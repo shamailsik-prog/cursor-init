@@ -194,8 +194,16 @@ annex_a_checks() {
   local p=$1 roles="(values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)"
   expect_out "$p: server is PostgreSQL 16 (pgvector/pgvector:pg16)" '^16$' \
     as_superuser_local "select current_setting('server_version_num')::int / 10000"
-  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 29 relations)" '^29$' \
+  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 33 relations, 004's four views included)" '^33$' \
     as_superuser_local "select count(*) from public.corpus_contract_relations()"
+  # Audit F05 (004), independent of the inventory function: the authority views exist, belong to the bootstrap
+  # superuser, and neither application role, corpus_clients nor PUBLIC holds any privilege on them.
+  expect_out "$p: the four v_authority_* views are the bootstrap superuser's and nobody else holds a privilege on them" '^4:0$' \
+    as_superuser_local "select count(*) || ':' || count(*) filter (where pg_get_userbyid(c.relowner) <> '$POSTGRES_USER'
+        or exists (select 1 from (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER'), ('corpus_clients'), ('public')) u(n)
+                    where has_table_privilege(u.n, c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                       or has_any_column_privilege(u.n, c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')))
+      from pg_class c where c.relnamespace = 'public'::regnamespace and c.relname like 'v\\_authority\\_%'"
   expect_out "$p: corpus_metadata.schema_version is L17-AnnexA-1.0" '^L17-AnnexA-1\.0$' \
     as_superuser_local "select value from public.corpus_metadata where key = 'schema_version'"
   expect_out "$p: the 9 *_publication_guard triggers exist and are enabled (tgenabled O)" '^9/9$' \
@@ -243,6 +251,9 @@ annex_a_reader_checks() {
   expect_out "$p: corpus_reader reads both published judgments (publish_batch, promotion) through v_judgment and v_citation" '^2$' \
     as_role_local corpus_reader "select count(*) from public.v_citation c join public.v_judgment j on j.id = c.judgment_id
       where c.citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
+  expect_out "$p: corpus_reader reads both published judgments through 004's v_authority_citation (audit F05)" '^2$' \
+    as_role_local corpus_reader "select count(*) from public.v_authority_citation
+      where citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
   expect_refused "$p: corpus_reader cannot read the judgment table itself, only the views" 'permission denied for table judgment' \
     as_role_local corpus_reader "select count(*) from public.judgment"
 }

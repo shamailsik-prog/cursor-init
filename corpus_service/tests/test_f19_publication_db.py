@@ -181,7 +181,7 @@ def test_f19_vocabulary_matches_the_ddl_checks(corpus_db):
 
 
 def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
-    corpus_db.apply_annex_a()  # a fresh database with only 001 + 003 (no migrate)
+    corpus_db.apply_annex_a()  # a fresh database with only Annex A, 001 + 003 + 004 (no migrate)
     relations = {
         r[0] for r in admin_fetch(
             corpus_db,
@@ -190,7 +190,10 @@ def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
         )
     }
     inventory = [r[0] for r in admin_fetch(corpus_db, "SELECT CAST(r AS text) FROM corpus_contract_relations() AS r")]
-    assert len(inventory) == 29 and len(set(inventory)) == 29
+    # 003's 29 relations and 004's four authority read views (audit F05; 004 re-defines the function).
+    assert len(inventory) == 33 and len(set(inventory)) == 33
+    assert {"v_authority_citation", "v_authority_treatment", "v_authority_section_version",
+            "v_authority_pending_adverse"} <= set(inventory)
     assert relations == set(inventory)
 
 
@@ -964,7 +967,7 @@ def test_f19_migrate_as_owner_succeeds_after_annex_a_and_leaves_it_with_the_supe
         "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
         "WHERE c.oid IN (SELECT r FROM corpus_contract_relations() AS r)",
     )
-    assert len(owners) == 29
+    assert len(owners) == 33  # 003's 29 and 004's four authority read views (audit F05)
     assert {row[1] for row in owners} == {admin_user}
     app_tables = admin_fetch(corpus_db, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'scraper_staging'")
     assert app_tables == [(owner,)]

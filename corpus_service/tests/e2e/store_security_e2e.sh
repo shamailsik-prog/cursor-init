@@ -413,6 +413,40 @@ expect_refused "provision-roles refuses when an Annex A function has passed to t
   'an Annex A function is not owned by a superuser' provision
 as_superuser_local "alter function public.corpus_contract_relations() owner to \"$POSTGRES_USER\"" >/dev/null
 expect_out "after the operator restores ownership, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
+# Audit F05, plan D20: re-applying 003 alone after 004 shrinks corpus_contract_relations() back to 003's 29.
+# Provisioning must then refuse before changing anything, rather than hand 004's views to the migration role
+# (which could redefine them); re-applying the whole chain (15-apply-annex-a.sh) recovers.
+apply_003_alone() {
+  "${COMPOSE[@]}" exec -T -u postgres postgres psql -U "$POSTGRES_USER" -d legal_scraper -v ON_ERROR_STOP=1 -q \
+    -c "SET client_min_messages = warning" -f /etc/postgresql/corpus/ddl/003_corpus_publication.sql
+}
+v_authority_owners() {
+  as_superuser_local "select coalesce(string_agg(distinct pg_get_userbyid(relowner), ','), 'none') from pg_class
+    where relnamespace = 'public'::regnamespace and relname like 'v\\_authority\\_%'"
+}
+apply_003_alone >/dev/null 2>&1 || fail "D20: re-applying 003 alone"
+expect_out "D20 control: after 003 alone the inventory is 003's 29 again, while 004's four views remain" '^29:4$' \
+  as_superuser_local "select (select count(*) from public.corpus_contract_relations()) || ':'
+    || (select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname like 'v\\_authority\\_%')"
+expect_refused "D20: provision-roles refuses an Annex A view missing from corpus_contract_relations()" \
+  'an Annex A view is missing from corpus_contract_relations\(\): .*v_authority_citation' provision
+expect_out "D20: ... and the authority views stay the bootstrap superuser's" "^$POSTGRES_USER\$" v_authority_owners
+expect_out "D20: ... and neither application role holds anything on them" '^0$' \
+  as_superuser_local "select count(*) from pg_class c cross join (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)
+    where c.relnamespace = 'public'::regnamespace and c.relname like 'v\\_authority\\_%'
+      and has_table_privilege(u.n, c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"
+expect_out "D20: re-applying the chain (15-apply-annex-a.sh) restores the 33-relation inventory" 'Annex A \(001, 003, 004\) applied' \
+  "${COMPOSE[@]}" exec -T -u postgres postgres /docker-entrypoint-initdb.d/15-apply-annex-a.sh
+expect_out "D20: after the chain is re-applied, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
+# Whatever its name: a view whose rewrite rule depends on an inventory relation, outside the inventory.
+as_superuser_local "create view public.f05_d20_probe as select citation_text from public.citation" >/dev/null 2>&1 \
+  || fail "D20: creating a view over citation"
+expect_refused "D20: provision-roles refuses any view over an Annex A relation that the inventory does not list (pg_depend)" \
+  'an Annex A view is missing from corpus_contract_relations\(\): f05_d20_probe' provision
+expect_out "D20: ... and that view stays the bootstrap superuser's" "^$POSTGRES_USER\$" \
+  as_superuser_local "select pg_get_userbyid(relowner) from pg_class where oid = 'public.f05_d20_probe'::regclass"
+as_superuser_local "drop view public.f05_d20_probe" >/dev/null 2>&1 || fail "D20: dropping the view"
+expect_out "D20: once it is gone, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after the fail-closed cases"
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \

@@ -38,7 +38,8 @@ TEST_DB_ENV = "CORPUS_TEST_DATABASE_URL"
 # Audit F19: the Annex A contract the publication writes. In production it is applied by a superuser at
 # postgres init (PR 2b), never by `python -m scraper.migrate`; here the fixture applies it as the admin.
 REPO_ROOT = PROJECT_ROOT.parent
-ANNEX_A_DDL = ("001_corpus_contract.sql", "003_corpus_publication.sql")
+# Always in this order, 004 last (audit F05 plan D13: 004 re-defines 003's relation inventory).
+ANNEX_A_DDL = ("001_corpus_contract.sql", "003_corpus_publication.sql", "004_authority_read_views.sql")
 # The application's own (ORM) tables: the runtime role's DML grant covers exactly these, never Annex A
 # (mirrors PR 2b's provisioning).
 ORM_TABLES = (

@@ -30,6 +30,11 @@
 # corpus_writer and corpus_declassify are left alone. APP_DB_USER is a member of corpus_writer WITH
 # INHERIT FALSE, SET TRUE (D14): it holds none of corpus_writer's rights until scraper.publication
 # switches to it (SET LOCAL ROLE) for one audited publication. MIGRATE_DB_USER gets no corpus_* role.
+# 004 (audit F05) adds four authority read views and re-defines the inventory with them. Before changing
+# anything this script refuses an Annex A view the inventory does not list (F05 plan D20): a public
+# relation named v_authority_%, or a view or materialized view whose rewrite rule depends on an
+# inventory relation. That is the state re-applying 003 alone after 004 leaves; the ownership move
+# below would otherwise hand those views to the migration role, which could redefine them.
 # corpus_writer and corpus_reader get USAGE on schema public (revoked from PUBLIC below), which their
 # own grants need; neither can log in. PostgreSQL 16 or later is required
 # (pg_auth_members.inherit_option / set_option).
@@ -122,6 +127,29 @@ BEGIN
   IF pg_catalog.to_regprocedure('public.corpus_contract_relations()') IS NULL
      OR pg_catalog.to_regprocedure('public.corpus_contract_routines()') IS NULL THEN
     RAISE EXCEPTION 'Annex A is not applied: run 15-apply-annex-a.sh first';
+  END IF;
+END
+$$;
+-- F05 plan D20: every Annex A view is in the inventory, or nothing below runs.
+DO $$
+DECLARE
+  missing text;
+BEGIN
+  SELECT string_agg(c.oid::regclass::text, ', ' ORDER BY c.relname)
+    INTO missing
+    FROM pg_class c
+   WHERE c.relnamespace = 'public'::regnamespace
+     AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+     AND c.oid NOT IN (SELECT a::oid FROM public.corpus_contract_relations() a)
+     AND (c.relname LIKE 'v\_authority\_%'
+          OR (c.relkind IN ('v', 'm') AND EXISTS (
+                SELECT FROM pg_rewrite rw
+                  JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = rw.oid
+                 WHERE rw.ev_class = c.oid
+                   AND d.refclassid = 'pg_class'::regclass AND d.refobjid <> c.oid
+                   AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a))));
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION 'an Annex A view is missing from corpus_contract_relations(): % (re-apply 004 with 15-apply-annex-a.sh)', missing;
   END IF;
 END
 $$;

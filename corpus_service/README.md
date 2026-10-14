@@ -203,9 +203,11 @@ published, `2` usage error or a structurally invalid batch, `3` batch key reused
 content, `4` a superuser or a role that is not a `corpus_writer` member, `1` anything else (nothing
 is written).
 
-**Who applies the DDL.** Annex A (001, 003) is applied by a superuser: in the compose stack by
+**Who applies the DDL.** Annex A (001, 003, and 004's authority read views for the draft gate,
+audit F05) is applied by a superuser, always in that order: in the compose stack by
 `docker/postgres/apply-annex-a.sh` at postgres init and by `scripts/rotate_postgres_password.sh` on an
-existing volume (see "Data-store security"); in tests by the fixture's admin. `python -m
+existing volume, which is how a volume created before 004 gets it (see "Data-store security"); in
+tests by the fixture's admin. `python -m
 scraper.migrate` never applies it: 001 needs `CREATE ROLE` and `CREATE EXTENSION`, which the
 `NOCREATEROLE` migration owner cannot do.
 
@@ -286,10 +288,11 @@ default, and all four differ.
   changes). Redis's `default` user is disabled; the app's ACL user has no `@admin`/`@dangerous`
   commands, cannot flush scripts/functions, and cannot switch databases.
 - **Annex A corpus contract (audit F19).** On a fresh volume the image's init runs `10-init.sql`
-  (extensions), then `15-apply-annex-a.sh`, which applies `../postgres/ddl/001_corpus_contract.sql`
-  and `003_corpus_publication.sql` (mounted read-only) in one transaction as the bootstrap
-  superuser, then `20-provision-roles.sh`, which refuses to run without Annex A or on PostgreSQL
-  older than 16. Annex A stays the superuser's: provisioning leaves every relation that
+  (extensions), then `15-apply-annex-a.sh`, which applies `../postgres/ddl/001_corpus_contract.sql`,
+  `003_corpus_publication.sql` and `004_authority_read_views.sql` (mounted read-only) in one
+  transaction as the bootstrap superuser, then `20-provision-roles.sh`, which refuses to run without Annex A or on PostgreSQL
+  older than 16, and refuses (before changing anything) an Annex A view the inventory does not list:
+  re-applying 003 alone after 004 would otherwise hand 004's views to the migration role. Annex A stays the superuser's: provisioning leaves every relation that
   `corpus_contract_relations()` lists out of the move to the migration role and out of the runtime
   role's DML grants. On every run it resets any grant on those relations (and the sequences they
   own) to either application role, `corpus_clients` or `PUBLIC`, and any `EXECUTE` on the routines
