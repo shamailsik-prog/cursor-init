@@ -48,7 +48,7 @@ Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (need
 
 The eve agent lives at `agent/` (`sikander-ai`). It is not a second provider path. `agent/agent.ts` uses `committeeBrainLanguageModel` from `platform/p1`, which only calls `callCommitteeBrain`. Default eve tools (`web_fetch`, `web_search`, `bash`) are off.
 
-The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI stay on Node 20+.
+The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI use **Node 22+** (`package.json` `engines.node`).
 
 Do not set provider API keys. Until O-53 closes (the app moves to the Cloud Functions route), the Next.js deployment must not hold an AI Gateway key: leave `AI_GATEWAY_API_KEY` and `VERCEL_AI_GATEWAY_API_KEY` unset, so `POST /api/p1/committee-brain` stays blocked (`PHASE0_NO_CREDENTIALS`). That route does not go through `callP1`, so the P1 kill switches, the monthly budget and the cost log govern the Cloud Functions path (`/api/platform/brain/committeeBrain`) only (ruling R8, `functions/src/p1/README.md`). Through that path, per L18 §4.6, public and internal calls may leave; confidential and above stay blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
 
@@ -59,7 +59,7 @@ npm run eve:info   # Node 24 — discovered agent surface
 ## Non-negotiables
 
 - Court fee and stamp duty are MANUAL checklist items only. L17.9 REMOVED by E-15 (8 Sep 2026). The four banned identifiers fail CI.
-- No Playwright / Puppeteer in this repository. Corpus harvest is a separate repo (`05_Corpus_Service` in the handover pack).
+- No Puppeteer in this repository. Root `@playwright/test` is a **dev-only** dependency for console auth e2e (allowlisted in `ci_gates/g0_guard_allowlist.json`; see `docs/errata/FA-F02-004-playwright-dev-e2e.md`). Corpus harvest Playwright stays in `corpus_service` / `05_Corpus_Service`.
 - Provider SDKs only under `platform/committeeBrain` or `platform/p1`.
 - Tenant and matter scoping at the data layer. No role exempt.
 - Classification ranks 0–4, monotonic. Downgrade only via partner `declassify()`.

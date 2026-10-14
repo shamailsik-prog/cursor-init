@@ -509,11 +509,12 @@ async function loadUser(
   store: ReturnType<typeof getRuntimeStore>,
   repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
   userId: string,
+  firmId: string,
   options: { preferRepository?: boolean } = {}
 ): Promise<User | null> {
   const cached = store.users.get(userId)
   if (cached && !options.preferRepository) return cached
-  const row = await repos.users.get(userId)
+  const row = await repos.users.get(userId, firmId)
   // preferRepository: a persisted record wins over this instance's copy; a user that exists only
   // in this instance's store (the in-memory seed) is still found.
   if (!row) return cached ?? null
@@ -584,7 +585,9 @@ async function handleGet(request: Request) {
       let resolvedFirmId = requestedFirmId
       let existingReference = null
       if (sessionReferenceId) {
-        existingReference = await repos.tenancySessionReferences.get(sessionReferenceId)
+        existingReference = requestedFirmId
+          ? await repos.tenancySessionReferences.get(sessionReferenceId, requestedFirmId)
+          : await repos.tenancySessionReferences.getForSessionReplay(sessionReferenceId)
         // One answer for "does not exist" and "not yours" (no existence oracle);
         // ownership is checked before revealing the reference's state.
         if (
@@ -613,7 +616,13 @@ async function handleGet(request: Request) {
       // The repository is authoritative here: role and clearance change only through the
       // identity API (Cloud Functions, E-27 / re-audit N-3), so a cached copy on this instance
       // may be stale, and the drift check below must see the change.
-      const user = await loadUser(store, repos, resolvedUserId, { preferRepository: true })
+      const user = await loadUser(
+        store,
+        repos,
+        resolvedUserId,
+        resolvedFirmId ?? requestedFirmId ?? "",
+        { preferRepository: true }
+      )
       // One answer for unknown and other-firm users (no existence oracle).
       if (!user || (resolvedFirmId && resolvedFirmId !== user.firmId)) {
         return NextResponse.json({ error: "unknown user" }, { status: 400 })

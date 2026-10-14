@@ -115,7 +115,8 @@ async function handleGet(request: Request) {
   await syncFirmMembers(store, repos, user.firmId)
 
   if (docId) {
-    const doc = (await repos.documents.get(docId)) ?? store.documents.get(docId) ?? null
+    const doc =
+      (await repos.documents.get(docId, user.firmId)) ?? store.documents.get(docId) ?? null
     if (!doc || doc.firmId !== user.firmId) {
       return NextResponse.json({ error: "unknown document" }, { status: 404 })
     }
@@ -294,9 +295,9 @@ async function handlePost(request: Request) {
     if (!inMemoryDoc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }
-    const persisted = await repos.documents.get(write.docId)
+    const persisted = await repos.documents.get(write.docId, actor.firmId)
     if (persisted) {
-      await repos.documents.update(write.docId, {
+      await repos.documents.update(write.docId, actor.firmId, {
         contentHash: inMemoryDoc.contentHash,
         classification: inMemoryDoc.classification,
         sourceChannel: inMemoryDoc.sourceChannel,
@@ -326,7 +327,7 @@ async function handlePost(request: Request) {
       await rollbackFailedIngest(store, repos, write.docId, write.reused)
       throw persistErr
     }
-    const doc = (await repos.documents.get(write.docId)) ?? inMemoryDoc
+    const doc = (await repos.documents.get(write.docId, actor.firmId)) ?? inMemoryDoc
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }
@@ -342,7 +343,9 @@ async function handlePost(request: Request) {
       action: "ingest",
       doc,
       reused: write.reused,
-      ocrJobs: (await repos.jobs.listByDocument(doc.id)).filter((job) => job.jobType === "ocr")
+      ocrJobs: (await repos.jobs.listByDocument(actor.firmId, doc.id)).filter(
+        (job) => job.jobType === "ocr"
+      )
         .length,
     }
     claim.complete(payload)

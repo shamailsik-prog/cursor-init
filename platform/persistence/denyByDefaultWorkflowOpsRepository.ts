@@ -1,11 +1,5 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  type Firestore,
-} from "@/platform/persistence/firestoreDbModular"
+import { doc, getDoc, setDoc, type Firestore } from "@/platform/persistence/firestoreDbModular"
+import { listRowsByFirm, listRowsByFirmAndField } from "@/platform/persistence/firmScopedList"
 
 /**
  * Firestore collection paths for workflow-ops spine repositories that use
@@ -168,22 +162,30 @@ export function createDenyByDefaultWorkflowOpsRepositoryBinder(db: Firestore) {
       async upsert(row: TRow) {
         await setDoc(doc(db, collectionName, row.id), row)
       },
-      async get(id: string): Promise<TRow | null> {
+      async get(id: string, firmId: string): Promise<TRow | null> {
         const snap = await getDoc(doc(db, collectionName, id))
         if (!snap.exists()) return null
-        return snap.data() as TRow
+        const row = snap.data() as TRow
+        if (row.firmId !== firmId) return null
+        return row
       },
       async listByFirm(firmId: string): Promise<TRow[]> {
-        const snap = await getDocs(collection(db, collectionName))
-        return snap.docs
-          .map((entry) => entry.data() as TRow)
-          .filter((row) => row.firmId === firmId)
+        const page = await listRowsByFirm<TRow & { firmId: string; id?: string }>(
+          db,
+          collectionName,
+          firmId
+        )
+        return page.items
       },
-      async listByMatter(matterId: string): Promise<TRow[]> {
-        const snap = await getDocs(collection(db, collectionName))
-        return snap.docs
-          .map((entry) => entry.data() as TRow)
-          .filter((row) => row.matterId === matterId)
+      async listByMatter(firmId: string, matterId: string): Promise<TRow[]> {
+        const page = await listRowsByFirmAndField<TRow & { id?: string }>(
+          db,
+          collectionName,
+          firmId,
+          "matterId",
+          matterId
+        )
+        return page.items
       },
     }
   }

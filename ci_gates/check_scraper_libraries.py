@@ -49,12 +49,10 @@ ROOT_PLAYWRIGHT_TEST_DEV = "@playwright/test"
 BUCKET = "fa_d3c_001_scraper"
 
 
-def _pkg_symbol(name: str) -> str | None:
+def _pkg_symbol(section: str, name: str) -> str | None:
     low = name.lower()
-    if "playwright" in low:
-        return "playwright"
-    if "puppeteer" in low:
-        return "puppeteer"
+    if "playwright" in low or "puppeteer" in low:
+        return f"{section}/{name}"
     return None
 
 
@@ -67,9 +65,7 @@ def _check_package_json(path: pathlib.Path) -> list[GuardFinding]:
     out: list[GuardFinding] = []
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
         for name in data.get(section, {}):
-            if rel == ROOT_PACKAGE_JSON and section == "devDependencies" and name == ROOT_PLAYWRIGHT_TEST_DEV:
-                continue
-            sym = _pkg_symbol(name)
+            sym = _pkg_symbol(section, name)
             if sym:
                 out.append(
                     GuardFinding(rel, sym, f"{rel}: {section} lists {name}"),

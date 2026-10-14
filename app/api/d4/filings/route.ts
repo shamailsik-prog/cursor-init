@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { bindRouteRepos, type FirmBoundSpineRepositories } from "@/platform/persistence/forFirm"
 import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
@@ -2009,7 +2010,7 @@ function pickClosureAutoAssignee(input: {
 
 async function recomputeClosureComplianceState(
   store: ReturnType<typeof getRuntimeStore>,
-  repos: Awaited<ReturnType<typeof getRuntimeRepositories>>,
+  repos: FirmBoundSpineRepositories,
   input: {
     firmId: string
     packageById: Map<string, { id: string; classification: Classification }>
@@ -2259,7 +2260,7 @@ async function recomputeClosureComplianceState(
     queueReentryRetirementReconciliationDriftCount: number
   }>
 }> {
-  const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(input.firmId)
+  const rotaRows = await repos.filingEscalationOwnerRota.listByFirm()
   const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
   const ownerByPackage = new Map<string, string>()
   for (const row of rotaRows) {
@@ -2267,11 +2268,11 @@ async function recomputeClosureComplianceState(
     if (!row.primaryOwnerId) continue
     ownerByPackage.set(row.packageId, row.primaryOwnerId)
   }
-  const openLifecycles = (await repos.filingEscalationRemediationLifecycles.listByFirm(input.firmId)).filter(
+  const openLifecycles = (await repos.filingEscalationRemediationLifecycles.listByFirm()).filter(
     (row) => row.status === "open"
   )
   const breachedReaffirmations = (
-    await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(input.firmId)
+    await repos.filingEscalationRolloverReaffirmationSlas.listByFirm()
   ).filter(
     (row) =>
       row.status === "breached" ||
@@ -2312,13 +2313,13 @@ async function recomputeClosureComplianceState(
     aggregate.reaffirmationIds.push(row.id)
     aggregate.classifications.push(input.packageById.get(row.packageId)?.classification ?? row.classification)
   }
-  const existingDigests = await repos.filingEscalationClosureComplianceDigests.listByFirm(input.firmId)
+  const existingDigests = await repos.filingEscalationClosureComplianceDigests.listByFirm()
   const existingDigestByOwner = new Map(existingDigests.map((row) => [row.ownerId, row]))
-  const existingQueues = await repos.filingEscalationClosureFollowupQueues.listByFirm(input.firmId)
+  const existingQueues = await repos.filingEscalationClosureFollowupQueues.listByFirm()
   const existingQueueByDigestId = new Map(existingQueues.map((row) => [row.digestId, row]))
-  const existingWindows = await repos.filingEscalationClosureSlaWindows.listByFirm(input.firmId)
+  const existingWindows = await repos.filingEscalationClosureSlaWindows.listByFirm()
   const existingWindowByDigestId = new Map(existingWindows.map((row) => [row.digestId, row]))
-  const existingAttestations = await repos.filingEscalationClosureAttestations.listByFirm(input.firmId)
+  const existingAttestations = await repos.filingEscalationClosureAttestations.listByFirm()
   const latestAttestationByQueueId = new Map<
     string,
     (typeof existingAttestations)[number]
@@ -2329,13 +2330,11 @@ async function recomputeClosureComplianceState(
       latestAttestationByQueueId.set(row.queueId, row)
     }
   }
-  const existingExceptionDigests = await repos.filingEscalationClosureSlaExceptionDigests.listByFirm(
-    input.firmId
-  )
+  const existingExceptionDigests = await repos.filingEscalationClosureSlaExceptionDigests.listByFirm()
   const existingExceptionByQueueId = new Map(
     existingExceptionDigests.map((row) => [row.queueId, row])
   )
-  const existingDisputes = await repos.filingEscalationClosureAttestationDisputes.listByFirm(input.firmId)
+  const existingDisputes = await repos.filingEscalationClosureAttestationDisputes.listByFirm()
   const latestDisputeByQueueId = new Map<string, (typeof existingDisputes)[number]>()
   for (const row of existingDisputes) {
     const existing = latestDisputeByQueueId.get(row.queueId)
@@ -2343,106 +2342,92 @@ async function recomputeClosureComplianceState(
       latestDisputeByQueueId.set(row.queueId, row)
     }
   }
-  const existingEnforcementRows = await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm(
-    input.firmId
-  )
+  const existingEnforcementRows = await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm()
   const existingEnforcementByQueueId = new Map(
     existingEnforcementRows.map((row) => [row.queueId, row])
   )
-  const existingAdjudicationRows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm(
-    input.firmId
-  )
+  const existingAdjudicationRows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm()
   const existingAdjudicationByDisputeId = new Map(
     existingAdjudicationRows.map((row) => [row.disputeId, row])
   )
-  const existingRebalanceRows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(
-    input.firmId
-  )
+  const existingRebalanceRows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm()
   const existingRebalanceByQueueId = new Map(existingRebalanceRows.map((row) => [row.queueId, row]))
-  const existingQuorumRows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(
-    input.firmId
-  )
+  const existingQuorumRows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm()
   const existingQuorumByAdjudicationId = new Map(
     existingQuorumRows.map((row) => [row.adjudicationId, row])
   )
-  const existingExecutionRows = await repos.filingEscalationClosureRebalanceExecution.listByFirm(
-    input.firmId
-  )
+  const existingExecutionRows = await repos.filingEscalationClosureRebalanceExecution.listByFirm()
   const existingExecutionByRebalanceId = new Map(
     existingExecutionRows.map((row) => [row.rebalanceId, row])
   )
-  const existingSloRows = await repos.filingEscalationClosureAdjudicationSlo.listByFirm(input.firmId)
+  const existingSloRows = await repos.filingEscalationClosureAdjudicationSlo.listByFirm()
   const existingSloByAdjudicationId = new Map(
     existingSloRows.map((row) => [row.adjudicationId, row])
   )
-  const existingSafeguardRows = await repos.filingEscalationClosureRebalanceSafeguards.listByFirm(
-    input.firmId
-  )
+  const existingSafeguardRows = await repos.filingEscalationClosureRebalanceSafeguards.listByFirm()
   const existingSafeguardByRebalanceId = new Map(
     existingSafeguardRows.map((row) => [row.rebalanceId, row])
   )
   const existingDebtRemediationRows =
-    await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm(input.firmId)
+    await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm()
   const existingDebtRemediationBySloId = new Map(
     existingDebtRemediationRows.map((row) => [row.adjudicationSloId, row])
   )
   const existingSafeguardExpiryRows =
-    await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm(input.firmId)
+    await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm()
   const existingSafeguardExpiryBySafeguardId = new Map(
     existingSafeguardExpiryRows.map((row) => [row.safeguardId, row])
   )
-  const existingDebtBurndownRows = await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm(
-    input.firmId
-  )
+  const existingDebtBurndownRows = await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm()
   const existingDebtBurndownByRemediationId = new Map(
     existingDebtBurndownRows.map((row) => [row.remediationId, row])
   )
   const existingSafeguardAttestationRows =
-    await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm(input.firmId)
+    await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm()
   const existingSafeguardAttestationByExpiryId = new Map(
     existingSafeguardAttestationRows.map((row) => [row.expiryId, row])
   )
   const existingBurndownRecalibrationRows =
-    await repos.filingEscalationClosureBurndownRecalibration.listByFirm(input.firmId)
+    await repos.filingEscalationClosureBurndownRecalibration.listByFirm()
   const existingBurndownRecalibrationByBurndownId = new Map(
     existingBurndownRecalibrationRows.map((row) => [row.burndownId, row])
   )
   const existingExpiryQueueRows =
-    await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm(input.firmId)
+    await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm()
   const existingExpiryQueueByAttestationId = new Map(
     existingExpiryQueueRows.map((row) => [row.attestationId, row])
   )
   const existingBurndownSettlementRows =
-    await repos.filingEscalationClosureBurndownSettlement.listByFirm(input.firmId)
+    await repos.filingEscalationClosureBurndownSettlement.listByFirm()
   const existingBurndownSettlementByRecalibrationId = new Map(
     existingBurndownSettlementRows.map((row) => [row.recalibrationId, row])
   )
   const existingExpiryQueueDrainRows =
-    await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm(input.firmId)
+    await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm()
   const existingExpiryQueueDrainByQueueItemId = new Map(
     existingExpiryQueueDrainRows.map((row) => [row.queueItemId, row])
   )
   const existingSettlementAttestationRows =
-    await repos.filingEscalationClosureSettlementAttestation.listByFirm(input.firmId)
+    await repos.filingEscalationClosureSettlementAttestation.listByFirm()
   const existingSettlementAttestationBySettlementId = new Map(
     existingSettlementAttestationRows.map((row) => [row.settlementId, row])
   )
   const existingQueueDrainReconciliationRows =
-    await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm(input.firmId)
+    await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm()
   const existingQueueDrainReconciliationByQueueDrainId = new Map(
     existingQueueDrainReconciliationRows.map((row) => [row.queueDrainId, row])
   )
   const existingSettlementArbitrationRows =
-    await repos.filingEscalationClosureSettlementArbitration.listByFirm(input.firmId)
+    await repos.filingEscalationClosureSettlementArbitration.listByFirm()
   const existingSettlementArbitrationBySettlementAttestationId = new Map(
     existingSettlementArbitrationRows.map((row) => [row.settlementAttestationId, row])
   )
   const existingQueueReentryComplianceRows =
-    await repos.filingEscalationClosureQueueReentryCompliance.listByFirm(input.firmId)
+    await repos.filingEscalationClosureQueueReentryCompliance.listByFirm()
   const existingQueueReentryComplianceByQueueReconciliationId = new Map(
     existingQueueReentryComplianceRows.map((row) => [row.queueReconciliationId, row])
   )
-  let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(input.firmId)
+  let closureSlaConfigRows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm()
   if (!closureSlaConfigRows.some((row) => row.ownerId === null && row.scope === "firm_default")) {
     const seededDefaultConfig = buildFilingEscalationClosureSlaWindowConfigRow({
       firmId: input.firmId,
@@ -2459,7 +2444,7 @@ async function recomputeClosureComplianceState(
     store.filingEscalationClosureSlaWindowConfigs.set(seededDefaultConfig.id, seededDefaultConfig)
     closureSlaConfigRows = [...closureSlaConfigRows, seededDefaultConfig]
   }
-  let closureAutoRuleRows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm(input.firmId)
+  let closureAutoRuleRows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm()
   if (!closureAutoRuleRows.some((row) => row.ownerId === null)) {
     const seededDefaultRule = buildFilingEscalationClosureAutoAssignmentRuleRow({
       firmId: input.firmId,
@@ -3713,7 +3698,7 @@ export async function GET(request: Request) {
 
 async function handleGet(request: Request) {
   const store = getRuntimeStore()
-  const repos = await getRuntimeRepositories(store)
+  const spineRepos = await getRuntimeRepositories(store)
   const url = new URL(request.url)
   const view = parseFilingsView(url.searchParams.get("view"))
   const userId = url.searchParams.get("userId")
@@ -3731,9 +3716,10 @@ async function handleGet(request: Request) {
     if (!user) {
       return NextResponse.json({ error: "unknown user" }, { status: 404 })
     }
-    await syncFirmMembers(store, repos, user.firmId)
-    const firmPackages = await repos.filings.listByFirm(user.firmId)
-    const artifactRows = await repos.filingPacketArtifacts.listByFirm(user.firmId)
+    await syncFirmMembers(store, spineRepos, user.firmId)
+    const repos: FirmBoundSpineRepositories = bindRouteRepos(spineRepos, user.firmId)
+    const firmPackages = await repos.filings.listByFirm()
+    const artifactRows = await repos.filingPacketArtifacts.listByFirm()
     const artifactByPackage = new Map(artifactRows.map((row) => [row.packageId, row]))
     // GET is side-effect free: rows missing for legacy packages are derived for this response
     // only. create_package / decide_package (POST) persist them.
@@ -3748,7 +3734,7 @@ async function handleGet(request: Request) {
         buildFilingPacketArtifactRow(filingPackage, draft, { now: filingPackage.createdAt })
       )
     }
-    const queueRows = await repos.filingDispatchQueue.listByFirm(user.firmId)
+    const queueRows = await repos.filingDispatchQueue.listByFirm()
     const queueByPackage = new Map(queueRows.map((row) => [row.packageId, row]))
     for (const filingPackage of firmPackages) {
       if (filingPackage.status !== "approved" || queueByPackage.has(filingPackage.id)) continue
@@ -3786,7 +3772,7 @@ async function handleGet(request: Request) {
     if (view === "annexures") {
       const annexureStatus = url.searchParams.get("annexureStatus")
       const packageId = url.searchParams.get("packageId")
-      const annexureRows = await repos.filingAnnexures.listByFirm(user.firmId)
+      const annexureRows = await repos.filingAnnexures.listByFirm()
       const annexureByPackage = new Map(annexureRows.map((row) => [row.packageId, row]))
       for (const filingPackage of firmPackages) {
         if (filingPackage.status !== "approved" || annexureByPackage.has(filingPackage.id)) continue
@@ -3825,7 +3811,7 @@ async function handleGet(request: Request) {
     if (view === "submission_receipts") {
       const packageId = url.searchParams.get("packageId")
       const dispatchOutcome = url.searchParams.get("dispatchOutcome")
-      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm()
       const visible = receiptRows
         .filter((row) => (matterId ? row.matterId === matterId : true))
         .filter((row) => (packageId ? row.packageId === packageId : true))
@@ -3854,20 +3840,20 @@ async function handleGet(request: Request) {
     if (view === "submission_reconciliation") {
       const packageId = url.searchParams.get("packageId")
       const reconciliationStatus = url.searchParams.get("reconciliationStatus")
-      const annexureRows = await repos.filingAnnexures.listByFirm(user.firmId)
+      const annexureRows = await repos.filingAnnexures.listByFirm()
       const readyAnnexureByPackage = new Map(
         annexureRows
           .filter((row) => row.generationStatus === "ready")
           .map((row) => [row.packageId, row])
       )
-      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm()
       const receiptsByPackage = new Map<string, typeof receiptRows>()
       for (const receipt of receiptRows) {
         const current = receiptsByPackage.get(receipt.packageId) ?? []
         current.push(receipt)
         receiptsByPackage.set(receipt.packageId, current)
       }
-      const persistedRows = await repos.filingSubmissionReconciliation.listByFirm(user.firmId)
+      const persistedRows = await repos.filingSubmissionReconciliation.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       for (const filingPackage of firmPackages) {
         if (filingPackage.status !== "approved") continue
@@ -3939,9 +3925,9 @@ async function handleGet(request: Request) {
       const severity = url.searchParams.get("severity")
       const escalationOwnerId = url.searchParams.get("escalationOwnerId")
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const persistedRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const persistedRows = await repos.filingSubmissionExceptions.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
-      const receiptRows = await repos.filingSubmissionReceipts.listByFirm(user.firmId)
+      const receiptRows = await repos.filingSubmissionReceipts.listByFirm()
       const receiptById = new Map(receiptRows.map((row) => [row.id, row]))
       const latestFailingReceiptByPackage = new Map<string, (typeof receiptRows)[number]>()
       for (const row of receiptRows) {
@@ -3951,7 +3937,7 @@ async function handleGet(request: Request) {
           latestFailingReceiptByPackage.set(row.packageId, row)
         }
       }
-      const reconciliationRows = await repos.filingSubmissionReconciliation.listByFirm(user.firmId)
+      const reconciliationRows = await repos.filingSubmissionReconciliation.listByFirm()
       const reconciliationByPackage = new Map(
         reconciliationRows.map((row) => [row.packageId, row])
       )
@@ -4059,7 +4045,7 @@ async function handleGet(request: Request) {
       const packageId = url.searchParams.get("packageId")
       const outcome = url.searchParams.get("outcome")
       const blockerTag = url.searchParams.get("blockerTag")?.trim().toLowerCase()
-      const rows = await repos.filingTransportExecutionEvidence.listByFirm(user.firmId)
+      const rows = await repos.filingTransportExecutionEvidence.listByFirm()
       const visible = rows
         .filter((row) => (matterId ? row.matterId === matterId : true))
         .filter((row) => (packageId ? row.packageId === packageId : true))
@@ -4096,16 +4082,16 @@ async function handleGet(request: Request) {
       const reason = url.searchParams.get("reason")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm()
       const exceptionByPackage = new Map(exceptionRows.map((row) => [row.packageId, row]))
-      const evidenceRows = await repos.filingTransportExecutionEvidence.listByFirm(user.firmId)
+      const evidenceRows = await repos.filingTransportExecutionEvidence.listByFirm()
       const evidenceByPackage = new Map<string, typeof evidenceRows>()
       for (const row of evidenceRows) {
         const current = evidenceByPackage.get(row.packageId) ?? []
         current.push(row)
         evidenceByPackage.set(row.packageId, current)
       }
-      const persistedDigestRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const persistedDigestRows = await repos.filingSubmissionSlaDigests.listByFirm()
       const rowsByPackage = new Map(persistedDigestRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -4179,11 +4165,11 @@ async function handleGet(request: Request) {
       const rotaStatus = url.searchParams.get("rotaStatus")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm(user.firmId)
+      const exceptionRows = await repos.filingSubmissionExceptions.listByFirm()
       const exceptionByPackage = new Map(exceptionRows.map((row) => [row.packageId, row]))
-      const digestRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const digestRows = await repos.filingSubmissionSlaDigests.listByFirm()
       const digestByPackage = new Map(digestRows.map((row) => [row.packageId, row]))
-      const persistedRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationOwnerRota.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -4622,7 +4608,7 @@ async function handleGet(request: Request) {
     if (view === "closure_sla_window_configs") {
       const ownerId = url.searchParams.get("ownerId")
       const scope = url.searchParams.get("scope")
-      const rows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureSlaWindowConfigs.listByFirm()
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureSlaWindowScope(scope) ? row.scope === scope : true))
@@ -4642,7 +4628,7 @@ async function handleGet(request: Request) {
     if (view === "closure_auto_assignment_rules") {
       const ownerId = url.searchParams.get("ownerId")
       const mode = url.searchParams.get("mode")
-      const rows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAutoAssignmentRules.listByFirm()
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (isFilingEscalationClosureAutoAssignmentMode(mode) ? row.mode === mode : true))
@@ -4866,7 +4852,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const packageId = url.searchParams.get("packageId")
       const attestationStatus = url.searchParams.get("attestationStatus")
-      const rows = await repos.filingEscalationClosureAttestations.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAttestations.listByFirm()
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
         .filter((row) => (queueId ? row.queueId === queueId : true))
@@ -4947,7 +4933,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const attestationId = url.searchParams.get("attestationId")
       const disputeStatus = url.searchParams.get("disputeStatus")
-      const rows = await repos.filingEscalationClosureAttestationDisputes.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAttestationDisputes.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -4977,7 +4963,7 @@ async function handleGet(request: Request) {
       const ownerId = url.searchParams.get("ownerId")
       const queueId = url.searchParams.get("queueId")
       const enforcementStatus = url.searchParams.get("enforcementStatus")
-      const rows = await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5011,7 +4997,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const disputeId = url.searchParams.get("disputeId")
       const adjudicationStatus = url.searchParams.get("adjudicationStatus")
-      const rows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAdjudicationQueue.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5041,7 +5027,7 @@ async function handleGet(request: Request) {
       const ownerId = url.searchParams.get("ownerId")
       const queueId = url.searchParams.get("queueId")
       const rebalanceStatus = url.searchParams.get("rebalanceStatus")
-      const rows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureEnforcementRebalance.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5071,7 +5057,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const quorumStatus = url.searchParams.get("quorumStatus")
-      const rows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5103,7 +5089,7 @@ async function handleGet(request: Request) {
       const rebalanceId = url.searchParams.get("rebalanceId")
       const executionStatus = url.searchParams.get("executionStatus")
       const mode = url.searchParams.get("mode")
-      const rows = await repos.filingEscalationClosureRebalanceExecution.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureRebalanceExecution.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5138,7 +5124,7 @@ async function handleGet(request: Request) {
       const adjudicationId = url.searchParams.get("adjudicationId")
       const sloStatus = url.searchParams.get("sloStatus")
       const escalationTier = url.searchParams.get("escalationTier")
-      const rows = await repos.filingEscalationClosureAdjudicationSlo.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAdjudicationSlo.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5173,7 +5159,7 @@ async function handleGet(request: Request) {
       const rebalanceId = url.searchParams.get("rebalanceId")
       const safeguardStatus = url.searchParams.get("safeguardStatus")
       const suppressionReason = url.searchParams.get("suppressionReason")
-      const rows = await repos.filingEscalationClosureRebalanceSafeguards.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureRebalanceSafeguards.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5209,9 +5195,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm(
-        user.firmId
-      )
+      const rows = await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5242,7 +5226,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5273,7 +5257,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5304,7 +5288,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5335,7 +5319,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureBurndownRecalibration.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureBurndownRecalibration.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5364,7 +5348,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5393,7 +5377,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureBurndownSettlement.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureBurndownSettlement.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5422,7 +5406,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5453,7 +5437,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureSettlementAttestation.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureSettlementAttestation.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5482,7 +5466,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5511,7 +5495,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const adjudicationId = url.searchParams.get("adjudicationId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureSettlementArbitration.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureSettlementArbitration.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5540,7 +5524,7 @@ async function handleGet(request: Request) {
       const queueId = url.searchParams.get("queueId")
       const rebalanceId = url.searchParams.get("rebalanceId")
       const status = url.searchParams.get("status")
-      const rows = await repos.filingEscalationClosureQueueReentryCompliance.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationClosureQueueReentryCompliance.listByFirm()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
       const visible = rows
         .filter((row) => (ownerId ? row.ownerId === ownerId : true))
@@ -5602,15 +5586,15 @@ async function handleGet(request: Request) {
           packageById,
           now,
         })
-      const rotaRows = await repos.filingEscalationOwnerRota.listByFirm(user.firmId)
+      const rotaRows = await repos.filingEscalationOwnerRota.listByFirm()
       const rotaByPackage = new Map(rotaRows.map((row) => [row.packageId, row]))
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(rotaRows)
-      const slaRows = await repos.filingSubmissionSlaDigests.listByFirm(user.firmId)
+      const slaRows = await repos.filingSubmissionSlaDigests.listByFirm()
       const slaByPackage = new Map(slaRows.map((row) => [row.packageId, row]))
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides: policyOverridesByPackage } =
         buildEscalationPolicyMaps(policyRows)
-      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm()
       const activeWaiverByPackage = new Map<string, (typeof waiverRows)[number]>()
       for (const row of waiverRows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -5629,19 +5613,17 @@ async function handleGet(request: Request) {
           activeWaiverByPackage.set(row.packageId, row)
         }
       }
-      const policyVarianceRows = await repos.filingEscalationPolicyVarianceDigests.listByFirm(user.firmId)
+      const policyVarianceRows = await repos.filingEscalationPolicyVarianceDigests.listByFirm()
       const policyVarianceByPackage = new Map(policyVarianceRows.map((row) => [row.packageId, row]))
-      const waiverExpiryRows = await repos.filingEscalationWaiverExpiryDigests.listByFirm(user.firmId)
+      const waiverExpiryRows = await repos.filingEscalationWaiverExpiryDigests.listByFirm()
       const waiverExpiryByPackage = new Map(waiverExpiryRows.map((row) => [row.packageId, row]))
-      const remediationExpiryRows = await repos.filingEscalationRemediationExpiryDigests.listByFirm(
-        user.firmId
-      )
+      const remediationExpiryRows = await repos.filingEscalationRemediationExpiryDigests.listByFirm()
       const remediationExpiryByPackage = new Map(
         remediationExpiryRows.map((row) => [row.packageId, row])
       )
-      const rolloverWatchRows = await repos.filingEscalationRolloverBreachWatches.listByFirm(user.firmId)
+      const rolloverWatchRows = await repos.filingEscalationRolloverBreachWatches.listByFirm()
       const rolloverWatchByPackage = new Map(rolloverWatchRows.map((row) => [row.packageId, row]))
-      const remediationRows = await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId)
+      const remediationRows = await repos.filingEscalationVarianceRemediations.listByFirm()
       for (const row of remediationRows) {
         if (row.status === "active" && row.expiresAt <= now) {
           const expired = { ...row, status: "expired" as const, updatedAt: now }
@@ -5650,18 +5632,16 @@ async function handleGet(request: Request) {
         }
       }
       const activeRemediationByPackage = latestActiveRemediationByPackage(
-        await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId),
+        await repos.filingEscalationVarianceRemediations.listByFirm(),
         now
       )
-      const lifecycleRows = await repos.filingEscalationRemediationLifecycles.listByFirm(user.firmId)
+      const lifecycleRows = await repos.filingEscalationRemediationLifecycles.listByFirm()
       const openLifecycleByPackage = latestOpenRemediationLifecycleByPackage(lifecycleRows)
-      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm()
       const rolloverByWaiverId = latestRolloverAttestationByWaiver(rolloverRows)
-      const reaffirmationRows = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(
-        user.firmId
-      )
+      const reaffirmationRows = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm()
       const reaffirmationByPackage = new Map(reaffirmationRows.map((row) => [row.packageId, row]))
-      const persistedRows = await repos.filingEscalationWorkloadDigests.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationWorkloadDigests.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -6462,7 +6442,7 @@ async function handleGet(request: Request) {
     if (view === "escalation_policy_baselines") {
       const scope = url.searchParams.get("scope")
       const packageId = url.searchParams.get("packageId")
-      const rows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const visible = rows
         .filter((row) => (packageId ? row.packageId === packageId : true))
         .filter((row) => {
@@ -6498,7 +6478,7 @@ async function handleGet(request: Request) {
       const packageId = url.searchParams.get("packageId")
       const waiverStatus = url.searchParams.get("waiverStatus")
       const now = Date.now()
-      const rows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationBreachWaivers.listByFirm()
       const normalized: typeof rows = []
       for (const row of rows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -6540,10 +6520,10 @@ async function handleGet(request: Request) {
       const varianceStatus = url.searchParams.get("varianceStatus")
       const reason = url.searchParams.get("reason")
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const persistedRows = await repos.filingEscalationPolicyVarianceDigests.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationPolicyVarianceDigests.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -6620,10 +6600,10 @@ async function handleGet(request: Request) {
       const expiryStatus = url.searchParams.get("expiryStatus")
       const reason = url.searchParams.get("reason")
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm()
       const activeWaiverByPackage = new Map<string, (typeof waiverRows)[number]>()
       for (const row of waiverRows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -6638,7 +6618,7 @@ async function handleGet(request: Request) {
           activeWaiverByPackage.set(row.packageId, row)
         }
       }
-      const persistedRows = await repos.filingEscalationWaiverExpiryDigests.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationWaiverExpiryDigests.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -6703,7 +6683,7 @@ async function handleGet(request: Request) {
       const remediationStatus = url.searchParams.get("remediationStatus")
       const decision = url.searchParams.get("decision")
       const now = Date.now()
-      const rows = await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationVarianceRemediations.listByFirm()
       const normalized: typeof rows = []
       for (const row of rows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -6748,7 +6728,7 @@ async function handleGet(request: Request) {
       const packageId = url.searchParams.get("packageId")
       const rolloverStatus = url.searchParams.get("rolloverStatus")
       const waiverId = url.searchParams.get("waiverId")
-      const rows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm()
       const visible = rows
         .filter((row) => (matterId ? row.matterId === matterId : true))
         .filter((row) => (packageId ? row.packageId === packageId : true))
@@ -6781,9 +6761,9 @@ async function handleGet(request: Request) {
       const reason = url.searchParams.get("reason")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
-      const remediationRows = await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId)
+      const remediationRows = await repos.filingEscalationVarianceRemediations.listByFirm()
       for (const row of remediationRows) {
         if (row.status === "active" && row.expiresAt <= now) {
           const expired = { ...row, status: "expired" as const, updatedAt: now }
@@ -6792,12 +6772,12 @@ async function handleGet(request: Request) {
         }
       }
       const activeRemediationByPackage = latestActiveRemediationByPackage(
-        await repos.filingEscalationVarianceRemediations.listByFirm(user.firmId),
+        await repos.filingEscalationVarianceRemediations.listByFirm(),
         now
       )
-      const lifecycleRows = await repos.filingEscalationRemediationLifecycles.listByFirm(user.firmId)
+      const lifecycleRows = await repos.filingEscalationRemediationLifecycles.listByFirm()
       const openLifecycleByPackage = latestOpenRemediationLifecycleByPackage(lifecycleRows)
-      const persistedRows = await repos.filingEscalationRemediationExpiryDigests.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationRemediationExpiryDigests.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -6866,7 +6846,7 @@ async function handleGet(request: Request) {
       const packageId = url.searchParams.get("packageId")
       const lifecycleStatus = url.searchParams.get("lifecycleStatus")
       const closureOutcome = url.searchParams.get("closureOutcome")
-      const rows = await repos.filingEscalationRemediationLifecycles.listByFirm(user.firmId)
+      const rows = await repos.filingEscalationRemediationLifecycles.listByFirm()
       const visible = rows
         .filter((row) => (matterId ? row.matterId === matterId : true))
         .filter((row) => (packageId ? row.packageId === packageId : true))
@@ -6902,9 +6882,9 @@ async function handleGet(request: Request) {
       const reason = url.searchParams.get("reason")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
-      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm()
       const activeWaiverByPackage = new Map<string, (typeof waiverRows)[number]>()
       for (const row of waiverRows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -6919,9 +6899,9 @@ async function handleGet(request: Request) {
           activeWaiverByPackage.set(row.packageId, row)
         }
       }
-      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm()
       const rolloverByWaiverId = latestRolloverAttestationByWaiver(rolloverRows)
-      const persistedRows = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -7003,9 +6983,9 @@ async function handleGet(request: Request) {
       const waiverId = url.searchParams.get("waiverId")
       const now = Date.now()
       const packageById = new Map(firmPackages.map((row) => [row.id, row]))
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(user.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
-      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm(user.firmId)
+      const waiverRows = await repos.filingEscalationBreachWaivers.listByFirm()
       const activeWaiverByPackage = new Map<string, (typeof waiverRows)[number]>()
       for (const row of waiverRows) {
         if (row.status === "active" && row.expiresAt <= now) {
@@ -7020,9 +7000,9 @@ async function handleGet(request: Request) {
           activeWaiverByPackage.set(row.packageId, row)
         }
       }
-      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm(user.firmId)
+      const rolloverRows = await repos.filingEscalationWaiverRolloverAttestations.listByFirm()
       const rolloverByWaiverId = latestRolloverAttestationByWaiver(rolloverRows)
-      const persistedRows = await repos.filingEscalationRolloverBreachWatches.listByFirm(user.firmId)
+      const persistedRows = await repos.filingEscalationRolloverBreachWatches.listByFirm()
       const rowsByPackage = new Map(persistedRows.map((row) => [row.packageId, row]))
       const candidatePackageIds = new Set<string>([
         ...rowsByPackage.keys(),
@@ -7136,7 +7116,7 @@ export async function POST(request: Request) {
 
 async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
-  const repos = await getRuntimeRepositories(store)
+  const spineRepos = await getRuntimeRepositories(store)
   let key: string
   try {
     key = requireIdempotencyKey(request)
@@ -7165,6 +7145,15 @@ async function handlePost(request: Request, session: HandlerSession | null) {
   const idem = beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
+  const actorIdForScope =
+    typeof parsed.actorId === "string" ? parsed.actorId : session?.userId ?? undefined
+  const firmScope =
+    session?.firmId ??
+    (actorIdForScope ? store.users.get(actorIdForScope)?.firmId : undefined)
+  if (!firmScope) {
+    return NextResponse.json({ error: "firm scope is required" }, { status: 400 })
+  }
+  const repos: FirmBoundSpineRepositories = bindRouteRepos(spineRepos, firmScope)
 
   try {
     if (parsed.action === "create_package") {
@@ -9159,7 +9148,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         filingEscalationWorkloadDigestId(filingPackage.id)
       )
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(
-        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+        await repos.filingEscalationOwnerRota.listByFirm()
       )
       const ownerLoadCount =
         rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
@@ -9273,7 +9262,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       }
       await repos.filingEscalationOwnerRota.upsert(updatedRota)
       store.filingEscalationOwnerRota.set(updatedRota.id, updatedRota)
-      const allRotaRows = await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+      const allRotaRows = await repos.filingEscalationOwnerRota.listByFirm()
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(allRotaRows)
       const existingDigest = await repos.filingEscalationWorkloadDigests.get(
         filingEscalationWorkloadDigestId(filingPackage.id)
@@ -9360,7 +9349,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         filingEscalationWorkloadDigestId(filingPackage.id)
       )
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(
-        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+        await repos.filingEscalationOwnerRota.listByFirm()
       )
       const ownerLoadCount =
         rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
@@ -9510,7 +9499,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(
         filingPackage.id,
@@ -9536,7 +9525,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       )
       const rota = await repos.filingEscalationOwnerRota.get(filingEscalationOwnerRotaId(filingPackage.id))
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(
-        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+        await repos.filingEscalationOwnerRota.listByFirm()
       )
       const ownerLoadCount =
         rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
@@ -9663,7 +9652,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       }
       await repos.filingEscalationBreachWaivers.upsert(revoked)
       store.filingEscalationBreachWaivers.set(revoked.id, revoked)
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(
         filingPackage.id,
@@ -9678,7 +9667,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         filingEscalationWorkloadDigestId(filingPackage.id)
       )
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(
-        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+        await repos.filingEscalationOwnerRota.listByFirm()
       )
       const ownerLoadCount =
         rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0
@@ -9811,7 +9800,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         }
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       if (requiresSecondApproverForRemediationDecision(decision) && !secondApprover) {
@@ -9998,7 +9987,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (row) => row.status === "open"
         )
       )
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const existingDigest = await repos.filingEscalationRemediationExpiryDigests.get(
@@ -10074,7 +10063,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (row) => row.status === "open"
         )
       )
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const existing = await repos.filingEscalationRemediationExpiryDigests.get(
@@ -10165,7 +10154,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
           (row) => row.status === "open"
         )
       )
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const existing = await repos.filingEscalationRemediationExpiryDigests.get(
@@ -10232,7 +10221,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
@@ -10352,7 +10341,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       }
       await repos.filingEscalationWaiverRolloverAttestations.upsert(updatedAttestation)
       store.filingEscalationWaiverRolloverAttestations.set(updatedAttestation.id, updatedAttestation)
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const existingWatch = await repos.filingEscalationRolloverBreachWatches.get(
@@ -10432,7 +10421,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const waivers = await repos.filingEscalationBreachWaivers.listByPackageId(filingPackage.id)
@@ -10655,7 +10644,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "auto_assign_closure_followup requires partner role" }, { status: 403 })
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const ownerIdFromQueueId = parsed.queueId
         ? (await repos.filingEscalationClosureFollowupQueues.get(parsed.queueId))?.ownerId ?? null
@@ -10717,7 +10706,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "assignee must be a partner in the same firm" }, { status: 422 })
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -10771,7 +10760,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "claim_closure_followup requires partner role" }, { status: 403 })
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -10833,7 +10822,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "resolve_closure_followup requires partner role" }, { status: 403 })
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const { queueByOwner } = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -10911,7 +10900,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         }
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11041,7 +11030,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         classification: updated.classification,
         reason: updated.status,
       })
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshedState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11085,7 +11074,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "waive_closure_sla_exception requires partner role" }, { status: 403 })
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11233,7 +11222,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         classification: dispute.classification,
         reason: dispute.conflictReason,
       })
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11359,7 +11348,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         classification: disputeUpdated.classification,
         reason: disputeUpdated.status,
       })
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11465,7 +11454,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         classification: adjudicationUpdated.classification,
         reason: panelMemberIds.join(","),
       })
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshed = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11606,7 +11595,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         classification: adjudicationUpdated.classification,
         reason: parsed.verdict,
       })
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const refreshed = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11657,7 +11646,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -11863,7 +11852,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -12017,7 +12006,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -12402,7 +12391,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -12490,7 +12479,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -12846,7 +12835,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -12932,7 +12921,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -13049,7 +13038,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -13366,7 +13355,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -13455,7 +13444,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -13550,7 +13539,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -13892,7 +13881,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -14004,7 +13993,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -14117,7 +14106,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -14517,7 +14506,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -14646,7 +14635,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -14777,7 +14766,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -15258,7 +15247,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -15409,7 +15398,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -15565,7 +15554,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -16944,7 +16933,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17118,7 +17107,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17288,7 +17277,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17457,7 +17446,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17632,7 +17621,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17808,7 +17797,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -17979,7 +17968,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -18153,7 +18142,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -18328,7 +18317,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -18485,7 +18474,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       const now = Date.now()
-      const packageRows = await repos.filings.listByFirm(actor.firmId)
+      const packageRows = await repos.filings.listByFirm()
       const packageById = new Map(packageRows.map((row) => [row.id, row]))
       const closureState = await recomputeClosureComplianceState(store, repos, {
         firmId: actor.firmId,
@@ -18582,7 +18571,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy } = buildEscalationPolicyMaps(policyRows)
       const defaultPolicyRow = defaultPolicy
         ? policyRows.find((row) => row.id === defaultPolicy.id) ?? null
@@ -18662,7 +18651,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: `permission denied: ${permission.reason}` }, { status: 403 })
       }
       const now = Date.now()
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy } = buildEscalationPolicyMaps(policyRows)
       const defaultPolicyRow = defaultPolicy
         ? policyRows.find((row) => row.id === defaultPolicy.id) ?? null
@@ -18741,7 +18730,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         [...waivers]
           .filter((row) => row.status === "active" && row.expiresAt > now)
           .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const existing = await repos.filingEscalationWaiverExpiryDigests.get(
@@ -18834,7 +18823,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "no matching active waiver found for extension" }, { status: 404 })
       }
       const note = parsed.note?.trim() || `waiver extended by ${extendHours}h`
-      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm(actor.firmId)
+      const policyRows = await repos.filingEscalationPolicyBaselines.listByFirm()
       const { defaultPolicy, packageOverrides } = buildEscalationPolicyMaps(policyRows)
       const policy = resolveEffectiveEscalationPolicy(filingPackage.id, packageOverrides, defaultPolicy)
       const previousExpiresAt = target.expiresAt
@@ -18956,7 +18945,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         filingEscalationWorkloadDigestId(filingPackage.id)
       )
       const ownerLoadByOwner = buildOwnerActiveLoadCounts(
-        await repos.filingEscalationOwnerRota.listByFirm(actor.firmId)
+        await repos.filingEscalationOwnerRota.listByFirm()
       )
       const ownerLoadCount =
         rota?.primaryOwnerId ? (ownerLoadByOwner.get(rota.primaryOwnerId) ?? 0) : 0

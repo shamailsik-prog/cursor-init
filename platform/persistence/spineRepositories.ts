@@ -180,25 +180,25 @@ export { AuditAppendConflictError }
 
 export type MatterRepository = {
   create(row: Matter): Promise<void>
-  get(id: string): Promise<Matter | null>
-  update(id: string, patch: Partial<Matter>): Promise<Matter | null>
+  get(id: string, firmId: string): Promise<Matter | null>
+  update(id: string, firmId: string, patch: Partial<Matter>): Promise<Matter | null>
   listByFirm(firmId: string): Promise<Matter[]>
 }
 
 export type UserRepository = {
   upsert(row: User): Promise<void>
-  get(id: string): Promise<User | null>
+  get(id: string, firmId: string): Promise<User | null>
   listByFirm(firmId: string): Promise<User[]>
 }
 
 /** firms/{firmId} — read-only here (Cloud Functions are the only writers). */
 export type FirmRepository = {
-  get(id: string): Promise<FirmRecord | null>
+  get(id: string, firmId: string): Promise<FirmRecord | null>
 }
 
 export type EntityRepository = {
   create(row: Entity): Promise<void>
-  get(id: string): Promise<Entity | null>
+  get(id: string, firmId: string): Promise<Entity | null>
   listByFirm(firmId: string): Promise<Entity[]>
 }
 
@@ -209,30 +209,30 @@ export type EntityLinkRepository = {
 
 export type MatterMemberRepository = {
   upsert(row: MatterMember): Promise<void>
-  get(matterId: string, userId: string): Promise<MatterMember | null>
+  get(matterId: string, userId: string, firmId: string): Promise<MatterMember | null>
   listByFirm(firmId: string): Promise<MatterMember[]>
-  listByMatter(matterId: string): Promise<MatterMember[]>
+  listByMatter(firmId: string, matterId: string): Promise<MatterMember[]>
 }
 
 export type DocumentRepository = {
   create(row: DocumentRecord): Promise<void>
-  get(id: string): Promise<DocumentRecord | null>
-  update(id: string, patch: Partial<DocumentRecord>): Promise<DocumentRecord | null>
+  get(id: string, firmId: string): Promise<DocumentRecord | null>
+  update(id: string, firmId: string, patch: Partial<DocumentRecord>): Promise<DocumentRecord | null>
   delete(id: string): Promise<void>
   listByFirm(firmId: string): Promise<DocumentRecord[]>
 }
 
 export type DraftRepository = {
   create(row: DraftRecord): Promise<void>
-  get(id: string): Promise<DraftRecord | null>
+  get(id: string, firmId: string): Promise<DraftRecord | null>
   listByFirm(firmId: string): Promise<DraftRecord[]>
   /** Server-side filing lock (review R1 #5); a missing draft is a no-op. */
-  setLocked(id: string, locked: boolean): Promise<void>
+  setLocked(id: string, firmId: string, locked: boolean): Promise<void>
 }
 
 export type WorkflowRepository = {
   createOrUpdate(row: DocumentWorkflow): Promise<void>
-  get(documentId: string): Promise<DocumentWorkflow | null>
+  get(documentId: string, firmId: string): Promise<DocumentWorkflow | null>
   listByFirm(firmId: string): Promise<DocumentWorkflow[]>
 }
 
@@ -244,8 +244,8 @@ export type FilingDecisionOutcome =
 
 export type FilingRepository = {
   create(row: FilingPackage): Promise<void>
-  get(id: string): Promise<FilingPackage | null>
-  update(id: string, patch: Partial<FilingPackage>): Promise<FilingPackage | null>
+  get(id: string, firmId: string): Promise<FilingPackage | null>
+  update(id: string, firmId: string, patch: Partial<FilingPackage>): Promise<FilingPackage | null>
   /**
    * Applies `patch` only while the stored package is still pending_partner_approval (a
    * conditional update; Firestore runs it in a transaction). A package already approved or
@@ -260,401 +260,377 @@ export type FilingRepository = {
 
 export type FilingPacketArtifactRepository = {
   upsert(row: FilingPacketArtifactRow): Promise<void>
-  get(id: string): Promise<FilingPacketArtifactRow | null>
+  get(id: string, firmId: string): Promise<FilingPacketArtifactRow | null>
   listByFirm(firmId: string): Promise<FilingPacketArtifactRow[]>
-  listByPackageId(packageId: string): Promise<FilingPacketArtifactRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingPacketArtifactRow[]>
 }
 
 export type FilingDispatchQueueRepository = {
   upsert(row: FilingDispatchQueueRow): Promise<void>
-  get(id: string): Promise<FilingDispatchQueueRow | null>
+  get(id: string, firmId: string): Promise<FilingDispatchQueueRow | null>
   listByFirm(firmId: string): Promise<FilingDispatchQueueRow[]>
-  listByPackageId(packageId: string): Promise<FilingDispatchQueueRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingDispatchQueueRow[]>
 }
 
 export type FilingAnnexureRepository = {
   upsert(row: FilingAnnexureRow): Promise<void>
-  get(id: string): Promise<FilingAnnexureRow | null>
+  get(id: string, firmId: string): Promise<FilingAnnexureRow | null>
   listByFirm(firmId: string): Promise<FilingAnnexureRow[]>
-  listByPackageId(packageId: string): Promise<FilingAnnexureRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingAnnexureRow[]>
 }
 
 export type FilingSubmissionReceiptRepository = {
   upsert(row: FilingSubmissionReceiptRow): Promise<void>
-  get(id: string): Promise<FilingSubmissionReceiptRow | null>
+  get(id: string, firmId: string): Promise<FilingSubmissionReceiptRow | null>
   listByFirm(firmId: string): Promise<FilingSubmissionReceiptRow[]>
-  listByPackageId(packageId: string): Promise<FilingSubmissionReceiptRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingSubmissionReceiptRow[]>
 }
 
 export type FilingSubmissionReconciliationRepository = {
   upsert(row: FilingSubmissionReconciliationRow): Promise<void>
-  get(id: string): Promise<FilingSubmissionReconciliationRow | null>
+  get(id: string, firmId: string): Promise<FilingSubmissionReconciliationRow | null>
   listByFirm(firmId: string): Promise<FilingSubmissionReconciliationRow[]>
-  listByPackageId(packageId: string): Promise<FilingSubmissionReconciliationRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingSubmissionReconciliationRow[]>
 }
 
 export type FilingSubmissionExceptionRepository = {
   upsert(row: FilingSubmissionExceptionRow): Promise<void>
-  get(id: string): Promise<FilingSubmissionExceptionRow | null>
+  get(id: string, firmId: string): Promise<FilingSubmissionExceptionRow | null>
   listByFirm(firmId: string): Promise<FilingSubmissionExceptionRow[]>
-  listByPackageId(packageId: string): Promise<FilingSubmissionExceptionRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingSubmissionExceptionRow[]>
 }
 
 export type FilingTransportExecutionEvidenceRepository = {
   upsert(row: FilingTransportExecutionEvidenceRow): Promise<void>
-  get(id: string): Promise<FilingTransportExecutionEvidenceRow | null>
+  get(id: string, firmId: string): Promise<FilingTransportExecutionEvidenceRow | null>
   listByFirm(firmId: string): Promise<FilingTransportExecutionEvidenceRow[]>
-  listByPackageId(packageId: string): Promise<FilingTransportExecutionEvidenceRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingTransportExecutionEvidenceRow[]>
 }
 
 export type FilingSubmissionSlaDigestRepository = {
   upsert(row: FilingSubmissionSlaDigestRow): Promise<void>
-  get(id: string): Promise<FilingSubmissionSlaDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingSubmissionSlaDigestRow | null>
   listByFirm(firmId: string): Promise<FilingSubmissionSlaDigestRow[]>
-  listByPackageId(packageId: string): Promise<FilingSubmissionSlaDigestRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingSubmissionSlaDigestRow[]>
 }
 
 export type FilingEscalationOwnerRotaRepository = {
   upsert(row: FilingEscalationOwnerRotaRow): Promise<void>
-  get(id: string): Promise<FilingEscalationOwnerRotaRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationOwnerRotaRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationOwnerRotaRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationOwnerRotaRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationOwnerRotaRow[]>
 }
 
 export type FilingEscalationWorkloadDigestRepository = {
   upsert(row: FilingEscalationWorkloadDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationWorkloadDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationWorkloadDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationWorkloadDigestRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationWorkloadDigestRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationWorkloadDigestRow[]>
 }
 
 export type FilingEscalationPolicyBaselineRepository = {
   upsert(row: FilingEscalationPolicyBaselineRow): Promise<void>
-  get(id: string): Promise<FilingEscalationPolicyBaselineRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationPolicyBaselineRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationPolicyBaselineRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationPolicyBaselineRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationPolicyBaselineRow[]>
 }
 
 export type FilingEscalationBreachWaiverLedgerRepository = {
   upsert(row: FilingEscalationBreachWaiverLedgerRow): Promise<void>
-  get(id: string): Promise<FilingEscalationBreachWaiverLedgerRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationBreachWaiverLedgerRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationBreachWaiverLedgerRow[]>
 }
 
 export type FilingEscalationPolicyVarianceDigestRepository = {
   upsert(row: FilingEscalationPolicyVarianceDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationPolicyVarianceDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationPolicyVarianceDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationPolicyVarianceDigestRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationPolicyVarianceDigestRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationPolicyVarianceDigestRow[]>
 }
 
 export type FilingEscalationWaiverExpiryDigestRepository = {
   upsert(row: FilingEscalationWaiverExpiryDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationWaiverExpiryDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationWaiverExpiryDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationWaiverExpiryDigestRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationWaiverExpiryDigestRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationWaiverExpiryDigestRow[]>
 }
 
 export type FilingEscalationVarianceRemediationRepository = {
   upsert(row: FilingEscalationVarianceRemediationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationVarianceRemediationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationVarianceRemediationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationVarianceRemediationRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationVarianceRemediationRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationVarianceRemediationRow[]>
 }
 
 export type FilingEscalationWaiverRolloverAttestationRepository = {
   upsert(row: FilingEscalationWaiverRolloverAttestationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationWaiverRolloverAttestationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationWaiverRolloverAttestationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationWaiverRolloverAttestationRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationWaiverRolloverAttestationRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationWaiverRolloverAttestationRow[]>
 }
 
 export type FilingEscalationRemediationExpiryDigestRepository = {
   upsert(row: FilingEscalationRemediationExpiryDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationRemediationExpiryDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationRemediationExpiryDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationRemediationExpiryDigestRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationRemediationExpiryDigestRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationRemediationExpiryDigestRow[]>
 }
 
 export type FilingEscalationRolloverBreachWatchRepository = {
   upsert(row: FilingEscalationRolloverBreachWatchRow): Promise<void>
-  get(id: string): Promise<FilingEscalationRolloverBreachWatchRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationRolloverBreachWatchRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationRolloverBreachWatchRow[]>
 }
 
 export type FilingEscalationRemediationLifecycleRepository = {
   upsert(row: FilingEscalationRemediationLifecycleRow): Promise<void>
-  get(id: string): Promise<FilingEscalationRemediationLifecycleRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationRemediationLifecycleRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationRemediationLifecycleRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationRemediationLifecycleRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationRemediationLifecycleRow[]>
 }
 
 export type FilingEscalationRolloverReaffirmationSlaRepository = {
   upsert(row: FilingEscalationRolloverReaffirmationSlaRow): Promise<void>
-  get(id: string): Promise<FilingEscalationRolloverReaffirmationSlaRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
-  listByPackageId(packageId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
+  listByPackageId(firmId: string, packageId: string): Promise<FilingEscalationRolloverReaffirmationSlaRow[]>
 }
 
 export type FilingEscalationClosureComplianceDigestRepository = {
   upsert(row: FilingEscalationClosureComplianceDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureComplianceDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureComplianceDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureComplianceDigestRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureComplianceDigestRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureComplianceDigestRow[]>
 }
 
 export type FilingEscalationClosureFollowupQueueRepository = {
   upsert(row: FilingEscalationClosureFollowupQueueRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureFollowupQueueRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureFollowupQueueRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureFollowupQueueRow[]>
 }
 
 export type FilingEscalationClosureSlaWindowConfigRepository = {
   upsert(row: FilingEscalationClosureSlaWindowConfigRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSlaWindowConfigRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSlaWindowConfigRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSlaWindowConfigRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaWindowConfigRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSlaWindowConfigRow[]>
 }
 
 export type FilingEscalationClosureAutoAssignmentRuleRepository = {
   upsert(row: FilingEscalationClosureAutoAssignmentRuleRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAutoAssignmentRuleRow[]>
 }
 
 export type FilingEscalationClosureSlaWindowRepository = {
   upsert(row: FilingEscalationClosureSlaWindowRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSlaWindowRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSlaWindowRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSlaWindowRow[]>
 }
 
 export type FilingEscalationClosureAttestationRepository = {
   upsert(row: FilingEscalationClosureAttestationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAttestationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAttestationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAttestationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAttestationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAttestationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAttestationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAttestationRow[]>
 }
 
 export type FilingEscalationClosureSlaExceptionDigestRepository = {
   upsert(row: FilingEscalationClosureSlaExceptionDigestRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSlaExceptionDigestRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureSlaExceptionDigestRow[]>
 }
 
 export type FilingEscalationClosureAttestationDisputeRepository = {
   upsert(row: FilingEscalationClosureAttestationDisputeRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAttestationDisputeRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAttestationDisputeRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
-  listByAttestationId(attestationId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
+  listByAttestationId(firmId: string, attestationId: string): Promise<FilingEscalationClosureAttestationDisputeRow[]>
 }
 
 export type FilingEscalationClosureSlaExceptionEnforcementRepository = {
   upsert(row: FilingEscalationClosureSlaExceptionEnforcementRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureSlaExceptionEnforcementRow[]>
 }
 
 export type FilingEscalationClosureAdjudicationQueueRepository = {
   upsert(row: FilingEscalationClosureAdjudicationQueueRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAdjudicationQueueRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAdjudicationQueueRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
-  listByDisputeId(disputeId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
+  listByDisputeId(firmId: string, disputeId: string): Promise<FilingEscalationClosureAdjudicationQueueRow[]>
 }
 
 export type FilingEscalationClosureEnforcementRebalanceRepository = {
   upsert(row: FilingEscalationClosureEnforcementRebalanceRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureEnforcementRebalanceRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureEnforcementRebalanceRow[]>
 }
 
 export type FilingEscalationClosureAdjudicationQuorumRepository = {
   upsert(row: FilingEscalationClosureAdjudicationQuorumRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAdjudicationQuorumRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
-  listByAdjudicationId(adjudicationId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureAdjudicationQuorumRow[]>
 }
 
 export type FilingEscalationClosureRebalanceExecutionRepository = {
   upsert(row: FilingEscalationClosureRebalanceExecutionRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureRebalanceExecutionRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureRebalanceExecutionRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
-  listByRebalanceId(rebalanceId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureRebalanceExecutionRow[]>
 }
 
 export type FilingEscalationClosureAdjudicationSloRepository = {
   upsert(row: FilingEscalationClosureAdjudicationSloRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAdjudicationSloRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAdjudicationSloRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
-  listByAdjudicationId(adjudicationId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureAdjudicationSloRow[]>
 }
 
 export type FilingEscalationClosureRebalanceSafeguardRepository = {
   upsert(row: FilingEscalationClosureRebalanceSafeguardRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureRebalanceSafeguardRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
-  listByRebalanceId(rebalanceId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureRebalanceSafeguardRow[]>
 }
 
 export type FilingEscalationClosureAdjudicationSloDebtRemediationRepository = {
   upsert(row: FilingEscalationClosureAdjudicationSloDebtRemediationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureAdjudicationSloDebtRemediationRow[]>
 }
 
 export type FilingEscalationClosureRebalanceSafeguardExpiryRepository = {
   upsert(row: FilingEscalationClosureRebalanceSafeguardExpiryRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureRebalanceSafeguardExpiryRow[]>
 }
 
 export type FilingEscalationClosureAdjudicationDebtBurndownRepository = {
   upsert(row: FilingEscalationClosureAdjudicationDebtBurndownRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureAdjudicationDebtBurndownRow[]>
 }
 
 export type FilingEscalationClosureSafeguardExpiryAttestationRepository = {
   upsert(row: FilingEscalationClosureSafeguardExpiryAttestationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureSafeguardExpiryAttestationRow[]>
 }
 
 export type FilingEscalationClosureBurndownRecalibrationRepository = {
   upsert(row: FilingEscalationClosureBurndownRecalibrationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureBurndownRecalibrationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureBurndownRecalibrationRow[]>
 }
 
 export type FilingEscalationClosureExpiryAttestationQueueRepository = {
   upsert(row: FilingEscalationClosureExpiryAttestationQueueRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureExpiryAttestationQueueRow[]>
 }
 
 export type FilingEscalationClosureBurndownSettlementRepository = {
   upsert(row: FilingEscalationClosureBurndownSettlementRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureBurndownSettlementRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureBurndownSettlementRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureBurndownSettlementRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureBurndownSettlementRow[]>
 }
 
 export type FilingEscalationClosureExpiryAttestationQueueDrainRepository = {
   upsert(row: FilingEscalationClosureExpiryAttestationQueueDrainRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureExpiryAttestationQueueDrainRow[]>
 }
 
 export type FilingEscalationClosureSettlementAttestationRepository = {
   upsert(row: FilingEscalationClosureSettlementAttestationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSettlementAttestationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSettlementAttestationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureSettlementAttestationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureSettlementAttestationRow[]>
 }
 
 export type FilingEscalationClosureQueueDrainReconciliationRepository = {
   upsert(row: FilingEscalationClosureQueueDrainReconciliationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureQueueDrainReconciliationRow[]>
 }
 
 export type FilingEscalationClosureSettlementArbitrationRepository = {
   upsert(row: FilingEscalationClosureSettlementArbitrationRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureSettlementArbitrationRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureSettlementArbitrationRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
-  listByAdjudicationId(
-    adjudicationId: string
-  ): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
+  listByAdjudicationId(firmId: string, adjudicationId: string): Promise<FilingEscalationClosureSettlementArbitrationRow[]>
 }
 
 export type FilingEscalationClosureQueueReentryComplianceRepository = {
   upsert(row: FilingEscalationClosureQueueReentryComplianceRow): Promise<void>
-  get(id: string): Promise<FilingEscalationClosureQueueReentryComplianceRow | null>
+  get(id: string, firmId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow | null>
   listByFirm(firmId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
-  listByOwnerId(ownerId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
-  listByQueueId(queueId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
-  listByRebalanceId(
-    rebalanceId: string
-  ): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
+  listByOwnerId(firmId: string, ownerId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
+  listByQueueId(firmId: string, queueId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
+  listByRebalanceId(firmId: string, rebalanceId: string): Promise<FilingEscalationClosureQueueReentryComplianceRow[]>
 }
 
 export type JobRepository = {
   create(row: Job): Promise<void>
   listByFirm(firmId: string): Promise<Job[]>
-  listByDocument(documentId: string): Promise<Job[]>
+  listByDocument(firmId: string, documentId: string): Promise<Job[]>
 }
 
 export type WorkflowEventRepository = {
@@ -664,23 +640,23 @@ export type WorkflowEventRepository = {
 
 export type FollowUpRepository = {
   upsert(row: FollowUp): Promise<void>
-  get(id: string): Promise<FollowUp | null>
+  get(id: string, firmId: string): Promise<FollowUp | null>
   listByFirm(firmId: string): Promise<FollowUp[]>
 }
 
 export type IntimationRepository = {
   upsert(row: Intimation): Promise<void>
-  get(id: string): Promise<Intimation | null>
+  get(id: string, firmId: string): Promise<Intimation | null>
   listByFirm(firmId: string): Promise<Intimation[]>
-  listByMatter(matterId: string): Promise<Intimation[]>
+  listByMatter(firmId: string, matterId: string): Promise<Intimation[]>
 }
 
 /** Repository shape of a dedicated TB ack-recon lattice view collection. */
 export type WorkflowOpsLatticeViewRepository<TRow> = {
   upsert(row: TRow): Promise<void>
-  get(id: string): Promise<TRow | null>
+  get(id: string, firmId: string): Promise<TRow | null>
   listByFirm(firmId: string): Promise<TRow[]>
-  listByMatter(matterId: string): Promise<TRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<TRow[]>
 }
 
 /**
@@ -699,177 +675,173 @@ export type AuditRepository = {
 /** Durable store for audit rows that could not be persisted (R3 N13); server-only. */
 export type AuditDeadLetterRepository = {
   append(letter: AuditDeadLetter): Promise<void>
-  list(): Promise<AuditDeadLetter[]>
+  listByFirm(firmId: string): Promise<AuditDeadLetter[]>
 }
 
 export type CommitteeBrainOutputRepository = {
   create(row: CommitteeBrainOutput): Promise<void>
-  get(id: string): Promise<CommitteeBrainOutput | null>
+  get(id: string, firmId: string): Promise<CommitteeBrainOutput | null>
   listByFirm(firmId: string): Promise<CommitteeBrainOutput[]>
 }
 
 export type MatterClientSearchIndexRepository = {
   upsert(row: MatterClientSearchIndexRow): Promise<void>
-  get(id: string): Promise<MatterClientSearchIndexRow | null>
+  get(id: string, firmId: string): Promise<MatterClientSearchIndexRow | null>
   listByFirm(firmId: string): Promise<MatterClientSearchIndexRow[]>
 }
 
 export type DraftTemplateAnalyticsRepository = {
   upsert(row: DraftTemplateAnalyticsRow): Promise<void>
-  get(id: string): Promise<DraftTemplateAnalyticsRow | null>
+  get(id: string, firmId: string): Promise<DraftTemplateAnalyticsRow | null>
   listByFirm(firmId: string): Promise<DraftTemplateAnalyticsRow[]>
 }
 
 export type MatterReportExportAnalyticsRepository = {
   upsert(row: MatterReportExportAnalyticsRow): Promise<void>
-  get(id: string): Promise<MatterReportExportAnalyticsRow | null>
+  get(id: string, firmId: string): Promise<MatterReportExportAnalyticsRow | null>
   listByFirm(firmId: string): Promise<MatterReportExportAnalyticsRow[]>
-  listByMatter(matterId: string): Promise<MatterReportExportAnalyticsRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<MatterReportExportAnalyticsRow[]>
 }
 
 export type MatterReportRelevanceSnapshotRepository = {
   upsert(row: MatterReportRelevanceSnapshotRow): Promise<void>
-  get(id: string): Promise<MatterReportRelevanceSnapshotRow | null>
+  get(id: string, firmId: string): Promise<MatterReportRelevanceSnapshotRow | null>
   listByFirm(firmId: string): Promise<MatterReportRelevanceSnapshotRow[]>
-  listByMatter(matterId: string): Promise<MatterReportRelevanceSnapshotRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<MatterReportRelevanceSnapshotRow[]>
 }
 
 export type WorkflowOpsActivityRepository = {
   upsert(row: WorkflowOpsActivityRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsActivityRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsActivityRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
 }
 
 export type WorkflowOpsAlertDigestRepository = {
   upsert(row: WorkflowOpsAlertDigestRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertDigestRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertDigestRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertDigestRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertDigestRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertDigestRow[]>
 }
 
 export type WorkflowOpsAlertAttestationRepository = {
   upsert(row: WorkflowOpsAlertAttestationRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertAttestationRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertAttestationRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertAttestationRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertAttestationRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertAttestationRow[]>
 }
 
 export type WorkflowOpsAlertEscalationLedgerRepository = {
   upsert(row: WorkflowOpsAlertEscalationLedgerRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertEscalationLedgerRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertEscalationLedgerRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertEscalationLedgerRow[]>
 }
 
 export type WorkflowOpsAlertAttestationDisputeRepository = {
   upsert(row: WorkflowOpsAlertAttestationDisputeRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertAttestationDisputeRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertAttestationDisputeRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertAttestationDisputeRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertAttestationDisputeRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertAttestationDisputeRow[]>
 }
 
 export type WorkflowOpsAlertEscalationClosureRepository = {
   upsert(row: WorkflowOpsAlertEscalationClosureRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertEscalationClosureRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertEscalationClosureRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertEscalationClosureRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertEscalationClosureRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertEscalationClosureRow[]>
 }
 
 export type WorkflowOpsAlertDisputeEnforcementLedgerRepository = {
   upsert(row: WorkflowOpsAlertDisputeEnforcementLedgerRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertDisputeEnforcementLedgerRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertDisputeEnforcementLedgerRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertDisputeEnforcementLedgerRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertDisputeEnforcementLedgerRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertDisputeEnforcementLedgerRow[]>
 }
 
 export type WorkflowOpsAlertClosureDebtReconciliationDigestRepository = {
   upsert(row: WorkflowOpsAlertClosureDebtReconciliationDigestRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertClosureDebtReconciliationDigestRow[]>
 }
 
 export type WorkflowOpsAlertEnforcementAttestationRepository = {
   upsert(row: WorkflowOpsAlertEnforcementAttestationRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertEnforcementAttestationRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertEnforcementAttestationRow[]>
 }
 
 export type WorkflowOpsAlertClosureDebtVarianceDigestRepository = {
   upsert(row: WorkflowOpsAlertClosureDebtVarianceDigestRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertClosureDebtVarianceDigestRow[]>
 }
 
 export type WorkflowOpsAlertEnforcementWaiverLedgerRepository = {
   upsert(row: WorkflowOpsAlertEnforcementWaiverLedgerRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertEnforcementWaiverLedgerRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertEnforcementWaiverLedgerRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertEnforcementWaiverLedgerRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertEnforcementWaiverLedgerRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertEnforcementWaiverLedgerRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationQueueRepository = {
   upsert(row: WorkflowOpsAlertVarianceRemediationQueueRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationQueueRow[]>
 }
 
 export type WorkflowOpsAlertWaiverExpiryDigestRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDigestRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDigestRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaLedgerRepository = {
   upsert(row: WorkflowOpsAlertVarianceRemediationSlaLedgerRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaLedgerRow[]>
 }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRepository = {
   upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow[]>
 }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow[]>
-  listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRepository = {
   upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow | null>
   listByFirm(
     firmId: string
   ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow[]>
-  listByMatter(
-    matterId: string
-  ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow[]>
 }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow | null>
   listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow[]>
-  listByMatter(
-    matterId: string
-  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRepository =
@@ -877,26 +849,20 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow[]>
-    listByMatter(
-      matterId: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow | null>
   listByFirm(
     firmId: string
   ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow[]>
-  listByMatter(
-    matterId: string
-  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRepository =
@@ -904,30 +870,24 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow[]
     >
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow | null>
   listByFirm(
     firmId: string
   ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow[]>
-  listByMatter(
-    matterId: string
-  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRepository =
@@ -935,30 +895,24 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow[]
     >
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRepository = {
   upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow): Promise<void>
-  get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow | null>
+  get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow | null>
   listByFirm(
     firmId: string
   ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]>
-  listByMatter(
-    matterId: string
-  ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]>
+  listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow[]>
 }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRepository =
@@ -966,17 +920,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow[]
     >
   }
@@ -986,15 +936,11 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow[]>
-    listByMatter(
-      matterId: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRepository =
@@ -1002,17 +948,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow[]
     >
   }
@@ -1022,15 +964,11 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow | null>
     listByFirm(
       firmId: string
     ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow[]>
-    listByMatter(
-      matterId: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRepository =
@@ -1038,17 +976,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow[]
     >
   }
@@ -1058,17 +992,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow[]
     >
   }
@@ -1078,17 +1008,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow[]
     >
   }
@@ -1098,17 +1024,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow[]
     >
   }
@@ -1118,17 +1040,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow[]
     >
   }
@@ -1138,17 +1056,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow[]
     >
   }
@@ -1158,17 +1072,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow[]
     >
   }
@@ -1178,17 +1088,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]
     >
   }
@@ -1198,17 +1104,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow[]
     >
   }
@@ -1218,17 +1120,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]
     >
   }
@@ -1238,17 +1136,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow[]
     >
   }
@@ -1258,17 +1152,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
   }
@@ -1278,17 +1168,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow[]
     >
   }
@@ -1298,17 +1184,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow[]
     >
   }
@@ -1318,17 +1200,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow[]
     >
   }
@@ -1338,17 +1216,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow[]
     >
   }
@@ -1358,17 +1232,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow[]
     >
   }
@@ -1378,17 +1248,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow[]
     >
   }
@@ -1398,17 +1264,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow[]
     >
   }
@@ -1418,17 +1280,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]
     >
   }
@@ -1438,17 +1296,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow[]
     >
   }
@@ -1458,17 +1312,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]
     >
   }
@@ -1478,17 +1328,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]
     >
   }
@@ -1499,17 +1345,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
   }
@@ -1519,17 +1361,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
   }
@@ -1541,17 +1379,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow[]
     >
   }
@@ -1567,17 +1401,13 @@ export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettle
     upsert(
       row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow[]
     >
   }
@@ -1587,17 +1417,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationRow[]
     >
   }
@@ -1605,9 +1431,9 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRepository =
@@ -1615,17 +1441,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow[]
     >
   }
@@ -1634,18 +1456,18 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
   }
 
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationRow[]>
   }
 
 
@@ -1654,17 +1476,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow[]
     >
   }
@@ -1674,17 +1492,13 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
     upsert(
       row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow
     ): Promise<void>
-    get(
-      id: string
-    ): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow | null>
     listByFirm(
       firmId: string
     ): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
-    listByMatter(
-      matterId: string
-    ): Promise<
+    listByMatter(firmId: string, matterId: string): Promise<
       WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow[]
     >
   }
@@ -1693,173 +1507,161 @@ export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpi
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow[]>
   }
 
 export type WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRepository =
   {
     upsert(row: WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow[]>
   }
 
 export type WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRepository =
   {
     upsert(row: WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow): Promise<void>
-    get(id: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
+    get(id: string, firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow | null>
     listByFirm(firmId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
-    listByMatter(matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
+    listByMatter(firmId: string, matterId: string): Promise<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow[]>
   }
 
 export type TenancySessionReferenceRepository = {
   upsert(row: TenancySessionReferenceRow): Promise<void>
-  get(id: string): Promise<TenancySessionReferenceRow | null>
+  get(id: string, firmId: string): Promise<TenancySessionReferenceRow | null>
+  /** Tenancy GET session replay when only sessionRefId is supplied (ownership checked in route). */
+  getForSessionReplay(id: string): Promise<TenancySessionReferenceRow | null>
   listByFirm(firmId: string): Promise<TenancySessionReferenceRow[]>
-  listByUserId(userId: string): Promise<TenancySessionReferenceRow[]>
+  listByUserId(firmId: string, userId: string): Promise<TenancySessionReferenceRow[]>
 }
 
 export type TenancyLineageDisputeAttestationRepository = {
   upsert(row: TenancyLineageDisputeAttestationRow): Promise<void>
-  get(id: string): Promise<TenancyLineageDisputeAttestationRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageDisputeAttestationRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageDisputeAttestationRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageDisputeAttestationRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageDisputeAttestationRow[]>
 }
 
 export type TenancyLineageReconciliationDigestRepository = {
   upsert(row: TenancyLineageReconciliationDigestRow): Promise<void>
-  get(id: string): Promise<TenancyLineageReconciliationDigestRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageReconciliationDigestRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageReconciliationDigestRow[]>
 }
 
 export type TenancyLineageReconciliationQueueArbitrationRepository = {
   upsert(row: TenancyLineageReconciliationQueueArbitrationRow): Promise<void>
-  get(id: string): Promise<TenancyLineageReconciliationQueueArbitrationRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageReconciliationQueueArbitrationRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageReconciliationQueueArbitrationRow[]>
 }
 
 export type TenancyLineageDigestClosureCheckpointRepository = {
   upsert(row: TenancyLineageDigestClosureCheckpointRow): Promise<void>
-  get(id: string): Promise<TenancyLineageDigestClosureCheckpointRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageDigestClosureCheckpointRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageDigestClosureCheckpointRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageDigestClosureCheckpointRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageDigestClosureCheckpointRow[]>
 }
 
 export type TenancyLineageClosureAdjudicationRepository = {
   upsert(row: TenancyLineageClosureAdjudicationRow): Promise<void>
-  get(id: string): Promise<TenancyLineageClosureAdjudicationRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageClosureAdjudicationRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageClosureAdjudicationRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageClosureAdjudicationRow[]>
 }
 
 export type TenancyLineageArbitrationDebtRetirementLedgerRepository = {
   upsert(row: TenancyLineageArbitrationDebtRetirementLedgerRow): Promise<void>
-  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageArbitrationDebtRetirementLedgerRow[]>
 }
 
 export type TenancyLineageClosureAdjudicationSettlementRepository = {
   upsert(row: TenancyLineageClosureAdjudicationSettlementRow): Promise<void>
-  get(id: string): Promise<TenancyLineageClosureAdjudicationSettlementRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageClosureAdjudicationSettlementRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageClosureAdjudicationSettlementRow[]>
 }
 
 export type TenancyLineageArbitrationDebtRetirementDisputeLedgerRepository = {
   upsert(row: TenancyLineageArbitrationDebtRetirementDisputeLedgerRow): Promise<void>
-  get(id: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow | null>
+  get(id: string, firmId: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow | null>
   listByFirm(firmId: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
-  listByLineageRoot(
-    lineageRootSessionReferenceId: string
-  ): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow[]>
 }
 
 export type TenancyExternalSessionIdentityBridgeRepository = {
   upsert(row: TenancyExternalSessionIdentityBridgeRow): Promise<void>
-  get(id: string): Promise<TenancyExternalSessionIdentityBridgeRow | null>
+  get(id: string, firmId: string): Promise<TenancyExternalSessionIdentityBridgeRow | null>
   listByFirm(firmId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
-  listByLineageRoot(lineageRootSessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
-  listBySessionReference(sessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listByLineageRoot(firmId: string, lineageRootSessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
+  listBySessionReference(firmId: string, sessionReferenceId: string): Promise<TenancyExternalSessionIdentityBridgeRow[]>
 }
 
 export type SpineRepositories = {
@@ -2080,12 +1882,16 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async create(row) {
         store.matters.set(row.id, row)
       },
-      async get(id) {
-        return store.matters.get(id) ?? null
+      async get(id, firmId?: string) {
+        const row = store.matters.get(id) ?? null
+        if (!row) return null
+        if (firmId !== undefined && row.firmId !== firmId) return null
+        return row
       },
-      async update(id, patch) {
+      async update(id, firmId, patch) {
         const current = store.matters.get(id)
         if (!current) return null
+        if (typeof patch.firmId === "string" && patch.firmId !== current.firmId) return null
         const next = { ...current, ...patch }
         store.matters.set(id, next)
         return next
@@ -2100,7 +1906,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
       // The repository returns provisioned records, never a request-scoped
       // clearance ceiling (callers write repository rows back into the store).
-      async get(id) {
+      async get(id, firmId) {
         return storedUserRecord(store, id) ?? null
       },
       async listByFirm(firmId) {
@@ -2118,7 +1924,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async create(row) {
         store.entities.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.entities.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2148,24 +1954,24 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.members.set(store.memberKey(row.matterId, row.userId), row)
       },
-      async get(matterId, userId) {
+      async get(matterId, userId, firmId) {
         return store.members.get(store.memberKey(matterId, userId)) ?? null
       },
       async listByFirm(firmId) {
         return [...store.members.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return [...store.members.values()].filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return [...store.members.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     documents: {
       async create(row) {
         store.documents.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.documents.get(id) ?? null
       },
-      async update(id, patch) {
+      async update(id, firmId, patch) {
         const current = store.documents.get(id)
         if (!current) return null
         const next = { ...current, ...patch }
@@ -2183,13 +1989,13 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async create(row) {
         store.drafts.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.drafts.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.drafts.values()].filter((row) => row.firmId === firmId)
       },
-      async setLocked(id, locked) {
+      async setLocked(id, firmId, locked) {
         const current = store.drafts.get(id)
         if (current) store.drafts.set(id, { ...current, locked })
       },
@@ -2198,7 +2004,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async createOrUpdate(row) {
         store.documentWorkflow.set(row.documentId, row)
       },
-      async get(documentId) {
+      async get(documentId, firmId) {
         return store.documentWorkflow.get(documentId) ?? null
       },
       async listByFirm(firmId) {
@@ -2209,10 +2015,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async create(row) {
         store.filingPackages.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingPackages.get(id) ?? null
       },
-      async update(id, patch) {
+      async update(id, firmId, patch) {
         const current = store.filingPackages.get(id)
         if (!current) return null
         const next = { ...current, ...patch }
@@ -2236,97 +2042,97 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingPacketArtifacts.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingPacketArtifacts.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingPacketArtifacts.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingPacketArtifacts.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingPacketArtifacts.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingDispatchQueue: {
       async upsert(row) {
         store.filingDispatchQueue.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingDispatchQueue.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingDispatchQueue.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingDispatchQueue.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingDispatchQueue.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingAnnexures: {
       async upsert(row) {
         store.filingAnnexures.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingAnnexures.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingAnnexures.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingAnnexures.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingAnnexures.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingSubmissionReceipts: {
       async upsert(row) {
         store.filingSubmissionReceipts.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingSubmissionReceipts.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionReceipts.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingSubmissionReceipts.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingSubmissionReceipts.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingSubmissionReconciliation: {
       async upsert(row) {
         store.filingSubmissionReconciliation.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingSubmissionReconciliation.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionReconciliation.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingSubmissionReconciliation.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingSubmissionReconciliation.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingSubmissionExceptions: {
       async upsert(row) {
         store.filingSubmissionExceptions.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingSubmissionExceptions.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionExceptions.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingSubmissionExceptions.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingSubmissionExceptions.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingTransportExecutionEvidence: {
       async upsert(row) {
         store.filingTransportExecutionEvidence.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingTransportExecutionEvidence.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingTransportExecutionEvidence.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingTransportExecutionEvidence.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2336,49 +2142,49 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingSubmissionSlaDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingSubmissionSlaDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionSlaDigests.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingSubmissionSlaDigests.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingSubmissionSlaDigests.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingEscalationOwnerRota: {
       async upsert(row) {
         store.filingEscalationOwnerRota.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationOwnerRota.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationOwnerRota.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingEscalationOwnerRota.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingEscalationOwnerRota.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingEscalationWorkloadDigests: {
       async upsert(row) {
         store.filingEscalationWorkloadDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationWorkloadDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
-        return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.packageId === packageId)
+      async listByPackageId(firmId, packageId) {
+        return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.firmId === firmId && row.packageId === packageId)
       },
     },
     filingEscalationPolicyBaselines: {
       async upsert(row) {
         store.filingEscalationPolicyBaselines.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationPolicyBaselines.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2386,7 +2192,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationPolicyBaselines.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2396,13 +2202,13 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationBreachWaivers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationBreachWaivers.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationBreachWaivers.values()].filter((row) => row.firmId === firmId)
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationBreachWaivers.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2412,7 +2218,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationPolicyVarianceDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationPolicyVarianceDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2420,7 +2226,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationPolicyVarianceDigests.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2430,7 +2236,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationWaiverExpiryDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationWaiverExpiryDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2438,7 +2244,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationWaiverExpiryDigests.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2448,7 +2254,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationVarianceRemediations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationVarianceRemediations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2456,7 +2262,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationVarianceRemediations.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2466,7 +2272,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationWaiverRolloverAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationWaiverRolloverAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2474,7 +2280,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationWaiverRolloverAttestations.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2484,7 +2290,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationRemediationExpiryDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationRemediationExpiryDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2492,7 +2298,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationRemediationExpiryDigests.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2502,7 +2308,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationRolloverBreachWatches.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationRolloverBreachWatches.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2510,7 +2316,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationRolloverBreachWatches.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2520,7 +2326,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationRemediationLifecycles.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationRemediationLifecycles.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2528,7 +2334,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationRemediationLifecycles.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2538,7 +2344,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationRolloverReaffirmationSlas.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationRolloverReaffirmationSlas.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2546,7 +2352,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByPackageId(packageId) {
+      async listByPackageId(firmId, packageId) {
         return [...store.filingEscalationRolloverReaffirmationSlas.values()].filter(
           (row) => row.packageId === packageId
         )
@@ -2556,7 +2362,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureComplianceDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureComplianceDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2564,7 +2370,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureComplianceDigests.values()].filter(
           (row) => row.ownerId === ownerId
         )
@@ -2574,7 +2380,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureFollowupQueues.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureFollowupQueues.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2582,7 +2388,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureFollowupQueues.values()].filter(
           (row) => row.ownerId === ownerId
         )
@@ -2592,7 +2398,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSlaWindowConfigs.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSlaWindowConfigs.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2600,7 +2406,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSlaWindowConfigs.values()].filter(
           (row) => row.ownerId === ownerId
         )
@@ -2610,7 +2416,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAutoAssignmentRules.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAutoAssignmentRules.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2618,7 +2424,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAutoAssignmentRules.values()].filter(
           (row) => row.ownerId === ownerId
         )
@@ -2628,7 +2434,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSlaWindows.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSlaWindows.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2636,7 +2442,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSlaWindows.values()].filter(
           (row) => row.ownerId === ownerId
         )
@@ -2646,7 +2452,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2654,12 +2460,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAttestations.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAttestations.values()].filter(
           (row) => row.queueId === queueId
         )
@@ -2669,7 +2475,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSlaExceptionDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSlaExceptionDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2677,12 +2483,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSlaExceptionDigests.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureSlaExceptionDigests.values()].filter(
           (row) => row.queueId === queueId
         )
@@ -2692,7 +2498,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAttestationDisputes.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAttestationDisputes.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2700,17 +2506,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAttestationDisputes.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAttestationDisputes.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAttestationId(attestationId) {
+      async listByAttestationId(firmId, attestationId) {
         return [...store.filingEscalationClosureAttestationDisputes.values()].filter(
           (row) => row.attestationId === attestationId
         )
@@ -2720,7 +2526,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSlaExceptionEnforcement.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSlaExceptionEnforcement.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2728,12 +2534,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSlaExceptionEnforcement.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureSlaExceptionEnforcement.values()].filter(
           (row) => row.queueId === queueId
         )
@@ -2743,7 +2549,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAdjudicationQueue.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAdjudicationQueue.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2751,17 +2557,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAdjudicationQueue.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAdjudicationQueue.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByDisputeId(disputeId) {
+      async listByDisputeId(firmId, disputeId) {
         return [...store.filingEscalationClosureAdjudicationQueue.values()].filter(
           (row) => row.disputeId === disputeId
         )
@@ -2771,7 +2577,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureEnforcementRebalance.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureEnforcementRebalance.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2779,12 +2585,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureEnforcementRebalance.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureEnforcementRebalance.values()].filter(
           (row) => row.queueId === queueId
         )
@@ -2794,7 +2600,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAdjudicationQuorum.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAdjudicationQuorum.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2802,17 +2608,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAdjudicationQuorum.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAdjudicationQuorum.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureAdjudicationQuorum.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -2822,7 +2628,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureRebalanceExecution.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureRebalanceExecution.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2830,17 +2636,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureRebalanceExecution.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureRebalanceExecution.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureRebalanceExecution.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -2850,7 +2656,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAdjudicationSlo.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAdjudicationSlo.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2858,17 +2664,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAdjudicationSlo.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAdjudicationSlo.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureAdjudicationSlo.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -2878,7 +2684,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureRebalanceSafeguards.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureRebalanceSafeguards.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2886,17 +2692,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureRebalanceSafeguards.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureRebalanceSafeguards.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureRebalanceSafeguards.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -2906,7 +2712,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAdjudicationSloDebtRemediation.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAdjudicationSloDebtRemediation.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2914,17 +2720,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -2934,7 +2740,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureRebalanceSafeguardExpiry.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureRebalanceSafeguardExpiry.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2942,17 +2748,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -2962,7 +2768,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureAdjudicationDebtBurndown.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureAdjudicationDebtBurndown.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2970,17 +2776,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureAdjudicationDebtBurndown.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureAdjudicationDebtBurndown.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureAdjudicationDebtBurndown.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -2990,7 +2796,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSafeguardExpiryAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSafeguardExpiryAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -2998,17 +2804,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSafeguardExpiryAttestations.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureSafeguardExpiryAttestations.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureSafeguardExpiryAttestations.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -3018,7 +2824,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureBurndownRecalibration.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureBurndownRecalibration.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3026,17 +2832,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -3046,7 +2852,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureExpiryAttestationQueue.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureExpiryAttestationQueue.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3054,17 +2860,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -3074,7 +2880,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureBurndownSettlement.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureBurndownSettlement.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3082,17 +2888,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureBurndownSettlement.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureBurndownSettlement.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureBurndownSettlement.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -3102,7 +2908,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureExpiryAttestationQueueDrain.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureExpiryAttestationQueueDrain.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3110,17 +2916,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureExpiryAttestationQueueDrain.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureExpiryAttestationQueueDrain.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureExpiryAttestationQueueDrain.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -3130,7 +2936,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSettlementAttestation.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSettlementAttestation.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3138,17 +2944,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSettlementAttestation.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureSettlementAttestation.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureSettlementAttestation.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -3158,7 +2964,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureQueueDrainReconciliation.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureQueueDrainReconciliation.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3166,17 +2972,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureQueueDrainReconciliation.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureQueueDrainReconciliation.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureQueueDrainReconciliation.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -3186,7 +2992,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureSettlementArbitration.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureSettlementArbitration.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3194,17 +3000,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureSettlementArbitration.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureSettlementArbitration.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByAdjudicationId(adjudicationId) {
+      async listByAdjudicationId(firmId, adjudicationId) {
         return [...store.filingEscalationClosureSettlementArbitration.values()].filter(
           (row) => row.adjudicationId === adjudicationId
         )
@@ -3214,7 +3020,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.filingEscalationClosureQueueReentryCompliance.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.filingEscalationClosureQueueReentryCompliance.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3222,17 +3028,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByOwnerId(ownerId) {
+      async listByOwnerId(firmId, ownerId) {
         return [...store.filingEscalationClosureQueueReentryCompliance.values()].filter(
           (row) => row.ownerId === ownerId
         )
       },
-      async listByQueueId(queueId) {
+      async listByQueueId(firmId, queueId) {
         return [...store.filingEscalationClosureQueueReentryCompliance.values()].filter(
           (row) => row.queueId === queueId
         )
       },
-      async listByRebalanceId(rebalanceId) {
+      async listByRebalanceId(firmId, rebalanceId) {
         return [...store.filingEscalationClosureQueueReentryCompliance.values()].filter(
           (row) => row.rebalanceId === rebalanceId
         )
@@ -3250,7 +3056,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async listByFirm(firmId) {
         return store.jobs.filter((job) => job.firmId === firmId)
       },
-      async listByDocument(documentId) {
+      async listByDocument(firmId, documentId) {
         return store.jobs.filter((job) => job.documentId === documentId)
       },
     },
@@ -3272,7 +3078,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         }
         store.followUps.push(row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.followUps.find((row) => row.id === id) ?? null
       },
       async listByFirm(firmId) {
@@ -3288,14 +3094,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         }
         store.intimations.push(row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.intimations.find((row) => row.id === id) ?? null
       },
       async listByFirm(firmId) {
         return store.intimations.filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return store.intimations.filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return store.intimations.filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     auditDeadLetter: {
@@ -3305,7 +3111,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         if (store.auditDeadLetters.some((l) => l.row === letter.row && l.deadLetteredAt === letter.deadLetteredAt)) return
         store.auditDeadLetters.push(letter)
       },
-      async list() {
+      async listByFirm(firmId) {
         return [...store.auditDeadLetters]
       },
     },
@@ -3334,7 +3140,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async create(row) {
         store.committeeOutputs.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.committeeOutputs.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3345,7 +3151,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.matterClientSearchIndex.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.matterClientSearchIndex.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3356,7 +3162,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.draftTemplateAnalytics.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.draftTemplateAnalytics.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3367,35 +3173,35 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.matterReportExportAnalytics.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.matterReportExportAnalytics.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.matterReportExportAnalytics.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return [...store.matterReportExportAnalytics.values()].filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return [...store.matterReportExportAnalytics.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     matterReportRelevanceSnapshots: {
       async upsert(row) {
         store.matterReportRelevanceSnapshots.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.matterReportRelevanceSnapshots.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsActivity: {
       async upsert(row) {
         store.workflowOpsActivity.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsActivity.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3406,41 +3212,41 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertDigests.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return [...store.workflowOpsAlertDigests.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertAttestations: {
       async upsert(row) {
         store.workflowOpsAlertAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
-        return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.matterId === matterId)
+      async listByMatter(firmId, matterId) {
+        return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertEscalationLedgers: {
       async upsert(row) {
         store.workflowOpsAlertEscalationLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertEscalationLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertEscalationLedgers.values()].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertEscalationLedgers.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3450,7 +3256,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertAttestationDisputes.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertAttestationDisputes.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3458,7 +3264,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertAttestationDisputes.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3468,7 +3274,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertEscalationClosures.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertEscalationClosures.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3476,7 +3282,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertEscalationClosures.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3486,7 +3292,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertDisputeEnforcementLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertDisputeEnforcementLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3494,7 +3300,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertDisputeEnforcementLedgers.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3504,7 +3310,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertClosureDebtReconciliationDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertClosureDebtReconciliationDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3512,7 +3318,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertClosureDebtReconciliationDigests.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3522,7 +3328,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertEnforcementAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertEnforcementAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3530,7 +3336,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertEnforcementAttestations.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3540,7 +3346,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertClosureDebtVarianceDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertClosureDebtVarianceDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3548,7 +3354,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertClosureDebtVarianceDigests.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3558,7 +3364,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertEnforcementWaiverLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertEnforcementWaiverLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3566,7 +3372,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertEnforcementWaiverLedgers.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3576,7 +3382,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertVarianceRemediationQueues.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertVarianceRemediationQueues.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3584,7 +3390,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertVarianceRemediationQueues.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3594,7 +3400,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3602,7 +3408,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDigests.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3612,7 +3418,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertVarianceRemediationSlaLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertVarianceRemediationSlaLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3620,7 +3426,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaLedgers.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3630,7 +3436,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputes.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputes.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3638,7 +3444,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputes.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3648,7 +3454,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3656,7 +3462,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3666,7 +3472,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudications.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputeAdjudications.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3674,7 +3480,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudications.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3684,7 +3490,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3692,7 +3498,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3702,7 +3508,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3710,7 +3516,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3723,7 +3529,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           row
         )
       },
-      async get(id) {
+      async get(id, firmId) {
         return (
           store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(
             id
@@ -3735,17 +3541,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.values(),
         ].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [
           ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.values(),
-        ].filter((row) => row.matterId === matterId)
+        ].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations: {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3753,7 +3559,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3767,7 +3573,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get(
               id
@@ -3779,17 +3585,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns: {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3797,7 +3603,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.values()].filter(
           (row) => row.matterId === matterId
         )
@@ -3811,7 +3617,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(
               id
@@ -3823,17 +3629,17 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements: {
       async upsert(row) {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -3841,10 +3647,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.values(),
         ].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.values(),
-        ].filter((row) => row.matterId === matterId)
+        ].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains: {
@@ -3854,7 +3660,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           row
         )
       },
-      async get(id) {
+      async get(id, firmId) {
         return (
           store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
             id
@@ -3866,10 +3672,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.values(),
         ].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [
           ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.values(),
-        ].filter((row) => row.matterId === matterId)
+        ].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations: {
@@ -3879,7 +3685,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           row
         )
       },
-      async get(id) {
+      async get(id, firmId) {
         return (
           store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.get(
             id
@@ -3891,10 +3697,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.values(),
         ].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.values(),
-        ].filter((row) => row.matterId === matterId)
+        ].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations:
@@ -3905,7 +3711,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.get(
               id
@@ -3917,10 +3723,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations: {
@@ -3930,7 +3736,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           row
         )
       },
-      async get(id) {
+      async get(id, firmId) {
         return (
           store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get(
             id
@@ -3942,10 +3748,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.values(),
         ].filter((row) => row.firmId === firmId)
       },
-      async listByMatter(matterId) {
+      async listByMatter(firmId, matterId) {
         return [
           ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.values(),
-        ].filter((row) => row.matterId === matterId)
+        ].filter((row) => row.firmId === firmId && row.matterId === matterId)
       },
     },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances:
@@ -3956,7 +3762,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get(
               id
@@ -3968,10 +3774,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations:
@@ -3982,7 +3788,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get(
               id
@@ -3994,10 +3800,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements:
@@ -4008,7 +3814,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get(
               id
@@ -4020,10 +3826,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances:
@@ -4034,7 +3840,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get(
               id
@@ -4046,10 +3852,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations:
@@ -4060,7 +3866,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get(
               id
@@ -4072,10 +3878,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers:
@@ -4086,7 +3892,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.get(
               id
@@ -4098,10 +3904,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications:
@@ -4112,7 +3918,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.get(
               id
@@ -4124,10 +3930,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations:
@@ -4138,7 +3944,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.get(
               id
@@ -4150,10 +3956,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports:
@@ -4164,7 +3970,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get(
               id
@@ -4176,10 +3982,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers:
@@ -4190,7 +3996,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
               id
@@ -4202,10 +4008,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts:
@@ -4216,7 +4022,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
               id
@@ -4228,10 +4034,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -4242,7 +4048,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -4254,10 +4060,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations:
@@ -4268,7 +4074,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.get(
               id
@@ -4280,10 +4086,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs:
@@ -4294,7 +4100,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.get(
               id
@@ -4306,10 +4112,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations:
@@ -4320,7 +4126,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(
               id
@@ -4332,10 +4138,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments:
@@ -4346,7 +4152,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.get(
               id
@@ -4358,10 +4164,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments:
@@ -4372,7 +4178,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments.get(
               id
@@ -4384,10 +4190,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations:
@@ -4398,7 +4204,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -4410,10 +4216,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations:
@@ -4424,7 +4230,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -4436,10 +4242,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers:
@@ -4450,7 +4256,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
               id
@@ -4462,10 +4268,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations:
@@ -4476,7 +4282,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
               id
@@ -4488,10 +4294,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations:
@@ -4502,7 +4308,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(
               id
@@ -4514,10 +4320,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers:
@@ -4528,7 +4334,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
               id
@@ -4540,10 +4346,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -4554,7 +4360,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -4566,10 +4372,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -4580,7 +4386,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -4592,10 +4398,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -4606,7 +4412,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -4618,10 +4424,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -4632,7 +4438,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -4644,10 +4450,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations:
@@ -4658,7 +4464,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
               id
@@ -4670,10 +4476,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments:
@@ -4684,7 +4490,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
               id
@@ -4696,10 +4502,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments:
@@ -4710,7 +4516,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
               id
@@ -4722,10 +4528,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
 
@@ -4737,7 +4543,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
               id
@@ -4749,10 +4555,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations:
@@ -4763,7 +4569,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(
               id
@@ -4775,10 +4581,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations:
@@ -4789,7 +4595,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(
               id
@@ -4801,10 +4607,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments:
@@ -4815,7 +4621,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(
               id
@@ -4827,10 +4633,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments:
@@ -4841,7 +4647,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(
               id
@@ -4853,10 +4659,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations:
@@ -4867,7 +4673,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -4879,10 +4685,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501:
@@ -4893,7 +4699,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.get(
               id
@@ -4905,10 +4711,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations:
@@ -4919,7 +4725,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -4931,10 +4737,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502:
@@ -4945,7 +4751,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.get(
               id
@@ -4957,10 +4763,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations:
@@ -4971,7 +4777,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -4983,10 +4789,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers:
@@ -4997,7 +4803,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
               id
@@ -5009,10 +4815,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers:
@@ -5023,7 +4829,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
               id
@@ -5035,10 +4841,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers:
@@ -5049,7 +4855,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.get(
               id
@@ -5061,10 +4867,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505:
@@ -5075,7 +4881,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505.get(
               id
@@ -5087,10 +4893,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517:
@@ -5101,7 +4907,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.get(
               id
@@ -5113,10 +4919,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519:
@@ -5127,7 +4933,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.get(
               id
@@ -5139,10 +4945,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -5153,7 +4959,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -5165,10 +4971,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507:
@@ -5179,7 +4985,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.get(
               id
@@ -5191,10 +4997,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509:
@@ -5205,7 +5011,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509.get(
               id
@@ -5217,10 +5023,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations:
@@ -5231,7 +5037,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
               id
@@ -5243,10 +5049,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments:
@@ -5257,7 +5063,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
               id
@@ -5269,10 +5075,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers:
@@ -5283,7 +5089,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.get(
               id
@@ -5295,10 +5101,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506:
@@ -5309,7 +5115,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506.get(
               id
@@ -5321,10 +5127,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518:
@@ -5335,7 +5141,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.get(
               id
@@ -5347,10 +5153,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520:
@@ -5361,7 +5167,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.get(
               id
@@ -5373,10 +5179,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations:
@@ -5387,7 +5193,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
               id
@@ -5399,10 +5205,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations:
@@ -5413,7 +5219,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
               id
@@ -5425,10 +5231,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications:
@@ -5439,7 +5245,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
               id
@@ -5451,10 +5257,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508:
@@ -5465,7 +5271,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.get(
               id
@@ -5477,10 +5283,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
   workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521:
@@ -5491,7 +5297,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521.get(
               id
@@ -5503,10 +5309,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510:
@@ -5517,7 +5323,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510.get(
               id
@@ -5529,10 +5335,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522:
@@ -5543,7 +5349,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522.get(
               id
@@ -5555,10 +5361,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523:
@@ -5569,7 +5375,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523.get(
               id
@@ -5581,10 +5387,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511:
@@ -5595,7 +5401,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511.get(
               id
@@ -5607,10 +5413,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524:
@@ -5621,7 +5427,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524.get(
               id
@@ -5633,10 +5439,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526:
@@ -5647,7 +5453,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526.get(
               id
@@ -5659,10 +5465,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525:
@@ -5673,7 +5479,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525.get(
               id
@@ -5685,10 +5491,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512:
@@ -5699,7 +5505,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512.get(
               id
@@ -5711,10 +5517,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513:
@@ -5725,7 +5531,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513.get(
               id
@@ -5737,10 +5543,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515:
@@ -5751,7 +5557,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515.get(
               id
@@ -5763,10 +5569,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527:
@@ -5777,7 +5583,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527.get(
               id
@@ -5789,10 +5595,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529:
@@ -5803,7 +5609,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529.get(
               id
@@ -5815,10 +5621,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514:
@@ -5829,7 +5635,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514.get(
               id
@@ -5841,10 +5647,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528:
@@ -5855,7 +5661,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528.get(
               id
@@ -5867,10 +5673,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530:
@@ -5881,7 +5687,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530.get(
               id
@@ -5893,10 +5699,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531:
@@ -5907,7 +5713,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531.get(
               id
@@ -5919,10 +5725,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532:
@@ -5933,7 +5739,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532.get(
               id
@@ -5945,10 +5751,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533:
@@ -5959,7 +5765,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533.get(
               id
@@ -5971,10 +5777,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535:
@@ -5985,7 +5791,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535.get(
               id
@@ -5997,10 +5803,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537:
@@ -6011,7 +5817,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537.get(
               id
@@ -6023,10 +5829,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539:
@@ -6037,7 +5843,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539.get(
               id
@@ -6049,10 +5855,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
 
@@ -6064,7 +5870,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView534.get(
               id
@@ -6076,10 +5882,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView534.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView534.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536:
@@ -6090,7 +5896,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536.get(
               id
@@ -6102,10 +5908,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538:
@@ -6116,7 +5922,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538.get(
               id
@@ -6128,10 +5934,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540:
@@ -6142,7 +5948,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540.get(
               id
@@ -6154,10 +5960,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541:
@@ -6168,7 +5974,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541.get(
               id
@@ -6180,10 +5986,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542:
@@ -6194,7 +6000,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542.get(
               id
@@ -6206,10 +6012,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
 
@@ -6221,7 +6027,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView543.get(
               id
@@ -6233,10 +6039,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView543.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView543.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545:
@@ -6247,7 +6053,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545.get(
               id
@@ -6259,10 +6065,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547:
@@ -6273,7 +6079,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547.get(
               id
@@ -6285,10 +6091,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
 
@@ -6300,7 +6106,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView549.get(
               id
@@ -6312,10 +6118,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView549.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView549.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544:
@@ -6326,7 +6132,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544.get(
               id
@@ -6338,10 +6144,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546:
@@ -6352,7 +6158,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546.get(
               id
@@ -6364,10 +6170,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548:
@@ -6378,7 +6184,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548.get(
               id
@@ -6390,10 +6196,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
         workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550:
@@ -6404,7 +6210,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550.get(
               id
@@ -6416,10 +6222,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
 
@@ -6431,7 +6237,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.get(
               id
@@ -6443,10 +6249,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations:
@@ -6457,7 +6263,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
               id
@@ -6469,10 +6275,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments:
@@ -6483,7 +6289,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
               id
@@ -6495,10 +6301,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations:
@@ -6509,7 +6315,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             row
           )
         },
-        async get(id) {
+        async get(id, firmId) {
           return (
             store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
               id
@@ -6521,10 +6327,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
           ].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
+        async listByMatter(firmId, matterId) {
           return [
             ...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.values(),
-          ].filter((row) => row.matterId === matterId)
+          ].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations:
@@ -6532,14 +6338,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         async upsert(row) {
           store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.set(row.id, row)
         },
-        async get(id) {
+        async get(id, firmId) {
           return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(id) ?? null
         },
         async listByFirm(firmId) {
           return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values()].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
-          return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values()].filter((row) => row.matterId === matterId)
+        async listByMatter(firmId, matterId) {
+          return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers:
@@ -6547,35 +6353,42 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         async upsert(row) {
           store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(row.id, row)
         },
-        async get(id) {
+        async get(id, firmId) {
           return store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(id) ?? null
         },
         async listByFirm(firmId) {
           return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values()].filter((row) => row.firmId === firmId)
         },
-        async listByMatter(matterId) {
-          return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values()].filter((row) => row.matterId === matterId)
+        async listByMatter(firmId, matterId) {
+          return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values()].filter((row) => row.firmId === firmId && row.matterId === matterId)
         },
       },
     tenancySessionReferences: {
       async upsert(row) {
         store.tenancySessionReferences.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
+        const row = store.tenancySessionReferences.get(id)
+        if (!row || row.firmId !== firmId) return null
+        return row
+      },
+      async getForSessionReplay(id) {
         return store.tenancySessionReferences.get(id) ?? null
       },
       async listByFirm(firmId) {
         return [...store.tenancySessionReferences.values()].filter((row) => row.firmId === firmId)
       },
-      async listByUserId(userId) {
-        return [...store.tenancySessionReferences.values()].filter((row) => row.userId === userId)
+      async listByUserId(firmId, userId) {
+        return [...store.tenancySessionReferences.values()].filter(
+          (row) => row.firmId === firmId && row.userId === userId
+        )
       },
     },
     tenancyLineageDisputeAttestations: {
       async upsert(row) {
         store.tenancyLineageDisputeAttestations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageDisputeAttestations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6583,7 +6396,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageDisputeAttestations.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6593,7 +6406,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageReconciliationDigests.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageReconciliationDigests.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6606,7 +6419,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageReconciliationQueueArbitrations.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageReconciliationQueueArbitrations.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6614,7 +6427,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6624,7 +6437,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageDigestClosureCheckpoints.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6632,7 +6445,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6642,7 +6455,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageClosureAdjudications.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageClosureAdjudications.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6650,7 +6463,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageClosureAdjudications.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6660,7 +6473,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageArbitrationDebtRetirementLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageArbitrationDebtRetirementLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6668,7 +6481,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6678,7 +6491,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageClosureAdjudicationSettlements.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageClosureAdjudicationSettlements.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6686,7 +6499,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6696,7 +6509,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6704,7 +6517,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
@@ -6714,7 +6527,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       async upsert(row) {
         store.tenancyExternalSessionIdentityBridges.set(row.id, row)
       },
-      async get(id) {
+      async get(id, firmId) {
         return store.tenancyExternalSessionIdentityBridges.get(id) ?? null
       },
       async listByFirm(firmId) {
@@ -6722,12 +6535,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           (row) => row.firmId === firmId
         )
       },
-      async listByLineageRoot(lineageRootSessionReferenceId) {
+      async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
         return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
           (row) => row.lineageRootSessionReferenceId === lineageRootSessionReferenceId
         )
       },
-      async listBySessionReference(sessionReferenceId) {
+      async listBySessionReference(firmId, sessionReferenceId) {
         return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
           (row) => row.sessionReferenceId === sessionReferenceId
         )

@@ -105,9 +105,38 @@ describe("G-0 full-tree scraper/provider guards (FA-CI-001)", () => {
     expect(result.out).toMatch(/puppeteer/i);
   });
 
+  it("fails root playwright package in dependencies (not exact allowlist symbol)", () => {
+    const dir = mkProbe();
+    tmpDirs.push(dir);
+    writeAllowlist(dir, ["package.json:devDependencies/@playwright/test"], []);
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ dependencies: { playwright: "1.64.0" } }),
+    );
+    const result = runGuard("ci_gates/check_scraper_libraries.py", dir);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toMatch(/playwright/i);
+  });
+
+  it("fails playwright-core and playwright-chromium in root dependencies", () => {
+    for (const pkg of ["playwright-core", "playwright-chromium"]) {
+      const dir = mkProbe();
+      tmpDirs.push(dir);
+      writeAllowlist(dir, ["package.json:devDependencies/@playwright/test"], []);
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ dependencies: { [pkg]: "1.64.0" } }),
+      );
+      const result = runGuard("ci_gates/check_scraper_libraries.py", dir);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toMatch(new RegExp(pkg, "i"));
+    }
+  });
+
   it("allows root @playwright/test devDependency only", () => {
     const dir = mkProbe();
     tmpDirs.push(dir);
+    writeAllowlist(dir, ["package.json:devDependencies/@playwright/test"], []);
     fs.writeFileSync(
       path.join(dir, "package.json"),
       JSON.stringify({ devDependencies: { "@playwright/test": "1.64.0" } }),

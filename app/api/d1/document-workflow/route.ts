@@ -275,9 +275,9 @@ async function handlePost(request: Request) {
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_review_decision")
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {
-        const persistedDoc = await repos.documents.get(updatedDoc.id)
+        const persistedDoc = await repos.documents.get(updatedDoc.id, actor.firmId)
         if (persistedDoc) {
-          await repos.documents.update(updatedDoc.id, {
+          await repos.documents.update(updatedDoc.id, actor.firmId, {
             classification: updatedDoc.classification,
             matterId: updatedDoc.matterId,
             sourceChannel: updatedDoc.sourceChannel,

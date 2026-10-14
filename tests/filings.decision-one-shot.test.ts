@@ -97,7 +97,7 @@ describe("FilingRepository.decideIfPending (memory)", () => {
     await repos.filings.create(pkg("pending_partner_approval"))
     expect(await repos.filings.decideIfPending("pkg_1", patch)).toMatchObject({ kind: "decided", row: { status: "approved" } })
     expect(await repos.filings.decideIfPending("pkg_1", { ...patch, status: "rejected" })).toEqual({ kind: "already_decided" })
-    expect((await repos.filings.get("pkg_1"))?.status).toBe("approved")
+    expect((await repos.filings.get("pkg_1", "firmA"))?.status).toBe("approved")
     expect(await repos.filings.decideIfPending("pkg_missing", patch)).toEqual({ kind: "missing" })
   })
 })

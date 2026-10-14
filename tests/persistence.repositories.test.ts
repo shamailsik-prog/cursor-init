@@ -49,7 +49,7 @@ describe("Firestore repository adapters", () => {
         role: "associate",
         clearanceLevel: "privileged",
       })
-      const persistedUser = await repos.users.get("associate_a")
+      const persistedUser = await repos.users.get("associate_a", "firmA")
       expect(persistedUser?.role).toBe("associate")
       const firmUsers = await repos.users.listByFirm("firmA")
       expect(firmUsers.some((row) => row.id === "associate_a")).toBe(true)
@@ -93,11 +93,11 @@ describe("Firestore repository adapters", () => {
         privilegedBoundaryDriftedBy: null,
         privilegedBoundaryDriftReason: null,
       })
-      const sessionRef = await repos.tenancySessionReferences.get("tsr_1")
+      const sessionRef = await repos.tenancySessionReferences.get("tsr_1", "firmA")
       expect(sessionRef?.userId).toBe("partner_a")
       const firmSessionRefs = await repos.tenancySessionReferences.listByFirm("firmA")
       expect(firmSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
-      const userSessionRefs = await repos.tenancySessionReferences.listByUserId("partner_a")
+      const userSessionRefs = await repos.tenancySessionReferences.listByUserId("firmA", "partner_a")
       expect(userSessionRefs.some((row) => row.id === "tsr_1")).toBe(true)
       await repos.tenancyLineageDisputeAttestations.upsert({
         id: "tld_1",
@@ -115,11 +115,11 @@ describe("Firestore repository adapters", () => {
         disposition: null,
         resolutionNote: null,
       })
-      const dispute = await repos.tenancyLineageDisputeAttestations.get("tld_1")
+      const dispute = await repos.tenancyLineageDisputeAttestations.get("tld_1", "firmA")
       expect(dispute?.status).toBe("open")
       const disputesByFirm = await repos.tenancyLineageDisputeAttestations.listByFirm("firmA")
       expect(disputesByFirm.some((row) => row.id === "tld_1")).toBe(true)
-      const disputesByRoot = await repos.tenancyLineageDisputeAttestations.listByLineageRoot("tsr_1")
+      const disputesByRoot = await repos.tenancyLineageDisputeAttestations.listByLineageRoot("firmA", "tsr_1")
       expect(disputesByRoot.some((row) => row.id === "tld_1")).toBe(true)
       await repos.tenancyLineageReconciliationDigests.upsert({
         id: "tenancy-lineage-digest:tsr_1",
@@ -135,9 +135,7 @@ describe("Firestore repository adapters", () => {
         reasons: ["open_lineage_dispute", "delegated_boundary_divergence"],
         updatedAt: 105,
       })
-      const tenancyDigest = await repos.tenancyLineageReconciliationDigests.get(
-        "tenancy-lineage-digest:tsr_1"
-      )
+      const tenancyDigest = await repos.tenancyLineageReconciliationDigests.get("tenancy-lineage-digest:tsr_1", "firmA")
       expect(tenancyDigest?.status).toBe("needs_review")
       const tenancyDigestsByFirm = await repos.tenancyLineageReconciliationDigests.listByFirm(
         "firmA"
@@ -163,9 +161,7 @@ describe("Firestore repository adapters", () => {
         notes: ["queue assigned"],
         updatedAt: 106,
       })
-      const tenancyQueue = await repos.tenancyLineageReconciliationQueueArbitrations.get(
-        "tenancy-lineage-arbitration:tsr_1"
-      )
+      const tenancyQueue = await repos.tenancyLineageReconciliationQueueArbitrations.get("tenancy-lineage-arbitration:tsr_1", "firmA")
       expect(tenancyQueue?.status).toBe("assigned")
       const tenancyQueueByFirm =
         await repos.tenancyLineageReconciliationQueueArbitrations.listByFirm("firmA")
@@ -173,7 +169,7 @@ describe("Firestore repository adapters", () => {
         tenancyQueueByFirm.some((row) => row.lineageRootSessionReferenceId === "tsr_1")
       ).toBe(true)
       const tenancyQueueByRoot =
-        await repos.tenancyLineageReconciliationQueueArbitrations.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageReconciliationQueueArbitrations.listByLineageRoot("firmA", "tsr_1")
       expect(tenancyQueueByRoot.some((row) => row.id === "tenancy-lineage-arbitration:tsr_1")).toBe(
         true
       )
@@ -192,9 +188,7 @@ describe("Firestore repository adapters", () => {
         notes: ["closure attested"],
         updatedAt: 107,
       })
-      const tenancyClosure = await repos.tenancyLineageDigestClosureCheckpoints.get(
-        "tenancy-lineage-closure:tsr_1"
-      )
+      const tenancyClosure = await repos.tenancyLineageDigestClosureCheckpoints.get("tenancy-lineage-closure:tsr_1", "firmA")
       expect(tenancyClosure?.status).toBe("closed_attested")
       const tenancyClosuresByFirm = await repos.tenancyLineageDigestClosureCheckpoints.listByFirm(
         "firmA"
@@ -203,7 +197,7 @@ describe("Firestore repository adapters", () => {
         true
       )
       const tenancyClosuresByRoot =
-        await repos.tenancyLineageDigestClosureCheckpoints.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageDigestClosureCheckpoints.listByLineageRoot("firmA", "tsr_1")
       expect(tenancyClosuresByRoot.some((row) => row.id === "tenancy-lineage-closure:tsr_1")).toBe(
         true
       )
@@ -227,9 +221,7 @@ describe("Firestore repository adapters", () => {
         notes: ["quorum pending"],
         updatedAt: 108,
       })
-      const tenancyAdjudication = await repos.tenancyLineageClosureAdjudications.get(
-        "tenancy-lineage-closure-adjudication:tsr_1"
-      )
+      const tenancyAdjudication = await repos.tenancyLineageClosureAdjudications.get("tenancy-lineage-closure-adjudication:tsr_1", "firmA")
       expect(tenancyAdjudication?.status).toBe("quorum_pending")
       const tenancyAdjudicationsByFirm = await repos.tenancyLineageClosureAdjudications.listByFirm(
         "firmA"
@@ -240,7 +232,7 @@ describe("Firestore repository adapters", () => {
         )
       ).toBe(true)
       const tenancyAdjudicationsByRoot =
-        await repos.tenancyLineageClosureAdjudications.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageClosureAdjudications.listByLineageRoot("firmA", "tsr_1")
       expect(
         tenancyAdjudicationsByRoot.some(
           (row) => row.id === "tenancy-lineage-closure-adjudication:tsr_1"
@@ -266,9 +258,7 @@ describe("Firestore repository adapters", () => {
         notes: ["queue pressure open"],
         updatedAt: 109,
       })
-      const tenancyDebtLedger = await repos.tenancyLineageArbitrationDebtRetirementLedgers.get(
-        "tenancy-lineage-arbitration-debt:tsr_1"
-      )
+      const tenancyDebtLedger = await repos.tenancyLineageArbitrationDebtRetirementLedgers.get("tenancy-lineage-arbitration-debt:tsr_1", "firmA")
       expect(tenancyDebtLedger?.status).toBe("pressure_open")
       const tenancyDebtLedgersByFirm =
         await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByFirm("firmA")
@@ -276,7 +266,7 @@ describe("Firestore repository adapters", () => {
         tenancyDebtLedgersByFirm.some((row) => row.id === "tenancy-lineage-arbitration-debt:tsr_1")
       ).toBe(true)
       const tenancyDebtLedgersByRoot =
-        await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageArbitrationDebtRetirementLedgers.listByLineageRoot("firmA", "tsr_1")
       expect(
         tenancyDebtLedgersByRoot.some((row) => row.id === "tenancy-lineage-arbitration-debt:tsr_1")
       ).toBe(true)
@@ -301,9 +291,7 @@ describe("Firestore repository adapters", () => {
         notes: ["publication logged"],
         updatedAt: 112,
       })
-      const tenancySettlement = await repos.tenancyLineageClosureAdjudicationSettlements.get(
-        "tenancy-lineage-closure-settlement:tsr_1"
-      )
+      const tenancySettlement = await repos.tenancyLineageClosureAdjudicationSettlements.get("tenancy-lineage-closure-settlement:tsr_1", "firmA")
       expect(tenancySettlement?.status).toBe("publication_checkpointed")
       const tenancySettlementsByFirm =
         await repos.tenancyLineageClosureAdjudicationSettlements.listByFirm("firmA")
@@ -311,7 +299,7 @@ describe("Firestore repository adapters", () => {
         tenancySettlementsByFirm.some((row) => row.id === "tenancy-lineage-closure-settlement:tsr_1")
       ).toBe(true)
       const tenancySettlementsByRoot =
-        await repos.tenancyLineageClosureAdjudicationSettlements.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageClosureAdjudicationSettlements.listByLineageRoot("firmA", "tsr_1")
       expect(
         tenancySettlementsByRoot.some((row) => row.id === "tenancy-lineage-closure-settlement:tsr_1")
       ).toBe(true)
@@ -339,9 +327,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 115,
       })
       const tenancyDebtDispute =
-        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(
-          "tenancy-lineage-arbitration-debt-dispute:tsr_1"
-        )
+        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get("tenancy-lineage-arbitration-debt-dispute:tsr_1", "firmA")
       expect(tenancyDebtDispute?.status).toBe("reviewer_assigned")
       const tenancyDebtDisputesByFirm =
         await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.listByFirm("firmA")
@@ -351,7 +337,7 @@ describe("Firestore repository adapters", () => {
         )
       ).toBe(true)
       const tenancyDebtDisputesByRoot =
-        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.listByLineageRoot("tsr_1")
+        await repos.tenancyLineageArbitrationDebtRetirementDisputeLedgers.listByLineageRoot("firmA", "tsr_1")
       expect(
         tenancyDebtDisputesByRoot.some(
           (row) => row.id === "tenancy-lineage-arbitration-debt-dispute:tsr_1"
@@ -381,9 +367,7 @@ describe("Firestore repository adapters", () => {
         notes: ["initial bridge attestation"],
         updatedAt: 117,
       })
-      const tenancyIdentityBridge = await repos.tenancyExternalSessionIdentityBridges.get(
-        "tenancy-external-session-identity-bridge:tsr_1_child"
-      )
+      const tenancyIdentityBridge = await repos.tenancyExternalSessionIdentityBridges.get("tenancy-external-session-identity-bridge:tsr_1_child", "firmA")
       expect(tenancyIdentityBridge?.status).toBe("attested")
       const tenancyIdentityBridgesByFirm =
         await repos.tenancyExternalSessionIdentityBridges.listByFirm("firmA")
@@ -393,14 +377,14 @@ describe("Firestore repository adapters", () => {
         )
       ).toBe(true)
       const tenancyIdentityBridgesByRoot =
-        await repos.tenancyExternalSessionIdentityBridges.listByLineageRoot("tsr_1")
+        await repos.tenancyExternalSessionIdentityBridges.listByLineageRoot("firmA", "tsr_1")
       expect(
         tenancyIdentityBridgesByRoot.some(
           (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
         )
       ).toBe(true)
       const tenancyIdentityBridgesBySession =
-        await repos.tenancyExternalSessionIdentityBridges.listBySessionReference("tsr_1_child")
+        await repos.tenancyExternalSessionIdentityBridges.listBySessionReference("firmA", "tsr_1_child")
       expect(
         tenancyIdentityBridgesBySession.some(
           (row) => row.id === "tenancy-external-session-identity-bridge:tsr_1_child"
@@ -425,7 +409,7 @@ describe("Firestore repository adapters", () => {
         },
         createdAt: 123,
       })
-      const committeeOutput = await repos.committeeOutputs.get("cbo_1")
+      const committeeOutput = await repos.committeeOutputs.get("cbo_1", "firmA")
       expect(committeeOutput?.purpose).toBe("committee-brain")
       const committeeRows = await repos.committeeOutputs.listByFirm("firmA")
       expect(committeeRows.some((row) => row.id === "cbo_1" && row.actorId === "partner_a")).toBe(
@@ -445,7 +429,7 @@ describe("Firestore repository adapters", () => {
         tags: ["indexed", "matter"],
         updatedAt: 12,
       })
-      const indexRow = await repos.reportingIndex.get("idx_1")
+      const indexRow = await repos.reportingIndex.get("idx_1", "firmA")
       expect(indexRow?.label).toBe("Indexed Matter")
       const indexRows = await repos.reportingIndex.listByFirm("firmA")
       expect(indexRows.some((row) => row.id === "idx_1" && row.rowType === "matter")).toBe(true)
@@ -463,9 +447,7 @@ describe("Firestore repository adapters", () => {
         lastTemplateSearchQuery: "motion",
         updatedAt: 42,
       })
-      const draftTemplateAnalytics = await repos.draftTemplateAnalytics.get(
-        "template:motion_template"
-      )
+      const draftTemplateAnalytics = await repos.draftTemplateAnalytics.get("template:motion_template", "firmA")
       expect(draftTemplateAnalytics?.composeCount).toBe(4)
       const analyticsRows = await repos.draftTemplateAnalytics.listByFirm("firmA")
       expect(
@@ -486,11 +468,11 @@ describe("Firestore repository adapters", () => {
         lastExportReason: "weekly_export",
         updatedAt: 45,
       })
-      const exportAnalytics = await repos.matterReportExportAnalytics.get("matter_report_export:mat_1")
+      const exportAnalytics = await repos.matterReportExportAnalytics.get("matter_report_export:mat_1", "firmA")
       expect(exportAnalytics?.exportCount).toBe(2)
       const exportAnalyticsByFirm = await repos.matterReportExportAnalytics.listByFirm("firmA")
       expect(exportAnalyticsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const exportAnalyticsByMatter = await repos.matterReportExportAnalytics.listByMatter("mat_1")
+      const exportAnalyticsByMatter = await repos.matterReportExportAnalytics.listByMatter("firmA", "mat_1")
       expect(
         exportAnalyticsByMatter.some(
           (row) => row.lastExportFormat === "csv" && row.lastExportScope === "summary"
@@ -510,11 +492,11 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "manual_recompute",
         updatedAt: 46,
       })
-      const relevanceSnapshot = await repos.matterReportRelevanceSnapshots.get("matter_report_relevance:mat_1")
+      const relevanceSnapshot = await repos.matterReportRelevanceSnapshots.get("matter_report_relevance:mat_1", "firmA")
       expect(relevanceSnapshot?.scoreBand).toBe("medium")
       const relevanceByFirm = await repos.matterReportRelevanceSnapshots.listByFirm("firmA")
       expect(relevanceByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const relevanceByMatter = await repos.matterReportRelevanceSnapshots.listByMatter("mat_1")
+      const relevanceByMatter = await repos.matterReportRelevanceSnapshots.listByMatter("firmA", "mat_1")
       expect(relevanceByMatter.some((row) => row.recomputeReason === "manual_recompute")).toBe(true)
       await repos.workflowOpsActivity.upsert({
         id: "ops:workflow_event:wfe_1",
@@ -532,7 +514,7 @@ describe("Firestore repository adapters", () => {
         tags: ["workflow", "processing", "mat_1"],
         createdAt: 44,
       })
-      const opsRow = await repos.workflowOpsActivity.get("ops:workflow_event:wfe_1")
+      const opsRow = await repos.workflowOpsActivity.get("ops:workflow_event:wfe_1", "firmA")
       expect(opsRow?.action).toBe("workflow_transition")
       const opsRows = await repos.workflowOpsActivity.listByFirm("firmA")
       expect(opsRows.some((row) => row.id === "ops:workflow_event:wfe_1")).toBe(true)
@@ -558,11 +540,11 @@ describe("Firestore repository adapters", () => {
         snoozedReason: null,
         updatedAt: 48,
       })
-      const alertDigest = await repos.workflowOpsAlertDigests.get("workflow_ops_alert:mat_1")
+      const alertDigest = await repos.workflowOpsAlertDigests.get("workflow_ops_alert:mat_1", "firmA")
       expect(alertDigest?.severity).toBe("high")
       const alertDigestsByFirm = await repos.workflowOpsAlertDigests.listByFirm("firmA")
       expect(alertDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const alertDigestsByMatter = await repos.workflowOpsAlertDigests.listByMatter("mat_1")
+      const alertDigestsByMatter = await repos.workflowOpsAlertDigests.listByMatter("firmA", "mat_1")
       expect(alertDigestsByMatter.some((row) => row.recomputeReason === "ops_runtime_check")).toBe(true)
       await repos.workflowOpsAlertAttestations.upsert({
         id: "workflow_ops_alert_attestation:mat_1",
@@ -581,11 +563,11 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_attestation_seed",
         updatedAt: 49,
       })
-      const attestation = await repos.workflowOpsAlertAttestations.get("workflow_ops_alert_attestation:mat_1")
+      const attestation = await repos.workflowOpsAlertAttestations.get("workflow_ops_alert_attestation:mat_1", "firmA")
       expect(attestation?.attestationStatus).toBe("pending_attestation")
       const attestationsByFirm = await repos.workflowOpsAlertAttestations.listByFirm("firmA")
       expect(attestationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const attestationsByMatter = await repos.workflowOpsAlertAttestations.listByMatter("mat_1")
+      const attestationsByMatter = await repos.workflowOpsAlertAttestations.listByMatter("firmA", "mat_1")
       expect(attestationsByMatter.some((row) => row.recomputeReason === "ops_attestation_seed")).toBe(true)
       await repos.workflowOpsAlertEscalationLedgers.upsert({
         id: "workflow_ops_alert_escalation:mat_1",
@@ -607,11 +589,11 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_escalation_seed",
         updatedAt: 50,
       })
-      const escalation = await repos.workflowOpsAlertEscalationLedgers.get("workflow_ops_alert_escalation:mat_1")
+      const escalation = await repos.workflowOpsAlertEscalationLedgers.get("workflow_ops_alert_escalation:mat_1", "firmA")
       expect(escalation?.escalationStatus).toBe("open")
       const escalationsByFirm = await repos.workflowOpsAlertEscalationLedgers.listByFirm("firmA")
       expect(escalationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const escalationsByMatter = await repos.workflowOpsAlertEscalationLedgers.listByMatter("mat_1")
+      const escalationsByMatter = await repos.workflowOpsAlertEscalationLedgers.listByMatter("firmA", "mat_1")
       expect(escalationsByMatter.some((row) => row.recomputeReason === "ops_escalation_seed")).toBe(true)
       await repos.workflowOpsAlertAttestationDisputes.upsert({
         id: "workflow_ops_alert_attestation_dispute:mat_1",
@@ -633,16 +615,14 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_dispute_seed",
         updatedAt: 51,
       })
-      const attestationDispute = await repos.workflowOpsAlertAttestationDisputes.get(
-        "workflow_ops_alert_attestation_dispute:mat_1"
-      )
+      const attestationDispute = await repos.workflowOpsAlertAttestationDisputes.get("workflow_ops_alert_attestation_dispute:mat_1", "firmA")
       expect(attestationDispute?.disputeStatus).toBe("open")
       const attestationDisputesByFirm = await repos.workflowOpsAlertAttestationDisputes.listByFirm(
         "firmA"
       )
       expect(attestationDisputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const attestationDisputesByMatter = await repos.workflowOpsAlertAttestationDisputes.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
       )
       expect(attestationDisputesByMatter.some((row) => row.recomputeReason === "ops_dispute_seed")).toBe(
         true
@@ -666,13 +646,11 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_closure_seed",
         updatedAt: 52,
       })
-      const closure = await repos.workflowOpsAlertEscalationClosures.get(
-        "workflow_ops_alert_escalation_closure:mat_1"
-      )
+      const closure = await repos.workflowOpsAlertEscalationClosures.get("workflow_ops_alert_escalation_closure:mat_1", "firmA")
       expect(closure?.closureStatus).toBe("checkpoint_recorded")
       const closuresByFirm = await repos.workflowOpsAlertEscalationClosures.listByFirm("firmA")
       expect(closuresByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const closuresByMatter = await repos.workflowOpsAlertEscalationClosures.listByMatter("mat_1")
+      const closuresByMatter = await repos.workflowOpsAlertEscalationClosures.listByMatter("firmA", "mat_1")
       expect(closuresByMatter.some((row) => row.recomputeReason === "ops_closure_seed")).toBe(true)
       await repos.workflowOpsAlertDisputeEnforcementLedgers.upsert({
         id: "workflow_ops_alert_dispute_enforcement:mat_1",
@@ -695,13 +673,11 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_enforcement_seed",
         updatedAt: 53,
       })
-      const enforcement = await repos.workflowOpsAlertDisputeEnforcementLedgers.get(
-        "workflow_ops_alert_dispute_enforcement:mat_1"
-      )
+      const enforcement = await repos.workflowOpsAlertDisputeEnforcementLedgers.get("workflow_ops_alert_dispute_enforcement:mat_1", "firmA")
       expect(enforcement?.enforcementStatus).toBe("pending_enforcement")
       const enforcementByFirm = await repos.workflowOpsAlertDisputeEnforcementLedgers.listByFirm("firmA")
       expect(enforcementByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
-      const enforcementByMatter = await repos.workflowOpsAlertDisputeEnforcementLedgers.listByMatter("mat_1")
+      const enforcementByMatter = await repos.workflowOpsAlertDisputeEnforcementLedgers.listByMatter("firmA", "mat_1")
       expect(enforcementByMatter.some((row) => row.recomputeReason === "ops_enforcement_seed")).toBe(true)
       await repos.workflowOpsAlertClosureDebtReconciliationDigests.upsert({
         id: "workflow_ops_alert_closure_debt_reconciliation:mat_1",
@@ -725,9 +701,7 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_reconciliation_seed",
         updatedAt: 54,
       })
-      const closureDebtReconciliation = await repos.workflowOpsAlertClosureDebtReconciliationDigests.get(
-        "workflow_ops_alert_closure_debt_reconciliation:mat_1"
-      )
+      const closureDebtReconciliation = await repos.workflowOpsAlertClosureDebtReconciliationDigests.get("workflow_ops_alert_closure_debt_reconciliation:mat_1", "firmA")
       expect(closureDebtReconciliation?.reconciliationStatus).toBe("debt_open")
       const closureDebtReconciliationByFirm =
         await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByFirm(
@@ -736,7 +710,7 @@ describe("Firestore repository adapters", () => {
       expect(closureDebtReconciliationByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const closureDebtReconciliationByMatter =
         await repos.workflowOpsAlertClosureDebtReconciliationDigests.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
         )
       expect(
         closureDebtReconciliationByMatter.some((row) => row.recomputeReason === "ops_reconciliation_seed")
@@ -760,16 +734,14 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_enforcement_attestation_seed",
         updatedAt: 55,
       })
-      const enforcementAttestation = await repos.workflowOpsAlertEnforcementAttestations.get(
-        "workflow_ops_alert_enforcement_attestation:mat_1"
-      )
+      const enforcementAttestation = await repos.workflowOpsAlertEnforcementAttestations.get("workflow_ops_alert_enforcement_attestation:mat_1", "firmA")
       expect(enforcementAttestation?.attestationStatus).toBe("pending_attestation")
       const enforcementAttestationsByFirm = await repos.workflowOpsAlertEnforcementAttestations.listByFirm(
         "firmA"
       )
       expect(enforcementAttestationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const enforcementAttestationsByMatter = await repos.workflowOpsAlertEnforcementAttestations.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
       )
       expect(
         enforcementAttestationsByMatter.some(
@@ -797,14 +769,12 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_variance_seed",
         updatedAt: 56,
       })
-      const varianceDigest = await repos.workflowOpsAlertClosureDebtVarianceDigests.get(
-        "workflow_ops_alert_closure_debt_variance:mat_1"
-      )
+      const varianceDigest = await repos.workflowOpsAlertClosureDebtVarianceDigests.get("workflow_ops_alert_closure_debt_variance:mat_1", "firmA")
       expect(varianceDigest?.varianceStatus).toBe("variance_open")
       const varianceDigestsByFirm = await repos.workflowOpsAlertClosureDebtVarianceDigests.listByFirm("firmA")
       expect(varianceDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const varianceDigestsByMatter = await repos.workflowOpsAlertClosureDebtVarianceDigests.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
       )
       expect(varianceDigestsByMatter.some((row) => row.recomputeReason === "ops_variance_seed")).toBe(true)
       await repos.workflowOpsAlertEnforcementWaiverLedgers.upsert({
@@ -830,14 +800,12 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_waiver_seed",
         updatedAt: 57,
       })
-      const waiverLedger = await repos.workflowOpsAlertEnforcementWaiverLedgers.get(
-        "workflow_ops_alert_enforcement_waiver:mat_1"
-      )
+      const waiverLedger = await repos.workflowOpsAlertEnforcementWaiverLedgers.get("workflow_ops_alert_enforcement_waiver:mat_1", "firmA")
       expect(waiverLedger?.waiverStatus).toBe("pending_attestation")
       const waiverLedgersByFirm = await repos.workflowOpsAlertEnforcementWaiverLedgers.listByFirm("firmA")
       expect(waiverLedgersByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const waiverLedgersByMatter = await repos.workflowOpsAlertEnforcementWaiverLedgers.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
       )
       expect(waiverLedgersByMatter.some((row) => row.recomputeReason === "ops_waiver_seed")).toBe(true)
       await repos.workflowOpsAlertVarianceRemediationQueues.upsert({
@@ -863,15 +831,13 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_variance_queue_seed",
         updatedAt: 58,
       })
-      const varianceRemediationQueue = await repos.workflowOpsAlertVarianceRemediationQueues.get(
-        "workflow_ops_alert_variance_remediation_queue:mat_1"
-      )
+      const varianceRemediationQueue = await repos.workflowOpsAlertVarianceRemediationQueues.get("workflow_ops_alert_variance_remediation_queue:mat_1", "firmA")
       expect(varianceRemediationQueue?.queueStatus).toBe("queued")
       const varianceRemediationQueuesByFirm =
         await repos.workflowOpsAlertVarianceRemediationQueues.listByFirm("firmA")
       expect(varianceRemediationQueuesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const varianceRemediationQueuesByMatter =
-        await repos.workflowOpsAlertVarianceRemediationQueues.listByMatter("mat_1")
+        await repos.workflowOpsAlertVarianceRemediationQueues.listByMatter("firmA", "mat_1")
       expect(
         varianceRemediationQueuesByMatter.some((row) => row.recomputeReason === "ops_variance_queue_seed")
       ).toBe(true)
@@ -897,14 +863,12 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_waiver_expiry_seed",
         updatedAt: 59,
       })
-      const waiverExpiryDigest = await repos.workflowOpsAlertWaiverExpiryDigests.get(
-        "workflow_ops_alert_waiver_expiry_digest:mat_1"
-      )
+      const waiverExpiryDigest = await repos.workflowOpsAlertWaiverExpiryDigests.get("workflow_ops_alert_waiver_expiry_digest:mat_1", "firmA")
       expect(waiverExpiryDigest?.expiryStatus).toBe("expires_lte_24h")
       const waiverExpiryDigestsByFirm = await repos.workflowOpsAlertWaiverExpiryDigests.listByFirm("firmA")
       expect(waiverExpiryDigestsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const waiverExpiryDigestsByMatter = await repos.workflowOpsAlertWaiverExpiryDigests.listByMatter(
-        "mat_1"
+        "firmA", "mat_1"
       )
       expect(
         waiverExpiryDigestsByMatter.some((row) => row.recomputeReason === "ops_waiver_expiry_seed")
@@ -937,15 +901,13 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_variance_sla_seed",
         updatedAt: 60,
       })
-      const remediationSlaLedger = await repos.workflowOpsAlertVarianceRemediationSlaLedgers.get(
-        "workflow_ops_alert_variance_remediation_sla:mat_1"
-      )
+      const remediationSlaLedger = await repos.workflowOpsAlertVarianceRemediationSlaLedgers.get("workflow_ops_alert_variance_remediation_sla:mat_1", "firmA")
       expect(remediationSlaLedger?.slaStatus).toBe("warning")
       const remediationSlaLedgersByFirm =
         await repos.workflowOpsAlertVarianceRemediationSlaLedgers.listByFirm("firmA")
       expect(remediationSlaLedgersByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const remediationSlaLedgersByMatter =
-        await repos.workflowOpsAlertVarianceRemediationSlaLedgers.listByMatter("mat_1")
+        await repos.workflowOpsAlertVarianceRemediationSlaLedgers.listByMatter("firmA", "mat_1")
       expect(
         remediationSlaLedgersByMatter.some((row) => row.recomputeReason === "ops_variance_sla_seed")
       ).toBe(true)
@@ -974,15 +936,13 @@ describe("Firestore repository adapters", () => {
         recomputeReason: "ops_waiver_expiry_dispute_seed",
         updatedAt: 61,
       })
-      const waiverExpiryDispute = await repos.workflowOpsAlertWaiverExpiryDisputes.get(
-        "workflow_ops_alert_waiver_expiry_dispute:mat_1"
-      )
+      const waiverExpiryDispute = await repos.workflowOpsAlertWaiverExpiryDisputes.get("workflow_ops_alert_waiver_expiry_dispute:mat_1", "firmA")
       expect(waiverExpiryDispute?.disputeStatus).toBe("open")
       const waiverExpiryDisputesByFirm =
         await repos.workflowOpsAlertWaiverExpiryDisputes.listByFirm("firmA")
       expect(waiverExpiryDisputesByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const waiverExpiryDisputesByMatter =
-        await repos.workflowOpsAlertWaiverExpiryDisputes.listByMatter("mat_1")
+        await repos.workflowOpsAlertWaiverExpiryDisputes.listByMatter("firmA", "mat_1")
       expect(
         waiverExpiryDisputesByMatter.some(
           (row) => row.recomputeReason === "ops_waiver_expiry_dispute_seed"
@@ -1012,15 +972,13 @@ describe("Firestore repository adapters", () => {
         updatedAt: 62,
       })
       const remediationSlaBreachEscalation =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get("workflow_ops_alert_variance_remediation_sla_breach_escalation:mat_1", "firmA")
       expect(remediationSlaBreachEscalation?.escalationStatus).toBe("open")
       const remediationSlaBreachEscalationsByFirm =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.listByFirm("firmA")
       expect(remediationSlaBreachEscalationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const remediationSlaBreachEscalationsByMatter =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.listByMatter("mat_1")
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachEscalations.listByMatter("firmA", "mat_1")
       expect(
         remediationSlaBreachEscalationsByMatter.some(
           (row) => row.recomputeReason === "ops_variance_sla_breach_escalation_seed"
@@ -1051,15 +1009,13 @@ describe("Firestore repository adapters", () => {
         updatedAt: 63,
       })
       const waiverExpiryDisputeAdjudication =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.get("workflow_ops_alert_waiver_expiry_dispute_adjudication:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudication?.adjudicationStatus).toBe("panel_assigned")
       const waiverExpiryDisputeAdjudicationsByFirm =
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.listByFirm("firmA")
       expect(waiverExpiryDisputeAdjudicationsByFirm.some((row) => row.matterId === "mat_1")).toBe(true)
       const waiverExpiryDisputeAdjudicationsByMatter =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.listByMatter("mat_1")
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudications.listByMatter("firmA", "mat_1")
       expect(
         waiverExpiryDisputeAdjudicationsByMatter.some(
           (row) => row.recomputeReason === "ops_waiver_expiry_dispute_adjudication_seed"
@@ -1091,9 +1047,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 64,
       })
       const remediationSlaBreachResolutionCheckpoint =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint:mat_1", "firmA")
       expect(remediationSlaBreachResolutionCheckpoint?.checkpointStatus).toBe("reopened")
       const remediationSlaBreachResolutionCheckpointsByFirm =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.listByFirm(
@@ -1104,7 +1058,7 @@ describe("Firestore repository adapters", () => {
       )
       const remediationSlaBreachResolutionCheckpointsByMatter =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.listByMatter(
-          "mat_1"
+          "firmA", "mat_1"
         )
       expect(
         remediationSlaBreachResolutionCheckpointsByMatter.some(
@@ -1139,9 +1093,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 65,
       })
       const waiverExpiryDisputeAdjudicationSlo =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudicationSlo?.sloStatus).toBe("breach_acknowledged")
       const waiverExpiryDisputeAdjudicationSlosByFirm =
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.listByFirm("firmA")
@@ -1150,7 +1102,7 @@ describe("Firestore repository adapters", () => {
       )
       const waiverExpiryDisputeAdjudicationSlosByMatter =
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.listByMatter(
-          "mat_1"
+          "firmA", "mat_1"
         )
       expect(
         waiverExpiryDisputeAdjudicationSlosByMatter.some(
@@ -1188,9 +1140,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const remediationSlaBreachResolutionCheckpointExpiryAttestation =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation:mat_1", "firmA")
       expect(remediationSlaBreachResolutionCheckpointExpiryAttestation?.attestationStatus).toBe(
         "expiry_acknowledged"
       )
@@ -1205,7 +1155,7 @@ describe("Firestore repository adapters", () => {
       ).toBe(true)
       const remediationSlaBreachResolutionCheckpointExpiryAttestationsByMatter =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.listByMatter(
-          "mat_1"
+          "firmA", "mat_1"
         )
       expect(
         remediationSlaBreachResolutionCheckpointExpiryAttestationsByMatter.some(
@@ -1242,9 +1192,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 67,
       })
       const waiverExpiryDisputeAdjudicationSloDebt =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediation:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudicationSloDebt?.debtStatus).toBe("breach_closure_attested")
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.upsert(
         {
@@ -1279,9 +1227,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const checkpointExpiryException =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliation:mat_1", "firmA")
       expect(checkpointExpiryException?.exceptionStatus).toBe("exception_reconciled")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.upsert({
         id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1",
@@ -1314,9 +1260,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 69,
       })
       const waiverExpiryDisputeAdjudicationSloDebtBurndown =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudicationSloDebtBurndown?.burndownStatus).toBe(
         "burndown_checkpointed"
       )
@@ -1356,9 +1300,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const checkpointExpiryQueue =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue:mat_1", "firmA")
       expect(checkpointExpiryQueue?.queueStatus).toBe("queue_auto_drained")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.upsert({
         id: "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1",
@@ -1388,9 +1330,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 72,
       })
       const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlement?.settlementStatus).toBe(
         "target_lock_attested"
       )
@@ -1429,9 +1369,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const checkpointExpiryQueueDrain =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(checkpointExpiryQueueDrain?.drainStatus).toBe("forced_drain_checkpointed")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.upsert(
         {
@@ -1468,9 +1406,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestation =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(
         waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestation?.settlementAttestationStatus
       ).toBe("verification_pending")
@@ -1511,9 +1447,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const checkpointExpiryQueueDrainReconciliation =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(checkpointExpiryQueueDrainReconciliation?.reconciliationStatus).toBe(
         "reconciliation_pending"
       )
@@ -1551,9 +1485,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(waiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitration?.settlementArbitrationStatus).toBe(
         "arbitration_pending"
       )
@@ -1592,9 +1524,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const checkpointExpiryQueueReentryCompliance =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(checkpointExpiryQueueReentryCompliance?.complianceStatus).toBe("compliance_pending")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.upsert(
         {
@@ -1631,9 +1561,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const dispositionFinalization =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(dispositionFinalization?.dispositionFinalizationStatus).toBe("final_ruling_issued")
       await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.upsert(
         {
@@ -1671,9 +1599,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const queueReentryDebtRetirement =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(queueReentryDebtRetirement?.debtRetirementStatus).toBe("exception_debt_assigned")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.upsert(
         {
@@ -1711,9 +1637,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const dispositionPublicationGovernance =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(dispositionPublicationGovernance?.publicationGovernanceStatus).toBe(
         "publication_governance_pending"
       )
@@ -1752,9 +1676,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const debtRetirementDisputeReconciliation =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(debtRetirementDisputeReconciliation?.disputeReconciliationStatus).toBe(
         "reconciliation_pending"
       )
@@ -1794,9 +1716,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const externalDistributionAuditLedger =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(externalDistributionAuditLedger?.externalDistributionAuditLedgerStatus).toBe(
         "external_distribution_audit_pending"
       )
@@ -1836,9 +1756,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const disputeReconciliationClosureVerification =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(disputeReconciliationClosureVerification?.closureVerificationStatus).toBe(
         "closure_verification_pending"
       )
@@ -1878,9 +1796,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const partnerHandoffAttestation =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(partnerHandoffAttestation?.partnerHandoffAttestationStatus).toBe(
         "partner_handoff_attestation_pending"
       )
@@ -1920,9 +1836,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const closureVerificationArchivalExport =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(closureVerificationArchivalExport?.archivalExportStatus).toBe("archival_export_pending")
       await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.upsert(
         {
@@ -1957,9 +1871,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const outboundRegistryAttestationLedger =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(outboundRegistryAttestationLedger?.outboundRegistryAttestationLedgerStatus).toBe(
         "outbound_registry_attestation_ledger_pending"
       )
@@ -1999,9 +1911,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const archivalExportPartnerDeliveryReceipt =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(archivalExportPartnerDeliveryReceipt?.partnerDeliveryReceiptStatus).toBe(
         "partner_delivery_receipt_pending"
       )
@@ -2037,9 +1947,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const freezeOverrideSealVerification =
-        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-          "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1"
-        )
+        await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get("workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalization:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestation:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement:mat_1", "firmA")
       expect(
         freezeOverrideSealVerification?.partnerDeliveryReceiptFreezeOverrideSealVerificationStatus
       ).toBe("partner_delivery_receipt_freeze_override_seal_verification_pending")
@@ -2076,9 +1984,7 @@ describe("Firestore repository adapters", () => {
         }
       )
       const transportBoundaryReceiptReconciliation =
-        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.get(
-          "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1"
-        )
+        await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.get("workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipt:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliation:workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain:mat_1", "firmA")
       expect(
         transportBoundaryReceiptReconciliation?.partnerDeliveryTransportBoundaryReceiptReconciliationStatus
       ).toBe("transport_boundary_receipt_reconciliation_pending")
@@ -2122,7 +2028,8 @@ describe("Firestore repository adapters", () => {
       )
       const custodyHandoff =
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.get(
-          custodyHandoffId
+          custodyHandoffId,
+          "firmA"
         )
       expect(custodyHandoff?.archivalExportCustodyHandoffStatus).toBe(
         "archival_export_custody_handoff_pending"
@@ -2167,7 +2074,8 @@ describe("Firestore repository adapters", () => {
       )
       const transportBoundaryReceiptReconciliationClosureAttestation =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(
-          closureAttestationId
+          closureAttestationId,
+          "firmA"
         )
       expect(
         transportBoundaryReceiptReconciliationClosureAttestation?.partnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationStatus
@@ -2251,7 +2159,8 @@ describe("Firestore repository adapters", () => {
       expect(
         (
           await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.get(
-            custodyHandoffExternalTransportReceiptAcknowledgmentId
+            custodyHandoffExternalTransportReceiptAcknowledgmentId,
+          "firmA"
           )
         )?.externalTransportChannel
       ).toBe("blocked_todo_firm")
@@ -2903,11 +2812,13 @@ describe("Firestore repository adapters", () => {
       )
       const custodyAckReconTbReconciliation =
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
-          repoCustodyAckReconTbExternalTransportReceiptAckReconciliationId
+          repoCustodyAckReconTbExternalTransportReceiptAckReconciliationId,
+          "firmA"
         )
       const closureAckReconTbReconciliation =
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
-          repoClosureAckReconTbExternalTransportReceiptAckReconciliationId
+          repoClosureAckReconTbExternalTransportReceiptAckReconciliationId,
+          "firmA"
         )
       expect(custodyAckReconTbReconciliation).toBeTruthy()
       expect(closureAckReconTbReconciliation).toBeTruthy()
@@ -3193,7 +3104,8 @@ describe("Firestore repository adapters", () => {
       expect(
         (
           await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-            repoCustodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId
+            repoCustodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId,
+          "firmA"
           )
         )?.transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
       ).toBe(
@@ -3202,7 +3114,8 @@ describe("Firestore repository adapters", () => {
       expect(
         (
           await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-            repoClosureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId
+            repoClosureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId,
+          "firmA"
           )
         )?.ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus
       ).toBe(
@@ -3227,7 +3140,8 @@ describe("Firestore repository adapters", () => {
           transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliation: {
             ...(
               await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-                repoCustodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId
+                repoCustodyAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId,
+          "firmA"
               )
             )!,
             transportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
@@ -3245,7 +3159,8 @@ describe("Firestore repository adapters", () => {
           ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliation: {
             ...(
               await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-                repoClosureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId
+                repoClosureAckReconTbSealVerificationsExternalTransportReceiptAckReconciliationId,
+          "firmA"
               )
             )!,
             ackReconTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationStatus:
@@ -3367,12 +3282,14 @@ describe("Firestore repository adapters", () => {
       )
       expect(
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-          tbRecon497Id(repoCustodyAckReconTbPdFreezeSealVerification495.id)
+          tbRecon497Id(repoCustodyAckReconTbPdFreezeSealVerification495.id),
+          "firmA"
         )
       ).toBeTruthy()
       expect(
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-          tbRecon498Id(repoClosureAckReconTbPdFreezeSealVerification496.id)
+          tbRecon498Id(repoClosureAckReconTbPdFreezeSealVerification496.id),
+          "firmA"
         )
       ).toBeTruthy()
       const {
@@ -3421,24 +3338,28 @@ describe("Firestore repository adapters", () => {
       )
       expect(
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-          tbExtAck499Id(repoCustodyAckReconTbPdFreezeSealTbRecon497.id)
+          tbExtAck499Id(repoCustodyAckReconTbPdFreezeSealTbRecon497.id),
+          "firmA"
         )
       ).toBeTruthy()
       expect(
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-          tbExtAck500Id(repoClosureAckReconTbPdFreezeSealTbRecon498.id)
+          tbExtAck500Id(repoClosureAckReconTbPdFreezeSealTbRecon498.id),
+          "firmA"
         )
       ).toBeTruthy()
       expect(tbExtAck499Id(repoCustodyAckReconTbPdFreezeSealTbRecon497.id).length).toBeLessThanOrEqual(1500)
       expect(tbExtAck500Id(repoClosureAckReconTbPdFreezeSealTbRecon498.id).length).toBeLessThanOrEqual(1500)
       expect(
         await repos.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.get(
-          repoCustodyAckReconTbOutboundRegistryAttestationLedger493.id
+          repoCustodyAckReconTbOutboundRegistryAttestationLedger493.id,
+          "firmA"
         )
       ).toBeTruthy()
       expect(
         await repos.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.get(
-          repoClosureAckReconTbOutboundRegistryAttestationLedger494.id
+          repoClosureAckReconTbOutboundRegistryAttestationLedger494.id,
+          "firmA"
         )
       ).toBeTruthy()
       await repos.entities.create({
@@ -3449,7 +3370,7 @@ describe("Firestore repository adapters", () => {
         phone: "+923001112233",
         classification: "internal",
       })
-      const entity = await repos.entities.get("ent_1")
+      const entity = await repos.entities.get("ent_1", "firmA")
       expect(entity?.canonicalName).toBe("Client One")
       await repos.entityLinks.upsert({
         firmId: "firmA",
@@ -3473,7 +3394,7 @@ describe("Firestore repository adapters", () => {
         status: "engagement_unconfirmed",
         classification: "internal",
       })
-      const matter = await repos.matters.get("mat_1")
+      const matter = await repos.matters.get("mat_1", "firmA")
       expect(matter?.title).toBe("Persisted matter")
       const matterRows = await repos.matters.listByFirm("firmA")
       expect(matterRows.some((row) => row.id === "mat_1")).toBe(true)
@@ -3482,9 +3403,9 @@ describe("Firestore repository adapters", () => {
         userId: "associate_a",
         firmId: "firmA",
       })
-      const member = await repos.members.get("mat_1", "associate_a")
+      const member = await repos.members.get("mat_1", "associate_a", "firmA")
       expect(member?.firmId).toBe("firmA")
-      const members = await repos.members.listByMatter("mat_1")
+      const members = await repos.members.listByMatter("firmA", "mat_1")
       expect(members.some((row) => row.userId === "associate_a")).toBe(true)
 
       await repos.documents.create({
@@ -3502,7 +3423,7 @@ describe("Firestore repository adapters", () => {
         uploadedBy: "partner_a",
         objectBytesStatus: "available",
       })
-      const doc = await repos.documents.get("doc_1")
+      const doc = await repos.documents.get("doc_1", "firmA")
       expect(doc?.contentHash).toBe("hash-1")
       await repos.jobs.create({
         id: "job_1",
@@ -3513,7 +3434,7 @@ describe("Firestore repository adapters", () => {
         classification: "internal",
         idempotencyKey: "idem-1",
       })
-      const docJobs = await repos.jobs.listByDocument("doc_1")
+      const docJobs = await repos.jobs.listByDocument("firmA", "doc_1")
       expect(docJobs.some((row) => row.id === "job_1")).toBe(true)
 
       await repos.drafts.create({
@@ -3528,7 +3449,7 @@ describe("Firestore repository adapters", () => {
         createdAt: 1,
         status: "draft",
       })
-      const draft = await repos.drafts.get("drf_1")
+      const draft = await repos.drafts.get("drf_1", "firmA")
       expect(draft?.title).toBe("Draft 1")
 
       await repos.workflow.createOrUpdate({
@@ -3539,7 +3460,7 @@ describe("Firestore repository adapters", () => {
         reviewerId: "associate_a",
         updatedAt: 2,
       })
-      const workflow = await repos.workflow.get("doc_1")
+      const workflow = await repos.workflow.get("doc_1", "firmA")
       expect(workflow?.status).toBe("review_required")
       await repos.workflowEvents.append({
         id: "wfe_1",
@@ -3565,7 +3486,7 @@ describe("Firestore repository adapters", () => {
         kind: "case_number_reject",
         status: "open",
       })
-      const followUp = await repos.followUps.get("fu_1")
+      const followUp = await repos.followUps.get("fu_1", "firmA")
       expect(followUp?.kind).toBe("case_number_reject")
       await repos.followUps.upsert({
         ...(followUp as NonNullable<typeof followUp>),
@@ -3583,9 +3504,9 @@ describe("Firestore repository adapters", () => {
         notifiedAt: 10,
         confirmedAt: null,
       })
-      const intimation = await repos.intimations.get("int_1")
+      const intimation = await repos.intimations.get("int_1", "firmA")
       expect(intimation?.matterId).toBe("mat_1")
-      const matterIntimations = await repos.intimations.listByMatter("mat_1")
+      const matterIntimations = await repos.intimations.listByMatter("firmA", "mat_1")
       expect(matterIntimations.some((row) => row.id === "int_1")).toBe(true)
 
       await repos.filings.create({
@@ -3602,7 +3523,7 @@ describe("Firestore repository adapters", () => {
         approvedBy: null,
         approvalReason: null,
       })
-      const filing = await repos.filings.get("pkg_1")
+      const filing = await repos.filings.get("pkg_1", "firmA")
       expect(filing?.status).toBe("pending_partner_approval")
       const filings = await repos.filings.listByFirm("firmA")
       expect(filings.some((row) => row.id === "pkg_1")).toBe(true)
@@ -3626,11 +3547,11 @@ describe("Firestore repository adapters", () => {
         ],
         updatedAt: 20,
       })
-      const packetArtifact = await repos.filingPacketArtifacts.get("packet:pkg_1")
+      const packetArtifact = await repos.filingPacketArtifacts.get("packet:pkg_1", "firmA")
       expect(packetArtifact?.packageId).toBe("pkg_1")
       const packetArtifactsByFirm = await repos.filingPacketArtifacts.listByFirm("firmA")
       expect(packetArtifactsByFirm.some((row) => row.id === "packet:pkg_1")).toBe(true)
-      const packetArtifactsByPackage = await repos.filingPacketArtifacts.listByPackageId("pkg_1")
+      const packetArtifactsByPackage = await repos.filingPacketArtifacts.listByPackageId("firmA", "pkg_1")
       expect(packetArtifactsByPackage.some((row) => row.id === "packet:pkg_1")).toBe(true)
       await repos.filingDispatchQueue.upsert({
         id: "dispatch:pkg_1",
@@ -3646,11 +3567,11 @@ describe("Firestore repository adapters", () => {
         externalDispatchState: "blocked_todo_firm",
         updatedAt: 22,
       })
-      const dispatchRow = await repos.filingDispatchQueue.get("dispatch:pkg_1")
+      const dispatchRow = await repos.filingDispatchQueue.get("dispatch:pkg_1", "firmA")
       expect(dispatchRow?.packageId).toBe("pkg_1")
       const dispatchByFirm = await repos.filingDispatchQueue.listByFirm("firmA")
       expect(dispatchByFirm.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
-      const dispatchByPackage = await repos.filingDispatchQueue.listByPackageId("pkg_1")
+      const dispatchByPackage = await repos.filingDispatchQueue.listByPackageId("firmA", "pkg_1")
       expect(dispatchByPackage.some((row) => row.id === "dispatch:pkg_1")).toBe(true)
       await repos.filingAnnexures.upsert({
         id: "annexure:pkg_1",
@@ -3678,11 +3599,11 @@ describe("Firestore repository adapters", () => {
         submissionTransportBoundary: "todo_firm_external_transport_blocked",
         updatedAt: 24,
       })
-      const annexure = await repos.filingAnnexures.get("annexure:pkg_1")
+      const annexure = await repos.filingAnnexures.get("annexure:pkg_1", "firmA")
       expect(annexure?.packageId).toBe("pkg_1")
       const annexuresByFirm = await repos.filingAnnexures.listByFirm("firmA")
       expect(annexuresByFirm.some((row) => row.id === "annexure:pkg_1")).toBe(true)
-      const annexuresByPackage = await repos.filingAnnexures.listByPackageId("pkg_1")
+      const annexuresByPackage = await repos.filingAnnexures.listByPackageId("firmA", "pkg_1")
       expect(annexuresByPackage.some((row) => row.id === "annexure:pkg_1")).toBe(true)
       await repos.filingSubmissionReceipts.upsert({
         id: "receipt:pkg_1:1",
@@ -3700,11 +3621,11 @@ describe("Firestore repository adapters", () => {
         recordedAt: 25,
         submissionTransportBoundary: "todo_firm_external_transport_blocked",
       })
-      const receipt = await repos.filingSubmissionReceipts.get("receipt:pkg_1:1")
+      const receipt = await repos.filingSubmissionReceipts.get("receipt:pkg_1:1", "firmA")
       expect(receipt?.dispatchOutcome).toBe("retry_scheduled")
       const receiptsByFirm = await repos.filingSubmissionReceipts.listByFirm("firmA")
       expect(receiptsByFirm.some((row) => row.id === "receipt:pkg_1:1")).toBe(true)
-      const receiptsByPackage = await repos.filingSubmissionReceipts.listByPackageId("pkg_1")
+      const receiptsByPackage = await repos.filingSubmissionReceipts.listByPackageId("firmA", "pkg_1")
       expect(receiptsByPackage.some((row) => row.id === "receipt:pkg_1:1")).toBe(true)
       await repos.filingSubmissionReconciliation.upsert({
         id: "reconcile:pkg_1",
@@ -3720,11 +3641,11 @@ describe("Firestore repository adapters", () => {
         notes: ["awaiting retry"],
         updatedAt: 26,
       })
-      const reconciliation = await repos.filingSubmissionReconciliation.get("reconcile:pkg_1")
+      const reconciliation = await repos.filingSubmissionReconciliation.get("reconcile:pkg_1", "firmA")
       expect(reconciliation?.latestReceiptId).toBe("receipt:pkg_1:1")
       const reconciliationByFirm = await repos.filingSubmissionReconciliation.listByFirm("firmA")
       expect(reconciliationByFirm.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
-      const reconciliationByPackage = await repos.filingSubmissionReconciliation.listByPackageId("pkg_1")
+      const reconciliationByPackage = await repos.filingSubmissionReconciliation.listByPackageId("firmA", "pkg_1")
       expect(reconciliationByPackage.some((row) => row.id === "reconcile:pkg_1")).toBe(true)
       await repos.filingSubmissionExceptions.upsert({
         id: "exception:pkg_1",
@@ -3750,11 +3671,11 @@ describe("Firestore repository adapters", () => {
         resolutionNotes: ["escalation opened"],
         updatedAt: 30,
       })
-      const exception = await repos.filingSubmissionExceptions.get("exception:pkg_1")
+      const exception = await repos.filingSubmissionExceptions.get("exception:pkg_1", "firmA")
       expect(exception?.severity).toBe("high")
       const exceptionByFirm = await repos.filingSubmissionExceptions.listByFirm("firmA")
       expect(exceptionByFirm.some((row) => row.id === "exception:pkg_1")).toBe(true)
-      const exceptionByPackage = await repos.filingSubmissionExceptions.listByPackageId("pkg_1")
+      const exceptionByPackage = await repos.filingSubmissionExceptions.listByPackageId("firmA", "pkg_1")
       expect(exceptionByPackage.some((row) => row.id === "exception:pkg_1")).toBe(true)
       await repos.filingTransportExecutionEvidence.upsert({
         id: "transport:pkg_1:1",
@@ -3776,11 +3697,11 @@ describe("Firestore repository adapters", () => {
         note: "transport blocked during deterministic submission",
         createdAt: 31,
       })
-      const transportEvidence = await repos.filingTransportExecutionEvidence.get("transport:pkg_1:1")
+      const transportEvidence = await repos.filingTransportExecutionEvidence.get("transport:pkg_1:1", "firmA")
       expect(transportEvidence?.outcome).toBe("transport_blocked")
       const transportEvidenceByFirm = await repos.filingTransportExecutionEvidence.listByFirm("firmA")
       expect(transportEvidenceByFirm.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
-      const transportEvidenceByPackage = await repos.filingTransportExecutionEvidence.listByPackageId("pkg_1")
+      const transportEvidenceByPackage = await repos.filingTransportExecutionEvidence.listByPackageId("firmA", "pkg_1")
       expect(transportEvidenceByPackage.some((row) => row.id === "transport:pkg_1:1")).toBe(true)
       await repos.filingSubmissionSlaDigests.upsert({
         id: "digest:pkg_1",
@@ -3806,11 +3727,11 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 33,
         updatedAt: 33,
       })
-      const digest = await repos.filingSubmissionSlaDigests.get("digest:pkg_1")
+      const digest = await repos.filingSubmissionSlaDigests.get("digest:pkg_1", "firmA")
       expect(digest?.status).toBe("open_breach")
       const digestsByFirm = await repos.filingSubmissionSlaDigests.listByFirm("firmA")
       expect(digestsByFirm.some((row) => row.id === "digest:pkg_1")).toBe(true)
-      const digestsByPackage = await repos.filingSubmissionSlaDigests.listByPackageId("pkg_1")
+      const digestsByPackage = await repos.filingSubmissionSlaDigests.listByPackageId("firmA", "pkg_1")
       expect(digestsByPackage.some((row) => row.id === "digest:pkg_1")).toBe(true)
       await repos.filingEscalationOwnerRota.upsert({
         id: "rota:pkg_1",
@@ -3835,11 +3756,11 @@ describe("Firestore repository adapters", () => {
         notes: ["handoff pending"],
         updatedAt: 36,
       })
-      const rota = await repos.filingEscalationOwnerRota.get("rota:pkg_1")
+      const rota = await repos.filingEscalationOwnerRota.get("rota:pkg_1", "firmA")
       expect(rota?.primaryOwnerId).toBe("partner_a")
       const rotaByFirm = await repos.filingEscalationOwnerRota.listByFirm("firmA")
       expect(rotaByFirm.some((row) => row.id === "rota:pkg_1")).toBe(true)
-      const rotaByPackage = await repos.filingEscalationOwnerRota.listByPackageId("pkg_1")
+      const rotaByPackage = await repos.filingEscalationOwnerRota.listByPackageId("firmA", "pkg_1")
       expect(rotaByPackage.some((row) => row.id === "rota:pkg_1")).toBe(true)
       await repos.filingEscalationWorkloadDigests.upsert({
         id: "workload:pkg_1",
@@ -3865,11 +3786,11 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 37,
         updatedAt: 37,
       })
-      const workload = await repos.filingEscalationWorkloadDigests.get("workload:pkg_1")
+      const workload = await repos.filingEscalationWorkloadDigests.get("workload:pkg_1", "firmA")
       expect(workload?.status).toBe("open_alert")
       const workloadByFirm = await repos.filingEscalationWorkloadDigests.listByFirm("firmA")
       expect(workloadByFirm.some((row) => row.id === "workload:pkg_1")).toBe(true)
-      const workloadByPackage = await repos.filingEscalationWorkloadDigests.listByPackageId("pkg_1")
+      const workloadByPackage = await repos.filingEscalationWorkloadDigests.listByPackageId("firmA", "pkg_1")
       expect(workloadByPackage.some((row) => row.id === "workload:pkg_1")).toBe(true)
       await repos.filingEscalationPolicyBaselines.upsert({
         id: "policy:firmA:default",
@@ -3886,7 +3807,7 @@ describe("Firestore repository adapters", () => {
         notes: ["firm policy baseline"],
         updatedAt: 38,
       })
-      const policy = await repos.filingEscalationPolicyBaselines.get("policy:firmA:default")
+      const policy = await repos.filingEscalationPolicyBaselines.get("policy:firmA:default", "firmA")
       expect(policy?.scope).toBe("firm_default")
       const policiesByFirm = await repos.filingEscalationPolicyBaselines.listByFirm("firmA")
       expect(policiesByFirm.some((row) => row.id === "policy:firmA:default")).toBe(true)
@@ -3908,11 +3829,11 @@ describe("Firestore repository adapters", () => {
         notes: ["waiver granted"],
         updatedAt: 39,
       })
-      const waiver = await repos.filingEscalationBreachWaivers.get("waiver:pkg_1:1")
+      const waiver = await repos.filingEscalationBreachWaivers.get("waiver:pkg_1:1", "firmA")
       expect(waiver?.status).toBe("active")
       const waiversByFirm = await repos.filingEscalationBreachWaivers.listByFirm("firmA")
       expect(waiversByFirm.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
-      const waiversByPackage = await repos.filingEscalationBreachWaivers.listByPackageId("pkg_1")
+      const waiversByPackage = await repos.filingEscalationBreachWaivers.listByPackageId("firmA", "pkg_1")
       expect(waiversByPackage.some((row) => row.id === "waiver:pkg_1:1")).toBe(true)
       await repos.filingEscalationPolicyVarianceDigests.upsert({
         id: "policy-variance:pkg_1",
@@ -3937,12 +3858,12 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 40,
         updatedAt: 40,
       })
-      const policyVariance = await repos.filingEscalationPolicyVarianceDigests.get("policy-variance:pkg_1")
+      const policyVariance = await repos.filingEscalationPolicyVarianceDigests.get("policy-variance:pkg_1", "firmA")
       expect(policyVariance?.status).toBe("open_alert")
       const varianceByFirm = await repos.filingEscalationPolicyVarianceDigests.listByFirm("firmA")
       expect(varianceByFirm.some((row) => row.id === "policy-variance:pkg_1")).toBe(true)
       const varianceByPackage =
-        await repos.filingEscalationPolicyVarianceDigests.listByPackageId("pkg_1")
+        await repos.filingEscalationPolicyVarianceDigests.listByPackageId("firmA", "pkg_1")
       expect(varianceByPackage.some((row) => row.id === "policy-variance:pkg_1")).toBe(true)
       await repos.filingEscalationWaiverExpiryDigests.upsert({
         id: "waiver-expiry:pkg_1",
@@ -3964,11 +3885,11 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 41,
         updatedAt: 41,
       })
-      const expiry = await repos.filingEscalationWaiverExpiryDigests.get("waiver-expiry:pkg_1")
+      const expiry = await repos.filingEscalationWaiverExpiryDigests.get("waiver-expiry:pkg_1", "firmA")
       expect(expiry?.status).toBe("open_expiry")
       const expiryByFirm = await repos.filingEscalationWaiverExpiryDigests.listByFirm("firmA")
       expect(expiryByFirm.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
-      const expiryByPackage = await repos.filingEscalationWaiverExpiryDigests.listByPackageId("pkg_1")
+      const expiryByPackage = await repos.filingEscalationWaiverExpiryDigests.listByPackageId("firmA", "pkg_1")
       expect(expiryByPackage.some((row) => row.id === "waiver-expiry:pkg_1")).toBe(true)
       await repos.filingEscalationVarianceRemediations.upsert({
         id: "remediation:pkg_1:1",
@@ -3988,12 +3909,12 @@ describe("Firestore repository adapters", () => {
         notes: ["remediation recorded"],
         updatedAt: 42,
       })
-      const remediation = await repos.filingEscalationVarianceRemediations.get("remediation:pkg_1:1")
+      const remediation = await repos.filingEscalationVarianceRemediations.get("remediation:pkg_1:1", "firmA")
       expect(remediation?.decision).toBe("temporary_override")
       const remediationsByFirm = await repos.filingEscalationVarianceRemediations.listByFirm("firmA")
       expect(remediationsByFirm.some((row) => row.id === "remediation:pkg_1:1")).toBe(true)
       const remediationsByPackage =
-        await repos.filingEscalationVarianceRemediations.listByPackageId("pkg_1")
+        await repos.filingEscalationVarianceRemediations.listByPackageId("firmA", "pkg_1")
       expect(remediationsByPackage.some((row) => row.id === "remediation:pkg_1:1")).toBe(true)
       await repos.filingEscalationWaiverRolloverAttestations.upsert({
         id: "rollover:pkg_1:1",
@@ -4014,12 +3935,12 @@ describe("Firestore repository adapters", () => {
         notes: ["rollover attested"],
         updatedAt: 44,
       })
-      const rollover = await repos.filingEscalationWaiverRolloverAttestations.get("rollover:pkg_1:1")
+      const rollover = await repos.filingEscalationWaiverRolloverAttestations.get("rollover:pkg_1:1", "firmA")
       expect(rollover?.status).toBe("attested")
       const rolloverByFirm = await repos.filingEscalationWaiverRolloverAttestations.listByFirm("firmA")
       expect(rolloverByFirm.some((row) => row.id === "rollover:pkg_1:1")).toBe(true)
       const rolloverByPackage =
-        await repos.filingEscalationWaiverRolloverAttestations.listByPackageId("pkg_1")
+        await repos.filingEscalationWaiverRolloverAttestations.listByPackageId("firmA", "pkg_1")
       expect(rolloverByPackage.some((row) => row.id === "rollover:pkg_1:1")).toBe(true)
       await repos.filingEscalationRemediationExpiryDigests.upsert({
         id: "remediation-expiry:pkg_1",
@@ -4042,15 +3963,13 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 45,
         updatedAt: 45,
       })
-      const remediationExpiry = await repos.filingEscalationRemediationExpiryDigests.get(
-        "remediation-expiry:pkg_1"
-      )
+      const remediationExpiry = await repos.filingEscalationRemediationExpiryDigests.get("remediation-expiry:pkg_1", "firmA")
       expect(remediationExpiry?.status).toBe("open_expiry")
       const remediationExpiryByFirm =
         await repos.filingEscalationRemediationExpiryDigests.listByFirm("firmA")
       expect(remediationExpiryByFirm.some((row) => row.id === "remediation-expiry:pkg_1")).toBe(true)
       const remediationExpiryByPackage =
-        await repos.filingEscalationRemediationExpiryDigests.listByPackageId("pkg_1")
+        await repos.filingEscalationRemediationExpiryDigests.listByPackageId("firmA", "pkg_1")
       expect(remediationExpiryByPackage.some((row) => row.id === "remediation-expiry:pkg_1")).toBe(
         true
       )
@@ -4074,12 +3993,12 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 46,
         updatedAt: 46,
       })
-      const rolloverBreach = await repos.filingEscalationRolloverBreachWatches.get("rollover-breach:pkg_1")
+      const rolloverBreach = await repos.filingEscalationRolloverBreachWatches.get("rollover-breach:pkg_1", "firmA")
       expect(rolloverBreach?.status).toBe("open_breach")
       const rolloverBreachByFirm = await repos.filingEscalationRolloverBreachWatches.listByFirm("firmA")
       expect(rolloverBreachByFirm.some((row) => row.id === "rollover-breach:pkg_1")).toBe(true)
       const rolloverBreachByPackage =
-        await repos.filingEscalationRolloverBreachWatches.listByPackageId("pkg_1")
+        await repos.filingEscalationRolloverBreachWatches.listByPackageId("firmA", "pkg_1")
       expect(rolloverBreachByPackage.some((row) => row.id === "rollover-breach:pkg_1")).toBe(true)
       await repos.filingEscalationRemediationLifecycles.upsert({
         id: "remediation-lifecycle:remediation:pkg_1:1",
@@ -4101,15 +4020,13 @@ describe("Firestore repository adapters", () => {
         notes: ["lifecycle opened"],
         updatedAt: 42,
       })
-      const lifecycle = await repos.filingEscalationRemediationLifecycles.get(
-        "remediation-lifecycle:remediation:pkg_1:1"
-      )
+      const lifecycle = await repos.filingEscalationRemediationLifecycles.get("remediation-lifecycle:remediation:pkg_1:1", "firmA")
       expect(lifecycle?.status).toBe("open")
       const lifecycleByFirm = await repos.filingEscalationRemediationLifecycles.listByFirm("firmA")
       expect(
         lifecycleByFirm.some((row) => row.id === "remediation-lifecycle:remediation:pkg_1:1")
       ).toBe(true)
-      const lifecycleByPackage = await repos.filingEscalationRemediationLifecycles.listByPackageId("pkg_1")
+      const lifecycleByPackage = await repos.filingEscalationRemediationLifecycles.listByPackageId("firmA", "pkg_1")
       expect(
         lifecycleByPackage.some((row) => row.id === "remediation-lifecycle:remediation:pkg_1:1")
       ).toBe(true)
@@ -4136,9 +4053,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 46,
         updatedAt: 46,
       })
-      const reaffirmation = await repos.filingEscalationRolloverReaffirmationSlas.get(
-        "rollover-reaffirmation-sla:pkg_1"
-      )
+      const reaffirmation = await repos.filingEscalationRolloverReaffirmationSlas.get("rollover-reaffirmation-sla:pkg_1", "firmA")
       expect(reaffirmation?.status).toBe("warning")
       const reaffirmationByFirm = await repos.filingEscalationRolloverReaffirmationSlas.listByFirm(
         "firmA"
@@ -4147,7 +4062,7 @@ describe("Firestore repository adapters", () => {
         reaffirmationByFirm.some((row) => row.id === "rollover-reaffirmation-sla:pkg_1")
       ).toBe(true)
       const reaffirmationByPackage =
-        await repos.filingEscalationRolloverReaffirmationSlas.listByPackageId("pkg_1")
+        await repos.filingEscalationRolloverReaffirmationSlas.listByPackageId("firmA", "pkg_1")
       expect(
         reaffirmationByPackage.some((row) => row.id === "rollover-reaffirmation-sla:pkg_1")
       ).toBe(true)
@@ -4169,9 +4084,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 47,
         updatedAt: 47,
       })
-      const closureDigest = await repos.filingEscalationClosureComplianceDigests.get(
-        "closure-compliance:firmA:partner_a"
-      )
+      const closureDigest = await repos.filingEscalationClosureComplianceDigests.get("closure-compliance:firmA:partner_a", "firmA")
       expect(closureDigest?.status).toBe("open_alert")
       const closureDigestsByFirm =
         await repos.filingEscalationClosureComplianceDigests.listByFirm("firmA")
@@ -4179,7 +4092,7 @@ describe("Firestore repository adapters", () => {
         closureDigestsByFirm.some((row) => row.id === "closure-compliance:firmA:partner_a")
       ).toBe(true)
       const closureDigestsByOwner =
-        await repos.filingEscalationClosureComplianceDigests.listByOwnerId("partner_a")
+        await repos.filingEscalationClosureComplianceDigests.listByOwnerId("firmA", "partner_a")
       expect(
         closureDigestsByOwner.some((row) => row.id === "closure-compliance:firmA:partner_a")
       ).toBe(true)
@@ -4202,9 +4115,7 @@ describe("Firestore repository adapters", () => {
         notes: ["closure follow-up queue row"],
         updatedAt: 48,
       })
-      const closureQueue = await repos.filingEscalationClosureFollowupQueues.get(
-        "closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureQueue = await repos.filingEscalationClosureFollowupQueues.get("closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureQueue?.status).toBe("claimed")
       const closureQueueByFirm = await repos.filingEscalationClosureFollowupQueues.listByFirm("firmA")
       expect(
@@ -4213,7 +4124,7 @@ describe("Firestore repository adapters", () => {
         )
       ).toBe(true)
       const closureQueueByOwner =
-        await repos.filingEscalationClosureFollowupQueues.listByOwnerId("partner_a")
+        await repos.filingEscalationClosureFollowupQueues.listByOwnerId("firmA", "partner_a")
       expect(
         closureQueueByOwner.some(
           (row) => row.id === "closure-followup:closure-compliance:firmA:partner_a"
@@ -4233,9 +4144,7 @@ describe("Firestore repository adapters", () => {
         notes: ["closure SLA config row"],
         updatedAt: 49,
       })
-      const closureSlaConfig = await repos.filingEscalationClosureSlaWindowConfigs.get(
-        "closure-sla-window-config:firmA:default"
-      )
+      const closureSlaConfig = await repos.filingEscalationClosureSlaWindowConfigs.get("closure-sla-window-config:firmA:default", "firmA")
       expect(closureSlaConfig?.scope).toBe("firm_default")
       const closureSlaConfigByFirm =
         await repos.filingEscalationClosureSlaWindowConfigs.listByFirm("firmA")
@@ -4255,9 +4164,7 @@ describe("Firestore repository adapters", () => {
         notes: ["closure auto-assignment rule row"],
         updatedAt: 50,
       })
-      const closureAutoRule = await repos.filingEscalationClosureAutoAssignmentRules.get(
-        "closure-auto-assignment-rule:firmA:default"
-      )
+      const closureAutoRule = await repos.filingEscalationClosureAutoAssignmentRules.get("closure-auto-assignment-rule:firmA:default", "firmA")
       expect(closureAutoRule?.mode).toBe("owner_rota")
       const closureAutoRuleByFirm =
         await repos.filingEscalationClosureAutoAssignmentRules.listByFirm("firmA")
@@ -4287,9 +4194,7 @@ describe("Firestore repository adapters", () => {
         notes: ["closure SLA window row"],
         updatedAt: 51,
       })
-      const closureSlaWindow = await repos.filingEscalationClosureSlaWindows.get(
-        "closure-sla-window:closure-compliance:firmA:partner_a"
-      )
+      const closureSlaWindow = await repos.filingEscalationClosureSlaWindows.get("closure-sla-window:closure-compliance:firmA:partner_a", "firmA")
       expect(closureSlaWindow?.status).toBe("ack_breached")
       const closureSlaWindowByFirm = await repos.filingEscalationClosureSlaWindows.listByFirm("firmA")
       expect(
@@ -4323,9 +4228,7 @@ describe("Firestore repository adapters", () => {
         notes: ["attestation row"],
         updatedAt: 53,
       })
-      const closureAttestation = await repos.filingEscalationClosureAttestations.get(
-        "closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1"
-      )
+      const closureAttestation = await repos.filingEscalationClosureAttestations.get("closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1", "firmA")
       expect(closureAttestation?.status).toBe("pending_second_review")
       const closureAttestationsByFirm =
         await repos.filingEscalationClosureAttestations.listByFirm("firmA")
@@ -4360,9 +4263,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 54,
         updatedAt: 54,
       })
-      const closureExceptionDigest = await repos.filingEscalationClosureSlaExceptionDigests.get(
-        "closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureExceptionDigest = await repos.filingEscalationClosureSlaExceptionDigests.get("closure-sla-exception:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureExceptionDigest?.pressureLevel).toBe("critical")
       const closureExceptionDigestsByFirm =
         await repos.filingEscalationClosureSlaExceptionDigests.listByFirm("firmA")
@@ -4397,9 +4298,7 @@ describe("Firestore repository adapters", () => {
         notes: ["dispute opened"],
         updatedAt: 55,
       })
-      const closureDispute = await repos.filingEscalationClosureAttestationDisputes.get(
-        "closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureDispute = await repos.filingEscalationClosureAttestationDisputes.get("closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureDispute?.status).toBe("open_dispute")
       const closureDisputesByFirm =
         await repos.filingEscalationClosureAttestationDisputes.listByFirm("firmA")
@@ -4430,9 +4329,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 57,
         updatedAt: 57,
       })
-      const closureEnforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get(
-        "closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureEnforcement = await repos.filingEscalationClosureSlaExceptionEnforcement.get("closure-sla-exception-enforcement:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureEnforcement?.status).toBe("reminder_sent")
       const closureEnforcementByFirm =
         await repos.filingEscalationClosureSlaExceptionEnforcement.listByFirm("firmA")
@@ -4467,9 +4364,7 @@ describe("Firestore repository adapters", () => {
         notes: ["adjudication escalated"],
         updatedAt: 58,
       })
-      const closureAdjudication = await repos.filingEscalationClosureAdjudicationQueue.get(
-        "closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureAdjudication = await repos.filingEscalationClosureAdjudicationQueue.get("closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureAdjudication?.status).toBe("panel_in_review")
       const closureAdjudicationByFirm =
         await repos.filingEscalationClosureAdjudicationQueue.listByFirm("firmA")
@@ -4496,9 +4391,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 59,
         updatedAt: 59,
       })
-      const closureRebalance = await repos.filingEscalationClosureEnforcementRebalance.get(
-        "closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureRebalance = await repos.filingEscalationClosureEnforcementRebalance.get("closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureRebalance?.status).toBe("owner_reassignment_recommended")
       const closureRebalanceByFirm = await repos.filingEscalationClosureEnforcementRebalance.listByFirm(
         "firmA"
@@ -4533,9 +4426,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 60,
         updatedAt: 60,
       })
-      const closureQuorum = await repos.filingEscalationClosureAdjudicationQuorum.get(
-        "closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureQuorum = await repos.filingEscalationClosureAdjudicationQuorum.get("closure-adjudication-quorum:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureQuorum?.status).toBe("quorum_pending")
       const closureQuorumByFirm = await repos.filingEscalationClosureAdjudicationQuorum.listByFirm(
         "firmA"
@@ -4562,9 +4453,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 61,
         updatedAt: 61,
       })
-      const closureExecution = await repos.filingEscalationClosureRebalanceExecution.get(
-        "closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureExecution = await repos.filingEscalationClosureRebalanceExecution.get("closure-rebalance-execution:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureExecution?.status).toBe("completed")
       const closureExecutionByFirm = await repos.filingEscalationClosureRebalanceExecution.listByFirm(
         "firmA"
@@ -4594,9 +4483,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 64,
         updatedAt: 64,
       })
-      const closureSlo = await repos.filingEscalationClosureAdjudicationSlo.get(
-        "closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureSlo = await repos.filingEscalationClosureAdjudicationSlo.get("closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureSlo?.status).toBe("breach_open")
       const closureSloByFirm = await repos.filingEscalationClosureAdjudicationSlo.listByFirm("firmA")
       expect(closureSloByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
@@ -4621,9 +4508,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 65,
         updatedAt: 65,
       })
-      const closureSafeguard = await repos.filingEscalationClosureRebalanceSafeguards.get(
-        "closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureSafeguard = await repos.filingEscalationClosureRebalanceSafeguards.get("closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureSafeguard?.status).toBe("cooldown_locked")
       const closureSafeguardByFirm =
         await repos.filingEscalationClosureRebalanceSafeguards.listByFirm("firmA")
@@ -4653,9 +4538,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 67,
         updatedAt: 67,
       })
-      const closureDebtRemediation = await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get(
-        "closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureDebtRemediation = await repos.filingEscalationClosureAdjudicationSloDebtRemediation.get("closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureDebtRemediation?.status).toBe("debt_retirement_pending")
       const closureDebtRemediationByFirm =
         await repos.filingEscalationClosureAdjudicationSloDebtRemediation.listByFirm("firmA")
@@ -4681,9 +4564,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 69,
         updatedAt: 69,
       })
-      const closureSafeguardExpiry = await repos.filingEscalationClosureRebalanceSafeguardExpiry.get(
-        "closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureSafeguardExpiry = await repos.filingEscalationClosureRebalanceSafeguardExpiry.get("closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureSafeguardExpiry?.status).toBe("override_expired")
       const closureSafeguardExpiryByFirm =
         await repos.filingEscalationClosureRebalanceSafeguardExpiry.listByFirm("firmA")
@@ -4714,9 +4595,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 73,
         updatedAt: 73,
       })
-      const closureDebtBurndown = await repos.filingEscalationClosureAdjudicationDebtBurndown.get(
-        "closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureDebtBurndown = await repos.filingEscalationClosureAdjudicationDebtBurndown.get("closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureDebtBurndown?.status).toBe("burndown_checkpoint_due")
       const closureDebtBurndownByFirm =
         await repos.filingEscalationClosureAdjudicationDebtBurndown.listByFirm("firmA")
@@ -4745,9 +4624,7 @@ describe("Firestore repository adapters", () => {
         updatedAt: 75,
       })
       const closureSafeguardAttestation =
-        await repos.filingEscalationClosureSafeguardExpiryAttestations.get(
-          "closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-        )
+        await repos.filingEscalationClosureSafeguardExpiryAttestations.get("closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureSafeguardAttestation?.status).toBe("attestation_overdue")
       const closureSafeguardAttestationByFirm =
         await repos.filingEscalationClosureSafeguardExpiryAttestations.listByFirm("firmA")
@@ -4779,9 +4656,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 76,
         updatedAt: 76,
       })
-      const closureBurndownRecalibration = await repos.filingEscalationClosureBurndownRecalibration.get(
-        "closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureBurndownRecalibration = await repos.filingEscalationClosureBurndownRecalibration.get("closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureBurndownRecalibration?.status).toBe("confidence_band_overridden")
       const closureBurndownRecalibrationByFirm =
         await repos.filingEscalationClosureBurndownRecalibration.listByFirm("firmA")
@@ -4810,9 +4685,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 78,
         updatedAt: 78,
       })
-      const closureExpiryAttestationQueue = await repos.filingEscalationClosureExpiryAttestationQueue.get(
-        "closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureExpiryAttestationQueue = await repos.filingEscalationClosureExpiryAttestationQueue.get("closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureExpiryAttestationQueue?.status).toBe("handoff_attested")
       const closureExpiryAttestationQueueByFirm =
         await repos.filingEscalationClosureExpiryAttestationQueue.listByFirm("firmA")
@@ -4841,9 +4714,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 80,
         updatedAt: 80,
       })
-      const closureBurndownSettlement = await repos.filingEscalationClosureBurndownSettlement.get(
-        "closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureBurndownSettlement = await repos.filingEscalationClosureBurndownSettlement.get("closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureBurndownSettlement?.status).toBe("target_lock_attested")
       const closureBurndownSettlementByFirm =
         await repos.filingEscalationClosureBurndownSettlement.listByFirm("firmA")
@@ -4873,9 +4744,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 82,
         updatedAt: 82,
       })
-      const closureQueueDrain = await repos.filingEscalationClosureExpiryAttestationQueueDrain.get(
-        "closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureQueueDrain = await repos.filingEscalationClosureExpiryAttestationQueueDrain.get("closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureQueueDrain?.status).toBe("stale_reassignment_attested")
       const closureQueueDrainByFirm =
         await repos.filingEscalationClosureExpiryAttestationQueueDrain.listByFirm("firmA")
@@ -4904,9 +4773,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 84,
         updatedAt: 84,
       })
-      const closureSettlementAttestation = await repos.filingEscalationClosureSettlementAttestation.get(
-        "closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureSettlementAttestation = await repos.filingEscalationClosureSettlementAttestation.get("closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureSettlementAttestation?.status).toBe("settlement_verified")
       const closureSettlementAttestationByFirm =
         await repos.filingEscalationClosureSettlementAttestation.listByFirm("firmA")
@@ -4935,9 +4802,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 87,
         updatedAt: 87,
       })
-      const closureQueueDrainReconciliation = await repos.filingEscalationClosureQueueDrainReconciliation.get(
-        "closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureQueueDrainReconciliation = await repos.filingEscalationClosureQueueDrainReconciliation.get("closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureQueueDrainReconciliation?.status).toBe("timeout_reentry_controlled")
       const closureQueueDrainReconciliationByFirm =
         await repos.filingEscalationClosureQueueDrainReconciliation.listByFirm("firmA")
@@ -4986,9 +4851,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 96,
         updatedAt: 96,
       })
-      const closureSettlementArbitration = await repos.filingEscalationClosureSettlementArbitration.get(
-        "closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1"
-      )
+      const closureSettlementArbitration = await repos.filingEscalationClosureSettlementArbitration.get("closure-settlement-arbitration:closure-settlement-attestation:closure-burndown-settlement:closure-burndown-recalibration:closure-adjudication-debt-burndown:closure-adjudication-slo-debt-remediation:closure-adjudication-slo:closure-adjudication-queue:closure-attestation-dispute:closure-attestation:closure-followup:closure-compliance:firmA:partner_a:1:1", "firmA")
       expect(closureSettlementArbitration?.status).toBe("distribution_attestation_reviewed")
       expect(closureSettlementArbitration?.rulingPublicationChannel).toBe("internal_panel_registry")
       expect(closureSettlementArbitration?.arbitrationPublicationExceptionBacklogCount).toBe(3)
@@ -5038,9 +4901,7 @@ describe("Firestore repository adapters", () => {
         lastEvaluatedAt: 97,
         updatedAt: 97,
       })
-      const closureQueueReentryCompliance = await repos.filingEscalationClosureQueueReentryCompliance.get(
-        "closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a"
-      )
+      const closureQueueReentryCompliance = await repos.filingEscalationClosureQueueReentryCompliance.get("closure-queue-reentry-compliance:closure-queue-drain-reconciliation:closure-expiry-attestation-queue-drain:closure-expiry-attestation-queue:closure-safeguard-expiry-attestation:closure-rebalance-safeguard-expiry:closure-rebalance-safeguard:closure-enforcement-rebalance:closure-followup:closure-compliance:firmA:partner_a", "firmA")
       expect(closureQueueReentryCompliance?.status).toBe("retirement_rollback_controlled")
       expect(closureQueueReentryCompliance?.debtAssigneeId).toBe("partner_b")
       expect(closureQueueReentryCompliance?.queueReentryRetirementReconciliationDriftCount).toBe(2)
@@ -5126,7 +4987,7 @@ describe("Firestore filings.decideIfPending (final audit F2)", () => {
       ])
       expect(outcomes.map((o) => o.kind).sort()).toEqual(["already_decided", "decided"])
       const winner = outcomes.find((o) => o.kind === "decided") as { row: { status: string; approvedBy: string } }
-      const stored = await repos.filings.get("pkg_one_shot")
+      const stored = await repos.filings.get("pkg_one_shot", "firmA")
       expect(stored?.status).toBe(winner.row.status)
       expect(stored?.approvedBy).toBe(winner.row.approvedBy)
       expect(await repos.filings.decideIfPending("pkg_missing", { status: "approved", approvedBy: "partner_a", approvalReason: "ok" })).toEqual({ kind: "missing" })
