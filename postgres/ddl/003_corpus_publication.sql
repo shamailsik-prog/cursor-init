@@ -5,8 +5,11 @@
 --   corpus_publication_begin()  -> advisory lock, audit row, transaction-scoped grant row
 --   INSERT/UPDATE contract rows carrying publication_id, guarded by enforce_promoted_via_publication()
 --   INSERT corpus_publication_item rows (one per entity decision)
---   corpus_publication_finish() -> counts recomputed and checked, grant removed, corpus_metadata refreshed
--- Error codes are SQLSTATE class SK (SKP01-SKP11); each message is a stable token, and DETAIL never
+--   corpus_publication_finish() -> counts recomputed and checked, the audit's coverage of the rows checked,
+--                                  grants removed, corpus_metadata refreshed
+--   COMMIT                      -> deferred checks: the publication is finished, and so is every publication
+--                                  a row written in the transaction carries (fix round 1, D1)
+-- Error codes are SQLSTATE class SK (SKP01-SKP13); each message is a stable token, and DETAIL never
 -- carries row values. Superuser sessions are exempt from the guard (spec ruling 2) but cannot publish (D2).
 
 -- 1. Fail-closed default: a contract row nobody published is quarantined.
@@ -93,6 +96,38 @@ ALTER TABLE statute VALIDATE CONSTRAINT statute_jurisdiction_annex_a_check;
 CREATE UNIQUE INDEX IF NOT EXISTS treatment_natural_key
   ON treatment (treating_judgment_id, treated_judgment_id, treatment, (coalesce(passage_anchor, '')));
 
+-- Fix round 1 (D4): every Annex A confidence is a number in [0, 1], whatever the row's status. NaN sorts
+-- above every number in PostgreSQL, so it fails "<= 1", as do both infinities; NULL stays allowed (001).
+DO $$
+DECLARE
+  c record;
+BEGIN
+  FOR c IN SELECT v.tbl, v.col, v.tbl || '_' || v.col || '_range' AS name FROM (VALUES
+      ('court', 'confidence'), ('judge', 'confidence'), ('instrument', 'confidence'), ('statute', 'confidence'),
+      ('statute_section', 'confidence'), ('statute_section_version', 'confidence'),
+      ('statute_section_version', 'version_confidence'), ('judgment', 'confidence'), ('citation', 'confidence'),
+      ('treatment', 'confidence')) AS v (tbl, col)
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conname = c.name AND conrelid = pg_catalog.to_regclass('public.' || c.tbl)) THEN
+      EXECUTE pg_catalog.format('ALTER TABLE public.%I ADD CONSTRAINT %I CHECK (%I >= 0 AND %I <= 1) NOT VALID',
+                                c.tbl, c.name, c.col, c.col);
+    END IF;
+    EXECUTE pg_catalog.format('ALTER TABLE public.%I VALIDATE CONSTRAINT %I', c.tbl, c.name);
+  END LOOP;
+END $$;
+
+-- finish() looks up every row a publication stamped (fix round 1, D2).
+CREATE INDEX IF NOT EXISTS court_publication_id ON court (publication_id);
+CREATE INDEX IF NOT EXISTS judge_publication_id ON judge (publication_id);
+CREATE INDEX IF NOT EXISTS instrument_publication_id ON instrument (publication_id);
+CREATE INDEX IF NOT EXISTS statute_publication_id ON statute (publication_id);
+CREATE INDEX IF NOT EXISTS statute_section_publication_id ON statute_section (publication_id);
+CREATE INDEX IF NOT EXISTS statute_section_version_publication_id ON statute_section_version (publication_id);
+CREATE INDEX IF NOT EXISTS judgment_publication_id ON judgment (publication_id);
+CREATE INDEX IF NOT EXISTS citation_publication_id ON citation (publication_id);
+CREATE INDEX IF NOT EXISTS treatment_publication_id ON treatment (publication_id);
+
 -- 5. Helpers.
 CREATE OR REPLACE FUNCTION corpus_session_is_superuser() RETURNS boolean
 LANGUAGE sql STABLE
@@ -141,6 +176,9 @@ $$;
 --    Fires when a row becomes promoted, or when a promoted row changes anything but classification
 --    and updated_at (D4: declassify() and classification raises are unaffected; columns added later
 --    are covered, which fails closed). A demotion of a promoted row also needs a publication (D5).
+--    Fix round 1: only the open publication may stamp its id on a row (D1, D2); a promoted citation,
+--    treatment, section or version needs promoted parents, and a promoted judgment, statute or section
+--    that promoted rows depend on cannot be demoted (D3); the treatment threshold is NaN-safe (D4).
 CREATE OR REPLACE FUNCTION enforce_promoted_via_publication() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
@@ -148,6 +186,8 @@ AS $$
 DECLARE
   c_ignored CONSTANT text[] := ARRAY['classification', 'updated_at'];
   v_fires boolean;
+  v_stamps boolean;
+  v_dependants boolean;
   v_new jsonb;
   v_confidence double precision;
   v_from date;
@@ -155,6 +195,20 @@ DECLARE
 BEGIN
   IF public.corpus_session_is_superuser() THEN
     RETURN NEW; -- spec ruling 2: a superuser can drop the trigger anyway; the reader views close the gap
+  END IF;
+  -- Only the open publication may stamp its id on a row (any status), so every row that carries a
+  -- publication id was written inside that publication and is covered by its finish() check.
+  IF NEW.publication_id IS NOT NULL THEN
+    IF TG_OP = 'INSERT' THEN
+      v_stamps := true;
+    ELSE
+      v_stamps := NEW.publication_id IS DISTINCT FROM OLD.publication_id;
+    END IF;
+    IF v_stamps AND NOT EXISTS (SELECT 1 FROM public.corpus_publication_grant g
+                                WHERE g.xid = pg_catalog.txid_current() AND g.publication_id = NEW.publication_id) THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP02', MESSAGE = 'publication_required',
+        DETAIL = pg_catalog.format('table %s', TG_TABLE_NAME);
+    END IF;
   END IF;
   IF TG_OP = 'INSERT' THEN
     v_fires := NEW.review_status = 'promoted';
@@ -173,7 +227,31 @@ BEGIN
       DETAIL = pg_catalog.format('table %s', TG_TABLE_NAME);
   END IF;
   IF NEW.review_status IS DISTINCT FROM 'promoted' THEN
-    RETURN NEW; -- a demotion inside a publication: no content checks
+    -- A demotion inside a publication: no content checks, but no promoted row may be left depending on
+    -- the demoted one (the reverse of the parent checks below; D9 in the database).
+    IF TG_OP = 'UPDATE' THEN
+      IF OLD.review_status = 'promoted' THEN
+        v_dependants := false;
+        IF TG_TABLE_NAME = 'judgment' THEN
+          v_dependants := EXISTS (SELECT 1 FROM public.citation c
+                                  WHERE c.judgment_id = OLD.id AND c.review_status = 'promoted')
+            OR EXISTS (SELECT 1 FROM public.treatment t
+                       WHERE (t.treating_judgment_id = OLD.id OR t.treated_judgment_id = OLD.id)
+                         AND t.review_status = 'promoted');
+        ELSIF TG_TABLE_NAME = 'statute' THEN
+          v_dependants := EXISTS (SELECT 1 FROM public.statute_section s
+                                  WHERE s.statute_id = OLD.id AND s.review_status = 'promoted');
+        ELSIF TG_TABLE_NAME = 'statute_section' THEN
+          v_dependants := EXISTS (SELECT 1 FROM public.statute_section_version v
+                                  WHERE v.section_id = OLD.id AND v.review_status = 'promoted');
+        END IF;
+        IF v_dependants THEN
+          RAISE EXCEPTION USING ERRCODE = 'SKP13', MESSAGE = 'promoted_dependants',
+            DETAIL = pg_catalog.format('table %s', TG_TABLE_NAME);
+        END IF;
+      END IF;
+    END IF;
+    RETURN NEW;
   END IF;
 
   IF NOT public.corpus_provenance_complete(NEW.source_id) THEN
@@ -186,16 +264,39 @@ BEGIN
     IF pg_catalog.btrim(coalesce(v_new ->> 'bench_type', '')) = '' THEN
       RAISE EXCEPTION USING ERRCODE = 'SKP04', MESSAGE = 'bench_required', DETAIL = 'table judgment';
     END IF;
+  ELSIF TG_TABLE_NAME = 'citation' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.judgment j
+                   WHERE j.id = (v_new ->> 'judgment_id')::uuid AND j.review_status = 'promoted') THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP13', MESSAGE = 'parent_not_promoted', DETAIL = 'table citation';
+    END IF;
   ELSIF TG_TABLE_NAME = 'treatment' THEN
     v_confidence := (v_new ->> 'confidence')::double precision;
-    IF v_confidence IS NULL OR v_confidence < 0.7 THEN
+    -- NaN-safe: PostgreSQL sorts NaN above every number, so "< 0.7" let it through (D4). The range form
+    -- refuses NaN and both infinities.
+    IF v_confidence IS NULL OR NOT (v_confidence >= 0.7 AND v_confidence <= 1.0) THEN
       RAISE EXCEPTION USING ERRCODE = 'SKP05', MESSAGE = 'treatment_confidence', DETAIL = 'table treatment';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.judgment j WHERE j.id = (v_new ->> 'treating_judgment_id')::uuid)
        OR NOT EXISTS (SELECT 1 FROM public.judgment j WHERE j.id = (v_new ->> 'treated_judgment_id')::uuid) THEN
       RAISE EXCEPTION USING ERRCODE = 'SKP05', MESSAGE = 'treatment_judgment_missing', DETAIL = 'table treatment';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.judgment j
+                   WHERE j.id = (v_new ->> 'treating_judgment_id')::uuid AND j.review_status = 'promoted')
+       OR NOT EXISTS (SELECT 1 FROM public.judgment j
+                      WHERE j.id = (v_new ->> 'treated_judgment_id')::uuid AND j.review_status = 'promoted') THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP05', MESSAGE = 'treatment_judgment_not_promoted', DETAIL = 'table treatment';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'statute_section' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.statute s
+                   WHERE s.id = (v_new ->> 'statute_id')::uuid AND s.review_status = 'promoted') THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP13', MESSAGE = 'parent_not_promoted', DETAIL = 'table statute_section';
+    END IF;
   ELSIF TG_TABLE_NAME = 'statute_section_version' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.statute_section s
+                   WHERE s.id = (v_new ->> 'section_id')::uuid AND s.review_status = 'promoted') THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP13', MESSAGE = 'parent_not_promoted',
+        DETAIL = 'table statute_section_version';
+    END IF;
     v_from := (v_new ->> 'effective_from')::date;
     v_to := (v_new ->> 'effective_to')::date;
     IF v_from IS NULL THEN
@@ -242,6 +343,100 @@ CREATE OR REPLACE TRIGGER citation_publication_guard BEFORE INSERT OR UPDATE ON 
   FOR EACH ROW EXECUTE FUNCTION enforce_promoted_via_publication();
 CREATE OR REPLACE TRIGGER treatment_publication_guard BEFORE INSERT OR UPDATE ON treatment
   FOR EACH ROW EXECUTE FUNCTION enforce_promoted_via_publication();
+
+-- 6b. Commit checks (fix round 1, D1), deferred to COMMIT so that they see the whole transaction:
+--     * a publication begun in the transaction has been finished (no unfinished publication, and so no
+--       grant row, outlives its transaction; the key is not burned);
+--     * every row version written in the transaction that carries a publication id carries a finished
+--       one (contract tables and source_provenance);
+--     * a promoted row version written by anything but a classification / updated_at change carries one.
+--     SET CONSTRAINTS ... IMMEDIATE runs them before finish(), so it fails closed. Superuser sessions are
+--     exempt (ruling 2), checked by session_user as everywhere else.
+CREATE OR REPLACE FUNCTION corpus_publication_commit_check() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  c_ignored CONSTANT text[] := ARRAY['classification', 'updated_at'];
+  v_pid uuid;
+  v_finished timestamptz;
+  v_needs_publication boolean;
+BEGIN
+  IF public.corpus_session_is_superuser() THEN
+    RETURN NULL;
+  END IF;
+  IF TG_TABLE_NAME = 'corpus_publication' THEN
+    v_pid := NEW.id;
+  ELSE
+    v_pid := NEW.publication_id;
+  END IF;
+  IF v_pid IS NULL THEN
+    -- Only a promoted row version gets here (the trigger's WHEN clause).
+    IF TG_OP = 'INSERT' THEN
+      v_needs_publication := true;
+    ELSE
+      v_needs_publication := OLD.review_status IS DISTINCT FROM 'promoted'
+        OR (pg_catalog.to_jsonb(NEW) - c_ignored) IS DISTINCT FROM (pg_catalog.to_jsonb(OLD) - c_ignored);
+    END IF;
+    IF v_needs_publication THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP12', MESSAGE = 'publication_not_finished',
+        DETAIL = pg_catalog.format('table %s', TG_TABLE_NAME);
+    END IF;
+    RETURN NULL;
+  END IF;
+  SELECT c.finished_at INTO v_finished FROM public.corpus_publication c WHERE c.id = v_pid;
+  IF NOT FOUND OR v_finished IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = 'SKP12', MESSAGE = 'publication_not_finished',
+      DETAIL = pg_catalog.format('table %s', TG_TABLE_NAME);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+-- CREATE OR REPLACE does not apply to constraint triggers: drop and re-create (idempotent).
+DROP TRIGGER IF EXISTS corpus_publication_finished_by_commit ON corpus_publication;
+CREATE CONSTRAINT TRIGGER corpus_publication_finished_by_commit AFTER INSERT ON corpus_publication
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS source_provenance_publication_commit_check ON source_provenance;
+CREATE CONSTRAINT TRIGGER source_provenance_publication_commit_check AFTER INSERT OR UPDATE ON source_provenance
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL)
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS court_publication_commit_check ON court;
+CREATE CONSTRAINT TRIGGER court_publication_commit_check AFTER INSERT OR UPDATE ON court
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS judge_publication_commit_check ON judge;
+CREATE CONSTRAINT TRIGGER judge_publication_commit_check AFTER INSERT OR UPDATE ON judge
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS instrument_publication_commit_check ON instrument;
+CREATE CONSTRAINT TRIGGER instrument_publication_commit_check AFTER INSERT OR UPDATE ON instrument
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS statute_publication_commit_check ON statute;
+CREATE CONSTRAINT TRIGGER statute_publication_commit_check AFTER INSERT OR UPDATE ON statute
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS statute_section_publication_commit_check ON statute_section;
+CREATE CONSTRAINT TRIGGER statute_section_publication_commit_check AFTER INSERT OR UPDATE ON statute_section
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS statute_section_version_publication_commit_check ON statute_section_version;
+CREATE CONSTRAINT TRIGGER statute_section_version_publication_commit_check AFTER INSERT OR UPDATE ON statute_section_version
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS judgment_publication_commit_check ON judgment;
+CREATE CONSTRAINT TRIGGER judgment_publication_commit_check AFTER INSERT OR UPDATE ON judgment
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS citation_publication_commit_check ON citation;
+CREATE CONSTRAINT TRIGGER citation_publication_commit_check AFTER INSERT OR UPDATE ON citation
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
+DROP TRIGGER IF EXISTS treatment_publication_commit_check ON treatment;
+CREATE CONSTRAINT TRIGGER treatment_publication_commit_check AFTER INSERT OR UPDATE ON treatment
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.publication_id IS NOT NULL OR NEW.review_status = 'promoted')
+  EXECUTE FUNCTION corpus_publication_commit_check();
 
 -- 7. Audit enforcement. Append-only for every role, a superuser included (D6). The single permitted
 --    change is finish() stamping the counts and finished_at once, while the publication's grant is open.
@@ -320,6 +515,14 @@ BEGIN
      OR p_actor_id IS NULL OR pg_catalog.btrim(p_actor_id) = '' OR pg_catalog.length(p_actor_id) > 200 THEN
     RAISE EXCEPTION USING ERRCODE = 'SKP09', MESSAGE = 'publication_invalid_argument';
   END IF;
+  -- The guard's cross-row checks (version overlap; promoted parents and dependants) rely on the lock
+  -- below serialising publications. Under REPEATABLE READ or SERIALIZABLE the transaction's snapshot can
+  -- predate the lock, so a publication runs at READ COMMITTED, where every statement after the lock sees
+  -- what earlier publications committed (fix round 1). Until now only finish()'s corpus_metadata upsert
+  -- stopped such a transaction (40001), as a side effect.
+  IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION USING ERRCODE = 'SKP08', MESSAGE = 'publication_isolation_refused';
+  END IF;
   -- One publication at a time: serialises the procedural overlap check and the seq/commit order.
   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('sikander.corpus_publication', 0));
   v_xid := pg_catalog.txid_current();
@@ -352,9 +555,14 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
+  c_tables CONSTANT text[] := ARRAY['court', 'judge', 'instrument', 'statute', 'statute_section',
+                                    'statute_section_version', 'judgment', 'citation', 'treatment'];
+  c_writes CONSTANT text := '(''promoted'', ''quarantined'', ''updated'')';
   v_xid bigint;
   v_counts jsonb;
   v_seq bigint;
+  v_table text;
+  v_n bigint;
 BEGIN
   IF public.corpus_session_is_superuser() THEN
     RAISE EXCEPTION USING ERRCODE = 'SKP07', MESSAGE = 'publication_superuser_refused';
@@ -377,6 +585,42 @@ BEGIN
   IF v_counts IS DISTINCT FROM p_counts THEN
     RAISE EXCEPTION USING ERRCODE = 'SKP10', MESSAGE = 'publication_counts_mismatch';
   END IF;
+  -- Fix round 1 (D2): the audit covers exactly the rows this publication wrote. Every contract row it
+  -- stamped has a write item (promoted, quarantined or updated) naming it; every write item names a row
+  -- it stamped; and each row agrees with its latest write item (promoted is promoted, quarantined is
+  -- not). The guard keeps any other transaction from stamping this publication's id afterwards.
+  FOREACH v_table IN ARRAY c_tables LOOP
+    EXECUTE pg_catalog.format(
+      'SELECT count(*) FROM public.%I t WHERE t.publication_id = $1 AND NOT EXISTS ('
+      ' SELECT 1 FROM public.corpus_publication_item i WHERE i.publication_id = $1 AND i.entity_type = $2'
+      ' AND i.entity_id = t.id AND i.decision IN %s)', v_table, c_writes)
+      INTO v_n USING p_publication_id, v_table;
+    IF v_n > 0 THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP10', MESSAGE = 'publication_rows_unaudited',
+        DETAIL = pg_catalog.format('table %s', v_table);
+    END IF;
+    EXECUTE pg_catalog.format(
+      'SELECT count(*) FROM public.corpus_publication_item i WHERE i.publication_id = $1 AND i.entity_type = $2'
+      ' AND i.decision IN %s AND NOT EXISTS ('
+      ' SELECT 1 FROM public.%I t WHERE t.id = i.entity_id AND t.publication_id = $1)', c_writes, v_table)
+      INTO v_n USING p_publication_id, v_table;
+    IF v_n > 0 THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP10', MESSAGE = 'publication_items_unwritten',
+        DETAIL = pg_catalog.format('table %s', v_table);
+    END IF;
+    EXECUTE pg_catalog.format(
+      'SELECT count(*) FROM public.%I t CROSS JOIN LATERAL ('
+      ' SELECT i.decision FROM public.corpus_publication_item i WHERE i.publication_id = $1'
+      ' AND i.entity_type = $2 AND i.entity_id = t.id AND i.decision IN %s ORDER BY i.id DESC LIMIT 1) l'
+      ' WHERE t.publication_id = $1'
+      ' AND ((l.decision = ''promoted'' AND t.review_status IS DISTINCT FROM ''promoted'')'
+      ' OR (l.decision = ''quarantined'' AND t.review_status = ''promoted''))', v_table, c_writes)
+      INTO v_n USING p_publication_id, v_table;
+    IF v_n > 0 THEN
+      RAISE EXCEPTION USING ERRCODE = 'SKP10', MESSAGE = 'publication_status_mismatch',
+        DETAIL = pg_catalog.format('table %s', v_table);
+    END IF;
+  END LOOP;
   UPDATE public.corpus_publication c
      SET item_count = (v_counts ->> 'items')::int,
          promoted_count = (v_counts ->> 'promoted')::int,
@@ -387,7 +631,11 @@ BEGIN
          finished_at = pg_catalog.clock_timestamp()
    WHERE c.id = p_publication_id
    RETURNING c.seq INTO v_seq;
-  DELETE FROM public.corpus_publication_grant g WHERE g.xid = v_xid AND g.publication_id = p_publication_id;
+  -- This publication's grant goes, and with it any grant a transaction left behind by committing without
+  -- finish() (refused at COMMIT since fix round 1, D1; possible before it). begin()'s advisory lock is
+  -- held until this transaction ends, so no other publication can be open now and every other row is
+  -- such an orphan; it was already unusable, being bound to its own transaction's xid.
+  DELETE FROM public.corpus_publication_grant g WHERE g.publication_id = p_publication_id OR g.xid <> v_xid;
   -- D30: last_refresh is the transaction start in UTC (errs toward stale, which fails closed for the reader).
   INSERT INTO public.corpus_metadata (key, value, updated_at) VALUES
       ('last_refresh', pg_catalog.to_char(pg_catalog.now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), pg_catalog.now()),
@@ -411,7 +659,8 @@ GRANT SELECT, INSERT, UPDATE ON court, judge, instrument, statute, statute_secti
 GRANT SELECT, INSERT ON source_provenance TO corpus_writer;
 REVOKE ALL ON FUNCTION corpus_publication_begin(text, text, text, text), corpus_publication_finish(uuid, jsonb),
   enforce_promoted_via_publication(), corpus_publication_append_only(), corpus_publication_item_guard(),
-  corpus_provenance_complete(uuid), corpus_session_is_superuser(), corpus_contract_relations() FROM PUBLIC;
+  corpus_publication_commit_check(), corpus_provenance_complete(uuid), corpus_session_is_superuser(),
+  corpus_contract_relations() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION corpus_publication_begin(text, text, text, text), corpus_publication_finish(uuid, jsonb)
   TO corpus_writer;
 DO $$ BEGIN

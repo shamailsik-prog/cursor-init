@@ -94,16 +94,20 @@ REJECT_REASONS: Final[Tuple[str, ...]] = (
 REASON_MISSING_BENCH: Final = "missing_bench"
 REASON_CITATION_NOT_CANONICAL: Final = "citation_not_canonical"
 REASON_TREATMENT_UNCERTAIN: Final = "treatment_uncertain"
+REASON_JUDGMENT_NOT_PROMOTED: Final = "judgment_not_promoted"  # a treatment's judgment is held (re-audit D3)
 _TRUST_REASONS: Final[Tuple[str, ...]] = (
     trust.REASON_REVIEW_SOURCE, trust.REASON_LOW_CONFIDENCE, trust.REASON_BLOCKED_SOURCE, trust.REASON_UNKNOWN_SOURCE,
 )
 QUARANTINE_REASONS: Final[Tuple[str, ...]] = (
-    REASON_MISSING_BENCH, REASON_CITATION_NOT_CANONICAL, REASON_TREATMENT_UNCERTAIN, *_TRUST_REASONS,
+    REASON_MISSING_BENCH, REASON_CITATION_NOT_CANONICAL, REASON_TREATMENT_UNCERTAIN, REASON_JUDGMENT_NOT_PROMOTED,
+    *_TRUST_REASONS,
 )
 # When an item is quarantined for several reasons, the durable reason is the first of these: the
-# trust decision, then the citation, then the bench, then the treatment confidence.
+# trust decision, then the citation, then the bench, then the treatment confidence, then a treatment's
+# unpromoted judgment.
 QUARANTINE_PRECEDENCE: Final[Tuple[str, ...]] = (
     *_TRUST_REASONS, REASON_CITATION_NOT_CANONICAL, REASON_MISSING_BENCH, REASON_TREATMENT_UNCERTAIN,
+    REASON_JUDGMENT_NOT_PROMOTED,
 )
 
 _SQUASH = re.compile(r"[\s.\-]+")

@@ -93,18 +93,28 @@ code here that writes it, and every write is part of one audited, idempotent **c
 1. `corpus_publication_begin(batch_key, sha256, source_kind, actor)` takes an advisory lock, writes
    the audit row and a transaction-scoped grant. The same key with the same content returns
    `already` and writes nothing; the same key with other content is refused (`batch_key_reused`).
+   A publication runs at READ COMMITTED (`SKP08 publication_isolation_refused` otherwise), so the
+   guard's cross-row checks never read a snapshot older than the lock.
 2. Each item is planned and written in its own savepoint, with `publication_id` on every row and one
    `corpus_publication_item` audit row per entity (`promoted`, `quarantined`, `updated` with the
    previous hash, `unchanged`, or `rejected` with a reason).
-3. `corpus_publication_finish(id, counts)` checks the counts against the audit, removes the grant and
-   sets `corpus_metadata` `last_refresh`, `publication_seq` and `publication_contract = '1'`.
+3. `corpus_publication_finish(id, counts)` checks the counts against the audit and the audit against
+   the rows (every row the publication stamped has a `promoted` / `quarantined` / `updated` item, every
+   such item names a stamped row, and each row's status agrees with its latest item), removes the grant
+   and sets `corpus_metadata` `last_refresh`, `publication_seq` and `publication_contract = '1'`.
+4. At `COMMIT`, deferred constraint triggers refuse (`SKP12 publication_not_finished`) a publication
+   begun but not finished, and any row written in the transaction that carries an unfinished
+   publication. `SET CONSTRAINTS ... IMMEDIATE` runs them before `finish()`, so it cannot publish.
 
-The database enforces it: a trigger refuses any promotion, or any change to a promoted row other
-than its classification, outside an open publication (`SKP02`), and refuses a promoted row without
-complete provenance, a judgment without a bench, a treatment below 0.7, or an invalid or overlapping
-statute version. The audit tables are append-only. Superuser sessions are exempt from the trigger
-(spec ruling 2) but cannot publish. Publishing runs as `corpus_writer` (`SET LOCAL ROLE`); the
-runtime role reaches it by `SET ROLE` only.
+The database enforces it: a trigger refuses any promotion, any change to a promoted row other than
+its classification, and any row stamped with a publication id, outside that open publication
+(`SKP02`). It refuses a promoted row without complete provenance, a judgment without a bench, a
+treatment whose confidence is not in [0.7, 1] (NaN included), or an invalid or overlapping statute
+version; a promoted citation, treatment, section or version whose judgment, statute or section is not
+promoted, and the demotion of a judgment, statute or section that promoted rows still depend on
+(`SKP13`). Every confidence column holds a number in [0, 1] (a CHECK). The audit tables are
+append-only. Superuser sessions are exempt from the triggers (spec ruling 2) but cannot publish.
+Publishing runs as `corpus_writer` (`SET LOCAL ROLE`); the runtime role reaches it by `SET ROLE` only.
 
 | Case | Outcome |
 |---|---|
@@ -118,15 +128,20 @@ runtime role reaches it by `SET ROLE` only.
 | A quarantine that would demote or rewrite a promoted row | rejected `promoted_row_protected` |
 | Batch key reused with different content | the whole batch refused (`batch_key_reused`) |
 | Treatment confidence below 0.7 | quarantined `treatment_uncertain` |
+| Treatment whose treating or treated judgment is not promoted | quarantined `judgment_not_promoted` |
 | Source not trusted (F20) | quarantined with the trust reason |
 | No bench | quarantined `missing_bench` |
-| Citation not canonical | quarantined `citation_not_canonical` |
+| Citation not canonical (also a key the normaliser would rewrite again) | quarantined `citation_not_canonical` |
 | Current text only | stored at `version_confidence` 0.5, which the reader ignores |
 
 **Promotion.** `promote_staging_records()` applies the F20 decision first. A record it promotes is
 published as its own publication (`batch_key = "staging/<id>"`); the staging row is promoted (with
 `promoted_to_id` = the Annex A judgment id) only if Annex A promoted it, and otherwise quarantined with
-the publication's reason. Trust-quarantined and citation-free records never reach Annex A.
+the publication's reason. A re-stage identical to what Annex A already holds (`unchanged`, in any
+spelling of the citation) is attached and skipped: promoted, linked to the existing judgment, no
+review-queue row, nothing rewritten; only a conflicting change to a protected promoted row
+(`promoted_row_protected`) goes to review. Trust-quarantined and citation-free records never reach
+Annex A.
 Promotion no longer writes `case_law_master` and no longer queues embeddings (Annex A embeddings are
 audit F27). A harvested row with no bench (`scraper_staging.extracted_bench_type`, which
 `python -m scraper.migrate` adds to an older database) is published quarantined `missing_bench`

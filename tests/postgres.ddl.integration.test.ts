@@ -66,13 +66,40 @@ async function expectSqlState(p: Promise<unknown>, code: string, message?: RegEx
   if (message) expect(caught?.message).toMatch(message);
 }
 
-/** BEGIN; begin(); body(pid); finish(counts); COMMIT. ROLLBACK and rethrow on any error. */
+// The tables a corpus_publication_item can name (its entity_type CHECK).
+const ITEM_TABLES = ["judgment", "citation", "treatment", "statute", "statute_section", "statute_section_version"];
+
+/** One write item (promoted, or quarantined for any other status) for every contract row the
+ *  publication stamped, as publish_batch writes them; returns the matching finish() counts. */
+async function auditRows(client: pg.Client, publicationId: string): Promise<Record<string, number>> {
+  const counts: Record<string, number> = { ...ZERO_COUNTS };
+  for (const table of ITEM_TABLES) {
+    const rows = await client.query(`SELECT id, review_status FROM ${table} WHERE publication_id = $1 ORDER BY id`, [
+      publicationId,
+    ]);
+    for (const row of rows.rows) {
+      const promoted = row.review_status === "promoted";
+      await client.query(
+        `INSERT INTO corpus_publication_item (publication_id, item_key, entity_type, entity_id, decision, reason, content_sha256)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [publicationId, `${table}:${row.id}`, table, row.id, promoted ? "promoted" : "quarantined",
+          promoted ? null : "pgddl_held", sha(`${table}:${row.id}`)],
+      );
+      counts.items += 1;
+      counts[promoted ? "promoted" : "quarantined"] += 1;
+    }
+  }
+  return counts;
+}
+
+/** BEGIN; begin(); body(pid); finish(counts); COMMIT. ROLLBACK and rethrow on any error.
+ *  counts "audit-rows" writes an item for every row the body stamped and finishes with those counts. */
 async function publishAs(
   client: pg.Client,
   key: string,
   inputSha: string,
   body: (publicationId: string) => Promise<void>,
-  counts: Record<string, number> = ZERO_COUNTS,
+  counts: Record<string, number> | "audit-rows" = ZERO_COUNTS,
 ): Promise<{ id: string; seq: string }> {
   await client.query("BEGIN");
   try {
@@ -82,9 +109,10 @@ async function publishAs(
     );
     const id: string = begun.rows[0].publication_id;
     await body(id);
+    const finalCounts = counts === "audit-rows" ? await auditRows(client, id) : counts;
     const finished = await client.query(
       "SELECT corpus_publication_finish($1::uuid, $2::jsonb)::text AS seq",
-      [id, JSON.stringify(counts)],
+      [id, JSON.stringify(finalCounts)],
     );
     await client.query("COMMIT");
     return { id, seq: finished.rows[0].seq };
@@ -131,6 +159,41 @@ async function insertProvenance(client: pg.Client, overrides: Record<string, unk
 
 const INSERT_JUDGMENT = `INSERT INTO judgment (id, case_title, bench_type, source_id, review_status, publication_id)
   VALUES ($1, $2, $3, $4, $5, $6)`;
+const INSERT_CITATION = `INSERT INTO citation (id, judgment_id, citation_text, source_id, review_status, publication_id)
+  VALUES ($1, $2, $3, $4, $5, $6)`;
+
+// ---- F19 fix round 1 (re-audit D1-D4) ----------------------------------------------------------
+// The re-auditor's actor: a login role that reaches corpus_writer by SET ROLE only (INHERIT FALSE),
+// as PR 2b provisions the runtime role. Its password is generated for this run and never stored.
+const R1_ROLE = "pgddl_r1_publisher";
+let r1Password: string | null = null;
+
+async function r1Writer(adminClient: pg.Client): Promise<pg.Client> {
+  if (r1Password === null) {
+    const password = randomUUID();
+    await adminClient.query(`DO $$ BEGIN CREATE ROLE ${R1_ROLE}; EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+    await adminClient.query(`ALTER ROLE ${R1_ROLE} LOGIN NOSUPERUSER PASSWORD '${password}'`);
+    await adminClient.query(`GRANT corpus_writer TO ${R1_ROLE} WITH INHERIT FALSE, SET TRUE`);
+    r1Password = password;
+  }
+  const client = roleClient(R1_ROLE, r1Password);
+  await client.connect();
+  await client.query("SET ROLE corpus_writer");
+  return client;
+}
+
+/** corpus_publication_begin() in the caller's open transaction; returns the publication id. */
+async function beginPublication(client: pg.Client, n: number): Promise<string> {
+  const begun = await client.query(
+    "SELECT publication_id FROM corpus_publication_begin($1, $2, 'curated', 'pgddl-actor')",
+    [batchKey(n), sha(`${n}-${randomUUID()}`)],
+  );
+  return begun.rows[0].publication_id;
+}
+
+async function countOf(client: pg.Client, sql: string, params: unknown[] = []): Promise<number> {
+  return (await client.query(sql, params)).rows[0].n;
+}
 
 suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
   let admin: pg.Client;
@@ -655,7 +718,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
         await version(2, "2099-07-01", null); // adjacent ranges do not overlap ([from, to))
         await expectSqlState(version(3, "2099-03-01", "2099-04-01"), "SKP06", /version_overlap/);
         await expectSqlState(version(4, "2099-12-01", null), "SKP06", /version_overlap/);
-      });
+      }, "audit-rows");
     } finally {
       await writer.end();
     }
@@ -695,7 +758,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
          VALUES ($1, 'F19 PG-DDL-14 2099', 'division', $2, 'promoted', 'privileged', $3)`,
         [id, prov, pid],
       );
-    });
+    }, "audit-rows");
     await writer.end();
 
     const partner = roleClient("corpus_declassify", "declass");
@@ -845,10 +908,13 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
         batchKey(17),
         sha(`17-${randomUUID()}`),
         async (pid) => {
+          // The item names a row this publication wrote (fix round 1, D2: finish() checks coverage).
+          const entity = randomUUID();
+          await writer.query(INSERT_JUDGMENT, [entity, "F19 PG-DDL-17 2099", null, null, "quarantined", pid]);
           await writer.query(
             `INSERT INTO corpus_publication_item (publication_id, item_key, entity_type, entity_id, decision, reason, content_sha256)
              VALUES ($1, 'pgddl-17', 'judgment', $2, 'quarantined', 'missing_bench', $3)`,
-            [pid, randomUUID(), sha("17-item")],
+            [pid, entity, sha("17-item")],
           );
         },
         { ...ZERO_COUNTS, items: 1, quarantined: 1 },
@@ -985,7 +1051,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
            VALUES ($1, $2, 'SCMR', 2099, 920020, $3, 'promoted', $4)`,
           [id, citation, prov, pid],
         );
-      });
+      }, "audit-rows");
     } finally {
       await writer.end();
     }
@@ -1003,6 +1069,448 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       }
     } finally {
       await reader.end();
+    }
+  });
+
+  // ---- F19 fix round 1: the re-auditor's attacks D1-D4, as a SET ROLE corpus_writer actor ----------
+  it("PG-DDL-21 003 R1 (D1): an unfinished publication cannot commit, SET CONSTRAINTS IMMEDIATE fails closed, and no grant outlives its transaction", async () => {
+    const writer = await r1Writer(admin);
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    try {
+      // The re-auditor's B3: begin(), a promoted judgment and citation, then COMMIT without items or finish().
+      const judgmentId = randomUUID();
+      const citation = "2099 SCMR 920021";
+      await writer.query("BEGIN");
+      const pid = await beginPublication(writer, 21);
+      const prov = await insertProvenance(writer);
+      await writer.query(INSERT_JUDGMENT, [judgmentId, "F19 PG-DDL-21 2099", "single", prov, "promoted", pid]);
+      await writer.query(INSERT_CITATION, [randomUUID(), judgmentId, citation, prov, "promoted", pid]);
+      await expectSqlState(writer.query("COMMIT"), "SKP12", /publication_not_finished/);
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM judgment WHERE id = $1", [judgmentId])).toBe(0);
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM corpus_publication WHERE id = $1", [pid])).toBe(0);
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM corpus_publication_grant")).toBe(0);
+      expect(await countOf(reader, "SELECT count(*)::int AS n FROM v_citation WHERE citation_text = $1", [citation])).toBe(0);
+
+      // begin() and COMMIT with nothing written is refused too: no unfinished publication, no grant row.
+      await writer.query("BEGIN");
+      const empty = await beginPublication(writer, 21);
+      await expectSqlState(writer.query("COMMIT"), "SKP12", /publication_not_finished/);
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM corpus_publication WHERE id = $1", [empty])).toBe(0);
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM corpus_publication_grant")).toBe(0);
+
+      // SET CONSTRAINTS ALL IMMEDIATE runs the commit checks before finish(): begin() itself fails.
+      await writer.query("BEGIN");
+      try {
+        await writer.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await expectSqlState(beginPublication(writer, 21), "SKP12", /publication_not_finished/);
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+      // The row check alone, made immediate after begin(): the promoted write fails at once.
+      await writer.query("BEGIN");
+      try {
+        const open = await beginPublication(writer, 21);
+        const source = await insertProvenance(writer);
+        await writer.query("SET CONSTRAINTS judgment_publication_commit_check IMMEDIATE");
+        await expectSqlState(
+          writer.query(INSERT_JUDGMENT, [randomUUID(), "F19 PG-DDL-21 immediate 2099", "single", source, "promoted", open]),
+          "SKP12",
+          /publication_not_finished/,
+        );
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+
+      // A finished publication commits, also with every check made immediate just before COMMIT.
+      const kept = randomUUID();
+      await writer.query("BEGIN");
+      try {
+        const open = await beginPublication(writer, 21);
+        const source = await insertProvenance(writer);
+        await writer.query(INSERT_JUDGMENT, [kept, "F19 PG-DDL-21 finished 2099", "single", source, "promoted", open]);
+        const counts = await auditRows(writer, open);
+        await writer.query("SELECT corpus_publication_finish($1::uuid, $2::jsonb)", [open, JSON.stringify(counts)]);
+        await writer.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await writer.query("COMMIT");
+      } catch (e) {
+        await writer.query("ROLLBACK");
+        throw e;
+      }
+      expect(await countOf(reader, "SELECT count(*)::int AS n FROM v_judgment WHERE id = $1", [kept])).toBe(1);
+
+      // A grant left behind by a transaction that ended without finish() (possible before fix round 1;
+      // simulated by the superuser, who is exempt) is bound to that transaction's xid: a later
+      // transaction can neither write under it nor finish it, and the next finish() clears it.
+      const leftover: string = (
+        await admin.query(
+          `INSERT INTO corpus_publication (batch_key, input_sha256, source_kind, actor_id, publisher_session_user)
+           VALUES ($1, $2, 'curated', 'pgddl-leftover', 'pgddl') RETURNING id`,
+          [batchKey(21), sha(`21-leftover-${randomUUID()}`)],
+        )
+      ).rows[0].id;
+      const pastXid: string = (await admin.query("SELECT txid_current()::text AS x")).rows[0].x;
+      await admin.query("INSERT INTO corpus_publication_grant (xid, publication_id) VALUES ($1::bigint, $2)", [pastXid, leftover]);
+      await writer.query("BEGIN");
+      try {
+        const source = await insertProvenance(writer);
+        await expectSqlState(
+          inSavepoint(writer, INSERT_JUDGMENT, [randomUUID(), "F19 PG-DDL-21 leftover 2099", "single", source, "promoted", leftover]),
+          "SKP02",
+          /publication_required/,
+        );
+        await expectSqlState(
+          inSavepoint(writer, "SELECT corpus_publication_finish($1::uuid, $2::jsonb)", [leftover, JSON.stringify(ZERO_COUNTS)]),
+          "SKP08",
+          /publication_not_open/,
+        );
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+      await publishAs(writer, batchKey(21), sha(`21-clear-${randomUUID()}`), async () => {});
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM corpus_publication_grant")).toBe(0);
+    } finally {
+      await reader.end();
+      await writer.end();
+    }
+  });
+
+  it("PG-DDL-22 003 R1 (D2): finish() accepts only an audit that covers exactly the rows the publication wrote", async () => {
+    const writer = await r1Writer(admin);
+    let page = 922000;
+    const judgment = async (pid: string, source: string, status = "promoted"): Promise<string> => {
+      const id = randomUUID();
+      await writer.query(INSERT_JUDGMENT, [id, "F19 PG-DDL-22 2099", "single", source, status, pid]);
+      return id;
+    };
+    const citation = async (pid: string, source: string, judgmentId: string): Promise<string> => {
+      const id = randomUUID();
+      page += 1;
+      await writer.query(INSERT_CITATION, [id, judgmentId, `2099 SCMR ${page}`, source, "promoted", pid]);
+      return id;
+    };
+    const item = (pid: string, type: string, id: string, decision: string) =>
+      writer.query(
+        `INSERT INTO corpus_publication_item (publication_id, item_key, entity_type, entity_id, decision, reason, content_sha256)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [pid, `${type}:${id}`, type, id, decision, decision === "quarantined" ? "pgddl_held" : null, sha(`22-${type}-${id}`)],
+      );
+    /** One transaction: begin(), body() writes rows and items and returns its counts; finish() must refuse. */
+    const refused = async (message: RegExp, body: (pid: string, source: string) => Promise<Record<string, number>>) => {
+      await writer.query("BEGIN");
+      try {
+        const pid = await beginPublication(writer, 22);
+        const source = await insertProvenance(writer);
+        const counts = await body(pid, source);
+        await expectSqlState(
+          writer.query("SELECT corpus_publication_finish($1::uuid, $2::jsonb)", [pid, JSON.stringify(counts)]),
+          "SKP10",
+          message,
+        );
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+    };
+    try {
+      // An earlier, properly audited publication: its rows are not a later publication's to claim.
+      let earlier = "";
+      await publishAs(writer, batchKey(22), sha(`22-earlier-${randomUUID()}`), async (pid) => {
+        earlier = await judgment(pid, await insertProvenance(writer));
+      }, "audit-rows");
+
+      // The re-auditor's B6: promoted rows, no items, finish() with all-zero counts.
+      await refused(/publication_rows_unaudited/, async (pid, source) => {
+        await citation(pid, source, await judgment(pid, source));
+        return ZERO_COUNTS;
+      });
+      // The judgment is audited, its citation is not.
+      await refused(/publication_rows_unaudited/, async (pid, source) => {
+        const j = await judgment(pid, source);
+        await citation(pid, source, j);
+        await item(pid, "judgment", j, "promoted");
+        return { ...ZERO_COUNTS, items: 1, promoted: 1 };
+      });
+      // A stamped row in a table no item can name.
+      await refused(/publication_rows_unaudited/, async (pid, source) => {
+        await writer.query(
+          "INSERT INTO court (full_name, source_id, review_status, publication_id) VALUES ($1, $2, 'quarantined', $3)",
+          [`F19 PG-DDL-22 Test Court 2099 ${randomUUID()}`, source, pid],
+        );
+        return ZERO_COUNTS;
+      });
+      // An item claiming a write that did not happen, and one naming another publication's row.
+      await refused(/publication_items_unwritten/, async (pid) => {
+        await item(pid, "judgment", randomUUID(), "promoted");
+        return { ...ZERO_COUNTS, items: 1, promoted: 1 };
+      });
+      await refused(/publication_items_unwritten/, async (pid) => {
+        await item(pid, "judgment", earlier, "updated");
+        return { ...ZERO_COUNTS, items: 1, updated: 1 };
+      });
+      // An item whose decision contradicts the row: promoted recorded as quarantined, and the reverse.
+      await refused(/publication_status_mismatch/, async (pid, source) => {
+        await item(pid, "judgment", await judgment(pid, source), "quarantined");
+        return { ...ZERO_COUNTS, items: 1, quarantined: 1 };
+      });
+      await refused(/publication_status_mismatch/, async (pid, source) => {
+        await item(pid, "judgment", await judgment(pid, source, "quarantined"), "promoted");
+        return { ...ZERO_COUNTS, items: 1, promoted: 1 };
+      });
+
+      // Exactly audited: accepted. Afterwards no row can be stamped with that publication any more,
+      // so what finish() checked stays true.
+      const done = await publishAs(writer, batchKey(22), sha(`22-done-${randomUUID()}`), async (pid) => {
+        const source = await insertProvenance(writer);
+        await citation(pid, source, await judgment(pid, source));
+      }, "audit-rows");
+      await expectSqlState(
+        writer.query(INSERT_JUDGMENT, [randomUUID(), "F19 PG-DDL-22 late 2099", "single", null, "quarantined", done.id]),
+        "SKP02",
+        /publication_required/,
+      );
+      const held = randomUUID();
+      await writer.query(INSERT_JUDGMENT, [held, "F19 PG-DDL-22 held 2099", "single", null, "quarantined", null]);
+      await expectSqlState(
+        writer.query("UPDATE judgment SET publication_id = $1 WHERE id = $2", [done.id, held]),
+        "SKP02",
+        /publication_required/,
+      );
+      expect(await countOf(admin, "SELECT count(*)::int AS n FROM judgment WHERE publication_id = $1", [done.id])).toBe(1);
+    } finally {
+      await writer.end();
+    }
+  });
+
+  it("PG-DDL-23 003 R1 (D3): promoted citations, treatments, sections and versions need promoted parents, and a promoted parent with promoted dependants cannot be demoted", async () => {
+    const writer = await r1Writer(admin);
+    const treatmentSql = `INSERT INTO treatment (id, treating_judgment_id, treated_judgment_id, treatment, treating_bench_type,
+        confidence, source_id, review_status, publication_id)
+      VALUES ($1, $2, $3, $4, 'larger', 0.9, $5, $6, $7)`;
+    const statuteSql = `INSERT INTO statute (id, name, jurisdiction, source_id, review_status, publication_id)
+      VALUES ($1, $2, 'Federal', $3, $4, $5)`;
+    const sectionSql = `INSERT INTO statute_section (id, statute_id, section_number, source_id, review_status, publication_id)
+      VALUES ($1, $2, $3, $4, $5, $6)`;
+    const versionSql = `INSERT INTO statute_section_version (id, section_id, version_no, effective_from, text,
+        version_confidence, source_id, review_status, publication_id)
+      VALUES ($1, $2, 1, '2099-01-01', 'Test Act 2099 text', 0.9, $3, $4, $5)`;
+    try {
+      await writer.query("BEGIN");
+      try {
+        const pid = await beginPublication(writer, 23);
+        const prov = await insertProvenance(writer);
+        const promoted = randomUUID();
+        const other = randomUUID();
+        const benchless = randomUUID();
+        await writer.query(INSERT_JUDGMENT, [promoted, "F19 PG-DDL-23 promoted 2099", "larger", prov, "promoted", pid]);
+        await writer.query(INSERT_JUDGMENT, [other, "F19 PG-DDL-23 other 2099", "division", prov, "promoted", pid]);
+        await writer.query(INSERT_JUDGMENT, [benchless, "F19 PG-DDL-23 bench-less 2099", null, prov, "quarantined", pid]);
+
+        // The re-auditor's B7: a promoted citation under the quarantined, bench-less judgment, and a
+        // promoted 'overruled' treatment from it against a promoted judgment (and the reverse edge).
+        await expectSqlState(
+          inSavepoint(writer, INSERT_CITATION, [randomUUID(), benchless, "2099 SCMR 920231", prov, "promoted", pid]),
+          "SKP13",
+          /parent_not_promoted/,
+        );
+        await expectSqlState(
+          inSavepoint(writer, treatmentSql, [randomUUID(), benchless, promoted, "overruled", prov, "promoted", pid]),
+          "SKP05",
+          /treatment_judgment_not_promoted/,
+        );
+        await expectSqlState(
+          inSavepoint(writer, treatmentSql, [randomUUID(), promoted, benchless, "followed", prov, "promoted", pid]),
+          "SKP05",
+          /treatment_judgment_not_promoted/,
+        );
+        // Held (quarantined), the same rows are accepted; the reader never sees them.
+        await inSavepoint(writer, INSERT_CITATION, [randomUUID(), benchless, "2099 SCMR 920232", prov, "quarantined", pid]);
+        await inSavepoint(writer, treatmentSql, [randomUUID(), benchless, promoted, "overruled", prov, "quarantined", pid]);
+        // Under promoted judgments they may be promoted.
+        const goodCitation = randomUUID();
+        const goodTreatment = randomUUID();
+        await inSavepoint(writer, INSERT_CITATION, [goodCitation, promoted, "2099 SCMR 920233", prov, "promoted", pid]);
+        await inSavepoint(writer, treatmentSql, [goodTreatment, other, promoted, "followed", prov, "promoted", pid]);
+        // Moving a promoted citation onto the quarantined judgment is refused the same way.
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE citation SET judgment_id = $1 WHERE id = $2", [benchless, goodCitation]),
+          "SKP13",
+          /parent_not_promoted/,
+        );
+
+        // The reverse path (D9 in the database): a judgment that promoted rows depend on cannot be
+        // quarantined or rejected, even inside a publication; once its dependants are held, it can.
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", [promoted]),
+          "SKP13",
+          /promoted_dependants/,
+        );
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE judgment SET review_status = 'rejected' WHERE id = $1", [other]),
+          "SKP13",
+          /promoted_dependants/,
+        );
+        await inSavepoint(writer, "UPDATE citation SET review_status = 'quarantined' WHERE id = $1", [goodCitation]);
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", [promoted]),
+          "SKP13",
+          /promoted_dependants/,
+        );
+        await inSavepoint(writer, "UPDATE treatment SET review_status = 'quarantined' WHERE id = $1", [goodTreatment]);
+        await inSavepoint(writer, "UPDATE judgment SET review_status = 'quarantined' WHERE id = $1", [promoted]);
+        await inSavepoint(writer, "UPDATE judgment SET review_status = 'rejected' WHERE id = $1", [other]);
+
+        // The statute chain: statute <- section <- version.
+        const heldStatute = randomUUID();
+        const liveStatute = randomUUID();
+        const heldSection = randomUUID();
+        const liveSection = randomUUID();
+        await inSavepoint(writer, statuteSql, [heldStatute, `Test Act 2099 held ${randomUUID()}`, prov, "quarantined", pid]);
+        await inSavepoint(writer, statuteSql, [liveStatute, `Test Act 2099 live ${randomUUID()}`, prov, "promoted", pid]);
+        await expectSqlState(
+          inSavepoint(writer, sectionSql, [randomUUID(), heldStatute, "1", prov, "promoted", pid]),
+          "SKP13",
+          /parent_not_promoted/,
+        );
+        await inSavepoint(writer, sectionSql, [heldSection, liveStatute, "2", prov, "quarantined", pid]);
+        await inSavepoint(writer, sectionSql, [liveSection, liveStatute, "3", prov, "promoted", pid]);
+        await expectSqlState(
+          inSavepoint(writer, versionSql, [randomUUID(), heldSection, prov, "promoted", pid]),
+          "SKP13",
+          /parent_not_promoted/,
+        );
+        await inSavepoint(writer, versionSql, [randomUUID(), liveSection, prov, "promoted", pid]);
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE statute SET review_status = 'quarantined' WHERE id = $1", [liveStatute]),
+          "SKP13",
+          /promoted_dependants/,
+        );
+        await expectSqlState(
+          inSavepoint(writer, "UPDATE statute_section SET review_status = 'quarantined' WHERE id = $1", [liveSection]),
+          "SKP13",
+          /promoted_dependants/,
+        );
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+    } finally {
+      await writer.end();
+    }
+  });
+
+  it("PG-DDL-24 003 R1 (D4): NaN, infinite and out-of-range confidences are refused", async () => {
+    const writer = await r1Writer(admin);
+    try {
+      await writer.query("BEGIN");
+      try {
+        const pid = await beginPublication(writer, 24);
+        const prov = await insertProvenance(writer);
+        const treating = randomUUID();
+        const treated = randomUUID();
+        await writer.query(INSERT_JUDGMENT, [treating, "F19 PG-DDL-24 treating 2099", "larger", prov, "promoted", pid]);
+        await writer.query(INSERT_JUDGMENT, [treated, "F19 PG-DDL-24 treated 2099", "division", prov, "promoted", pid]);
+        let anchor = 0;
+        const treatment = (confidence: string, status: string) => {
+          anchor += 1;
+          return inSavepoint(
+            writer,
+            `INSERT INTO treatment (id, treating_judgment_id, treated_judgment_id, treatment, passage_anchor,
+               treating_bench_type, confidence, source_id, review_status, publication_id)
+             VALUES ($1, $2, $3, 'followed', $4, 'larger', $5::float8, $6, $7, $8)`,
+            [randomUUID(), treating, treated, `para ${anchor}`, confidence, prov, status, pid],
+          );
+        };
+        // The re-auditor's B8: NaN sorts above every number in PostgreSQL, so "< 0.7" let it through.
+        for (const bad of ["NaN", "Infinity", "-Infinity", "1.5", "-0.1", "0.69"]) {
+          await expectSqlState(treatment(bad, "promoted"), "SKP05", /treatment_confidence/);
+        }
+        await treatment("0.7", "promoted");
+        await treatment("1", "promoted");
+
+        // Whatever the status, every Annex A confidence column holds a number in [0, 1].
+        const minimal: Array<[string, string, (bad: string) => unknown[]]> = [
+          ["court", "INSERT INTO court (full_name, confidence) VALUES ($1, $2::float8)",
+            (bad) => [`F19 PG-DDL-24 Test Court 2099 ${randomUUID()}`, bad]],
+          ["judge", "INSERT INTO judge (name, confidence) VALUES ('F19 PG-DDL-24 Test Judge 2099', $1::float8)", (bad) => [bad]],
+          ["instrument", "INSERT INTO instrument (title, confidence) VALUES ('Test Act 2099 SRO', $1::float8)", (bad) => [bad]],
+          ["statute", "INSERT INTO statute (name, jurisdiction, confidence) VALUES ($1, 'Federal', $2::float8)",
+            (bad) => [`Test Act 2099 ${randomUUID()}`, bad]],
+          ["statute_section", "INSERT INTO statute_section (section_number, confidence) VALUES ('24', $1::float8)", (bad) => [bad]],
+          ["statute_section_version", "INSERT INTO statute_section_version (version_no, confidence) VALUES (1, $1::float8)",
+            (bad) => [bad]],
+          ["statute_section_version", "INSERT INTO statute_section_version (version_no, version_confidence) VALUES (1, $1::float8)",
+            (bad) => [bad]],
+          ["judgment", "INSERT INTO judgment (case_title, confidence) VALUES ('F19 PG-DDL-24 2099', $1::float8)", (bad) => [bad]],
+          ["citation", "INSERT INTO citation (citation_text, confidence) VALUES ($1, $2::float8)",
+            (bad) => [`2099 SCMR 924${randomUUID().slice(0, 4)}`, bad]],
+        ];
+        for (const bad of ["NaN", "Infinity", "-Infinity", "1.0000001", "-0.000001"]) {
+          await expectSqlState(treatment(bad, "quarantined"), "23514");
+          for (const [table, sql, args] of minimal) {
+            await expectSqlState(inSavepoint(writer, sql, args(bad)), "23514", new RegExp(table));
+          }
+        }
+      } finally {
+        await writer.query("ROLLBACK");
+      }
+    } finally {
+      await writer.end();
+    }
+    const checks = await admin.query(
+      `SELECT c.conrelid::regclass::text AS tbl, a.attname AS col, c.convalidated AS valid
+       FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+       WHERE c.contype = 'c' AND a.attname IN ('confidence', 'version_confidence')
+         AND c.conrelid = ANY ($1::regclass[])`,
+      [CONTRACT_TABLES],
+    );
+    const found = checks.rows.map((r) => `${r.tbl}.${r.col}:${r.valid}`).sort();
+    const expected = [...CONTRACT_TABLES.map((t) => `${t}.confidence:true`), "statute_section_version.version_confidence:true"].sort();
+    expect(found).toEqual(expected);
+  });
+
+  it("PG-DDL-25 003 R1: a publication runs at READ COMMITTED, so the guard's cross-row checks never read a snapshot older than the publication lock", async () => {
+    const a = await r1Writer(admin);
+    const b = await r1Writer(admin);
+    try {
+      // A judgment published by an earlier publication.
+      const j = randomUUID();
+      await publishAs(a, batchKey(25), sha(`25-j-${j}`), async (pid) => {
+        await a.query(INSERT_JUDGMENT, [j, "F19 PG-DDL-25 2099", "single", await insertProvenance(a), "promoted", pid]);
+      }, "audit-rows");
+      // B takes a REPEATABLE READ snapshot; then A's publication demotes the judgment and commits.
+      await b.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      try {
+        await b.query("SELECT 1");
+        await publishAs(a, batchKey(25), sha(`25-demote-${j}`), async (pid) => {
+          await a.query("UPDATE judgment SET review_status = 'quarantined', publication_id = $1 WHERE id = $2", [pid, j]);
+        }, "audit-rows");
+        // B's snapshot still shows the judgment promoted, from before it waited for the publication
+        // lock: it may not publish at all (else its guard checks would read that stale state).
+        await expectSqlState(beginPublication(b, 25), "SKP08", /publication_isolation_refused/);
+      } finally {
+        await b.query("ROLLBACK");
+      }
+      await b.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      try {
+        await expectSqlState(beginPublication(b, 25), "SKP08", /publication_isolation_refused/);
+      } finally {
+        await b.query("ROLLBACK");
+      }
+      // At READ COMMITTED every statement sees the demotion: a promoted citation under it is refused.
+      await b.query("BEGIN");
+      try {
+        const pid = await beginPublication(b, 25);
+        const prov = await insertProvenance(b);
+        await expectSqlState(
+          b.query(INSERT_CITATION, [randomUUID(), j, "2099 SCMR 920251", prov, "promoted", pid]),
+          "SKP13",
+          /parent_not_promoted/,
+        );
+      } finally {
+        await b.query("ROLLBACK");
+      }
+    } finally {
+      await a.end();
+      await b.end();
     }
   });
 });

@@ -191,6 +191,15 @@ class StructuralErrorTests(unittest.TestCase):
         self.assert_refused(b"{not json")
         self.assert_refused(b'{"format": NaN}')
 
+    def test_nan_and_infinite_confidences_are_refused(self):
+        # Re-audit D4: json.dumps writes NaN / Infinity literals; no confidence may carry one.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            self.assert_refused(batch(judgment(trust={"level": "trusted", "confidence": bad})))
+            self.assert_refused(batch(judgment(), treatment(confidence=bad)))
+            self.assert_refused(batch(history(trust={"level": "trusted", "confidence": bad})))
+            self.assert_refused(batch(history(versions=[{"version_no": 1, "effective_from": "2099-01-01", "effective_to": None,
+                                                         "text": "t", "version_confidence": bad}])))
+
     def test_nul_characters_are_refused(self):
         self.assert_refused(batch(judgment(full_text="text\u0000more")))
 

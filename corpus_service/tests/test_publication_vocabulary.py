@@ -164,7 +164,7 @@ class ReasonTests(unittest.TestCase):
         )
         self.assertEqual(
             v.QUARANTINE_REASONS,
-            ("missing_bench", "citation_not_canonical", "treatment_uncertain",
+            ("missing_bench", "citation_not_canonical", "treatment_uncertain", "judgment_not_promoted",
              "review_source", "low_confidence", "blocked_source", "unknown_source"),
         )
 
@@ -180,11 +180,15 @@ class ReasonTests(unittest.TestCase):
         self.assertEqual(
             v.QUARANTINE_PRECEDENCE,
             ("review_source", "low_confidence", "blocked_source", "unknown_source",
-             "citation_not_canonical", "missing_bench", "treatment_uncertain"),
+             "citation_not_canonical", "missing_bench", "treatment_uncertain", "judgment_not_promoted"),
         )
         self.assertEqual(set(v.QUARANTINE_PRECEDENCE), set(v.QUARANTINE_REASONS))
         self.assertEqual(v.first_quarantine_reason({"missing_bench", "review_source"}), "review_source")
         self.assertEqual(v.first_quarantine_reason({"missing_bench", "citation_not_canonical"}), "citation_not_canonical")
+        # Re-audit D3: an unpromoted treating or treated judgment holds a treatment, and loses to every
+        # reason about the treatment itself.
+        self.assertEqual(v.first_quarantine_reason({"judgment_not_promoted", "treatment_uncertain"}), "treatment_uncertain")
+        self.assertEqual(v.first_quarantine_reason({"judgment_not_promoted"}), "judgment_not_promoted")
         self.assertIsNone(v.first_quarantine_reason(set()))
 
 

@@ -1167,3 +1167,145 @@ def test_f19_guard_rejection_inside_promotion_rolls_back_only_that_item(corpus_d
     )
     assert items == [("rejected", "missing_bench")]
     assert admin_fetch(corpus_db, "SELECT count(*) FROM source_provenance") == [(2,)]
+
+
+# ---------------------------------------------------------------------------------------------
+# fix round 1 (re-audit of b2074b2): D1, D3 and D5 through the application, and the
+# attach-and-skip rule for an unchanged re-stage
+# ---------------------------------------------------------------------------------------------
+def test_f19_r1_publish_batch_fails_closed_when_the_commit_checks_are_made_immediate(corpus_db):
+    """D1: the publication's commit checks are deferred to COMMIT. A caller that makes them immediate
+    cannot publish at all (begin() itself fails, publication_state) and nothing is written; left
+    deferred, the same batch publishes."""
+    from sqlalchemy import text
+
+    from scraper import database
+    from scraper.publication.annex_a import PublicationError, publish_batch
+
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    doc = batch_doc("curated/f19-r1-immediate", judgment_item("j1"))
+
+    async def _immediate():
+        async with database.engine.begin() as conn:
+            await conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            return await publish_batch(conn, parse(doc), "f19-test-actor")
+
+    with corpus_db.app_engine_as(writer, writer_pw):
+        with pytest.raises(PublicationError) as refused:
+            run(_immediate())
+        assert refused.value.code == "publication_state"
+        assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication") == [(0,)]
+        assert admin_fetch(corpus_db, "SELECT count(*) FROM judgment") == [(0,)]
+        published = publish(doc)
+    assert published.primary("j1").decision == "promoted"
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication WHERE finished_at IS NOT NULL") == [(1,)]
+    assert admin_fetch(corpus_db, "SELECT count(*) FROM corpus_publication_grant") == [(0,)]
+
+
+def test_f19_r1_a_treatment_touching_an_unpromoted_judgment_is_held(corpus_db):
+    """D3: a treatment is promoted only between promoted judgments. One whose treating or treated
+    judgment is quarantined (here: no bench) is held as judgment_not_promoted, so an unreviewed
+    'overruled' stays pending (fails closed in the reader, spec ruling 3) instead of reading as
+    reviewed; the database refuses the promoted form outright (PG-DDL-23)."""
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        result = publish(batch_doc(
+            "curated/f19-r1-treatment-parents",
+            judgment_item("live", citations=[{"text": "2099 SCMR 71"}], bench="larger"),
+            judgment_item("live2", citations=[{"text": "2099 SCMR 73"}], bench="division"),
+            judgment_item("benchless", citations=[{"text": "2099 SCMR 72"}], bench=None),
+            treatment_item("t-from-held", treating={"item_key": "benchless"}, treated={"item_key": "live"}),
+            treatment_item("t-to-held", treating={"item_key": "live"}, treated={"item_key": "benchless"}, kind="followed"),
+            treatment_item("t-by-citation", treating="2099 SCMR 72", treated="2099 SCMR 71", kind="doubted"),
+            treatment_item("t-live", treating={"item_key": "live"}, treated="2099 SCMR 73", kind="referred"),
+        ))
+    assert (result.primary("benchless").decision, result.primary("benchless").reason) == ("quarantined", "missing_bench")
+    got = {key: (result.primary(key).decision, result.primary(key).reason, result.primary(key).review_status)
+           for key in ("t-from-held", "t-to-held", "t-by-citation", "t-live")}
+    assert got == {
+        "t-from-held": ("quarantined", "judgment_not_promoted", "quarantined"),
+        "t-to-held": ("quarantined", "judgment_not_promoted", "quarantined"),
+        "t-by-citation": ("quarantined", "judgment_not_promoted", "quarantined"),
+        "t-live": ("promoted", None, "promoted"),
+    }
+    assert result.counts == counts(items=7, promoted=5, quarantined=5)
+    reader, reader_pw = corpus_db.reader_role()
+    assert fetch_as(corpus_db, reader, reader_pw, "SELECT treatment FROM v_treatment") == [("referred",)]
+
+
+def test_f19_r1_a_citation_key_that_is_not_a_fixed_point_is_not_canonical(corpus_db):
+    """D5: a built key that the normaliser would rewrite again ("NLR 2099 Quetta(KAR) 12" becomes
+    "... Quetta(Sindh) 12") can never be matched by the gate, so it is held citation_not_canonical,
+    whether it arrives as curated parts or as a staged string."""
+    prepare(corpus_db)
+    writer, writer_pw = corpus_db.writer_role()
+    with corpus_db.app_engine_as(writer, writer_pw):
+        result = publish(batch_doc(
+            "curated/f19-r1-fixed-point",
+            judgment_item("kar", citations=[parts("NLR", 12, court="Quetta", series="K.A.R.")], bench="single"),
+            judgment_item("tax", citations=[parts("KLR", 13, court="Quetta", series="CS", note="T.A.X.")], bench="single"),
+            judgment_item("plain", citations=[parts("NLR", 14, court="Quetta")], bench="single"),
+        ))
+    got = {key: (result.primary(key).decision, result.primary(key).reason) for key in ("kar", "tax", "plain")}
+    assert got == {
+        "kar": ("quarantined", "citation_not_canonical"),
+        "tax": ("quarantined", "citation_not_canonical"),
+        "plain": ("promoted", None),
+    }
+    assert dict(admin_fetch(corpus_db, "SELECT citation_text, review_status FROM citation")) == {
+        "NLR 2099 Quetta (K.A.R.) 12": "quarantined",
+        "KLR 2099 Quetta (CS) 13 (T.A.X.)": "quarantined",
+        "NLR 2099 Quetta 14": "promoted",
+    }
+
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    ids = run(_stage({"kar": dict(source_id=src["trusted"], source_site="f19-trusted",
+                                  extracted_citation="NLR 2099 Balochistan (K.A.R.) 15")}))
+    promoted, _app = _promote_as_runtime_role(corpus_db)
+    assert promoted == {"promoted": 0, "quarantined": 1, "failed": 0}
+    staging, queue = _staging_state(corpus_db)
+    assert staging[ids["kar"]][:3] == (False, True, "citation_not_canonical")
+    assert queue[ids["kar"]][0] == "citation_not_canonical"
+
+
+def test_f19_r1_an_unchanged_restage_is_attached_and_skipped_without_a_review_row(corpus_db):
+    """Attach and skip (FINAL_2's dedup rule, as #48 round 2 applies it to duplicate_citation):
+    re-staging an already published judgment and citation unchanged, in either spelling, links the
+    record to the existing Annex A judgment, writes no review-queue row, is not counted as
+    quarantined and leaves the published rows untouched. Only promoted_row_protected (a conflicting
+    change to a protected promoted row) goes to review."""
+    prepare(corpus_db)
+    src = run(_make_sources({"trusted": ("f19-trusted", "trusted")}))
+    trusted = dict(source_id=src["trusted"], source_site="f19-trusted")
+    same = dict(extracted_bench_type="single", source_url="https://f19.example.invalid/judgment/attach",
+                raw_text="synthetic F19 attach", extracted_title="F19 Staged attach v. Test 2099")
+    run(_stage({"first": dict(**trusted, **same, extracted_citation="PLD 2099 Sindh 77")}))
+    first, _app = _promote_as_runtime_role(corpus_db)
+    assert first == {"promoted": 1, "quarantined": 0, "failed": 0}
+    published = admin_fetch(corpus_db, "SELECT id, updated_at, source_id FROM judgment")
+    assert len(published) == 1
+
+    again = run(_stage({
+        "same_spelling": dict(**trusted, **same, extracted_citation="PLD 2099 Sindh 77"),
+        "other_spelling": dict(**trusted, **same, extracted_citation="PLD 2099 Karachi 77"),
+        "conflicting": dict(**trusted, **{**same, "extracted_bench_type": None}, extracted_citation="PLD 2099 Sindh 77"),
+    }))
+    second, _app = _promote_as_runtime_role(corpus_db)
+    assert second == {"promoted": 2, "quarantined": 1, "failed": 0}
+    staging, queue = _staging_state(corpus_db)
+    for key in ("same_spelling", "other_spelling"):
+        assert staging[again[key]] == (True, False, None, published[0][0]), key
+        assert again[key] not in queue, key
+    assert set(queue) == {again["conflicting"]}
+    assert queue[again["conflicting"]][0] == "promoted_row_protected"
+    assert admin_fetch(corpus_db, "SELECT id, updated_at, source_id FROM judgment") == published
+    decisions = admin_fetch(
+        corpus_db,
+        "SELECT p.batch_key, i.entity_type, i.decision FROM corpus_publication_item i "
+        "JOIN corpus_publication p ON p.id = i.publication_id WHERE p.batch_key = ANY(:keys) ORDER BY 1, 2",
+        keys=[f"staging/{again['same_spelling']}", f"staging/{again['other_spelling']}"],
+    )
+    assert {(row[1], row[2]) for row in decisions} == {("citation", "unchanged"), ("judgment", "unchanged")}
+    assert len(decisions) == 4

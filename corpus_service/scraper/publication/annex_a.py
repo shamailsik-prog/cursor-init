@@ -15,7 +15,9 @@ Decisions (spec §5 and the plan's D-rulings):
   jurisdiction / statute status / history, an unresolvable judgment, citations that resolve to two
   judgments (D11), no citation, or a change that would demote or rewrite a promoted row (D9);
 * an item is written but quarantined for a non-trusted source, a missing bench (ruling 9), a
-  citation that is not canonical, or a treatment below 0.7 (B-7);
+  citation that is not canonical (including a key the normaliser would rewrite again, re-audit D5), a
+  treatment below 0.7 (B-7), or a treatment whose treating or treated judgment is not promoted
+  (re-audit D3: the database refuses it promoted);
 * identical content is ``unchanged`` (no write); changed content is ``updated`` with the previous hash.
 * A guard error from the database (SKP03-SKP06) rolls back that item only and records it rejected;
   any other error aborts the whole publication (D15), and the caller must roll back.
@@ -106,12 +108,15 @@ GUARD_REASONS: Final[Mapping[str, str]] = {
     "bench_required": v.REASON_MISSING_BENCH,
     "treatment_confidence": v.REASON_TREATMENT_UNCERTAIN,
     "treatment_judgment_missing": v.REASON_UNRESOLVABLE_JUDGMENT,
+    "treatment_judgment_not_promoted": v.REASON_UNRESOLVABLE_JUDGMENT,
     "version_effective_from_required": v.REASON_HISTORY_MISSING_EFFECTIVE_FROM,
     "version_range_invalid": v.REASON_HISTORY_OUT_OF_ORDER,
     "version_overlap": v.REASON_HISTORY_OVERLAP,
 }
 _GUARD_STATES: Final = frozenset({"SKP03", "SKP04", "SKP05", "SKP06"})
-_STATE_ERRORS: Final = frozenset({"SKP02", "SKP07", "SKP08", "SKP09", "SKP10", "SKP11"})
+# SKP12 (publication_not_finished) reaches begin() only when the caller made the commit checks
+# immediate (SET CONSTRAINTS ... IMMEDIATE), which cannot publish: fail closed.
+_STATE_ERRORS: Final = frozenset({"SKP02", "SKP07", "SKP08", "SKP09", "SKP10", "SKP11", "SKP12"})
 COUNT_KEYS: Final[Tuple[str, ...]] = ("items", "promoted", "quarantined", "updated", "unchanged", "rejected")
 _ENTITY_TABLES: Final = {
     "judgment": "judgment", "citation": "citation", "treatment": "treatment", "statute": "statute",
@@ -272,9 +277,14 @@ def _plan_citations(item: JudgmentItem) -> List[_CitationPlan]:
         if given is not None:
             parts = CitationParts(**given.model_dump())
             try:
-                key = build_canonical(parts)
-                plans.setdefault(key, _CitationPlan(key, True, parts))
+                key: Optional[str] = build_canonical(parts)
             except CitationError:
+                key = None
+            # The key must be a fixed point of the normaliser (re-audit D5): one it would rewrite again
+            # ("... Quetta(KAR) 12" -> "... Quetta(Sindh) 12") is never matched by the gate.
+            if key is not None and is_canonical(key):
+                plans.setdefault(key, _CitationPlan(key, True, parts))
+            else:
                 raw = _display_text(given)
                 plans.setdefault(raw, _CitationPlan(raw, False, None))
             continue
@@ -457,8 +467,15 @@ async def _publish_treatment(run: _Run, item: TreatmentItem) -> None:
         held.append(decision.reason)
     if bench is None:
         held.append(v.REASON_MISSING_BENCH)
-    if item.confidence < v.TREATMENT_MIN_CONFIDENCE:
+    if not item.confidence >= v.TREATMENT_MIN_CONFIDENCE:  # NaN-safe form (re-audit D4)
         held.append(v.REASON_TREATMENT_UNCERTAIN)
+    # Only promoted judgments can carry a promoted treatment (re-audit D3); one that touches a
+    # quarantined judgment is held, so an unreviewed adverse treatment stays pending (ruling 3).
+    statuses = dict((await run.conn.execute(text(
+        "SELECT id, review_status FROM public.judgment WHERE id = ANY(:ids)"
+    ), {"ids": [treating, treated]})).all())
+    if statuses.get(treating) != "promoted" or statuses.get(treated) != "promoted":
+        held.append(v.REASON_JUDGMENT_NOT_PROMOTED)
     reason = v.first_quarantine_reason(held)
     status = "promoted" if reason is None else "quarantined"
 
