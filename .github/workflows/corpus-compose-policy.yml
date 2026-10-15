@@ -1,6 +1,9 @@
 name: corpus compose policy (F30)
+# Cost: a draft PR does not run this job; marking it ready for review does (when these paths changed). A PR converted
+# to draft starts a run whose job skips, and that run cancels the one in flight (concurrency below).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "corpus_service/**"
       # Annex A DDL: postgres init applies it (docker/postgres/apply-annex-a.sh), so a change re-runs
@@ -14,8 +17,13 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A newer event on a PR (a push, or conversion to draft) supersedes the older run; pushes to main run to the end.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   policy-e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
