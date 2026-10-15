@@ -4,6 +4,7 @@ from scraper.parsers.text_cleaner import clean_html, extract_summary
 from scraper.parsers.citation_extractor import extract_citations, score_confidence
 from scraper.database import SessionLocal
 from scraper.models import ScraperStaging
+from scraper.source_identity import stamp_metadata
 logger = logging.getLogger(__name__)
 
 REPORTER_URLS = [
@@ -44,6 +45,7 @@ async def scrape_nasirlawsite(source, db):
                         citation_obj = cits[0] if cits else None
                         citation = _citation_to_str(citation_obj)
                         staging = ScraperStaging(
+                            source_id=source.id,
                             source_site="NasirLawSite",
                             source_url=full,
                             raw_html=raw_html[:50000],
@@ -51,6 +53,7 @@ async def scrape_nasirlawsite(source, db):
                             extracted_citation=citation,
                             extracted_title=soup.title.string if soup.title else None,
                             confidence_score=score_confidence({"citation": citation, "full_text": cleaned}),
+                            parsing_metadata=stamp_metadata(source),
                         )
                         db.add(staging)
                         await db.commit()

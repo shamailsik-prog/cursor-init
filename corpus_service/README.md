@@ -15,6 +15,96 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
    non-overridable in production).
 4. No legal rules of decision live here — corpus storage only.
 
+## Trust levels (audit F20)
+
+`scraper_sources.trust_level` is exactly one of `trusted`, `review` or `blocked`, default `review`
+(FINAL_2 :252-253). The vocabulary and every decision below live in `scraper/trust.py`; the
+database CHECK and default are built from it. Matching is exact, and anything else fails closed.
+
+| Source trust | `staging` routes (dispatcher) | `direct` routes: PakistanCode, NationalAssembly (dispatcher) | Staged record at promotion |
+|---|---|---|---|
+| `trusted` | run | run (they write `statutes_master` themselves) | promoted if confidence >= 0.5 (or attached, if its citation is already published), else quarantined `low_confidence` |
+| `review` | run | skipped (FINAL_2 :897: a review source's output is always quarantined, and these write no staging row) | quarantined `review_source` |
+| `blocked` | skipped | skipped | quarantined `blocked_source` |
+| any other value, or a missing, deleted or renamed source | skipped | skipped | quarantined `unknown_source` |
+
+**Dispatcher routes.** Every entry in `scraper/tasks/dispatcher.py` `ROUTES` declares its kind:
+`staging` (writes `scraper_staging` only; promotion decides later) or `direct` (writes a master table
+itself). Every `direct` route runs only for a `trusted` source. A route with no kind, or any other
+kind, is refused and logged. `tests/test_trust_policy.py` scans all of `scraper/` with Python's AST
+(import aliases resolved) for any reference to `CaseLawMaster` / `StatutesMaster` and any write SQL
+naming `case_law_master` / `statutes_master` (schema-qualified or not); every module it finds must be
+a `direct` route module or on the reviewed allowlist in that test: promotion, the F23 quarantine
+router, embeddings and cross_reference write; main (`/health`), search and export only read.
+
+Every staging row a harvester writes carries its source: `source_id` plus
+`parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`).
+`source_id` is `ON DELETE SET NULL`; the stamped id still names the source after a delete. The six
+court harvesters (SHC, SC, LHC, PHC, BHC, IHC) also write their rows already quarantined
+(`quarantine_reason` `review source`), so promotion never selects them; NasirLawSite rows wait for
+normalisation, which nothing schedules yet (audit F21).
+
+Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this order:
+
+1. **Source.** Only the most specific identifier present is used: `source_id`, else
+   `parsing_metadata.source_id`, else `parsing_metadata.source_name`, else `source_site`. If that
+   identifier no longer resolves (deleted, renamed, malformed) the source is unknown; it never falls
+   through to a less specific label such as a court family's shared `source_site`.
+2. **Citation.** None or blank: quarantined `citation_missing`.
+3. **Trust.** The table above: `review_source`, `blocked_source`, `unknown_source` or `low_confidence`.
+4. **Duplicate.** FINAL_2 DEDUPLICATION ("attach ... to the existing judgment row and skip the
+   rest"): a promotable record whose citation is already in `case_law_master` is *attached*. Its
+   `promoted_to_id` points at the existing row and it is closed (`promoted`, `promoted_at`); no
+   second master row, no embedding, no review-queue row. `case_law_master` has one citation per row
+   and no column for a judgment's other citations, so the link is the attachment. The check runs
+   under a per-citation advisory lock, so concurrent runs cannot both publish one citation.
+5. Otherwise promoted: a `case_law_master` row, an `embedding_queue` row, and `promoted`,
+   `promoted_at`, `promoted_to_id` on the staging row.
+
+Each record is re-read `FOR UPDATE` and decided in its own transaction. A record whose promotion
+raises is rolled back and counted as failed. Only a failure confirmed to be about the record itself,
+a database error with SQLSTATE class 22 (data exception) or 23 (integrity constraint violation),
+quarantines it `promotion_error:<ExceptionClass>` (class name only, never the message) so it is not
+retried forever; if even that write fails, the failure is logged and the record stays pending. Every
+other failure leaves the record pending for the next run:
+- a transient database error (connection lost, or SQLSTATE class 08, 40, 53 or 57, or 55P03);
+- a systemic or unknown one: permission (42501), schema drift (42P01, 42703), an internal error
+  (XX000), a generic RAISE (P0001), any other SQLSTATE, or a Python exception with none. These may be
+  a deployment or schema fault that would hit every record, so the backlog must survive it. They are
+  logged at error level with the id, class and SQLSTATE and `systemic=true`, never row data.
+
+After three consecutive systemic failures with the same SQLSTATE (or exception class)
+(`SYSTEMIC_FAILURE_LIMIT`), the run stops early and leaves the rest pending; any other outcome in
+between resets the count. Otherwise the rest of the batch always continues. Every quarantine reason is
+written to the staging row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
+`{"promoted", "attached", "quarantined", "failed"}`, plus `"aborted": "systemic:<SQLSTATE or class>"`
+when it stopped early. A record that raised counts as failed whether it was left pending or
+quarantined `promotion_error`. A record that always raises a systemic or unknown error stays pending
+and is retried on every run; there is no retry cap yet (F28).
+
+Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is
+`review`.
+
+**Upgrading an existing database.** `python -m scraper.migrate` (the `migrate` service, as
+`MIGRATE_DB_USER`) replaces the pre-F20 CHECK (`trusted|semi_trusted|untrusted|quarantined`, default
+`trusted`), maps `semi_trusted`, `untrusted`, `quarantined` and any other value to `review`, and sets
+the default to `review`, all before it seeds. It is idempotent: when `ck_trust_level_values` is
+validated and identical to PostgreSQL's own rendering of the F20 CHECK, and the default is exactly
+`review`, it changes nothing. Any other same-named CHECK (NOT VALID, or a different body such as
+`... OR trust_level IS NOT NULL`) or any other default (`'trusted'`, none) is replaced. The
+comparison builds the expected CHECK on a throwaway table in `scraper_sources`' own schema (`public`)
+inside a savepoint that is always rolled back, so the migration role needs CREATE on that schema,
+which it has, and no TEMP. Because of that probe, running `python -m scraper.migrate` as the
+DML-only runtime role exits 1 even on a current database: only the `migrate` service runs it. The
+API's startup `init_db()` never runs any of this: it is DDL, and the runtime role is DML-only. A row
+the old default made `trusted` stays `trusted`, so review the `trusted` sources after upgrading.
+
+**Tests.** `tests/test_f20_trust_policy_db.py` and `tests/test_f20_harvesters_db.py` run against a
+real Postgres 16 + pgvector named by `CORPUS_TEST_DATABASE_URL` (a `postgresql+asyncpg://` URL for a
+role that can create databases, roles and extensions, such as a throwaway `pgvector/pgvector:pg16`
+container's superuser). Each test creates and drops its own database. Without the URL, those tests
+skip locally and the run fails under CI.
+
 ## Quick start (no Docker)
 
 ```bash

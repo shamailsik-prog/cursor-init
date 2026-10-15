@@ -59,6 +59,7 @@ from pgvector.sqlalchemy import Vector
 
 # Share the single DeclarativeBase used by init_db.create_all
 from scraper.database import Base
+from scraper.trust import DEFAULT_TRUST_LEVEL, trust_check_sql
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +126,9 @@ class ScraperSource(Base):
         Index("ix_scraper_sources_trust_level", "trust_level"),
         Index("ix_scraper_sources_source_url", "source_url"),
         CheckConstraint("active_credential_slot IN (1,2)", name="ck_active_slot_1_2"),
-        CheckConstraint("trust_level IN ('trusted','semi_trusted','untrusted','quarantined')", name="ck_trust_level_values"),
+        # Audit F20: the vocabulary (trusted | review | blocked) comes from scraper.trust; existing
+        # databases are brought to it by database.upgrade_trust_vocabulary (python -m scraper.migrate).
+        CheckConstraint(trust_check_sql(), name="ck_trust_level_values"),
         CheckConstraint("scrape_frequency_hours > 0", name="ck_scrape_freq_positive"),
     )
 
@@ -164,7 +167,10 @@ class ScraperSource(Base):
     last_failure_reason: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
     # Trust & scheduling
-    trust_level: Mapped[str] = mapped_column(String(20), default="trusted", server_default=text("'trusted'"), nullable=False)
+    # Fail closed (F20): a source nobody has approved is review, never trusted.
+    trust_level: Mapped[str] = mapped_column(
+        String(20), default=DEFAULT_TRUST_LEVEL, server_default=text(f"'{DEFAULT_TRUST_LEVEL}'"), nullable=False
+    )
     scrape_frequency_hours: Mapped[int] = mapped_column(Integer, default=6, server_default=text("6"), nullable=False)
     request_delay_min_ms: Mapped[int] = mapped_column(Integer, default=1200, server_default=text("1200"), nullable=False)
     request_delay_max_ms: Mapped[int] = mapped_column(Integer, default=2500, server_default=text("2500"), nullable=False)
