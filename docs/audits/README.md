@@ -3,7 +3,12 @@
 What each automated check proves, where it runs, and how to run it locally.
 Per-PR checks run in `.github/workflows/gate-g0.yml` (Gate G-0 job) and
 `.github/workflows/security.yml`; mutation testing is weekly / on demand in
-`.github/workflows/mutation.yml`. Phase-audit write-ups (`phase-*.md`,
+`.github/workflows/mutation.yml`. Actions minutes are billed on this private
+repository, so a draft PR runs none of these checks (only the PR phase-claim
+gate). They run when a PR is opened ready, marked ready for review, or pushed
+to while ready, and on every push to main. On a PR, the Postgres DDL and
+`corpus_service` pytest jobs run only when files they depend on changed (the
+`changes` job in `gate-g0.yml`). Phase-audit write-ups (`phase-*.md`,
 `lattice-*.md`) in this directory are separate records, not gates.
 
 ## Gates (per PR, `gate-g0.yml`)
@@ -18,11 +23,11 @@ Per-PR checks run in `.github/workflows/gate-g0.yml` (Gate G-0 job) and
 | Functions typecheck / build / tests | `functions/` type-checks, bundles, and its P5 identity, MFA, gates and HTTP suites pass under the Auth + Firestore emulators. | `npm --prefix functions run typecheck`, `npm --prefix functions run build`, `npm --prefix functions run test:emu` (on a busy machine use a temporary config with free ports: `functions/README.md` "Port notes") |
 | **Gate G-2 (cross-firm isolation, L18 §10)** | With two firms seeded, every implemented read path (web and WhatsApp, D1-1, D1-2, D3-1, D5-1, D2-1, in memory and Firestore persistence), every P5 operation through the HTTP `api` (its only entry point, U-1) and every tenant collection in `firestore.rules` refuses firm B's six roles. Fails on any allowed cross-firm read, any read path the suites do not list, or a missing suite result. Prints the coverage table and an `evidence` line for `recordGatePass`; until a pass is recorded, `onboardFirm` refuses a second firm. | `npm run gate:g2` (local runs pick their own demo project and ephemeral ports; never edits `firebase.json`) |
 
-## Security scans (per PR and push to main, `security.yml`)
+## Security scans (`security.yml`: gitleaks and the dependency audit per ready PR; all three on push to main and weekly)
 
 | Job | Proves | Run locally |
 | --- | --- | --- |
-| CodeQL (`javascript-typescript`, `python`) | No finding from the default and `security-extended` query suites in the Next app, `functions/`, `corpus_service/` and the gate scripts. Code scanning needs GitHub Code Security on this private repository and is off, so CI analyses without uploading and `ci_gates/check_codeql_sarif.py` fails on any result with security-severity ≥ 7.0 (high) or level error; the SARIF is kept as a run artifact. | `codeql database create … --build-mode=none --codescanning-config .github/codeql/codeql-config.yml`, then `codeql database analyze … <lang>-security-extended.qls --format=sarif-latest`, then the gate script. |
+| CodeQL (`javascript-typescript`, `python`) | Runs on a push to main, every Monday and on demand (`workflow_dispatch`), not on pull requests. No finding from the default and `security-extended` query suites in the Next app, `functions/`, `corpus_service/` and the gate scripts. Code scanning needs GitHub Code Security on this private repository and is off, so CI analyses without uploading and `ci_gates/check_codeql_sarif.py` fails on any result with security-severity ≥ 7.0 (high) or level error; the SARIF is kept as a run artifact. | `codeql database create … --build-mode=none --codescanning-config .github/codeql/codeql-config.yml`, then `codeql database analyze … <lang>-security-extended.qls --format=sarif-latest`, then the gate script. |
 | Secret scan (gitleaks 8.30.1) | No commit in the push / PR adds a secret matching gitleaks' default rules, after the narrow fixture allowlists in `.gitleaks.toml` (UUID idempotency keys in test files, empty `.env.example` placeholders, the emulator `fake-api-key`, `demo-*` project ids). | `gitleaks git . --config .gitleaks.toml --log-opts="--all" --redact` (release binary from github.com/gitleaks/gitleaks/releases; verify its checksum) |
 | **Dependency audit** | `npm audit --omit=dev --audit-level=high` (root, `functions/`) and `pip-audit` (`corpus_service/requirements.txt`) run report-only. The gate, `ci_gates/check_known_advisories.mjs`, fails on any high or critical npm advisory, or any pip-audit vulnerability, that is not listed for its scope in [`known-advisories.md`](known-advisories.md) with a reason and an owner; it fails closed on an unreadable report and prints stale rows. | `npm audit --omit=dev --json > /tmp/root.json; npm --prefix functions audit --omit=dev --json > /tmp/fn.json; pip-audit -r corpus_service/requirements.txt -f json -o /tmp/pip.json; node ci_gates/check_known_advisories.mjs --npm npm:root=/tmp/root.json --npm npm:functions=/tmp/fn.json --pip pip:corpus_service=/tmp/pip.json` |
 

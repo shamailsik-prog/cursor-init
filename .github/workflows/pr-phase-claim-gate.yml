@@ -1,8 +1,13 @@
 name: PR phase-claim gate
 
+# Runs on drafts too (about a minute, and it checks the PR body). A newer edit or push supersedes the older run.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: claim-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claim-gate:
