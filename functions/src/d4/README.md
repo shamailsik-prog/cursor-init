@@ -145,6 +145,33 @@ The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 cr
 
 A database without 004 has no `corpus_authority_reader`, and that is `schema_missing`.
 
+#### Creating the reader login
+
+Create the login with plain SQL, as a superuser of the corpus database, after 004 is applied. Give it a generated password; `SIKANDER_CORPUS_READER_URL` carries it.
+
+```sql
+CREATE ROLE <login> LOGIN PASSWORD '<generated secret>';
+GRANT corpus_authority_reader, corpus_clients TO <login>;
+```
+
+`corpus_clients` exists where PR 2b provisioned the database (the compose corpus host). There pg_hba admits only its members over TCP, and it carries CONNECT and schema USAGE, nothing else. Where `corpus_clients` does not exist, grant CONNECT on the database instead:
+
+```sql
+CREATE ROLE <login> LOGIN PASSWORD '<generated secret>';
+GRANT corpus_authority_reader TO <login>;
+GRANT CONNECT ON DATABASE <database> TO <login>;
+```
+
+Grant it nothing else: no other role, no attribute (CREATEDB, CREATEROLE and the like), and no privilege on any table or sequence. The store refuses (`wrong_role`) a login that belongs to any other role, however the membership is held. The reason is that any further membership can give the gate's credential more than reading the four views, even one that holds nothing today:
+
+- a SET-only member of a superuser role can `SET ROLE` to it;
+- a member of `pg_read_server_files` can read files on the server;
+- a role that is granted something later passes it on to its members.
+
+So the check is an allowlist, not a list of known-bad roles. The compose e2e makes a login this way (`annex_a_d7_reader_checks` in `corpus_service/tests/e2e/lib.sh`) and runs the store's own check as it over TLS after provisioning.
+
+A caution for managed databases: a user created through a provider's console or tooling, or through its IAM integration, may be given provider roles or rely on token authentication. The allowlist refuses such a login, and the static URL cannot carry a short-lived token. Create the reader login with the plain SQL above, as a superuser or the provider's equivalent administrative user.
+
 The store reads only 004's views (`postgres/ddl/004_authority_read_views.sql`) and `corpus_metadata`. A row shows only when it is promoted, written by a finished publication, and carries complete provenance, and so is every parent it reports. A judgment must also be public and have a bench. A row a superuser wrote outside any publication never shows (ruling 2). An overruling the reader cannot show (held for review, or hidden by these rules) is never absent. `listTreatments` reports it as `PENDING_OVERRULING`, an overruling whose bench cannot be relied on. On its own the citation reads UNVERIFIED (ruling 3), never VERIFIED. Beside a qualifying overruling the citation stays OVERRULED: a pending overruling never hides the strongest warning (P4-2; #51 fix round 1, D-1). `InMemoryAuthorityStore.addPendingOverruling` gives the same answer, for O-59 parity. Jurisdiction codes map to Annex A values by upper-case equality only (`FEDERAL` is `Federal`; `PK` maps to nothing, ruling 6). A section version is usable only with a confidence strictly above 0.5 (ruling 4). Dates travel as text, so the process time zone cannot move them.
 
 It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which the gate reads as UNVERIFIED / TEMPORAL_UNAVAILABLE. The gate catches that class and only that class: any other error still fails the request. The store wraps only a driver error or its own explicit refusal. A programming error in the adapter (a `TypeError`, say) propagates unchanged: the request fails with a 500, a draft being approved stays a draft, and no breaker opens (plan D5 and D23; #51 fix round 1, D-6). The reasons are:

@@ -211,6 +211,12 @@ tests by the fixture's admin. `python -m
 scraper.migrate` never applies it: 001 needs `CREATE ROLE` and `CREATE EXTENSION`, which the
 `NOCREATEROLE` migration owner cannot do.
 
+**The draft gate's reader login (audit F05).** The Functions draft gate reads Annex A through 004's
+authority views as a login that is a member of `corpus_authority_reader` and, for CONNECT,
+`corpus_clients`, and of nothing else. The compose stack does not create that login. Create it with
+plain SQL as `functions/src/d4/README.md` describes ("Creating the reader login"); the gate refuses a
+login that belongs to any other role.
+
 **Tests.** `tests/test_f19_publication_db.py` (and the migrated `test_f20_trust_policy_db.py`) apply
 Annex A to each per-test database and publish as generated `corpus_writer` members; the pure tests
 are `test_publication_vocabulary.py`, `test_publication_citations.py` (checked against the golden
