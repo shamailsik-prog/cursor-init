@@ -95,6 +95,20 @@ describe("P1 Gateway transport (P3-68)", () => {
     })
   })
 
+  it("carries the provider's response id and the request-id header when they are plain ids, and drops anything else (audit F08 R1-D5)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_7f3a-01" }).end(JSON.stringify({ id: "gen-01J9ZXK4", choices: [{ message: { content: "hi" } }] }))
+    }
+    expect(await gatewayTransport("k", base).send(request)).toEqual({ text: "hi", inputTokens: null, outputTokens: null, responseId: "gen-01J9ZXK4", requestId: "req_7f3a-01" })
+    // Not a plain id (spaces, provider text, over 200 characters, not a string): left out, never stored.
+    for (const bad of ["has spaces in it", "x".repeat(201), 42, { nested: "id" }]) {
+      respond = json(200, { id: bad, choices: [{ message: { content: "hi" } }] })
+      const out = await gatewayTransport("k", base).send(request)
+      expect(out, JSON.stringify(bad)).not.toHaveProperty("responseId")
+      expect(out).not.toHaveProperty("requestId")
+    }
+  })
+
   it("sends the max_tokens it is given", async () => {
     respond = json(200, { choices: [{ message: { content: "x" } }] })
     await gatewayTransport("k", base).send({ ...request, maxTokens: 17 })
@@ -212,11 +226,34 @@ describe("P1 Gateway transport errors (I1: billed failures are charged)", () => 
     expect((during as Error).message).toBe("gateway timeout")
   })
 
+  it("a timeout while the body streams still carries the request-id header (re-audit R3 INFO)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_9f-03" })
+      res.write('{"choices":[{"message":')
+    }
+    const e = (await failure(gatewayTransport("k", base, { timeoutMs: 100 }).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_timeout", true, undefined, "req_9f-03"])
+  })
+
   it("a 2xx whose body is not JSON is gateway_not_json and billable, with no usage", async () => {
     respond = (_req, res) => res.writeHead(200).end("SECRET not json")
     const e = await failure(gatewayTransport("k", base).send(request))
     expect(fields(e)).toEqual({ ...P1, code: "gateway_not_json", billable: true })
     expect((e as Error).message).toBe("gateway response is not JSON")
+  })
+
+  it("a billable 2xx without usable content still carries the provider's response id and the request-id header (Codex P2)", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_9f-01" }).end(JSON.stringify({ id: "gen-9F01", choices: [], usage: { prompt_tokens: 7 } }))
+    }
+    const e = (await failure(gatewayTransport("k", base).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_no_text", true, "gen-9F01", "req_9f-01"])
+  })
+
+  it("a billable 2xx whose body is not JSON still carries the request-id header (Codex P2)", async () => {
+    respond = (_req, res) => res.writeHead(200, { "x-request-id": "req_9f-02" }).end("SECRET not json")
+    const e = (await failure(gatewayTransport("k", base).send(request))) as P1TransportError
+    expect([e.code, e.billable, e.responseId, e.requestId]).toEqual(["gateway_not_json", true, undefined, "req_9f-02"])
   })
 
   it("a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts", async () => {

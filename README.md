@@ -10,7 +10,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 |---|---|
 | `data/courts.json` | Court prefix table (Job B). Prefixes are data. |
 | `data/documentTypes.json` | 159 VERIFIED types, keyed on `id` (Job C). |
-| `firestore.rules` | Every Phase 0 collection + default deny. |
+| `firestore.rules` | Every Phase 0 collection + default deny. Matter-bound `documents`, `document_versions` and non-engine `jobs` reads also check the matter's current label (audit F14): two access calls per distinct matter on top of two identity calls, so a client transaction or batch over rows of about nine or more matters can be denied (limit 20); split such work by matter. |
 | `postgres/ddl/` | Annex A corpus contract + platform flags. Embedding lock: `text-embedding-3-small`, 1536, HNSW. |
 | `ci_gates/gate_g0.sh` | Static guards (fee, scraper, provider, master-write, idempotency, pagination, classification, embedding). Fail the build; no warn-only checks. |
 | `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |

@@ -17,10 +17,33 @@ export type Visibility = "none" | "restricted" | "full"
 const MATTER_STAFF: ReadonlySet<string> = new Set(["partner", "associate", "clerk"])
 
 /**
- * Who sees `job`: `none` if it is missing, not an engine row, in another firm, has an unknown
- * label or is above the caller's clearance. A firm-level job (`matterId == null`) is `full` for a
- * partner and `none` otherwise. A matter job is `full` for a member partner, associate or clerk,
- * `restricted` for a non-member partner, and `none` otherwise.
+ * A job's matter as the job routes read it on this call (audit F14): its firm and its current label. `null` when the
+ * job names a matter that could not be read (missing, or an id the routes do not read).
+ */
+export type MatterNow = { firmId: unknown; classification: unknown } | null
+
+/**
+ * The job row as its visibility and its view judge it now (audit F14). A matter job takes its effective label: the
+ * stricter of the label it was enqueued with and its matter's current label, so a matter raised after the job was
+ * enqueued binds the job too (labels never fall, L17.3 #20). A matter job whose matter is missing, in another firm,
+ * or carries an unknown label, or whose own label is unknown, is `undefined`: no one sees it (fail closed). A
+ * firm-level job (`matterId` null or absent) is returned unchanged. The stored row is never rewritten: its label is
+ * part of the job's enqueue identity (P3-4).
+ */
+export function atMatterLabel(job: DocumentData | undefined, matter: MatterNow): DocumentData | undefined {
+  if (!job) return undefined
+  if (job.matterId === null || job.matterId === undefined) return job
+  if (!matter || matter.firmId !== job.firmId) return undefined
+  if (!isKnownClassification(job.classification) || !isKnownClassification(matter.classification)) return undefined
+  if (rankOf(matter.classification) <= rankOf(job.classification)) return job
+  return { ...job, classification: matter.classification }
+}
+
+/**
+ * Who sees `job` (the row as `atMatterLabel` returns it, so a matter job's label is its effective one): `none` if it
+ * is missing, not an engine row, in another firm, has an unknown label or is above the caller's clearance. A
+ * firm-level job (`matterId == null`) is `full` for a partner and `none` otherwise. A matter job is `full` for a member
+ * partner, associate or clerk, `restricted` for a non-member partner, and `none` otherwise.
  */
 export function visibilityOf(caller: Caller, job: DocumentData | undefined, isMember: boolean): Visibility {
   if (!job || job.engine !== JOB_ENGINE || job.firmId !== caller.firmId) return "none"
@@ -90,7 +113,7 @@ function logsOf(value: unknown): JobLogView[] {
 }
 
 /**
- * The API view of job `id`. `restricted`: `matterId` is "restricted" and `inputRefs`,
+ * The API view of job `id` (the row as `atMatterLabel` returns it, so `classification` is the effective label). `restricted`: `matterId` is "restricted" and `inputRefs`,
  * `outputRefs` and `logs` are left out. `full` adds the refs, and the logs when `opts.logs`
  * (getJob only). `retryable` and `cancellable` say what retryFailedJob and cancelJob would allow
  * by state and type (the caller's role is still checked there).

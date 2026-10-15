@@ -170,6 +170,39 @@ export function isSafeRef(ref: unknown): boolean {
   return parts.length === 2 && isSafeDocId(parts[0]) && isSafeDocId(parts[1])
 }
 
+/**
+ * The firm-level collections a firm-level job (`matterId` null) may reference (audit F14 R1-D3, R2-D3). Such a job is
+ * judged against no matter, so a reference it carried to a matter's row (a document, a draft, evidence, a custody
+ * event, a reporting snapshot, a conflict check, another job, ...) would reach that row with no check of the matter's
+ * current label or membership. An allowlist, not a denylist, so a collection nobody listed fails closed: the job
+ * events (fan-out's input), the merge events (un-merge's output) and the firm's registry rows (clients, entities,
+ * entity links and aliases) and counters. Every one is firm-scoped in firestore.rules.
+ */
+export const FIRM_LEVEL_REF_COLLECTIONS: ReadonlySet<string> = new Set([
+  "events",
+  "merge_events",
+  "clients",
+  "entities",
+  "entity_links",
+  "entity_aliases",
+  "counters",
+])
+
+/** `ref` (a `collection/id` ref) names a row of an allowlisted firm-level collection. */
+export function isFirmLevelRef(ref: string): boolean {
+  return FIRM_LEVEL_REF_COLLECTIONS.has(ref.split("/")[0])
+}
+
+/**
+ * Job refs (inputRefs at enqueue, outputRefs at commit): an array of at most MAX_REFS safe `collection/id` refs, each
+ * into an allowlisted firm-level collection when the job is firm-level (`matterId` null; audit F14 R1-D3, R2-D3). A
+ * matter job's refs are read under its matter's current label and membership (the job routes judge the job that way).
+ */
+export function areValidRefs(refs: unknown, matterId: string | null): refs is string[] {
+  if (!Array.isArray(refs) || refs.length > MAX_REFS || !refs.every(isSafeRef)) return false
+  return matterId !== null || refs.every((ref: string) => isFirmLevelRef(ref))
+}
+
 type Validated = { spec: JobSpec; jobId: string; payloadHash: string; inputRefs: string[]; runKey: string | null }
 
 /** Validates a spec; a failure is a programming error naming the field only, never its value. */
@@ -182,7 +215,7 @@ function validate(spec: JobSpec): Validated {
   const canonical = canonicalJson(spec.payload)
   if (Buffer.byteLength(canonical) > MAX_PAYLOAD_BYTES) throw invalid("payload")
   const inputRefs = spec.inputRefs ?? []
-  if (!Array.isArray(inputRefs) || inputRefs.length > MAX_REFS || !inputRefs.every(isSafeRef)) throw invalid("inputRefs")
+  if (!areValidRefs(inputRefs, spec.matterId)) throw invalid("inputRefs")
   const key = spec.idempotencyKey
   if (typeof key !== "string" || key.length < 1 || key.length > MAX_KEY_LENGTH) throw invalid("idempotencyKey")
   const runKey = spec.runKey ?? null
