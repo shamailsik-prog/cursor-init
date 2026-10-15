@@ -619,10 +619,17 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     expect((await misbehaveMarkerRef(bad).get()).exists).toBe(false)
     expect(await readJob(bad)).toMatchObject({ status: "failed", lastError: { code: "internal" }, outputRefs: [] })
 
-    const good = await enqueue({ mode: "refs" } as never, { jobType: "test.misbehave" })
+    // Refs into matter-bound collections (matters/m1, documents/d2) are valid on a matter job only (audit F14 R1-D3).
+    const good = await enqueue({ mode: "refs" } as never, { jobType: "test.misbehave", matterId: uniq("matter") })
     expect(await d.dispatcher.deliver({ jobId: good, seq: 0 }, T0)).toBe("done")
     expect((await misbehaveMarkerRef(good).get()).get("count")).toBe(1)
     expect(await readJob(good)).toMatchObject({ status: "done", outputRefs: ["matters/m1", "documents/d2"] })
+
+    // The same refs from a firm-level job (matterId null) are a handler bug: nothing applied, a retryable internal failure.
+    const firmLevel = await enqueue({ mode: "refs" } as never, { jobType: "test.misbehave" })
+    expect(await d.dispatcher.deliver({ jobId: firmLevel, seq: 0 }, T0)).toBe("failed")
+    expect((await misbehaveMarkerRef(firmLevel).get()).exists).toBe(false)
+    expect(await readJob(firmLevel)).toMatchObject({ status: "failed", matterId: null, lastError: { code: "internal" }, outputRefs: [] })
   })
 
   it("a parse that throws a plain Error is the permanent invalid_payload", async () => {

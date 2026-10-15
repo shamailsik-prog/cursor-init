@@ -4,9 +4,9 @@ import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
 import { stageJobAudit, stageJobAuditSync } from "./audit"
-import { CLOCK_SKEW_TOLERANCE_MS, DISPATCH_GRACE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, MAX_REFS, RETRY_DELAYS_MS } from "./constants"
+import { CLOCK_SKEW_TOLERANCE_MS, DISPATCH_GRACE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, RETRY_DELAYS_MS } from "./constants"
 import type { JobDeps, JobTask } from "./dispatch"
-import { isSafeRef, jobsRef, stageJobUpdate, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
+import { areValidRefs, jobsRef, stageJobUpdate, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
 import { JobError, LeaseLostError, sanitizeError, type SanitizedError } from "./errors"
 import { stageJobDeadLetteredEvent, stageJobFailedEvent } from "./jobEvents"
 import { handlerFor, type JobHandler, type JobResult } from "./registry"
@@ -307,9 +307,10 @@ async function commit(ref: DocumentReference, owner: string, outcome: HandlerOut
       return ended(stageFailureRow(tx, ref, row, err, now), err.code)
     }
     if (!outcome.ok) return fail(outcome.err)
-    // A handler bug (bad refs) is a retryable internal error; nothing of the result is applied.
+    // A handler bug (bad refs, or a firm-level job's ref into a matter-bound collection: audit F14 R1-D3) is a
+    // retryable internal error; nothing of the result is applied.
     const outputRefs = outcome.result.outputRefs ?? []
-    if (!Array.isArray(outputRefs) || outputRefs.length > MAX_REFS || !outputRefs.every(isSafeRef)) return fail(new JobError("internal"))
+    if (!areValidRefs(outputRefs, typeof row.matterId === "string" ? row.matterId : null)) return fail(new JobError("internal"))
     try {
       outcome.result.apply?.(tx)
     } catch (err) {
