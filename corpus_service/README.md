@@ -52,24 +52,41 @@ Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this 
    through to a less specific label such as a court family's shared `source_site`.
 2. **Citation.** None or blank: quarantined `citation_missing`.
 3. **Trust.** The table above: `review_source`, `blocked_source`, `unknown_source` or `low_confidence`.
-4. **Duplicate.** FINAL_2 DEDUPLICATION ("attach ... to the existing judgment row and skip the
-   rest"): a promotable record whose citation is already in `case_law_master` is *attached*. Its
-   `promoted_to_id` points at the existing row and it is closed (`promoted`, `promoted_at`); no
-   second master row, no embedding, no review-queue row. `case_law_master` has one citation per row
-   and no column for a judgment's other citations, so the link is the attachment. The check runs
-   under a per-citation advisory lock, so concurrent runs cannot both publish one citation.
-5. Otherwise promoted: a `case_law_master` row, an `embedding_queue` row, and `promoted`,
-   `promoted_at`, `promoted_to_id` on the staging row.
+4. **Publication (audit F19).** A promotable record is published into the Annex A contract as one
+   audited publication, under a per-citation advisory lock keyed by the canonical citation (so
+   concurrent runs never publish one citation at once, and "PLD 2099 Karachi 12" and
+   "PLD 2099 Sindh 12" take the same lock). The publication decides an already published citation,
+   following FINAL_2 DEDUPLICATION ("attach ... to the existing judgment row and skip the rest") in
+   Annex A terms:
+   - identical content (`unchanged`) is *attached*: `promoted_to_id` points at the existing Annex A
+     judgment and the record is closed (`promoted`, `promoted_at`), with nothing rewritten and no
+     review-queue row; it counts as `attached`;
+   - changed trusted content is `updated` onto the same judgment and counts as `promoted`;
+   - a re-scrape that would be quarantined (no bench, for example) never touches the published
+     authority (`promoted_row_protected`), the only re-stage that goes to review.
+   A new record is promoted (`promoted`, `promoted_at`, `promoted_to_id` = the Annex A judgment) only
+   if Annex A promoted it; otherwise it is quarantined with the publication's reason (see
+   "Publication into Annex A" below). Nothing is written to `case_law_master` or `embedding_queue`.
 
 Each record is re-read `FOR UPDATE` and decided in its own transaction. A record whose promotion
 raises is rolled back and counted as failed. Only a failure confirmed to be about the record itself,
 a database error with SQLSTATE class 22 (data exception) or 23 (integrity constraint violation),
 quarantines it `promotion_error:<ExceptionClass>` (class name only, never the message) so it is not
-retried forever; if even that write fails, the failure is logged and the record stays pending. Every
+retried forever; if even that write fails, the failure is logged and the record stays pending. A
+refusal by the Annex A publication guard that escapes the item (003's SQLSTATE SKP01-SKP13, such as
+SKP12 `publication_not_finished` or SKP13 `parent_not_promoted`) is a decision about the record and
+is quarantined the same way, except SKP08: a publication-state refusal such as
+`publication_isolation_refused` is a deployment or configuration fault and counts as systemic. A
+record whose own content fails the batch validation that promotion runs before publishing is
+record-specific too (Codex P2 on #49), and is quarantined `batch_invalid:<code>` (the code only):
+`too_large` (its batch document is over `MAX_BATCH_BYTES`, 32 MiB), `schema` (it fails the batch
+models), `nul_character`, or `citation` (a `CitationError` from the key builder). Every
 other failure leaves the record pending for the next run:
 - a transient database error (connection lost, or SQLSTATE class 08, 40, 53 or 57, or 55P03);
-- a systemic or unknown one: permission (42501), schema drift (42P01, 42703), an internal error
-  (XX000), a generic RAISE (P0001), any other SQLSTATE, or a Python exception with none. These may be
+- a systemic or unknown one: permission (42501; before PR 2b grants the runtime role
+  `corpus_writer`, every publication fails this way or as a `PublicationError` with no SQLSTATE),
+  schema drift (42P01, 42703), an internal error (XX000), a generic RAISE (P0001), SKP08, any other
+  SQLSTATE, or an unknown Python exception with none. These may be
   a deployment or schema fault that would hit every record, so the backlog must survive it. They are
   logged at error level with the id, class and SQLSTATE and `systemic=true`, never row data.
 
@@ -79,7 +96,7 @@ between resets the count. Otherwise the rest of the batch always continues. Ever
 written to the staging row's `quarantine_reason` and to a `quarantine_queue` row. The run returns
 `{"promoted", "attached", "quarantined", "failed"}`, plus `"aborted": "systemic:<SQLSTATE or class>"`
 when it stopped early. A record that raised counts as failed whether it was left pending or
-quarantined `promotion_error`. A record that always raises a systemic or unknown error stays pending
+quarantined (`promotion_error` or `batch_invalid`). A record that always raises a systemic or unknown error stays pending
 and is retried on every run; there is no retry cap yet (F28).
 
 Seeds: PakistanLawSite, PakistanCode and NationalAssembly are `trusted`; every other source is
@@ -104,6 +121,97 @@ real Postgres 16 + pgvector named by `CORPUS_TEST_DATABASE_URL` (a `postgresql+a
 role that can create databases, roles and extensions, such as a throwaway `pgvector/pgvector:pg16`
 container's superuser). Each test creates and drops its own database. Without the URL, those tests
 skip locally and the run fails under CI.
+
+## Publication into Annex A (audit F19)
+
+Harvested and curated authority reaches the application only through the Annex A corpus contract
+(`postgres/ddl/001_corpus_contract.sql`, plus `003_corpus_publication.sql`), which the application
+reads through the promoted-only `v_*` views as `corpus_reader`. `scraper/publication/` is the only
+code here that writes it, and every write is part of one audited, idempotent **corpus publication**:
+
+1. `corpus_publication_begin(batch_key, sha256, source_kind, actor)` takes an advisory lock, writes
+   the audit row and a transaction-scoped grant. The same key with the same content returns
+   `already` and writes nothing; the same key with other content is refused (`batch_key_reused`).
+   A publication runs at READ COMMITTED (`SKP08 publication_isolation_refused` otherwise), so the
+   guard's cross-row checks never read a snapshot older than the lock.
+2. Each item is planned and written in its own savepoint, with `publication_id` on every row and one
+   `corpus_publication_item` audit row per entity (`promoted`, `quarantined`, `updated` with the
+   previous hash, `unchanged`, or `rejected` with a reason).
+3. `corpus_publication_finish(id, counts)` checks the counts against the audit and the audit against
+   the rows (every row the publication stamped has a `promoted` / `quarantined` / `updated` item, every
+   such item names a stamped row, and each row's status agrees with its latest item), removes the grant
+   and sets `corpus_metadata` `last_refresh`, `publication_seq` and `publication_contract = '1'`.
+4. At `COMMIT`, deferred constraint triggers refuse (`SKP12 publication_not_finished`) a publication
+   begun but not finished, and any row written in the transaction that carries an unfinished
+   publication. `SET CONSTRAINTS ... IMMEDIATE` runs them before `finish()`, so it cannot publish.
+
+The database enforces it: a trigger refuses any promotion, any change to a promoted row other than
+its classification, and any row stamped with a publication id, outside that open publication
+(`SKP02`). It refuses a promoted row without complete provenance, a judgment without a bench, a
+treatment whose confidence is not in [0.7, 1] (NaN included), or an invalid or overlapping statute
+version; a promoted citation, treatment, section or version whose judgment, statute or section is not
+promoted, and the demotion of a judgment, statute or section that promoted rows still depend on
+(`SKP13`). Every confidence column holds a number in [0, 1] (a CHECK). The audit tables are
+append-only. Superuser sessions are exempt from the triggers (spec ruling 2) but cannot publish.
+Publishing runs as `corpus_writer` (`SET LOCAL ROLE`); the runtime role reaches it by `SET ROLE` only.
+
+| Case | Outcome |
+|---|---|
+| Missing or incomplete provenance | rejected `provenance_incomplete` |
+| Invalid bench (not single / division / full / larger or an alias) | rejected `invalid_bench` |
+| Invalid treatment kind | rejected `invalid_treatment_kind` |
+| Unresolvable judgment (treatment) | rejected `unresolvable_judgment` |
+| Citations of one item resolving to two judgments | rejected `citation_conflict` |
+| History missing `effective_from` / overlapping / out of order | rejected `history_missing_effective_from` / `history_overlap` / `history_out_of_order` |
+| Invalid jurisdiction (not one of the eight; `PK` refused) or statute status | rejected `invalid_jurisdiction` / `invalid_statute_status` |
+| A quarantine that would demote or rewrite a promoted row | rejected `promoted_row_protected` |
+| Batch key reused with different content | the whole batch refused (`batch_key_reused`) |
+| Treatment confidence below 0.7 | quarantined `treatment_uncertain` |
+| Treatment whose treating or treated judgment is not promoted | quarantined `judgment_not_promoted` |
+| Source not trusted (F20) | quarantined with the trust reason |
+| No bench | quarantined `missing_bench` |
+| Citation not canonical (also a key the normaliser would rewrite again) | quarantined `citation_not_canonical` |
+| Current text only | stored at `version_confidence` 0.5, which the reader ignores |
+
+**Promotion.** `promote_staging_records()` applies the F20 decision first. A record it promotes is
+published as its own publication (`batch_key = "staging/<id>"`); the staging row is promoted (with
+`promoted_to_id` = the Annex A judgment id) only if Annex A promoted it, and otherwise quarantined with
+the publication's reason. A re-stage identical to what Annex A already holds (`unchanged`, in any
+spelling of the citation) is attached and skipped: closed as promoted, linked to the existing
+judgment, no review-queue row, nothing rewritten, counted `attached`; only a conflicting change to a
+protected promoted row
+(`promoted_row_protected`) goes to review. Trust-quarantined and citation-free records never reach
+Annex A.
+Promotion no longer writes `case_law_master` and no longer queues embeddings (Annex A embeddings are
+audit F27). A harvested row with no bench (`scraper_staging.extracted_bench_type`, which
+`python -m scraper.migrate` adds to an older database) is published quarantined `missing_bench`
+until a bench is supplied (spec ruling 9). Citations are stored under the gate's canonical keys
+(`services/d4-2/citations.ts`): the extractor's "Karachi" becomes "Sindh".
+
+**Curated batches.** Treatments and statute section histories come from curated batches in the
+versioned format `corpus-publication-batch/1` (`scraper/publication/batch.py`; the JSON Schema is in
+`docs/superpowers/plans/2026-10-14-f19-publication-etl.md`, Task 3):
+
+```bash
+DATABASE_URL=postgresql+asyncpg://<corpus_writer member>@<host>/<db> \
+  python -m scraper.publication.cli publish --batch batch.json --actor <curator id>
+```
+
+stdout is one JSON object (ids, decisions and reasons only). Exit codes: `0` published or already
+published, `2` usage error or a structurally invalid batch, `3` batch key reused with different
+content, `4` a superuser or a role that is not a `corpus_writer` member, `1` anything else (nothing
+is written).
+
+**Who applies the DDL.** Annex A (001, 003) is applied by a superuser (the postgres init script in
+PR 2b; the test fixture's admin in tests). `python -m scraper.migrate` never applies it: 001 needs
+`CREATE ROLE` and `CREATE EXTENSION`, which the `NOCREATEROLE` migration owner cannot do.
+
+**Tests.** `tests/test_f19_publication_db.py` (and the migrated `test_f20_trust_policy_db.py`) apply
+Annex A to each per-test database and publish as generated `corpus_writer` members; the pure tests
+are `test_publication_vocabulary.py`, `test_publication_citations.py` (checked against the golden
+`tests/fixtures/corpus/citation-canonical-golden.json`, generated from TypeScript by
+`npm run corpus:citation-golden`) and `test_publication_batch.py`. Run them with
+`CORPUS_TEST_DATABASE_URL=… python -m pytest corpus_service/tests -q` from the repository root.
 
 ## Quick start (no Docker)
 

@@ -136,6 +136,27 @@ async def upgrade_trust_vocabulary(conn: AsyncConnection) -> None:
         "|".join(TRUST_LEVELS), DEFAULT_TRUST_LEVEL, len(mapped), (": " + "; ".join(mapped)) if mapped else "",
     )
 
+async def upgrade_staging_bench_type(conn: AsyncConnection) -> None:
+    """Add scraper_staging.extracted_bench_type (audit F19) to a database created before it.
+
+    Idempotent: when the column is already there, nothing is run. DDL, so like
+    upgrade_trust_vocabulary it runs only in `python -m scraper.migrate` as the schema owner, never in
+    the API's init_db(). The Annex A contract itself is never applied here (it needs a superuser; PR 2b).
+
+    The check looks at the same relation the ALTER TABLE resolves to ('scraper_staging'::regclass),
+    not at current_schema(): with the default search_path a schema named after the migration role
+    comes first, while the tables live in public (the case PR #48 round 2's probe fix covers)."""
+    present = (await conn.execute(text(
+        "SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid = 'scraper_staging'::regclass "
+        "AND attname = 'extracted_bench_type' AND NOT attisdropped"
+    ))).first()
+    if present is not None:
+        logger.info("staging bench column already present; nothing to upgrade")
+        return
+    await conn.execute(text("ALTER TABLE scraper_staging ADD COLUMN extracted_bench_type VARCHAR(100)"))
+    logger.info("staging bench column added (scraper_staging.extracted_bench_type)")
+
+
 async def seed_data():
     from scraper.models import ScraperSource
     from sqlalchemy import select

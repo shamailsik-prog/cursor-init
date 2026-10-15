@@ -8,14 +8,21 @@ superuser; locally, a throwaway pgvector/pgvector:pg16 container). Each test get
 own, created empty and dropped afterwards, so the tests are isolated and repeatable. Outside CI a
 missing URL skips those tests with the reason; under CI (``CI`` set) it stops the run, so the
 real-database tests cannot pass by being skipped.
+
+Audit F19 tests also apply the Annex A contract (postgres/ddl 001 + 003) to their database as the
+admin (``apply_annex_a``), and use generated login roles that reach ``corpus_writer`` /
+``corpus_reader`` the way the compose provisioning grants them (``runtime_role``, ``writer_role``,
+``reader_role``). Every role password is generated at runtime and redacted from captured output.
 """
 
 import asyncio
+import contextlib
 import os
 import secrets
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterator, Sequence, Tuple
 
 import pytest
 
@@ -27,6 +34,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 TEST_DB_ENV = "CORPUS_TEST_DATABASE_URL"
+
+# Audit F19: the Annex A contract the publication writes. In production it is applied by a superuser at
+# postgres init (PR 2b), never by `python -m scraper.migrate`; here the fixture applies it as the admin.
+REPO_ROOT = PROJECT_ROOT.parent
+ANNEX_A_DDL = ("001_corpus_contract.sql", "003_corpus_publication.sql")
+# The application's own (ORM) tables: the runtime role's DML grant covers exactly these, never Annex A
+# (mirrors PR 2b's provisioning).
+ORM_TABLES = (
+    "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
+    "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue",
+)
 
 
 def _test_db_url() -> str:
@@ -128,6 +146,101 @@ class CorpusTestDatabase:
             if secret:
                 text = text.replace(secret, "<redacted>")
         return text
+
+    # -- audit F19: Annex A and the publication roles --------------------------------------------
+    def apply_annex_a(self, files: Sequence[str] = ANNEX_A_DDL) -> None:
+        """Apply the Annex A DDL files to this database as the admin (a superuser), the way the
+        postgres init script does: one simple-query execute per file (multi-statement, DO blocks,
+        $$ bodies; one implicit transaction per file)."""
+        import asyncpg
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self.url).set(drivername="postgresql").render_as_string(hide_password=False)
+
+        async def _apply():
+            conn = await asyncpg.connect(url)
+            try:
+                for name in files:
+                    await conn.execute((REPO_ROOT / "postgres" / "ddl" / name).read_text(encoding="utf-8"))
+            finally:
+                await conn.close()
+
+        asyncio.run(_apply())
+
+    def _grant_member(self, role: str, group: str, *, set_only: bool) -> None:
+        option = " WITH INHERIT FALSE, SET TRUE" if set_only else ""
+        self.admin(f'GRANT {group} TO "{role}"{option}')
+
+    def runtime_role(self, corpus_writer: str = "set") -> Tuple[str, str]:
+        """The API/worker runtime role as PR 2b provisions it: DML on the ORM tables only (not
+        "ALL TABLES"), and corpus_writer reachable by SET ROLE only (INHERIT FALSE, SET TRUE).
+
+        corpus_writer="none" is the role as shipped before PR 2b (no membership); "no_set" is a
+        member that may not SET ROLE to it (INHERIT FALSE, SET FALSE)."""
+        name, password = self.create_role("f19_app")
+        tables = ", ".join(f'"{t}"' for t in ORM_TABLES)
+        self.admin(
+            f'GRANT SELECT, INSERT, UPDATE, DELETE ON {tables} TO "{name}"',
+            # Sequences owned by an ORM table only (Annex A identity sequences stay out).
+            f"""DO $$ DECLARE s record; BEGIN
+                  FOR s IN SELECT seq.relname FROM pg_class seq
+                           JOIN pg_depend d ON d.objid = seq.oid AND d.deptype IN ('a', 'i')
+                           JOIN pg_class t ON t.oid = d.refobjid
+                           WHERE seq.relkind = 'S' AND t.relname = ANY(ARRAY[{", ".join(f"'{t}'" for t in ORM_TABLES)}])
+                  LOOP EXECUTE format('GRANT USAGE, SELECT, UPDATE ON SEQUENCE %I TO %I', s.relname, '{name}');
+                  END LOOP; END $$""",
+        )
+        if corpus_writer == "set":
+            self._grant_member(name, "corpus_writer", set_only=True)
+        elif corpus_writer == "no_set":
+            self.admin(f'GRANT corpus_writer TO "{name}" WITH INHERIT FALSE, SET FALSE')
+        elif corpus_writer != "none":
+            raise ValueError(corpus_writer)
+        return name, password
+
+    def writer_role(self) -> Tuple[str, str]:
+        """A publisher login: a corpus_writer member by SET ROLE only."""
+        name, password = self.create_role("f19_pub")
+        self._grant_member(name, "corpus_writer", set_only=True)
+        return name, password
+
+    def reader_role(self) -> Tuple[str, str]:
+        """An application reader login: a corpus_reader member (the promoted-only v_* views)."""
+        name, password = self.create_role("f19_rdr")
+        self._grant_member(name, "corpus_reader", set_only=False)
+        return name, password
+
+    @contextlib.contextmanager
+    def app_engine_as(self, user: str, password: str) -> Iterator[None]:
+        """Rebind the application's own engine and sessions to this database as ``user``."""
+        from scraper import database
+
+        engine = self.engine_for(self.url_as(user, password))
+        saved_engine = database.engine
+        database.engine = engine
+        database.SessionLocal.configure(bind=engine)
+        try:
+            yield
+        finally:
+            database.SessionLocal.configure(bind=saved_engine)
+            database.engine = saved_engine
+            asyncio.run(engine.dispose())
+
+    def run_cli(self, *args: str, user: str, password: str) -> subprocess.CompletedProcess:
+        """``python -m scraper.publication.cli <args>`` as the operator runs it, with DATABASE_URL
+        for ``user`` on this database (no Redis). Output is redacted of every test password."""
+        env = {**os.environ, "DATABASE_URL": self.url_as(user, password), "REDIS_URL": ""}
+        proc = subprocess.run(
+            [sys.executable, "-m", "scraper.publication.cli", *args],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        proc.stdout = self.redact(proc.stdout)
+        proc.stderr = self.redact(proc.stderr)
+        return proc
 
     # -- lifecycle ------------------------------------------------------------------------------
     def create(self) -> None:

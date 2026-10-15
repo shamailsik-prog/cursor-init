@@ -423,6 +423,10 @@ class ScraperStaging(Base):
     extracted_court: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     extracted_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     extracted_reporter: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Audit F19: the bench as the harvester read it (raw text). Aliases are mapped onto
+    # single | division | full | larger only at publication (scraper.publication.vocabulary); a row
+    # with no bench is published quarantined (missing_bench, spec ruling 9, Annex B B-10).
+    extracted_bench_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     extracted_judges: Mapped[Optional[List[str]]] = mapped_column(ARRAY(Text), nullable=True)
     extracted_parties: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     extracted_statutes: Mapped[Optional[List[str]]] = mapped_column(ARRAY(Text), nullable=True)

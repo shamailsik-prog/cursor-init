@@ -362,6 +362,10 @@ async def _stage(rows):
                 "extracted_title": f"F20 Fixture {key} v. Test",
                 "extracted_year": 2099,
                 "raw_text": "synthetic F20 fixture text",
+                # Audit F19: a bench and the harvested page, so a promoted row publishes into Annex A
+                # with complete provenance (plan Task 8 mapping).
+                "extracted_bench_type": "single",
+                "raw_html": "<p>synthetic F20 fixture</p>",
                 "normalised": True,
                 **fields,
             }
@@ -381,13 +385,41 @@ async def _outcomes():
     return staging, queue, master, embed
 
 
+# Audit F19: promotion publishes into the Annex A contract. What it published, read as the admin.
+ANNEX_A_TABLES = (
+    "source_provenance", "judgment", "citation", "treatment", "statute", "statute_section",
+    "statute_section_version", "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
+    "corpus_metadata",
+)
+
+
+async def _annex_a_promoted():
+    """(judgment id, citation_text) for every promoted citation of a promoted judgment."""
+    return await fetch(
+        "SELECT j.id, c.citation_text FROM judgment j JOIN citation c ON c.judgment_id = j.id "
+        "WHERE j.review_status = 'promoted' AND c.review_status = 'promoted' ORDER BY c.citation_text"
+    )
+
+
+async def _annex_a_snapshot():
+    return {table: await fetch(f"SELECT * FROM {table} ORDER BY 1") for table in ANNEX_A_TABLES}
+
+
 def _promote():
     from scraper.tasks.promotion import promote_staging_records
 
     return run(promote_staging_records())
 
 
+def _promote_as_runtime_role(corpus_db):
+    """Promotion as the compose runtime role (DML on its own tables, corpus_writer by SET ROLE only),
+    as in production after PR 2b. A superuser is refused by publish_batch (plan D2)."""
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        return _promote()
+
+
 def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({
         "trusted": ("f20-trusted", "trusted"),
@@ -397,19 +429,19 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
         "renamed": ("f20-old-name", "trusted"),
     }))
     ids = run(_stage({
-        "trusted_050": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 1", confidence_score=0.5),
-        "trusted_049": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 2", confidence_score=0.49),
-        "review": dict(source_site="f20-review", source_id=src["review"], extracted_citation="2099 F20 3", confidence_score=0.99),
-        "blocked": dict(source_site="f20-blocked", source_id=src["blocked"], extracted_citation="2099 F20 4", confidence_score=0.99),
-        "unknown_site": dict(source_site="f20-no-such-source", extracted_citation="2099 F20 5", confidence_score=0.99),
-        "deleted": dict(source_site="f20-deleted", source_id=src["deleted"], extracted_citation="2099 F20 6", confidence_score=0.99),
-        "renamed": dict(source_site="f20-old-name", source_id=src["renamed"], extracted_citation="2099 F20 7", confidence_score=0.9),
+        "trusted_050": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 1", confidence_score=0.5),
+        "trusted_049": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 2", confidence_score=0.49),
+        "review": dict(source_site="f20-review", source_id=src["review"], extracted_citation="2099 SCMR 3", confidence_score=0.99),
+        "blocked": dict(source_site="f20-blocked", source_id=src["blocked"], extracted_citation="2099 SCMR 4", confidence_score=0.99),
+        "unknown_site": dict(source_site="f20-no-such-source", extracted_citation="2099 SCMR 5", confidence_score=0.99),
+        "deleted": dict(source_site="f20-deleted", source_id=src["deleted"], extracted_citation="2099 SCMR 6", confidence_score=0.99),
+        "renamed": dict(source_site="f20-old-name", source_id=src["renamed"], extracted_citation="2099 SCMR 7", confidence_score=0.9),
         # The FK is authoritative: a review source cannot borrow a trusted source's name.
-        "fk_beats_name": dict(source_site="f20-trusted", source_id=src["review"], extracted_citation="2099 F20 8", confidence_score=0.99),
+        "fk_beats_name": dict(source_site="f20-trusted", source_id=src["review"], extracted_citation="2099 SCMR 8", confidence_score=0.99),
         # No FK: the harvester's parsing_metadata.source_name comes before the source_site label.
-        "metadata_name": dict(source_site="f20-site-label", parsing_metadata={"source_name": "f20-trusted"}, extracted_citation="2099 F20 9", confidence_score=0.8),
+        "metadata_name": dict(source_site="f20-site-label", parsing_metadata={"source_name": "f20-trusted"}, extracted_citation="2099 SCMR 9", confidence_score=0.8),
         # No FK, no metadata: the source_site label, as today's harvesters stage rows.
-        "site_only": dict(source_site="f20-trusted", extracted_citation="2099 F20 10", confidence_score=0.7),
+        "site_only": dict(source_site="f20-trusted", extracted_citation="2099 SCMR 10", confidence_score=0.7),
     }))
     # After staging: the source is deleted (FK -> NULL), and another renamed.
     run(execute(
@@ -418,9 +450,10 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
         params={"d": src["deleted"], "r": src["renamed"]},
     ))
 
-    result = _promote()
+    result = _promote_as_runtime_role(corpus_db)
 
     staging, queue, master, embed = run(_outcomes())
+    published = run(_annex_a_promoted())
     by_id = {row[0]: row for row in staging}
     expected = {
         "trusted_050": ("promoted", None),
@@ -444,58 +477,81 @@ def test_c_promotion_decides_through_the_trust_vocabulary(corpus_db):
     assert not wrong, f"staging outcome differs from the trust rule: {wrong}"
     # The durable reason is on the review-queue row too, and nothing promoted is queued.
     assert {key: queue_reason.get(ids[key]) for key in expected} == {key: reason for key, (_s, reason) in expected.items()}
-    promoted_citations = {"2099 F20 1", "2099 F20 7", "2099 F20 9", "2099 F20 10"}
-    assert {row[1] for row in master} == promoted_citations, "only promoted rows may reach case_law_master"
-    assert len(master) == 4
-    master_ids = {row[0] for row in master}
-    assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == master_ids
-    assert {row[0] for row in embed} == master_ids and {row[1] for row in embed} == {"case_law_master"}
+    # Audit F19: promoted rows are published into Annex A, and only they reach it.
+    promoted_citations = {"2099 SCMR 1", "2099 SCMR 7", "2099 SCMR 9", "2099 SCMR 10"}
+    assert {row[1] for row in published} == promoted_citations, "only promoted rows may reach Annex A"
+    assert len(published) == 4
+    judgment_ids = {row[0] for row in published}
+    assert len(judgment_ids) == 4
+    assert {by_id[ids[k]][4] for k in ("trusted_050", "renamed", "metadata_name", "site_only")} == judgment_ids
+    # Ruling 10: promotion no longer writes case_law_master or queues embeddings.
+    assert master == [] and embed == []
     assert result == {"promoted": 4, "attached": 0, "quarantined": 6, "failed": 0}
 
     # A second pass has nothing left to decide and writes nothing new.
-    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
+    annex_a = run(_annex_a_snapshot())
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
     assert run(_outcomes()) == (staging, queue, master, embed)
+    assert run(_annex_a_snapshot()) == annex_a
 
 
 # ---------------------------------------------------------------------------------------------
 # (d) F22: a citation-free record is quarantined; a bad record does not stop the batch
 # ---------------------------------------------------------------------------------------------
 def test_d_citation_free_record_is_quarantined_and_the_batch_continues(corpus_db, caplog):
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
+    # A database error on one row (F22's isolation property, now on Annex A): the publication of the
+    # row titled "F22 fault 2099" is refused by a test trigger on judgment.
+    corpus_db.admin(
+        """CREATE FUNCTION f22_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.case_title = 'F22 fault 2099' THEN
+               RAISE EXCEPTION 'f22 marker %', NEW.case_title USING ERRCODE = '23514';
+             END IF;
+             RETURN NEW;
+           END $$""",
+        "CREATE TRIGGER f22_test_fault BEFORE INSERT OR UPDATE ON judgment FOR EACH ROW EXECUTE FUNCTION f22_test_fault()",
+    )
     src = run(_make_sources({"trusted": ("f20-trusted", "trusted")}))
     ids = run(_stage({
         "no_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation=None, confidence_score=0.9),
         "blank_citation": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="   ", confidence_score=0.9),
-        "good": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 21", confidence_score=0.9),
-        # case_law_master refuses year 1800 (ck_case_law_year_sane): a database error on this row.
-        "db_error": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 22", extracted_year=1800, confidence_score=0.9),
-        "good_too": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 F20 23", confidence_score=0.9),
+        "good": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 21", confidence_score=0.9),
+        # The fault trigger above refuses this row's judgment: a database error on this row.
+        "db_error": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 22", extracted_title="F22 fault 2099", confidence_score=0.9),
+        "good_too": dict(source_site="f20-trusted", source_id=src["trusted"], extracted_citation="2099 SCMR 23", confidence_score=0.9),
     }))
 
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     staging, queue, master, _embed = run(_outcomes())
+    published = run(_annex_a_promoted())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["no_citation"]][1:4] == (False, True, "citation_missing")
     assert by_id[ids["blank_citation"]][1:4] == (False, True, "citation_missing")
     assert by_id[ids["good"]][1:3] == (True, False)
     assert by_id[ids["good_too"]][1:3] == (True, False)
-    # The failing row's own work is rolled back, then it is quarantined with a durable reason
-    # (exception class only), so a poison record is not retried forever (re-audit LOW-3).
+    # The failing row's own work is rolled back (its Annex A publication with it), then it is
+    # quarantined with a durable reason (exception class only), so a poison record is not retried
+    # forever (re-audit LOW-3).
     assert by_id[ids["db_error"]][1:4] == (False, True, "promotion_error:IntegrityError")
     assert sorted((row[0], row[1]) for row in queue) == sorted([
         (ids["no_citation"], "citation_missing"),
         (ids["blank_citation"], "citation_missing"),
         (ids["db_error"], "promotion_error:IntegrityError"),
     ])
-    assert {row[1] for row in master} == {"2099 F20 21", "2099 F20 23"}
+    assert {row[1] for row in published} == {"2099 SCMR 21", "2099 SCMR 23"}
+    assert master == []  # F19 ruling 10: promotion no longer writes case_law_master
+    assert run(fetch("SELECT count(*) FROM corpus_publication WHERE batch_key = :k",
+                     k=f"staging/{ids['db_error']}")) == [(0,)]
     assert result == {"promoted": 2, "attached": 0, "quarantined": 2, "failed": 1}
 
     failures = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
     assert len(failures) == 1, failures
     assert str(ids["db_error"]) in failures[0] and "IntegrityError" in failures[0]
-    assert "ck_case_law_year_sane" not in failures[0] and "1800" not in failures[0], "log carries row data"
+    assert "f22 marker" not in failures[0] and "F22 fault 2099" not in failures[0], "log carries row data"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -571,7 +627,9 @@ def test_h_a_present_identifier_that_misses_never_falls_through_to_a_trusted_lab
     """MEDIUM-1: the most specific identifier present decides; if it no longer resolves (source
     deleted or renamed) the record is unknown_source. It never falls through to a less specific
     label - here every row also carries a trusted family label, the shape the court harvesters use
-    (source_site "SupremeCourt" for source "SupremeCourtPublic")."""
+    (source_site "SupremeCourt" for source "SupremeCourtPublic"). Since F19 the promoted control is
+    published into Annex A, as the runtime role."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({
         "family": ("f20-family", "trusted"),
@@ -583,18 +641,18 @@ def test_h_a_present_identifier_that_misses_never_falls_through_to_a_trusted_lab
     ids = run(_stage({
         # FK plus the stamps every harvester now writes; FK becomes NULL on delete (ON DELETE SET NULL).
         "fk_deleted": dict(source_id=src["a"], parsing_metadata={"source_id": str(src["a"]), "source_name": "f20-specific-a"},
-                           source_site="f20-family", extracted_citation="2099 F20 41", confidence_score=0.9),
+                           source_site="f20-family", extracted_citation="2099 SCMR 41", confidence_score=0.9),
         "meta_source_id_deleted": dict(parsing_metadata={"source_id": str(src["b"])}, source_site="f20-family",
-                                       extracted_citation="2099 F20 42", confidence_score=0.9),
+                                       extracted_citation="2099 SCMR 42", confidence_score=0.9),
         "meta_source_name_renamed": dict(parsing_metadata={"source_name": "f20-specific-c"}, source_site="f20-family",
-                                         extracted_citation="2099 F20 43", confidence_score=0.9),
+                                         extracted_citation="2099 SCMR 43", confidence_score=0.9),
         "meta_source_name_deleted": dict(parsing_metadata={"source_name": "f20-specific-d"}, source_site="f20-family",
-                                         extracted_citation="2099 F20 44", confidence_score=0.9),
+                                         extracted_citation="2099 SCMR 44", confidence_score=0.9),
         # A malformed identifier is present and resolves to nothing: also unknown, never the label.
         "meta_source_id_malformed": dict(parsing_metadata={"source_id": "not-a-uuid"}, source_site="f20-family",
-                                         extracted_citation="2099 F20 45", confidence_score=0.9),
+                                         extracted_citation="2099 SCMR 45", confidence_score=0.9),
         # Control: with no more specific identifier, the label itself is the identifier.
-        "label_only": dict(source_site="f20-family", extracted_citation="2099 F20 46", confidence_score=0.9),
+        "label_only": dict(source_site="f20-family", extracted_citation="2099 SCMR 46", confidence_score=0.9),
     }))
     run(execute(
         "DELETE FROM scraper_sources WHERE id IN (:a, :b, :d)",
@@ -602,70 +660,114 @@ def test_h_a_present_identifier_that_misses_never_falls_through_to_a_trusted_lab
         params={"a": src["a"], "b": src["b"], "c": src["c"], "d": src["d"]},
     ))
 
-    result = _promote()
+    result = _promote_as_runtime_role(corpus_db)
 
     got = _outcome_by_key(ids)
     want = {key: "unknown_source" for key in ids}
     want["label_only"] = "promoted"
     assert got == want, got
     _staging, queue, master, _embed = run(_outcomes())
-    assert {row[1] for row in master} == {"2099 F20 46"}, "only the label-only control may be promoted"
+    published = run(_annex_a_promoted())
+    assert {row[1] for row in published} == {"2099 SCMR 46"}, "only the label-only control may be promoted"
+    assert master == []  # F19 ruling 10: promotion no longer writes case_law_master
     assert sorted(row[1] for row in queue) == ["unknown_source"] * 5
     assert result == {"promoted": 1, "attached": 0, "quarantined": 5, "failed": 0}
 
 
 def test_h_trust_is_decided_before_the_duplicate_check(corpus_db):
     """LOW-4 + round-2 L3: a record that may not be promoted is quarantined with its trust reason
-    whether or not its citation is already published. A promotable duplicate follows FINAL_2's
-    DEDUPLICATION rule ("attach ... to the existing judgment row and skip the rest"): it is linked
-    to the existing case_law_master row (promoted_to_id) and closed, with no second master row, no
-    embedding and no review-queue row."""
+    whether or not its citation is already published, and nothing is published for it. A promotable
+    duplicate follows FINAL_2's DEDUPLICATION rule ("attach ... to the existing judgment row and skip
+    the rest").
+
+    Migrated to F19 (the case_law_master duplicate query is gone): the duplicate decision is the
+    audited publication's, against Annex A. An identical re-stage is `unchanged`: attached to the
+    existing judgment and skipped (promoted, promoted_to_id = that judgment, nothing rewritten, no
+    review-queue row, counted `attached`). A changed trusted re-stage is `updated` onto the same
+    judgment (counted `promoted`). A bench-less re-stage is refused as promoted_row_protected (D9), the
+    only re-stage that goes to review. Two identical promotable rows with one new citation in one run
+    yield one judgment and one citation row: the first is published, the second attached to it.
+    Explicit ids fix the processing order."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted"), "b": ("f20-blocked", "blocked"), "r": ("f20-review", "review")}))
-    original = run(_stage({"original": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9)}))
-    assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
-    d1_master = {row[0]: row for row in run(_outcomes())[0]}[original["original"]][4]
+    original = dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 SCMR 901", confidence_score=0.9,
+                    source_url="https://f20.example.invalid/judgment/original", extracted_title="F20 Fixture original v. Test")
+    run(_stage({"original": original}))
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+    judgment_d1 = run(_annex_a_promoted())[0][0]
+    # The pair below is one judgment staged twice with identical content.
+    pair = dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 SCMR 902", confidence_score=0.9,
+                source_url="https://f20.example.invalid/judgment/pair", extracted_title="F20 Fixture pair v. Test")
 
+    uid = lambda n: uuid.UUID(f"00000000-0000-4000-8000-{n:012d}")  # noqa: E731
     ids = run(_stage({
-        "blocked_dup": dict(source_id=src["b"], source_site="f20-blocked", extracted_citation="2099 F20 D1", confidence_score=0.9),
-        "review_dup": dict(source_id=src["r"], source_site="f20-review", extracted_citation="2099 F20 D1", confidence_score=0.9),
-        "low_conf_dup": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.3),
-        "trusted_dup": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D1", confidence_score=0.9),
-        # Two promotable rows with the same new citation in one batch: one is published.
-        "pair_1": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D2", confidence_score=0.9),
-        "pair_2": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 F20 D2", confidence_score=0.9),
+        "blocked_dup": dict(id=uid(1), source_id=src["b"], source_site="f20-blocked", extracted_citation="2099 SCMR 901", confidence_score=0.9),
+        "review_dup": dict(id=uid(2), source_id=src["r"], source_site="f20-review", extracted_citation="2099 SCMR 901", confidence_score=0.9),
+        "low_conf_dup": dict(id=uid(3), source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 SCMR 901", confidence_score=0.3),
+        "trusted_dup_identical": dict(original, id=uid(4)),
+        "trusted_dup_changed": dict(id=uid(5), source_id=src["t"], source_site="f20-trusted", extracted_citation="2099 SCMR 901", confidence_score=0.9),
+        "trusted_dup_no_bench": dict(original, id=uid(6), extracted_bench_type=None),
+        # Two identical promotable rows with the same new citation in one batch: one judgment is
+        # published by the first, and the second is attached to it.
+        "pair_1": dict(pair, id=uid(10)),
+        "pair_2": dict(pair, id=uid(11)),
     }))
-    result = _promote()
+    result = _promote_as_runtime_role(corpus_db)
 
     got = _outcome_by_key(ids)
-    assert {k: got[k] for k in ("blocked_dup", "review_dup", "low_conf_dup")} == {
+    assert got == {
         "blocked_dup": "blocked_source",
         "review_dup": "review_source",
         "low_conf_dup": "low_confidence",
+        "trusted_dup_identical": "promoted",
+        "trusted_dup_changed": "promoted",
+        "trusted_dup_no_bench": "promoted_row_protected",
+        "pair_1": "promoted",
+        "pair_2": "promoted",
     }, got
+    decisions = dict(run(fetch(
+        "SELECT p.batch_key, i.decision || coalesce(':' || i.reason, '') FROM corpus_publication p "
+        "JOIN corpus_publication_item i ON i.publication_id = p.id WHERE i.entity_type = 'judgment'"
+    )))
+    key = lambda name: f"staging/{ids[name]}"  # noqa: E731
+    for name in ("blocked_dup", "review_dup", "low_conf_dup"):
+        assert key(name) not in decisions, f"{name}: a record that may not be promoted was published"
+    assert decisions[key("trusted_dup_identical")] == "unchanged"
+    assert decisions[key("trusted_dup_changed")] == "updated"
+    assert decisions[key("trusted_dup_no_bench")] == "rejected:promoted_row_protected"
+    assert (decisions[key("pair_1")], decisions[key("pair_2")]) == ("promoted", "unchanged")
+
+    published = run(_annex_a_promoted())
+    assert sorted(row[1] for row in published) == ["2099 SCMR 901", "2099 SCMR 902"]
+    assert run(fetch("SELECT count(*) FROM judgment")) == [(2,)] and run(fetch("SELECT count(*) FROM citation")) == [(2,)]
     staging, queue, master, embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
-    # Attached: closed (promoted flag, promoted_to_id = the existing row), not quarantined.
-    assert by_id[ids["trusted_dup"]][1:5] == (True, False, None, d1_master)
-    pair = [by_id[ids["pair_1"]], by_id[ids["pair_2"]]]
-    assert all(row[1:4] == (True, False, None) for row in pair), pair
-    assert pair[0][4] == pair[1][4], "both copies must point at the one published row"
-    assert sorted(row[1] for row in master) == ["2099 F20 D1", "2099 F20 D2"], "no second master row"
-    assert len(embed) == 2, "an attached copy queues no embedding"
-    assert sorted(row[1] for row in queue) == ["blocked_source", "low_confidence", "review_source"], \
-        "an attached duplicate writes no review-queue row"
-    assert result == {"promoted": 1, "attached": 2, "quarantined": 3, "failed": 0}
+    judgment_d2 = next(row[0] for row in published if row[1] == "2099 SCMR 902")
+    # Attached: closed (promoted flag, promoted_to_id = the existing judgment), not quarantined.
+    assert by_id[ids["trusted_dup_identical"]][1:5] == (True, False, None, judgment_d1)
+    assert by_id[ids["pair_2"]][1:5] == (True, False, None, judgment_d2)
+    # Updated onto the same judgment, and the first of the pair published it.
+    assert by_id[ids["trusted_dup_changed"]][1:5] == (True, False, None, judgment_d1)
+    assert by_id[ids["pair_1"]][1:5] == (True, False, None, judgment_d2)
+    # Only the trust reasons and the protected re-stage reach the review queue; an attached duplicate
+    # writes no review-queue row.
+    assert sorted(row[1] for row in queue) == ["blocked_source", "low_confidence", "promoted_row_protected", "review_source"]
+    assert master == [] and embed == []  # F19 ruling 10: no case_law_master row, no embedding
+    assert result == {"promoted": 2, "attached": 2, "quarantined": 4, "failed": 0}
 
 
 def test_h_a_python_error_leaves_the_record_pending_and_the_batch_continues(corpus_db, monkeypatch, caplog):
     """LOW-3 + round-4 (Codex P1): a Python exception mid-batch says nothing about the record (it
     has no SQLSTATE, so it may be a deployment or code fault). The record's work is rolled back and
     it is left pending, not quarantined, so it retries once the fault is fixed; the rest of the
-    batch is promoted. The log carries the id and class only, marked systemic."""
+    batch is promoted. The log carries the id and class only, marked systemic. Since F19 the rest
+    of the batch is published into Annex A, as the runtime role."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     ids = run(_stage({
-        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 P{i}",
+        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 SCMR 7{i}",
                       confidence_score=0.61 if i == 2 else 0.9)
         for i in range(5)
     }))
@@ -675,43 +777,47 @@ def test_h_a_python_error_leaves_the_record_pending_and_the_batch_continues(corp
 
     def boom(trust, confidence):
         if confidence == 0.61:
-            raise RuntimeError("boom with row data 2099 F20 P2")
+            raise RuntimeError("boom with row data 2099 SCMR 72")
         return real(trust, confidence)
 
     monkeypatch.setattr(promo, "publication_decision", boom)
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     assert result == {"promoted": 4, "attached": 0, "quarantined": 0, "failed": 1}
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["k2"]][1:4] == (False, False, None), "a Python error must leave the record pending"
     assert queue == []
-    assert len(master) == 4
+    published = run(_annex_a_promoted())
+    assert sorted(row[1] for row in published) == ["2099 SCMR 70", "2099 SCMR 71", "2099 SCMR 73", "2099 SCMR 74"]
+    assert master == []  # F19 ruling 10
     messages = " ".join(r.getMessage() for r in caplog.records)
     assert f"promotion.record_failed staging_id={ids['k2']} error=RuntimeError" in messages
     assert "systemic=true" in messages
-    assert "2099 F20 P2" not in messages, "log carries row data"
+    assert "2099 SCMR 72" not in messages, "log carries row data"
 
     # The record is retried on the next run (still failing while the fault is there), then
     # promoted once it is gone.
-    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
     monkeypatch.setattr(promo, "publication_decision", real)
-    assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
 
 
 def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_db, monkeypatch, caplog):
     """LOW-3: if even the promotion_error quarantine write fails, that is logged (class only) and the
     batch continues; the record stays pending. (Round 4: the first failure is a record-specific
-    database error, the only kind that is quarantined.)"""
+    database error, the only kind that is quarantined. Since F19 the others publish into Annex A,
+    as the runtime role, and the fault is raised on the record's citation insert.)"""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     ids = run(_stage({
-        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 Q{i}",
+        f"k{i}": dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 SCMR 8{i}",
                       confidence_score=0.9)
         for i in range(3)
     }))
-    run(execute(*_raise_on_master_insert({"2099 F20 Q1": "23505"})))
+    run(execute(*_raise_on_citation_insert({"2099 SCMR 81": "23505"})))
     import scraper.tasks.promotion as promo
 
     real_queue = promo.QuarantineQueue
@@ -723,9 +829,10 @@ def test_h_if_the_error_quarantine_also_fails_the_batch_still_continues(corpus_d
 
     monkeypatch.setattr(promo, "QuarantineQueue", queue_that_refuses_error_rows)
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == ["2099 SCMR 80", "2099 SCMR 82"]
     staging = {row[0]: row for row in run(_outcomes())[0]}
     assert staging[ids["k1"]][1:4] == (False, False, None)
     messages = [r.getMessage() for r in caplog.records]
@@ -752,33 +859,56 @@ def _threaded(fn, n):
 def test_h_concurrent_runs_never_double_promote(corpus_db):
     """LOW-1 (re-audit attack, adapted to LOW-4 and round-2 L3): four promotion runs at once over
     160 rows. Every citation is staged twice by a trusted source, so a race could publish both
-    copies. Exactly one copy is published; the other is attached to it (no review-queue row)."""
+    copies. Exactly one copy is published; the other is attached to it (no review-queue row).
+
+    Migrated to F19: "double promote" now means two Annex A judgments or citation rows for one
+    citation, or a copy that fails instead of being decided. Each pair is one judgment staged twice
+    with identical content under two spellings of the citation ("PLD 2099 Karachi n" / "PLD 2099
+    Sindh n"), so it is also the per-citation lock keyed by the canonical citation that serialises
+    them. Whichever copy runs first publishes the judgment; the other finds it `unchanged` and is
+    attached to it."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted"), "r": ("f20-review", "review")}))
     rows = {}
     for i in range(120):
-        rows[f"t{i}"] = dict(source_id=src["t"], source_site="f20-trusted", extracted_citation=f"2099 F20 C{i // 2}", confidence_score=0.9)
+        spelling = "Karachi" if i % 2 == 0 else "Sindh"
+        rows[f"t{i}"] = dict(source_id=src["t"], source_site="f20-trusted",
+                             extracted_citation=f"PLD 2099 {spelling} {300 + i // 2}", confidence_score=0.9,
+                             source_url=f"https://f20.example.invalid/judgment/pair{i // 2}",
+                             extracted_title=f"F20 Fixture pair {i // 2} v. Test")
     for i in range(40):
-        rows[f"r{i}"] = dict(source_id=src["r"], source_site="f20-review", extracted_citation=f"2099 F20 R{i}", confidence_score=0.9)
+        rows[f"r{i}"] = dict(source_id=src["r"], source_site="f20-review", extracted_citation=f"2099 SCMR {2000 + i}", confidence_score=0.9)
     ids = run(_stage(rows))
 
-    results, errors = _threaded(_promote, 4)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        # Connect once first: the four threads then share an engine whose dialect is initialised (a
+        # brand-new engine's first connect, raced from four event loops at once, is a test artefact).
+        assert run(fetch("SELECT 1")) == [(1,)]
+        results, errors = _threaded(_promote, 4)
     assert not errors, errors
     staging, queue, master, embed = run(_outcomes())
-    citations = [m[1] for m in master]
-    assert len(citations) == len(set(citations)) == 60, (len(citations), len(set(citations)))
     assert not [s for s in staging if s[1] and s[2]], "a row is both promoted and quarantined"
     assert not [s for s in staging if not s[1] and not s[2]], "a row was left undecided"
-    # Both copies of every citation point at its single master row.
-    master_by_citation = {m[1]: m[0] for m in master}
+    # Both copies of every citation (both spellings) point at its single Annex A judgment.
+    judgment_by_citation = dict(run(fetch("SELECT citation_text, judgment_id FROM citation")))
     by_id = {s[0]: s for s in staging}
     wrong_link = [k for k, sid in ids.items() if k.startswith("t")
-                  and by_id[sid][4] != master_by_citation[rows[k]["extracted_citation"]]]
+                  and by_id[sid][4] != judgment_by_citation[f"PLD 2099 Sindh {300 + int(k[1:]) // 2}"]]
     assert not wrong_link, wrong_link[:3]
     queued = [q[0] for q in queue]
     assert len(queued) == len(set(queued)) == 40, "only the review rows go to the review queue"
-    assert sorted(q[1] for q in queue) == ["review_source"] * 40
-    assert len(embed) == 60
+    assert sorted(q[1] for q in queue) == ["review_source"] * 40, "a copy failed or was refused"
+    citations = [row[0] for row in run(fetch("SELECT citation_text FROM citation WHERE review_status = 'promoted'"))]
+    assert len(citations) == len(set(citations)) == 60, (len(citations), len(set(citations)))
+    assert set(citations) == {f"PLD 2099 Sindh {300 + k}" for k in range(60)}
+    assert run(fetch("SELECT count(*), count(*) FILTER (WHERE review_status = 'promoted') FROM judgment")) == [(60, 60)]
+    decisions = sorted(run(fetch(
+        "SELECT i.decision, count(*) FROM corpus_publication_item i WHERE i.entity_type = 'judgment' GROUP BY 1"
+    )))
+    assert decisions == [("promoted", 60), ("unchanged", 60)], decisions
+    assert run(fetch("SELECT count(*) FROM corpus_publication WHERE finished_at IS NOT NULL")) == [(120,)]
+    assert master == [] and embed == []  # F19 ruling 10
     total = {k: sum(r[k] for r in results) for k in ("promoted", "attached", "quarantined", "failed")}
     assert total == {"promoted": 60, "attached": 60, "quarantined": 40, "failed": 0}, (total, results)
 
@@ -865,51 +995,73 @@ def test_h_a_fresh_database_is_current_after_one_migrate(corpus_db):
 
 def test_h_a_second_run_waits_for_an_unfinished_publication_of_the_same_citation(corpus_db, monkeypatch):
     """LOW-1/LOW-4 + round-2 L3: two runs on *different* staging rows with the same citation,
-    interleaved so the second run checks for a duplicate while the first has inserted but not yet
-    committed the case_law_master row. The second run must wait for the first and then attach its
-    copy to the first's row - not publish a second copy (refused at commit as a promotion_error)."""
+    interleaved so the second run reaches the citation while the first has published but not yet
+    committed it. The second run must wait for the first and then attach its copy to the first's
+    judgment - not publish a second copy (refused at commit as a promotion_error).
+
+    Migrated to F19: the hook point is the Annex A publication (case_law_master and the embedding
+    queue are gone), and the two rows spell the citation differently ("PLD 2099 Karachi 98" and
+    "PLD 2099 Sindh 98") with otherwise identical content, so the per-citation lock must be keyed by
+    the canonical citation for B to wait before its own publication. After A commits, B's
+    publication finds A's judgment `unchanged` (A's hash as the previous one): B is attached to it,
+    one judgment, one citation row, no review-queue row."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     first_id = uuid.UUID("ffffffff-ffff-4fff-bfff-ffffffffffff")
     second_id = uuid.UUID("00000000-0000-4000-8000-000000000001")  # sorts first for run B
     run(_stage({"first": dict(id=first_id, source_id=src["t"], source_site="f20-trusted",
-                              extracted_citation="2099 F20 RACE", confidence_score=0.9)}))
+                              extracted_citation="PLD 2099 Karachi 98", confidence_score=0.9,
+                              source_url="https://f20.example.invalid/judgment/race", extracted_title="F20 Fixture race v. Test")}))
 
     import scraper.tasks.promotion as promo
 
-    real_queue = promo.EmbeddingQueue
-    a_paused, b_promoting = threading.Event(), threading.Event()
+    real_publish = promo.publish_batch
+    a_paused, b_publishing = threading.Event(), threading.Event()
+    observed = {}
 
-    def embedding_queue(**fields):
-        # Called after the master row is flushed, before the commit.
+    async def publish_batch(conn, batch, actor_id):
         if threading.current_thread().name == "run-A":
+            result = await real_publish(conn, batch, actor_id)  # published, not yet committed
             a_paused.set()
-            b_promoting.wait(5)  # B gets this long to (wrongly) promote the same citation
-        else:
-            b_promoting.set()
-        return real_queue(**fields)
+            # B gets this long to (wrongly) reach its own publication of the same citation.
+            observed["b_published_while_a_open"] = b_publishing.wait(5)
+            return result
+        b_publishing.set()
+        return await real_publish(conn, batch, actor_id)
 
-    monkeypatch.setattr(promo, "EmbeddingQueue", embedding_queue)
+    monkeypatch.setattr(promo, "publish_batch", publish_batch)
     out = {}
-    run_a = threading.Thread(target=lambda: out.setdefault("A", _promote()), name="run-A")
-    run_a.start()
-    assert a_paused.wait(30), "run A never reached its publication"
-    run(_stage({"second": dict(id=second_id, source_id=src["t"], source_site="f20-trusted",
-                               extracted_citation="2099 F20 RACE", confidence_score=0.9)}))
-    run_b = threading.Thread(target=lambda: out.setdefault("B", _promote()), name="run-B")
-    run_b.start()
-    run_a.join(60)
-    run_b.join(60)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        run_a = threading.Thread(target=lambda: out.setdefault("A", _promote()), name="run-A")
+        run_a.start()
+        assert a_paused.wait(30), "run A never reached its publication"
+        run(_stage({"second": dict(id=second_id, source_id=src["t"], source_site="f20-trusted",
+                                   extracted_citation="PLD 2099 Sindh 98", confidence_score=0.9,
+                                   source_url="https://f20.example.invalid/judgment/race", extracted_title="F20 Fixture race v. Test")}))
+        run_b = threading.Thread(target=lambda: out.setdefault("B", _promote()), name="run-B")
+        run_b.start()
+        run_a.join(60)
+        run_b.join(60)
 
+    assert observed == {"b_published_while_a_open": False}, "run B did not wait for run A's citation lock"
     assert out["A"] == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}, out
     assert out["B"] == {"promoted": 0, "attached": 1, "quarantined": 0, "failed": 0}, out
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
     assert by_id[first_id][1:3] == (True, False)
-    # B waited for A, then attached its copy to A's row instead of publishing a second one.
+    # B waited for A, then attached its copy to A's judgment instead of publishing a second one.
     assert by_id[second_id][1:5] == (True, False, None, by_id[first_id][4])
-    assert [row[1] for row in master] == ["2099 F20 RACE"]
-    assert queue == []
+    assert by_id[first_id][4] is not None
+    assert [row[1] for row in run(_annex_a_promoted())] == ["PLD 2099 Sindh 98"]
+    assert run(fetch("SELECT count(*) FROM judgment")) == [(1,)]
+    audit = run(fetch(
+        "SELECT p.batch_key, p.seq, i.decision, i.content_sha256, i.prev_sha256 FROM corpus_publication p "
+        "JOIN corpus_publication_item i ON i.publication_id = p.id WHERE i.entity_type = 'judgment' ORDER BY p.seq"
+    ))
+    assert [(row[0], row[2]) for row in audit] == [(f"staging/{first_id}", "promoted"), (f"staging/{second_id}", "unchanged")]
+    assert audit[1][4] == audit[0][3], "B decided against A's committed publication"
+    assert master == [] and queue == []  # F19 ruling 10; an attached copy writes no review-queue row
 
 
 # ---------------------------------------------------------------------------------------------
@@ -950,23 +1102,29 @@ def _interrupt_the_promotion_waiting_on(corpus_db, staging_id, terminate, starte
 def test_i_a_transient_database_error_leaves_the_record_pending(corpus_db, terminate, pool, caplog):
     """Round-2 L2: a transient error (connection lost, SQLSTATE class 08/40/53/57, or 55P03) is not
     the record's fault. The record is left pending (not quarantined), reported as failed, and the
-    rest of the batch continues; a later run promotes it."""
+    rest of the batch continues; a later run promotes it.
+
+    Migrated to F19: promotion runs as the runtime role (a superuser is refused by publish_batch),
+    the citations are canonical, and "promoted" means published into Annex A. The interrupted record
+    leaves no publication behind."""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
     ids = run(_stage({
         f"k{i}": dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src["t"],
-                      source_site="f20-trusted", extracted_citation=f"2099 F20 T{i}", confidence_score=0.9)
+                      source_site="f20-trusted", extracted_citation=f"2099 SCMR 95{i}", confidence_score=0.9)
         for i in range(4)
     }))
     started, done = threading.Event(), threading.Event()
     _interrupt_the_promotion_waiting_on(corpus_db, ids["k1"], terminate, started, done)
     assert started.wait(30)
+    runtime_url = corpus_db.url_as(*corpus_db.runtime_role())
 
     async def promote_with(pool_kind):
         from scraper import database
         from scraper.tasks.promotion import promote_staging_records
 
-        eng = database.build_engine(corpus_db.url) if pool_kind == "production_queuepool" else corpus_db.engine_for(corpus_db.url)
+        eng = database.build_engine(runtime_url) if pool_kind == "production_queuepool" else corpus_db.engine_for(runtime_url)
         saved = database.SessionLocal.kw.get("bind")
         database.SessionLocal.configure(bind=eng)
         try:
@@ -984,12 +1142,65 @@ def test_i_a_transient_database_error_leaves_the_record_pending(corpus_db, termi
     assert by_id[ids["k1"]][1:4] == (False, False, None), "a transient error must leave the record pending"
     assert queue == [], "a transient error writes no review-queue row"
     assert result == {"promoted": 3, "attached": 0, "quarantined": 0, "failed": 1}, result
-    assert sorted(row[1] for row in master) == ["2099 F20 T0", "2099 F20 T2", "2099 F20 T3"]
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == ["2099 SCMR 950", "2099 SCMR 952", "2099 SCMR 953"]
+    assert run(fetch("SELECT count(*) FROM corpus_publication WHERE batch_key = :k", k=f"staging/{ids['k1']}")) == [(0,)]
+    assert master == []  # F19 ruling 10
     messages = " ".join(r.getMessage() for r in caplog.records)
     assert f"promotion.record_failed staging_id={ids['k1']} " in messages and "transient=true" in messages, messages
 
     # The lock is gone now; the next run promotes the record.
-    assert _promote() == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 1, "attached": 0, "quarantined": 0, "failed": 0}
+    assert sorted(row[1] for row in run(_annex_a_promoted()))[1] == "2099 SCMR 951"
+
+
+def test_i_a_publication_guard_refusal_is_never_treated_as_transient(corpus_db, caplog):
+    """Merging round-2 L2 into F19: a refusal by the Annex A publication is the record's fault, not a
+    transient error. A guard refusal that escapes the item (SQLSTATE class SK; here SKP13 from a
+    stand-in trigger, the code the D3 guard uses) and a CHECK refusal (23514, IntegrityError) quarantine
+    the record as promotion_error:<Class>: never left pending to be retried forever. (An item-level
+    guard refusal, SKP03-SKP06, is recorded rejected and quarantined with its own reason:
+    test_f19_guard_rejection_inside_promotion_rolls_back_only_that_item.)"""
+    corpus_db.apply_annex_a()
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    corpus_db.admin(
+        """CREATE FUNCTION f19_test_refusal() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.case_title = 'F19 guard SKP13 2099' THEN
+               RAISE EXCEPTION USING ERRCODE = 'SKP13', MESSAGE = 'parent_not_promoted', DETAIL = 'table judgment';
+             END IF;
+             IF NEW.case_title = 'F19 guard 23514 2099' THEN
+               RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'f19 check refusal';
+             END IF;
+             RETURN NEW;
+           END $$""",
+        "CREATE TRIGGER f19_test_refusal BEFORE INSERT ON judgment FOR EACH ROW EXECUTE FUNCTION f19_test_refusal()",
+    )
+    src = run(_make_sources({"t": ("f20-trusted", "trusted")}))
+    row = lambda n, citation, **kw: dict(id=uuid.UUID(f"00000000-0000-4000-8000-{n:012d}"), source_id=src["t"],  # noqa: E731
+                                         source_site="f20-trusted", extracted_citation=citation, confidence_score=0.9, **kw)
+    ids = run(_stage({
+        "before": row(1, "2099 SCMR 960"),
+        "skp13": row(2, "2099 SCMR 961", extracted_title="F19 guard SKP13 2099"),
+        "check": row(3, "2099 SCMR 962", extracted_title="F19 guard 23514 2099"),
+        "after": row(4, "2099 SCMR 963"),
+    }))
+    with caplog.at_level(logging.INFO):
+        result = _promote_as_runtime_role(corpus_db)
+
+    assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 2}, result
+    staging, queue, _master, _embed = run(_outcomes())
+    by_id = {r[0]: r for r in staging}
+    for key in ("skp13", "check"):
+        promoted, quarantined, reason = by_id[ids[key]][1:4]
+        assert (promoted, quarantined) == (False, True), (key, by_id[ids[key]])
+        assert reason.startswith("promotion_error:"), (key, reason)
+    assert by_id[ids["check"]][3] == "promotion_error:IntegrityError"
+    assert sorted(q[1] for q in queue) == sorted([by_id[ids["skp13"]][3], "promotion_error:IntegrityError"])
+    failed = [r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage()]
+    assert len(failed) == 2 and all("transient=false" in m for m in failed), failed
+    assert sorted(r[1] for r in run(_annex_a_promoted())) == ["2099 SCMR 960", "2099 SCMR 963"]
+    # Nothing is left pending to be retried.
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1076,24 +1287,35 @@ def test_k_a_route_without_a_valid_kind_is_refused_and_every_direct_route_needs_
 # ---------------------------------------------------------------------------------------------
 # (l) round 4 (Codex P1 on PR #48): only record-specific failures are quarantined
 # ---------------------------------------------------------------------------------------------
-def _raise_on_master_insert(codes):
-    """SQL for a trigger that raises SQLSTATE codes[citation] when that citation's case_law_master
-    row is inserted (the message carries row data, which must never reach a log or a reason)."""
+def _raise_on_citation_insert(codes):
+    """SQL for a trigger that raises SQLSTATE codes[citation] when that citation's Annex A citation
+    row is inserted (the message carries row data, which must never reach a log or a reason).
+    Migrated to F19: promotion no longer writes case_law_master, so the fault sits on the row the
+    publication writes for the record (the error escapes publish_batch's item, as any non-guard
+    database error does)."""
     cases = " ".join(f"WHEN '{citation}' THEN '{code}'" for citation, code in codes.items())
     return (
         "CREATE FUNCTION f20_raise_on_insert() RETURNS trigger LANGUAGE plpgsql AS $$ "
-        f"DECLARE code text := CASE NEW.citation {cases} END; BEGIN "
-        "IF code IS NOT NULL THEN RAISE EXCEPTION 'synthetic row data %', NEW.citation USING ERRCODE = code; END IF; "
+        f"DECLARE code text := CASE NEW.citation_text {cases} END; BEGIN "
+        "IF code IS NOT NULL THEN RAISE EXCEPTION 'synthetic row data %', NEW.citation_text USING ERRCODE = code; END IF; "
         "RETURN NEW; END $$",
-        "CREATE TRIGGER f20_raise_on_insert BEFORE INSERT ON case_law_master FOR EACH ROW EXECUTE FUNCTION f20_raise_on_insert()",
+        "CREATE TRIGGER f20_raise_on_insert BEFORE INSERT ON citation FOR EACH ROW EXECUTE FUNCTION f20_raise_on_insert()",
     )
+
+
+_PAGE_BASE = {"SYS": 9700, "REC": 9800, "CB": 9900, "PUB": 9600}
+
+
+def _cite(prefix, i):
+    """The canonical 2099 citation of record i of a section (l) batch."""
+    return f"2099 SCMR {_PAGE_BASE[prefix] + i}"
 
 
 def _stage_in_order(src, n, prefix):
     """n trusted, promotable records whose ids sort in index order (promotion runs ORDER BY id)."""
     return run(_stage({
         f"k{i}": dict(id=uuid.UUID(f"00000000-0000-4000-8000-{i + 1:012d}"), source_id=src, source_site="f20-trusted",
-                      extracted_citation=f"2099 {prefix} {i}", confidence_score=0.9)
+                      extracted_citation=_cite(prefix, i), confidence_score=0.9)
         for i in range(n)
     }))
 
@@ -1104,21 +1326,24 @@ def test_l_a_systemic_or_unknown_database_error_leaves_the_record_pending(corpus
     """Round 4: a failure that is not confirmed to be about the record (permission, schema drift,
     an internal error, a generic RAISE) is rolled back and left pending, not quarantined, so the
     backlog is not lost when the deployment or schema is at fault. It counts as failed, is logged
-    with id, class and SQLSTATE and systemic=true, and is retried on the next run."""
+    with id, class and SQLSTATE and systemic=true, and is retried on the next run. (Migrated to F19:
+    Annex A, the runtime role, the fault on the record's citation insert.)"""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
     ids = _stage_in_order(src, 3, "SYS")
-    run(execute(*_raise_on_master_insert({"2099 SYS 1": code})))
+    run(execute(*_raise_on_citation_insert({_cite("SYS", 1): code})))
 
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}, result
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["k1"]][1:4] == (False, False, None), f"{code} must leave the record pending"
     assert queue == [], f"{code} must write no review-queue row"
-    assert sorted(row[1] for row in master) == ["2099 SYS 0", "2099 SYS 2"]
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == [_cite("SYS", 0), _cite("SYS", 2)]
+    assert master == []  # F19 ruling 10
     failed = [r for r in caplog.records if "promotion.record_failed" in r.getMessage()]
     assert len(failed) == 1 and failed[0].levelno == logging.ERROR, [r.getMessage() for r in failed]
     message = failed[0].getMessage()
@@ -1127,7 +1352,7 @@ def test_l_a_systemic_or_unknown_database_error_leaves_the_record_pending(corpus
     assert "synthetic row data" not in message and "2099" not in message, "log carries row data"
 
     # The next run retries it (and fails again while the fault is there): still pending.
-    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 1}
     assert {row[0]: row for row in run(_outcomes())[0]}[ids["k1"]][1:4] == (False, False, None)
 
 
@@ -1136,25 +1361,29 @@ def test_l_a_systemic_or_unknown_database_error_leaves_the_record_pending(corpus
 def test_l_a_record_specific_database_error_is_quarantined_and_the_good_records_are_promoted(corpus_db, code, reason, caplog):
     """Round 4: SQLSTATE class 22 (data exception) and 23 (integrity constraint violation) are the
     confirmed record-specific failures. That record is quarantined promotion_error:<ExceptionClass>
-    (class only) with a review-queue row; the good records around it are promoted."""
+    (class only) with a review-queue row; the good records around it are promoted. (Migrated to F19:
+    Annex A, the runtime role, the fault on the record's citation insert.)"""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
     ids = _stage_in_order(src, 3, "REC")
-    run(execute(*_raise_on_master_insert({"2099 REC 1": code})))
+    run(execute(*_raise_on_citation_insert({_cite("REC", 1): code})))
 
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     assert result == {"promoted": 2, "attached": 0, "quarantined": 0, "failed": 1}, result
     staging, queue, master, _embed = run(_outcomes())
     by_id = {row[0]: row for row in staging}
     assert by_id[ids["k1"]][1:4] == (False, True, reason)
     assert [(row[0], row[1]) for row in queue] == [(ids["k1"], reason)]
-    assert sorted(row[1] for row in master) == ["2099 REC 0", "2099 REC 2"]
+    assert sorted(row[1] for row in run(_annex_a_promoted())) == [_cite("REC", 0), _cite("REC", 2)]
+    assert master == []  # F19 ruling 10
     message = " ".join(r.getMessage() for r in caplog.records if "promotion.record_failed" in r.getMessage())
     assert f"sqlstate={code} " in message and "systemic=false" in message, message
     assert "2099" not in message
-    assert _promote() == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}, "a quarantined record is not retried"
+    assert _promote_as_runtime_role(corpus_db) == {"promoted": 0, "attached": 0, "quarantined": 0, "failed": 0}, \
+        "a quarantined record is not retried"
 
 
 @pytest.mark.parametrize("codes,expected,aborted", [
@@ -1168,14 +1397,16 @@ def test_l_the_breaker_stops_the_batch_after_three_consecutive_identical_systemi
     """Round 4: N=3 consecutive systemic/unknown failures with the same SQLSTATE (or exception
     class) stop the run early, so a broken schema does not churn the whole backlog; the records not
     attempted stay pending and the result carries the reason. Any other outcome in between resets
-    the count."""
+    the count. (Migrated to F19: Annex A, the runtime role, the fault on each record's citation
+    insert.)"""
+    corpus_db.apply_annex_a()
     assert_migrated(corpus_db.migrate(), corpus_db)
     src = run(_make_sources({"t": ("f20-trusted", "trusted")}))["t"]
     ids = _stage_in_order(src, len(codes), "CB")
-    run(execute(*_raise_on_master_insert({f"2099 CB {i}": c for i, c in enumerate(codes) if c})))
+    run(execute(*_raise_on_citation_insert({_cite("CB", i): c for i, c in enumerate(codes) if c})))
 
     with caplog.at_level(logging.INFO):
-        result = _promote()
+        result = _promote_as_runtime_role(corpus_db)
 
     want = dict(expected, aborted=aborted) if aborted else expected
     assert result == want, result
