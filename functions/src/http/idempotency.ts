@@ -106,6 +106,15 @@ export type IdempotencyScope = {
   redact?: boolean
 }
 
+/**
+ * The `idempotency_keys` doc id of a key in a firm: `{firmId}_{key}` with the key in lower case, `_nofirm` for a
+ * firmless route. Exported so an operation can name the answer its request will store (the P1 lease reconciler marks a
+ * committeeBrain answer settled, Codex P2 on PR #40).
+ */
+export function idempotencyDocId(firmId: string, key: string): string {
+  return `${firmId || "_nofirm"}_${key.toLowerCase()}`
+}
+
 type Claim = { kind: "claimed" } | { kind: "replay"; response: HttpResult } | { kind: "in_progress" } | { kind: "reused" }
 
 function isHttpResult(value: unknown): value is HttpResult {
@@ -132,7 +141,7 @@ function claimedAtMs(doc: Record<string, unknown>): number {
 export async function withIdempotency(scope: IdempotencyScope, handler: () => Promise<HttpResult>): Promise<HttpResult> {
   if (!isUuidV4(scope.key)) throw new HttpError(400, "idempotency_key_required")
   const db = adminDb()
-  const ref = db.collection("idempotency_keys").doc(`${scope.firmId || "_nofirm"}_${scope.key.toLowerCase()}`)
+  const ref = db.collection("idempotency_keys").doc(idempotencyDocId(scope.firmId, scope.key))
   const hash = requestHash(scope.body)
   const claimId = randomUUID()
 
