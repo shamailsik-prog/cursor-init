@@ -389,7 +389,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
   })
 
   describe("committeeBrain: masking (Review Focus 1)", () => {
-    const RAW = ["Ali Raza Khan", "Zubair Hashmi", "Kamran Akmal", "35202-1234567-1", "0300-1234567"]
+    const RAW = ["Ali Raza Khan", "Zubair Hashmi", "Naveed Iqbal", "35202-1234567-1", "0300-1234567"]
     const leaks = (s: string) => RAW.filter((raw) => s.toLowerCase().includes(raw.toLowerCase()))
 
     it("the matter's party names (name and names) and the supplied ones are masked in what the transport receives, in the stored output and in the reply; none reaches a row, an event, an audit row or a log line", async () => {
@@ -400,12 +400,12 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         ],
       })
       const logs = spyLogs()
-      const sent = fakeTransport({ text: "Reply: ali raza khan and Kamran Akmal may call 0300-1234567; zubair hashmi agrees." })
+      const sent = fakeTransport({ text: "Reply: ali raza khan and Naveed Iqbal may call 0300-1234567; zubair hashmi agrees." })
       const r = await send(brainAt, f.P, {
         firmId: f.firmId,
         matterId: f.matterId,
-        body: "Client Ali Raza Khan (CNIC 35202-1234567-1, mobile 0300-1234567) v. Zubair Hashmi and Kamran Akmal.",
-        partyNames: ["Kamran Akmal"],
+        body: "Client Ali Raza Khan (CNIC 35202-1234567-1, mobile 0300-1234567) v. Zubair Hashmi and Naveed Iqbal.",
+        partyNames: ["Naveed Iqbal"],
       }) as Out
 
       expect(sent).toHaveLength(1)

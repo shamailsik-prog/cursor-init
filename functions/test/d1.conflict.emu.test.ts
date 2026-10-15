@@ -207,7 +207,7 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
   it("no registry data → CLEAR, decision cleared; check, decided trail row, conflict.decided event and one allow audit row", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
-    const out = await runCheck({ token: partner.token, data: { firmId, client: { name: "Zainab Bibi" }, opposingParties: [opposing("Kamran Akmal")] } } as never)
+    const out = await runCheck({ token: partner.token, data: { firmId, client: { name: "Zainab Bibi" }, opposingParties: [opposing("Naveed Iqbal")] } } as never)
     expect(out).toMatchObject({ result: "CLEAR", decision: "cleared", identityBasis: "confirmed_identity", hitCount: 0, hits: [] })
 
     const check = (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
@@ -221,7 +221,7 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
       stale: false,
       subjects: [
         { role: "client", name: "Zainab Bibi", keys: {} },
-        { role: "opposing", name: "Kamran Akmal", keys: {} },
+        { role: "opposing", name: "Naveed Iqbal", keys: {} },
       ],
     })
     expect(check?.createdAt).toBeInstanceOf(Timestamp)
@@ -414,13 +414,13 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
   it("a client subject named by clientId whose own entity sits on an earlier matter as the opposing party → FLAG adverse_history", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
-    const a = await register(partner.token, firmId, { name: "Shahid Afridi" })
+    const a = await register(partner.token, firmId, { name: "Tariq Afzal" })
     const matterId = await seedMatter(firmId, "someone-else", { matterNo: "NHS/2026/0009" })
     await adminDb().collection("matter_parties").add({
-      firmId, matterId, role: "opposing", name: "S. Afridi Trading", names: ["s afridi trading"], keys: {}, entityId: a.entityId,
+      firmId, matterId, role: "opposing", name: "T. Afzal Trading", names: ["t afzal trading"], keys: {}, entityId: a.entityId,
       matterClassification: "confidential", matterStatus: "live", classification: "confidential",
     })
-    const out = await runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [opposing("Kamran Akmal")] } } as never)
+    const out = await runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [opposing("Naveed Iqbal")] } } as never)
     expect(out.result).toBe("FLAG")
     expect(out.hits.find((h) => h.hitRole === "opposing")).toMatchObject({ type: "adverse_history", basis: "key", identityBasis: "confirmed_identity", matterNo: "NHS/2026/0009" })
   })
@@ -442,7 +442,7 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
   it("an opposing key match with no link row is still a key hit, reviewed as a candidate identity", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
-    const a = await register(partner.token, firmId, { name: "Shahid Afridi", cnic: CNIC_X })
+    const a = await register(partner.token, firmId, { name: "Tariq Afzal", cnic: CNIC_X })
     await seedMatter(firmId, a.clientId)
     const out = await runCheck({
       token: partner.token,
@@ -462,7 +462,7 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
 
     const asClient = await runCheck({
       token: partner.token,
-      data: { firmId, client: { clientId: one.clientId }, opposingParties: [opposing("Kamran Akmal")] },
+      data: { firmId, client: { clientId: one.clientId }, opposingParties: [opposing("Naveed Iqbal")] },
     } as never)
     expect(asClient.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
     expect(asClient.identityBasis).toBe("candidate_only")
@@ -492,7 +492,7 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
       const linkIds = await ageLinks(firmId, 2, { state: "rejected" })
       expect(linkIds).toHaveLength(1)
       const check = () =>
-        runCheck({ token: partner.token, data: { firmId, client: { clientId: one.clientId }, opposingParties: [opposing("Kamran Akmal")] } } as never)
+        runCheck({ token: partner.token, data: { firmId, client: { clientId: one.clientId }, opposingParties: [opposing("Naveed Iqbal")] } } as never)
       return { firmId, one, two, linkIds, check }
     }
 
@@ -540,10 +540,10 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
   describe("O-27: an opposing party's hit label is max(matter label, party row label) (spec P2-37)", () => {
     async function partyHit(matterId: string | null, firmId: string, token: string) {
       await adminDb().collection("matter_parties").add({
-        firmId, matterId, role: "opposing", name: "Kamran Akmal", names: ["kamran akmal"], keys: {},
+        firmId, matterId, role: "opposing", name: "Naveed Iqbal", names: ["naveed iqbal"], keys: {},
         matterClassification: "confidential", matterStatus: "live", classification: "privileged",
       })
-      const out = await runCheck({ token, data: { firmId, client: { name: "Kamran Akmal" }, opposingParties: [opposing("Zzz Qqq")] } } as never)
+      const out = await runCheck({ token, data: { firmId, client: { name: "Naveed Iqbal" }, opposingParties: [opposing("Zzz Qqq")] } } as never)
       expect(out.hits).toEqual([expect.objectContaining({ hitRole: "opposing", type: "adverse_history", outcome: "POSSIBLE_CANDIDATE_REVIEW" })])
       return (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
     }
@@ -600,11 +600,11 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     const party = (role: string, name: string) => ({
       firmId, matterId, role, name, names: [name.toLowerCase()], keys: {}, matterClassification: "confidential", matterStatus: "live", classification: "confidential",
     })
-    await adminDb().collection("matter_parties").add(party("opposing", "Kamran Akmal"))
+    await adminDb().collection("matter_parties").add(party("opposing", "Naveed Iqbal"))
     await adminDb().collection("matter_parties").add(party("client", "Imran Nazir"))
     const out = await runCheck({
       token: partner.token,
-      data: { firmId, client: { name: "Kamran Akmal" }, opposingParties: [opposing("Imran Nazir")] },
+      data: { firmId, client: { name: "Naveed Iqbal" }, opposingParties: [opposing("Imran Nazir")] },
     } as never)
     expect(out.hits).toEqual([expect.objectContaining({ subjectIndex: 0, hitRole: "opposing", type: "adverse_history", matterNo: "NHS/2026/0007" })])
     expect(out.result).toBe("POSSIBLE_CANDIDATE_REVIEW")

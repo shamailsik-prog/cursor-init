@@ -99,7 +99,7 @@ describe("N11: citations written in Urdu script", () => {
 
 describe("acronym reporter tokens need a 4-digit year within 4 tokens (review R3 item 6)", () => {
   it.each([
-    "Engro Fertilizers PLC paid Rs. 5 million",
+    "Qalvo Fertilizers PLC paid Rs. 5 million",
     "the CLC committee met on 5 May",
     "employee no. 4 of YLR division",
     "XYZ PTD 5 others",
@@ -233,7 +233,7 @@ const PROBE3_CASES: Array<[string, string]> = [
   ["Ordinance disguise", "Ordinance No. 12 of 2019 (Lahore High Court)"],
   ["Act No. disguising reported", "Act No. 2019 SCMR 1234"],
   // false-positive checks for stricter fallback
-  ["FP: company PLC with number", "Engro Fertilizers PLC paid Rs. 5 million"],
+  ["FP: company PLC with number", "Qalvo Fertilizers PLC paid Rs. 5 million"],
   ["FP: ptd ltd", "XYZ (Pvt.) Ltd. and PTD 5 others"],
   ["FP: section", "section 302 PPC read with 34 PPC"],
   ["FP: CLC as acronym", "the CLC committee met on 5 May"],

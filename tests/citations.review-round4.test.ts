@@ -29,8 +29,8 @@ describe("R4-1 (charset): a non-ASCII symbol or punctuation mark between two let
     for (const text of [
       "The respondent’s counsel didn't appear",
       "Gulshan-e-Iqbal and Gulshan–e–Iqbal",
-      "M/s Engro and AT&T and U.S.A.",
-      "Engro® and Sona™ urea; © 2024 Engro",
+      "M/s Qalvo and AT&T and U.S.A.",
+      "Qalvo® and Nura™ urea; © 2024 Qalvo",
       "temperature 40°C, § 497 and ¶ 12",
     ]) {
       expect(checkDraftCharset(text).ok, text).toBe(true)
