@@ -30,13 +30,18 @@
 # corpus_writer and corpus_declassify are left alone. APP_DB_USER is a member of corpus_writer WITH
 # INHERIT FALSE, SET TRUE (D14): it holds none of corpus_writer's rights until scraper.publication
 # switches to it (SET LOCAL ROLE) for one audited publication. MIGRATE_DB_USER gets no corpus_* role.
-# corpus_writer and corpus_reader get USAGE on schema public (revoked from PUBLIC below), which their
-# own grants need; neither can log in. PostgreSQL 16 or later is required
+# Because the runtime role can SET ROLE corpus_writer, whatever corpus_writer holds the runtime role can
+# reach: 001 creates corpus_writer with no privileged attribute and no membership, but leaves a role that
+# already exists as it is, so every run resets corpus_writer to NOSUPERUSER NOCREATEDB NOCREATEROLE
+# NOREPLICATION NOBYPASSRLS NOINHERIT (001's NOINHERIT) and revokes every membership it holds (Codex P1
+# on #50). corpus_writer and corpus_reader get USAGE on schema public (revoked from PUBLIC below), which
+# their own grants need; neither can log in. PostgreSQL 16 or later is required
 # (pg_auth_members.inherit_option / set_option).
 #
 # It then checks the result in the same transaction and rolls everything back on any surprise:
 # memberships of the two application roles other than corpus_clients and the app's single
-# corpus_writer membership (INHERIT FALSE, SET TRUE, no admin); an Annex A relation or routine not
+# corpus_writer membership (INHERIT FALSE, SET TRUE, no admin); a privileged attribute on corpus_writer,
+# or any membership it holds; an Annex A relation or routine not
 # owned by a superuser; any table or column privilege on an Annex A relation, or any privilege on a
 # sequence one owns, that either application role holds directly, through corpus_clients or PUBLIC, or
 # through a role it inherits; EXECUTE on an Annex A routine the DDL keeps from PUBLIC, for either
@@ -138,6 +143,16 @@ ALTER ROLE :"mig_user" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICAT
   INHERIT PASSWORD :'mig_pw';
 ALTER ROLE :"app_user" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
   INHERIT PASSWORD :'app_pw';
+-- corpus_writer is reachable from the runtime role by SET ROLE (below), so it may carry nothing 001 does
+-- not give it: no privileged attribute, no membership (pg_execute_server_program, a superuser, ...).
+-- Its LOGIN attribute is 001's and stays; pg_hba.conf admits only corpus_clients members over TCP.
+ALTER ROLE corpus_writer WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+-- GRANTED BY each membership's own grantor: a plain REVOKE would only remove grants made as this role.
+SELECT format('REVOKE %I FROM corpus_writer GRANTED BY %I CASCADE', g.rolname, pg_get_userbyid(m.grantor))
+  FROM pg_auth_members m
+  JOIN pg_roles g ON g.oid = m.roleid
+  JOIN pg_roles u ON u.oid = m.member
+ WHERE u.rolname = 'corpus_writer' \gexec
 
 -- An existing role may carry other memberships (pg_read_server_files, pg_write_all_data, ...).
 -- The runtime role's corpus_writer membership is kept (a re-run must not revoke it) and its options
@@ -342,6 +357,24 @@ BEGIN
   IF (SELECT count(*) FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid JOIN pg_roles u ON u.oid = m.member
        WHERE g.rolname = 'corpus_writer' AND u.rolname = app) <> 1 THEN
     RAISE EXCEPTION 'the runtime role must hold exactly one corpus_writer membership';
+  END IF;
+  -- Codex P1 (#50): what SET ROLE corpus_writer would hand the runtime role.
+  SELECT concat_ws(' ', CASE WHEN rolsuper THEN 'SUPERUSER' END, CASE WHEN rolcreatedb THEN 'CREATEDB' END,
+                   CASE WHEN rolcreaterole THEN 'CREATEROLE' END, CASE WHEN rolreplication THEN 'REPLICATION' END,
+                   CASE WHEN rolbypassrls THEN 'BYPASSRLS' END)
+    INTO problem
+    FROM pg_roles WHERE rolname = 'corpus_writer';
+  IF problem <> '' THEN
+    RAISE EXCEPTION 'corpus_writer holds a privileged attribute: %', problem;
+  END IF;
+  SELECT string_agg(format('%s (granted by %s)', g.rolname, pg_get_userbyid(m.grantor)), '; ')
+    INTO problem
+    FROM pg_auth_members m
+    JOIN pg_roles g ON g.oid = m.roleid
+    JOIN pg_roles u ON u.oid = m.member
+   WHERE u.rolname = 'corpus_writer';
+  IF problem IS NOT NULL THEN
+    RAISE EXCEPTION 'corpus_writer is a member of another role: %', problem;
   END IF;
   SELECT string_agg(format('%s owned by %s', c.oid::regclass, o.rolname), '; ')
     INTO problem
