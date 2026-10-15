@@ -114,8 +114,10 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
  * the router's clock for this request (`now`, epoch ms; absent outside the router → Date.now()).
  * `idempotencyKey` is the request's Idempotency-Key on POST/PUT (absent on GET), for keys of
  * jobs the call causes (P3-4, `jobKey`). `route` is the operation's route, `"POST /api/..."` (set with the key; P3-38).
+ * `startedAtMs` is when the router received the request on the real clock (`Date.now()`, never the injectable `now`),
+ * so an operation can bound the time spent before it starts paid work (P1 committeeBrain, re-audit R3-D2).
  */
-export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string; route?: string }
+export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string; route?: string; startedAtMs?: number }
 
 export type { FirmlessIdentity }
 
