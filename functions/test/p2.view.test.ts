@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { Classification } from "@/platform/p1/types"
 import type { Caller } from "../src/p5/auth"
 import { jobTestSeam, type JobHandler } from "../src/p2/registry"
-import { jobView, visibilityOf } from "../src/p2/view"
+import { atMatterLabel, jobView, visibilityOf } from "../src/p2/view"
 
 // P3-11: who sees a job row, and what a view carries. Pure: no emulator.
 const FIRM = "firm-v"
@@ -108,6 +108,51 @@ describe("visibilityOf (P3-11)", () => {
     void _e
     expect(visibilityOf(caller("partner"), legacy, true)).toBe("none")
     expect(visibilityOf(caller("partner"), row({ engine: "next" }), true)).toBe("none")
+  })
+})
+
+describe("atMatterLabel (audit F14)", () => {
+  const matter = (classification: unknown, firmId: unknown = FIRM) => ({ firmId, classification })
+  const LABELS: Classification[] = ["public", "internal", "confidential", "privileged", "privileged-restricted"]
+
+  it("a matter job takes the stricter of its own label and its matter's current label, for every pair", () => {
+    for (const [i, jobLabel] of LABELS.entries()) {
+      for (const [j, matterLabel] of LABELS.entries()) {
+        const effective = atMatterLabel(row({ classification: jobLabel }), matter(matterLabel))?.classification
+        expect([jobLabel, matterLabel, effective]).toEqual([jobLabel, matterLabel, LABELS[Math.max(i, j)]])
+      }
+    }
+  })
+
+  it("a raised matter label hides the job from a member cleared for the job's own label, and shows the raised label to one cleared for it", () => {
+    const job = row({ classification: "internal" })
+    expect(visibilityOf(caller("clerk", "confidential"), job, true)).toBe("full")
+    const raised = atMatterLabel(job, matter("privileged-restricted"))
+    expect(visibilityOf(caller("clerk", "confidential"), raised, true)).toBe("none")
+    expect(visibilityOf(caller("partner", "confidential"), raised, false)).toBe("none")
+    expect(visibilityOf(caller("clerk"), raised, true)).toBe("full")
+    expect(jobView("j1", raised!, "full", { logs: false }).classification).toBe("privileged-restricted")
+    // The stored row is not rewritten.
+    expect(job.classification).toBe("internal")
+  })
+
+  it("a matter job whose matter is missing, another firm's, or of an unknown label, or whose own label is unknown, is hidden", () => {
+    expect(atMatterLabel(row(), null)).toBeUndefined()
+    expect(atMatterLabel(row(), matter("internal", "other-firm"))).toBeUndefined()
+    expect(atMatterLabel(row(), matter("top-secret"))).toBeUndefined()
+    expect(atMatterLabel(row(), matter("constructor"))).toBeUndefined()
+    expect(atMatterLabel(row(), matter(undefined))).toBeUndefined()
+    expect(atMatterLabel(row({ classification: "constructor" }), matter("internal"))).toBeUndefined()
+    expect(atMatterLabel(undefined, matter("internal"))).toBeUndefined()
+    expect(visibilityOf(caller("partner"), atMatterLabel(row(), null), true)).toBe("none")
+  })
+
+  it("a firm-level job keeps its own label and rule, whatever matter is passed", () => {
+    const firmLevel = row({ matterId: null })
+    for (const m of [null, matter("privileged-restricted"), matter("top-secret", "other-firm")]) {
+      expect(atMatterLabel(firmLevel, m)).toBe(firmLevel)
+    }
+    expect(visibilityOf(caller("partner", "confidential"), atMatterLabel(firmLevel, null), false)).toBe("full")
   })
 })
 

@@ -13,6 +13,7 @@ export const LEGACY_CHAIN_TEST_FILES = [
   "tests/api.ops-reporting.behaviour-fixes.test.ts",
   "tests/api.ops-reporting.dispatch-coverage.test.ts",
   "tests/api.ops-reporting.test.ts",
+  "tests/f14-ops-reporting-listing.test.ts",
   "tests/ops.pr-tb-ack-recon-lattice-dedicated-collection-lineage-isolation.test.ts",
   "tests/persistence.route-wiring.test.ts",
   "tests/persistence.runtime-mode.test.ts",
@@ -39,6 +40,8 @@ export const LEGACY_D1_NEXT_WRITES_TEST_FILES = [
   "tests/persistence.runtime-mode.test.ts",
   "tests/audit-f01-production-persistence.e2e.test.ts",
   "tests/f03.persistence-rollback.test.ts",
+  "tests/f14-document-clearance.firestore.test.ts",
+  "tests/f14-member-write-order.test.ts",
   "tests/platform.surface.test.ts",
   "tests/security.review-round2.test.ts",
 ] as const

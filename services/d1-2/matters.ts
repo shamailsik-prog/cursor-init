@@ -1,6 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
-import type { SpineStore } from "@/platform/spine/store"
+import type { Matter, SpineStore } from "@/platform/spine/store"
 import { notifyAccounts } from "@/platform/p4/intimation"
 
 export function createMatter(
@@ -72,11 +72,16 @@ export class MembershipAssignmentError extends PublicError {
  * set by the matters API at creation, through the same `validateMatterAssignee` rule (the
  * creator seats themselves; the partner rule governs later assignment only). Mirrored by
  * firestore.rules matter_members create.
+ *
+ * Validation only, nothing cached (audit F14 R7): the matters route's add_member validates here, persists the
+ * membership, and only then caches it (`cacheMember`) and audits it, so a member sync whose listing is read after the
+ * membership is cached always lists it. (The former `assignMatterMember`, which cached without persisting, is removed:
+ * audit F14 R8.)
  */
-export function assignMatterMember(
+export function validateMatterAssignment(
   store: SpineStore,
   input: { actorId: string; matterId: string; userId: string }
-) {
+): { matter: Matter; member: { matterId: string; userId: string; firmId: string } } {
   const actor = store.users.get(input.actorId)
   if (!actor) throw new PublicError("unknown actor")
   const matter = store.matters.get(input.matterId)
@@ -94,13 +99,19 @@ export function assignMatterMember(
     throw new MembershipAssignmentError("not_member", "only a member of the matter assigns its members")
   }
   validateMatterAssignee(store, matter.firmId, input.userId)
-  addMember(store, input.matterId, input.userId, matter.firmId)
-  recordMatterMemberAdd(store, actor.id, matter, input.userId)
-  return { matterId: input.matterId, userId: input.userId, firmId: matter.firmId }
+  return { matter, member: { matterId: input.matterId, userId: input.userId, firmId: matter.firmId } }
 }
 
 /**
- * The assignee rule shared by matter create (`memberUserIds`) and `assignMatterMember`
+ * Caches a membership that has been validated and persisted (audit F14 R7). Nothing here can fail after the write: the
+ * checks `addMember` makes are made before it (`validateMatterAssignment`, or `validateMatterAssignee` at create).
+ */
+export function cacheMember(store: SpineStore, member: { matterId: string; userId: string; firmId: string }): void {
+  store.members.set(store.memberKey(member.matterId, member.userId), { ...member })
+}
+
+/**
+ * The assignee rule shared by matter create (`memberUserIds`) and `validateMatterAssignment`
  * (final audit F1). R2 N5: only same-firm matter staff are assigned. Clients reach their own
  * matters through matters.clientId (L8.1), and accounts is register-only (L17.6 #41). A
  * cross-firm user is reported exactly like a nonexistent one (no existence oracle).

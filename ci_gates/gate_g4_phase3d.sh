@@ -34,6 +34,14 @@
 #        codes, messages and billable flags, and the transport and Opik fetch seams refusing to be set when
 #        NODE_ENV is production
 #      - the deployable bundle: NODE_ENV pinned to production at build time (no runtime read left)
+#      - audit F07 and F08 end to end (f07-f08-ai-spend.e2e.emu.test.ts): the worst case reserved atomically before
+#        dispatch (spent + reserved within the budget unless a provider bills more input than bytes + overhead, which
+#        is recorded, raised and raises the model's overhead up to a clamp, an implausible breach being an anomaly; the
+#        firm's concurrent calls bounded; no paid work after the pre-call allowance), the provider attempt
+#        recorded before dispatch, accounting pending after a failed usage commit, the accounting_indeterminate block
+#        once a lease lapses, and the lease reconciler settling or releasing what a call left (only record faults
+#        quarantine; lapsed records found by index, never starved by live ones; outputs and stored answers settled)
+#      - the request time budget: the call's phases, the handler's own work and a margin fit the api timeout
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -89,7 +97,7 @@ GW_TESTS=(
   'PKR (P3-64) with pkrPerUsd 280, a 14000 micro-USD call stores fxPkrPerUsd 280 and costPkr 3.92'
   # alerts at 70 and 90, exactly once (P3-65, Review Focus 2)
   'alerts at 70 and 90 (P3-65, Review Focus 2) crossing 70 writes one alert, one system audit row, one event and one warning; crossing 90 later writes the 90 alert'
-  'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 60000 to 95000 writes both alerts'
+  'alerts at 70 and 90 (P3-65, Review Focus 2) one call from 6000000 to 9500000 writes both alerts'
   'alerts at 70 and 90 (P3-65, Review Focus 2) landing exactly on 70% crosses it; stopping just below does not'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing 70% write exactly one 70 alert, and the total equals the sum of the rows'
   'alerts at 70 and 90 (P3-65, Review Focus 2) ten parallel calls crossing both 70% and 90% write exactly one alert, audit row and event for each, and the total equals the sum of the rows'
@@ -133,6 +141,66 @@ REFUSAL_TESTS=(
   "'no transport and no key' → blocked 'no_credentials'"
 )
 
+# --- audit F07 and F08 end to end (functions/test/f07-f08-ai-spend.e2e.emu.test.ts) ---------------------------
+SPEND_SUITE='audit F07 and F08: AI spend is reserved before dispatch and accounted after it (e2e)'
+SPEND_TESTS=(
+  # F07: the worst case is reserved atomically before dispatch; spent + reserved stays within the budget unless a
+  # provider bills more input than bytes + overhead, which is recorded, raised and learned
+  'F07 through callP1 the audit scenario: ten concurrent calls against a 100 micro-USD budget dispatch nothing and commit no spend'
+  'F07 through callP1 of ten concurrent calls only those whose worst case fits are dispatched, and spent plus reserved never exceeds the budget'
+  # re-audit R4-D1: the reservation transaction's own budget check, isolated (calls held, then reserving one at a time);
+  # and, renamed for what it shows, liveness and the upper bound when the calls contend at once
+  'F07 through callP1 ten calls on separate instances, all past the first look and then reserving one at a time, admit exactly the three that fit: the reservation transaction alone keeps spent plus reserved within the budget (re-audit R4-D1)'
+  "F07 through callP1 calls on separate instances (no shared ledger queue) contending at once, retried like a client's, still admit at least one and never more than fit: liveness and the upper bound under contention"
+  'F07 through callP1 a single request whose worst case exceeds the remaining budget is refused before dispatch; one that fits exactly is sent'
+  # re-audit R1-D1 (provider usage discrepancy), R1-D3 (kill switch in the reservation transaction)
+  'F07 through callP1 provider usage discrepancy, one call: a provider billing one input token per byte never takes spent above the budget'
+  'F07 through callP1 provider usage discrepancy, four parallel calls: spent plus reserved stays within the budget while they are in flight and after they settle'
+  'F07 through callP1 a provider that bills beyond the reservation is charged in full, and the excess is recorded on the reservation, raised as ai.reservation.exceeded and logged p1.reservation_exceeded'
+  "F07 through callP1 a kill switch set after the call's first read is honoured by the reservation transaction: refused, nothing sent"
+  # re-audit R2-D3 (Unicode normal forms); Copilot finding on PR #40 (1,024 overhead, learned overhead, fail closed);
+  # Codex P2 on PR #40 (provider ids on a billed failure)
+  'F07 through callP1 a body whose Unicode normalisation expands is reserved at its largest normal form: spent plus reserved stays within the budget'
+  "F07 through callP1 a reservation carries the documented 1,024-token request overhead on top of the body's bytes (Copilot finding on PR #40)"
+  "F07 through callP1 a provider that bills template tokens beyond the overhead teaches the model's overhead: later reservations hold it and stay within the budget (Copilot finding on PR #40)"
+  'F07 through callP1 an unknown model is refused before dispatch: model_unpriced, nothing sent, nothing reserved (Copilot finding on PR #40: fail closed)'
+  "F07 through callP1 a billed failure keeps the provider's ids on its attempt (Codex P2 on PR #40)"
+  # re-audit R3-D1 (the learned overhead is clamped, an implausible breach is an anomaly), R3-D2 (the pre-call deadline)
+  'F07 through callP1 a provider reporting 25,000,000 prompt tokens for a 28-byte body teaches at most the clamp: an uninvolved $50 firm is still admitted, and the anomaly is recorded (re-audit R3-D1)'
+  "F07 through callP1 a provider reporting Number.MAX_SAFE_INTEGER prompt tokens cannot overflow the learned overhead: it stays at the clamp and a firm at the route's maximum budget is still admitted (re-audit R3-D1)"
+  'F07 through callP1 four concurrent breaches end at the largest overhead they show, and never above the clamp (re-audit R3-D1)'
+  'F07 through callP1 a call whose pre-call work ran past its allowance is refused with a retryable error before anything is reserved or sent (re-audit R3-D2)'
+  "F07 through callP1 a firm's concurrent calls are bounded: the fifth live reservation is refused concurrency_exhausted by default, and a freed slot admits again"
+  "F07 through callP1 the firm's configured maxConcurrentCalls replaces the default, and an invalid value falls back to it"
+  'F07 through callP1 a reservation that cannot be written or an attempt that cannot be recorded sends nothing: blocked reservation_failed, and the held amount is released'
+  'F07 through callP1 the lease reconciler releases an abandoned reservation that never reached the provider, and spending resumes'
+  # F08: a durable attempt before dispatch, accounting pending, the indeterminate block and the reconciler
+  'F08 through callP1 the audit scenario: a usage-commit failure keeps a durable reservation with its provider attempt, says accounting pending, blocks the firm once the lease lapses, and the reconciler settles it'
+  'F08 through callP1 an attempt whose outcome was never recorded is reconciled at the reserved worst case'
+  "F08 through callP1 a reconciler that settles a call still in flight is never double-counted by that call's own commit"
+  # re-audit R1-D2: malformed records, no head-of-line blocking, quarantine
+  'F08 through callP1 a lapsed attempt with no traceId is still reconciled, and its firm is unblocked'
+  'F08 through callP1 a reservation whose leaseUntil is stored as a number is found by the reconciler and settled, and its firm is unblocked'
+  'F08 through callP1 a hundred unreconcilable lapsed reservations of another firm, ahead of a good one, do not starve it: it is settled in the first run'
+  'F08 through callP1 a reservation the reconciler cannot settle is quarantined after three failed runs: reconcile_failed, logged, its hold kept and its firm still blocked'
+  # re-audit R2-D1 (transient failures never quarantine), R2-D2 (live records never starve a lapsed one; the sweep)
+  'F08 through callP1 a valid record whose reconciliation fails only on contention for its month total is never quarantined: it stays reserved, uncounted, and is settled once the contention ends'
+  'F08 through callP1 five hundred live reservations sorting ahead of a lapsed attempt do not starve it: it is settled in the first run'
+  'F08 through callP1 a lapsed attempt whose leaseUntil is missing altogether is found by the rotating sweep and settled, and its firm is unblocked'
+  # both, through the HTTP router
+  'F07 and F08 through the HTTP router (committeeBrain) a request whose pre-call work ran past the 8 s allowance is refused 503 precall_deadline before anything is reserved or sent, and a same-key retry runs (re-audit R3-D2)'
+  'F07 and F08 through the HTTP router (committeeBrain) ten concurrent committeeBrain requests against a budget for two worst cases dispatch two and refuse the rest; spent plus reserved never exceeds it'
+  'F07 and F08 through the HTTP router (committeeBrain) a usage-commit failure answers with the text and accounting pending, stores accounting pending, blocks the firm accounting_indeterminate past the lease, and the reconciler restores service'
+)
+# The per-firm ledger queue (functions/test/p1.units.test.ts): contention control that never costs liveness.
+QUEUE_SUITE='P1 ledger queue (audit F07: contention control that never costs liveness)'
+QUEUE_TESTS=(
+  "runs one firm's operations one at a time, in arrival order, whether they succeed or fail"
+  'an operation that holds the queue past the hold time lets the next one run beside it'
+  'a waiter whose wait runs out is refused with its own error and its operation never runs; the queue then moves on'
+  'different firms never wait for each other'
+)
+
 # --- the routes (functions/test/p1.api.emu.test.ts) --------------------------------------------------------
 API_SUITE='the /api/platform/brain routes (P3-60, P3-66, P3-70..P3-72)'
 API_TESTS=(
@@ -164,6 +232,7 @@ API_TESTS=(
   "committeeBrain: output (P3-70) the output write is retried an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call"
   'committeeBrain: output (P3-70) the output write is retried an ALREADY_EXISTS while no output row of this call exists is not taken as a commit: it is retried like any failure'
   'committeeBrain: output (P3-70) the output write is retried with NODE_ENV production every p1OpsTestSeam field is inert: no injected failure, no lost answer, no wait'
+  "committeeBrain: output (P3-70) the output write is retried no attempt starts after the output write's deadline: it rethrows with the remaining injected failures unused (Codex P1 on PR #40)"
   'committeeBrain: output (P3-70) the output write is retried an HttpError is a decision, not a transient fault: it is not retried'
   'committeeBrain: output (P3-70) a different Idempotency-Key is a new call'
   # setBudgetAlerts (P3-71)
@@ -187,7 +256,9 @@ API_TESTS=(
   # getAiUsage (P3-71)
   'getAiUsage (P3-71) only a partner: associate, clerk, intern, accounts and client are refused 403'
   'getAiUsage (P3-71) the default month is the current PKT month: 19:30Z on 31 October is November'
+  'getAiUsage (P3-71) a month with no calls returns zeros, with the budget and rate not set as null'
   'getAiUsage (P3-71) the exact response from the month total: spend, PKR to 2 decimal places, percent used to 2 decimal places, calls, tokens'
+  'getAiUsage (P3-71) is audited as ai.usage.read, and the response has exactly the documented keys'
   'getAiUsage (P3-71) reports the alerts crossed with their creation time, in threshold order, for the month asked'
   'getAiUsage (P3-71) shows both kill switches as views with an ISO setAt, firm and platform'
   "getAiUsage (P3-71) never shows a firm the operator's identity: the platform view says setBy \"platform\", whoever set it, in any firm's response"
@@ -202,6 +273,16 @@ COST_TESTS=(
   'the price and routing tables are frozen, so nothing can change a price at run time'
   'costMicroUsd returns null for an unpriced model, including inherited object keys'
   'estimateTokens is ceil(UTF-8 bytes / 3)'
+  "the reservation's input ceiling is the largest UTF-8 length of the body and its four normal forms, plus the request overhead (re-audit R2-D3)"
+  'every priced model carries its input overhead, and a model without one is not dispatched (Copilot finding, fail closed)'
+  "a learned overhead counts only up to LEARNED_OVERHEAD_MAX_FACTOR times the model's own overhead (re-audit R3-D1)"
+)
+# Codex P1 on PR #40: the whole committeeBrain request (the call's phases, the handler's own work and a margin) fits the
+# api function's timeout, and the import-time check refuses shares that do not.
+TIME_SUITE='P1 request time budget (Codex P1 on PR #40: the whole committeeBrain request fits the function timeout)'
+TIME_TESTS=(
+  "the call's phases, the handler's own work and a margin fit the api function's timeout"
+  'the import-time check refuses shares that exceed the function timeout'
 )
 MONTH_SUITE='P1 PKT month key (P3-64)'
 MONTH_TESTS=(
@@ -224,6 +305,7 @@ TRANSPORT_TESTS=(
   'posts the OpenAI-compatible body with the bearer key and parses text and usage'
   'rejects a non-2xx response with a fixed message that does not echo the provider text'
   'rejects a 200 with no usable choices[0].message.content, with a fixed message'
+  "carries the provider's response id and the request-id header when they are plain ids, and drops anything else (audit F08 R1-D5)"
 )
 TRANSPORT_ERR_SUITE='P1 Gateway transport errors (I1: billed failures are charged)'
 TRANSPORT_ERR_TESTS=(
@@ -232,6 +314,9 @@ TRANSPORT_ERR_TESTS=(
   'a timeout, before the headers or while the body streams, is gateway_timeout and billable'
   'a 2xx whose body is not JSON is gateway_not_json and billable, with no usage'
   'a 2xx without usable content is gateway_no_text and billable, carrying the usage figures that are valid counts'
+  "a billable 2xx without usable content still carries the provider's response id and the request-id header (Codex P2)"
+  'a billable 2xx whose body is not JSON still carries the request-id header (Codex P2)'
+  'a timeout while the body streams still carries the request-id header (re-audit R3 INFO)'
   'a redirect is refused: gateway_request_failed, not billable, and the redirect target receives nothing'
   'passes redirect: error to fetch'
 )
@@ -267,6 +352,7 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${REFUSAL_TESTS[@]}"; do names+=("$GW_SUITE $REFUSAL_PREFIX $t$REFUSAL_TAIL"); done
   for t in "${API_TESTS[@]}"; do names+=("$API_SUITE $t"); done
   for t in "${COST_TESTS[@]}"; do names+=("$COST_SUITE $t"); done
+  for t in "${TIME_TESTS[@]}"; do names+=("$TIME_SUITE $t"); done
   for t in "${MONTH_TESTS[@]}"; do names+=("$MONTH_SUITE $t"); done
   for t in "${OPIKCFG_TESTS[@]}"; do names+=("$OPIKCFG_SUITE $t"); done
   for t in "${TRACE_TESTS[@]}"; do names+=("$TRACE_SUITE $t"); done
@@ -275,8 +361,10 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${SEAM_TESTS[@]}"; do names+=("$SEAM_SUITE $t"); done
   for t in "${EXPORTER_TESTS[@]}"; do names+=("$EXPORTER_SUITE $t"); done
   for t in "${DEPLOY_TESTS[@]}"; do names+=("$DEPLOY_SUITE $t"); done
+  for t in "${SPEND_TESTS[@]}"; do names+=("$SPEND_SUITE $t"); done
+  for t in "${QUEUE_TESTS[@]}"; do names+=("$QUEUE_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/f07-f08-ai-spend.e2e.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`P1 gateway, routes and units: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)

@@ -13,7 +13,7 @@ import {
   resolveCommitteeScope,
   strictestClassification,
 } from "@/platform/p5/committeeScope"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import {
@@ -90,6 +90,8 @@ async function handleGet(request: Request) {
     // written before matterId was required stay readable by their author only.
     if (cleared.some((row) => row.matterId)) {
       await syncFirmMembers(store, repos, actor.firmId)
+      // Audit F14 R2-D1: each output's matter is judged at its current label.
+      await syncFirmMatters(store, repos, actor.firmId)
     }
     const matterAccess = new Map<string, boolean>()
     const visible: CommitteeBrainOutput[] = []
@@ -204,6 +206,10 @@ async function handlePost(request: Request) {
 
   try {
     const actor = requireActor(parsed.actorId)
+    // Audit F14 R2-D1: the scope (permission and the classification that drives provider policy) is decided on the
+    // matter's current label and the caller's current membership, as persisted.
+    await syncFirmMembers(store, repos, actor.firmId)
+    await syncFirmMatters(store, repos, actor.firmId)
     let scope
     try {
       scope = await resolveCommitteeScope(store, repos, actor, {

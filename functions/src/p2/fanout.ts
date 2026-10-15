@@ -33,6 +33,18 @@ export type Subscriber = {
 /** Production subscribers. 3a registers none (P3-15). */
 export const SUBSCRIBERS: readonly Subscriber[] = []
 
+/**
+ * The matter an event names (audit F14 R3-D1): its `payload.matterId`, the platform's event contract (matter.created,
+ * the matter stage events and the draft events carry it). `undefined` when the event names no matter (absent or null).
+ * Any other value is returned as is, so an unusable one fails the subscriber closed rather than reading as "no matter".
+ */
+export function matterNamedBy(event: DocumentData): unknown {
+  const payload: unknown = event.payload
+  if (payload === null || typeof payload !== "object") return undefined
+  const named = (payload as Record<string, unknown>).matterId
+  return named === null ? undefined : named
+}
+
 /** Throws on a duplicate id, an unregistered job type, or a `job.*` event name (a job-event loop). */
 export function validateSubscribers(list: readonly Subscriber[]): void {
   const seen = new Set<string>()
@@ -55,6 +67,11 @@ validateSubscribers(SUBSCRIBERS)
  * (logged by code; the transaction rolled back, so the whole event is dropped rather than
  * retried without the conflicting spec, which keeps the rule simple). Nothing logged carries an
  * event value.
+ *
+ * Audit F14 R3-D1: a job for an event that names a matter (`matterNamedBy`) is a matter job. A
+ * subscriber without `matterIdOf` takes the event's matter; one whose `matterIdOf` yields no
+ * matter for such an event is skipped (logged as `matter_event_without_matter`), because a
+ * firm-level job carrying `events/<id>` would be judged against no matter's label or membership.
  */
 export async function fanOutEvent(
   eventId: string,
@@ -79,12 +96,14 @@ export async function fanOutEvent(
   const subscribers = [...SUBSCRIBERS, ...jobTestSeam.subscribers]
   validateSubscribers(subscribers)
   const classification: Classification = isKnownClassification(event.classification) ? event.classification : "privileged-restricted"
+  const named = matterNamedBy(event)
   const specs: JobSpec[] = []
   for (const s of subscribers) {
     if (typeof event.name !== "string" || !s.eventNames.includes(event.name)) continue
-    let matterId: string | null
+    // A subscriber's matterIdOf decides; without one, the job takes the matter the event names (audit F14 R3-D1).
+    let matterId: unknown
     try {
-      matterId = s.matterIdOf?.(event) ?? null
+      matterId = s.matterIdOf ? (s.matterIdOf(event) ?? null) : (named ?? null)
     } catch {
       logger.warn("event.fanout_subscriber_skipped", {
         eventId,
@@ -98,6 +117,16 @@ export async function fanOutEvent(
         eventId,
         subscriber: s.id,
         code: "matter_id_invalid",
+      })
+      continue
+    }
+    // A matter's event never makes a firm-level job: its ref (events/<id>, whose id may embed the matter's id) would be
+    // judged against no matter. Fail closed: that subscriber gets no job (audit F14 R3-D1).
+    if (matterId === null && named !== undefined) {
+      logger.warn("event.fanout_subscriber_skipped", {
+        eventId,
+        subscriber: s.id,
+        code: "matter_event_without_matter",
       })
       continue
     }
