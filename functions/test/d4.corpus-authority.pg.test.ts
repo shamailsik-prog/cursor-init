@@ -549,6 +549,25 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     }
   })
 
+  // #51 R3 R2-1: a sequence is written through USAGE (nextval) or UPDATE (setval). The re-audit set the publication
+  // sequence back with setval as such a login, and the writer's next publication failed (IntegrityError), so either
+  // privilege on any sequence in public is refused. SELECT on a sequence only reads its last value (metadata): allowed.
+  const WRITES_A_SEQUENCE: Array<{ shape: string; sql: string[] }> = [
+    { shape: "USAGE and UPDATE on every sequence in public", sql: ["GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA public TO $ROLE"] },
+    { shape: "UPDATE on the publication sequence (setval)", sql: ["GRANT UPDATE ON SEQUENCE public.corpus_publication_seq_seq TO $ROLE"] },
+    { shape: "USAGE on the publication sequence (nextval)", sql: ["GRANT USAGE ON SEQUENCE public.corpus_publication_seq_seq TO $ROLE"] },
+  ]
+
+  it.each(WRITES_A_SEQUENCE)("wrong_role: a reader login that also holds $shape (#51 R3 R2-1)", async ({ sql }) => {
+    const config = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, ...sql])
+    await expect(store(config).findJudgment(ANY)).rejects.toMatchObject(unavailableAs("wrong_role"))
+  })
+
+  it("SELECT on a sequence alone (its last value, metadata) does not stop a reader login (#51 R3 R2-1, control)", async () => {
+    const config = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`, "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO $ROLE"])
+    expect(await store(config).findJudgment(ANY)).toMatchObject({ benchType: "division" })
+  })
+
   it("the legitimate reader still reads: corpus_authority_reader alone, and with corpus_clients when only that role may CONNECT (#51 R2 R1-1)", async () => {
     const direct = await loginWith([`GRANT ${READER_ROLE} TO $ROLE`])
     expect(await store(direct).findJudgment(ANY)).toMatchObject({ benchType: "division" })

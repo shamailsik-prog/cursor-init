@@ -139,7 +139,7 @@ The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 cr
 - it inherits `corpus_authority_reader`;
 - its memberships are an allowlist: `corpus_authority_reader` and, for CONNECT only (PR 2b's pg_hba lets only its members in), `corpus_clients`, and no other role however held, inherited or SET-only, directly or through another role, or implicitly (the database's owner, any predefined role such as `pg_read_server_files`) (#51 fix round 2);
 - no role it is a member of, itself included, is a superuser or holds CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS;
-- it holds no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT, UPDATE or REFERENCES) on any relation in schema `public`;
+- it holds no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT, UPDATE or REFERENCES) on any relation in schema `public`, and neither USAGE (`nextval`) nor UPDATE (`setval`) on any sequence there (#51 fix round 3; SELECT on a sequence, which only reads its last value, is allowed);
 - it can SELECT no relation in schema `public` (the table or any column, however granted, including to PUBLIC) other than the four views and `corpus_metadata`;
 - the session is read-only.
 

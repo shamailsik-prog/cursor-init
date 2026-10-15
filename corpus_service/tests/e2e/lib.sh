@@ -282,8 +282,10 @@ annex_a_reader_checks() {
 # F05, #51 fix round 2, plan D21): a member of corpus_authority_reader and, for CONNECT through pg_hba, corpus_clients,
 # and of nothing else. Over TLS it passes the adapter's own session check (ROLE_SQL, read from
 # functions/src/d4/corpusAuthorityStore.ts by d7_role_sql.py: reader t, elevated f, other_role f, writes f,
-# reads_more f, read-only on) and reads both published judgments. One more membership (pg_read_server_files) fails
-# the same check. The login is dropped at the end. Needs psql_c and as_superuser_local from the calling script.
+# reads_more f, read-only on) and reads both published judgments; corpus_clients holds no sequence privilege there.
+# One more membership (pg_read_server_files) fails the same check (other_role), and so does USAGE and UPDATE on the
+# sequences in public (writes; #51 fix round 3). The login is dropped at the end. Needs psql_c and as_superuser_local
+# from the calling script.
 annex_a_d7_reader_checks() {
   local p=$1 page=$2 user=f05_d7_reader sql conn
   if ! sql=$(python3 "$(dirname "${BASH_SOURCE[0]}")/d7_role_sql.py" 2>&1); then
@@ -307,11 +309,22 @@ annex_a_d7_reader_checks() {
   expect_out "$p: the reader login reads both published judgments through v_authority_citation over TLS" '^2$' \
     psql_c "$conn" "select count(*) from public.v_authority_citation where citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')" \
     -e PGPASSWORD="$F05_READER_PASSWORD"
+  # has_sequence_privilege raises on a relation that is not a sequence, and the planner may test a qual before
+  # relkind = 'S', so the CASE fixes the order.
+  expect_out "$p: corpus_clients holds no privilege on any sequence in public" '^0$' \
+    as_superuser_local "select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace
+      and case when c.relkind = 'S' then has_sequence_privilege('corpus_clients', c.oid, 'USAGE,UPDATE,SELECT') else false end"
   as_superuser_local "grant pg_read_server_files to $user" >/dev/null 2>&1 || fail "$p: grant pg_read_server_files to the reader"
   expect_out "$p: one more membership (pg_read_server_files) fails the same check (other_role)" \
     '^t\|f\|t\|f\|f\|on$' \
     psql_c "$conn" "$sql" -e PGPASSWORD="$F05_READER_PASSWORD" -e "PGOPTIONS=-c default_transaction_read_only=on"
-  as_superuser_local "drop role $user" >/dev/null 2>&1 || fail "$p: drop the reader login"
+  as_superuser_local "revoke pg_read_server_files from $user; grant usage, update on all sequences in schema public to $user" \
+    >/dev/null 2>&1 || fail "$p: grant the reader USAGE and UPDATE on the sequences in public"
+  expect_out "$p: USAGE and UPDATE on the sequences in public fail the same check (writes)" \
+    '^t\|f\|f\|t\|f\|on$' \
+    psql_c "$conn" "$sql" -e PGPASSWORD="$F05_READER_PASSWORD" -e "PGOPTIONS=-c default_transaction_read_only=on"
+  as_superuser_local "revoke all on all sequences in schema public from $user; drop role $user" >/dev/null 2>&1 \
+    || fail "$p: drop the reader login"
 }
 
 # expect_lines LABEL EXPECTED ACTUAL: two newline-separated lists must hold the same lines (sorted).

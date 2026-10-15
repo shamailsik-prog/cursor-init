@@ -115,7 +115,10 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
 // - No role it is a member of, itself included, may be a superuser or hold CREATEROLE, CREATEDB, REPLICATION or
 //   BYPASSRLS, so a SET ROLE into an allowlisted role that someone altered gains nothing either.
 // - It must hold no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT,
-//   UPDATE or REFERENCES) on any relation in schema public.
+//   UPDATE or REFERENCES) on any relation in schema public, and neither USAGE (nextval) nor UPDATE (setval) on any
+//   sequence there (R3: setval on the publication sequence breaks the writer's next publication). SELECT on a
+//   sequence only reads its last value and is allowed. has_sequence_privilege raises on anything that is not a
+//   sequence, and the planner may test a qual before relkind = 'S', so a CASE fixes the order.
 // - It must be able to SELECT (the table or any column) no relation in schema public except READABLE: no Annex A
 //   base table, no 001 v_* view, and nothing else there either, however granted (directly, by role, or to PUBLIC).
 // A database without 004 has no corpus_authority_reader: pg_has_role raises 42704, which is schema_missing.
@@ -130,7 +133,10 @@ const ROLE_SQL = `SELECT pg_has_role('corpus_authority_reader', 'USAGE') AS read
        EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                 WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-                       OR has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES'))) AS writes,
+                       OR has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES')))
+         OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                     WHERE c.relnamespace = 'public'::regnamespace
+                       AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'USAGE,UPDATE') ELSE false END) AS writes,
        EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                 WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND c.relname <> ALL ($1::text[])
