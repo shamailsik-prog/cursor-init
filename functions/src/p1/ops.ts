@@ -1,16 +1,18 @@
 import { FieldValue, Timestamp, type DocumentReference } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { HttpError } from "../http/errors"
+import { idempotencyDocId, isUuidV4 } from "../http/idempotency"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { callP1, isAlreadyExists } from "./gateway"
+import { CALL_WORST_CASE_MS, P1PreCallDeadlineError, assertOperationTimeBudget, callP1, isAlreadyExists, type P1Result } from "./gateway"
 import { isMonthKey, monthKeyPkt } from "./month"
-import { TRANSPORT_ERROR } from "./types"
+import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
 /**
  * The five P1 operations behind `/api/platform/brain/` (spec P3-60, P3-66, P3-70..P3-72): `committeeBrain`,
@@ -40,15 +42,61 @@ const badRequest = (code: string) => new HttpError(400, code)
 /** Attempts at the `committee_outputs` write; after a failed attempt the wait is 100 ms, then 200 ms (doubling). */
 const OUTPUT_WRITE_ATTEMPTS = 3
 const OUTPUT_WRITE_BACKOFF_MS = 100
+/**
+ * The output write's deadline (Codex P1 on PR #40), from its first attempt: no attempt, and no wait, starts once it
+ * would run past it. Each attempt is one SDK transaction attempt (`maxAttempts: 1`), so the SDK adds no retries or
+ * back-off of its own: the write takes at most this plus one attempt in flight.
+ */
+export const OUTPUT_WRITE_DEADLINE_MS = 3_000
+
+/**
+ * The time committeeBrain allows before paid work starts (re-audit R3-D2): eight store or Auth round trips at 1 s each
+ * (the ID token's verification and the session binding, the rate limit, the Idempotency-Key claim, the `ai.call`
+ * permission check, the matter read, the party-name query and the call's first reads), measured on the real clock from
+ * when the router received the request (`session.startedAtMs`). It is enforced: once the call's first reads are done,
+ * `callP1` reserves nothing and sends nothing if this has passed, and the request answers 503 `precall_deadline`
+ * (retryable; the Idempotency-Key is released). A read that hangs is still not cut off, but it costs nothing, and no
+ * paid work starts that could outlive the request's timeout.
+ */
+export const PRE_CALL_ALLOWANCE_MS = 8_000
+/**
+ * The time committeeBrain allows after the call: the `committee_outputs` write with the route's audit row
+ * (OUTPUT_WRITE_DEADLINE_MS, 3 s, plus 2 s for the one attempt in flight) and the Idempotency-Key completion (3 s: up
+ * to four short transactions with 0.7 s of back-off between them, `settle` in http/idempotency.ts).
+ */
+export const POST_CALL_ALLOWANCE_MS = 8_000
+/**
+ * committeeBrain's own work around `callP1`, as a share of the api function's timeout (Codex P1 on PR #40): the
+ * pre-call allowance (enforced, re-audit R3-D2) and the post-call allowance (the output write is bounded by its
+ * deadline). The import-time check below keeps the call's phases (CALL_WORST_CASE_MS, 99 s), this share (16 s) and
+ * REQUEST_TIMEOUT_MARGIN_MS within the 120 s timeout.
+ */
+export const COMMITTEE_HANDLER_OVERHEAD_MS = PRE_CALL_ALLOWANCE_MS + POST_CALL_ALLOWANCE_MS
+/** Kept free at the end of the request: the response itself, and the clock drift between the shares. */
+export const REQUEST_TIMEOUT_MARGIN_MS = 5_000
+
+assertOperationTimeBudget({
+  callMs: CALL_WORST_CASE_MS,
+  handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS,
+  marginMs: REQUEST_TIMEOUT_MARGIN_MS,
+  timeoutMs: FUNCTION_TIMEOUT_SECONDS * 1000,
+})
 
 /**
  * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
  * `outputWriteFailures` is a queue: each attempt at the `committee_outputs` write takes the next error from it
  * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
  * the next error from it and throws it, as if the commit had landed but its answer was lost (an ambiguous
- * commit). `sleep` replaces the back-off wait.
+ * commit). `sleep` replaces the back-off wait. `wallClock` replaces `Date.now` as the output write's deadline clock.
+ * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2).
  */
-export const p1OpsTestSeam: { outputWriteFailures?: Error[]; lostCommitAnswers?: Error[]; sleep?: (ms: number) => Promise<void> } = {}
+export const p1OpsTestSeam: {
+  outputWriteFailures?: Error[]
+  lostCommitAnswers?: Error[]
+  sleep?: (ms: number) => Promise<void>
+  wallClock?: () => number
+  preCallClock?: () => number
+} = {}
 
 function seam(): typeof p1OpsTestSeam {
   return process.env.NODE_ENV === "production" ? {} : p1OpsTestSeam
@@ -71,10 +119,13 @@ async function outputCommitted(outputRef: DocumentReference, usageLogId: string)
  * fails with ALREADY_EXISTS after an earlier attempt's commit was lost (an ambiguous commit) finds the row:
  * when `outputRef` exists with this call's `usageLogId` the write is done, and it returns normally, so the
  * route's allow row (committed with that row) stands and no deny row is written. Any other ALREADY_EXISTS is
- * handled like any other failure. The last failure is rethrown as it was.
+ * handled like any other failure. No wait or attempt starts once it would end past OUTPUT_WRITE_DEADLINE_MS from the
+ * first attempt (Codex P1 on PR #40). The last failure is rethrown as it was.
  */
 async function withOutputWriteRetry(write: () => Promise<void>, row: { outputRef: DocumentReference; usageLogId: string }): Promise<void> {
   const t = seam()
+  const clock = t.wallClock ?? Date.now
+  const started = clock()
   for (let attempt = 1; ; attempt++) {
     try {
       const injected = t.outputWriteFailures?.shift()
@@ -88,6 +139,7 @@ async function withOutputWriteRetry(write: () => Promise<void>, row: { outputRef
       if (isAlreadyExists(err) && (await outputCommitted(row.outputRef, row.usageLogId))) return
       if (attempt >= OUTPUT_WRITE_ATTEMPTS) throw err
       const wait = OUTPUT_WRITE_BACKOFF_MS * 2 ** (attempt - 1)
+      if (clock() - started + wait >= OUTPUT_WRITE_DEADLINE_MS) throw err
       await (t.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(wait)
     }
   }
@@ -175,6 +227,8 @@ export type CommitteeBrainResponse = {
   classification: Classification
   usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
   traceId: string
+  /** Whether the call's books are complete, apart from whether its text is available (audit F08; see P1Accounting). */
+  accounting: P1Accounting
 }
 
 /**
@@ -182,14 +236,19 @@ export type CommitteeBrainResponse = {
  * request, then `ai.call` on the matter (same firm, member, cleared; partner, associate, clerk), derives the
  * classification (the strictest of the matter's label, the caller's label and the `internal` floor; the caller's
  * clearance must reach it), masks with the matter's party names, calls `callP1` and writes one `committee_outputs`
- * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text.
+ * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text. The response
+ * and the row carry `accounting` (audit F08): `pending` when the call's usage could not be committed, so its spend
+ * is still held by its reservation until the lease reconciler settles it.
  */
 export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
   auth: "firm",
   kind: "p1",
   action: "ai.call",
   target: "matters",
-  run: async ({ caller, now: routerNow }, data, audit) => {
+  run: async ({ caller, now: routerNow, idempotencyKey, startedAtMs }, data, audit) => {
+    // The pre-call deadline (re-audit R3-D2), on the real clock from when the router received the request.
+    const preCallClock = seam().preCallClock ?? Date.now
+    const preCallDeadline = { atMs: (startedAtMs ?? Date.now()) + PRE_CALL_ALLOWANCE_MS, clock: preCallClock }
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const input = parseCommitteeInput(data)
@@ -210,16 +269,37 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
     const t0 = Date.now()
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)
-    const result = await callP1(
-      { firmId: caller.firmId, actorId: caller.uid, matterId, jobId: null, taskType: "committee", classification, body: input.body, purpose: input.purpose, partyNames },
-      { now: clock }
-    )
+    // The request's stored answer goes on the reservation, so the lease reconciler can mark it settled (Codex P2 on PR #40).
+    const idempotencyDoc = isUuidV4(idempotencyKey) ? idempotencyDocId(caller.firmId, idempotencyKey) : null
+    let result: P1Result
+    try {
+      result = await callP1(
+        {
+          firmId: caller.firmId,
+          actorId: caller.uid,
+          matterId,
+          jobId: null,
+          taskType: "committee",
+          classification,
+          body: input.body,
+          purpose: input.purpose,
+          partyNames,
+          idempotencyDoc,
+        },
+        { now: clock, preCallDeadline }
+      )
+    } catch (err) {
+      // Nothing was reserved, sent or written: a 503 releases the Idempotency-Key, so the same request may be retried.
+      if (err instanceof P1PreCallDeadlineError) throw new HttpError(503, err.code)
+      throw err
+    }
 
     const blocked = result.outcome !== "ok"
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)
     const outputRef = adminDb().collection("committee_outputs").doc()
     // The Next.js row shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock.
     const createdAt = Math.floor(clock())
+    // One SDK attempt per try (Codex P1 on PR #40): the retries and their deadline are withOutputWriteRetry's alone.
     await withOutputWriteRetry(() => adminDb().runTransaction(async (tx) => {
       await audit.stage(tx, "allow", "ok")
       tx.create(outputRef, {
@@ -239,9 +319,12 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
         },
         usageLogId: result.usageLogId,
         traceId: result.traceId,
+        // The accounting state when the call returned; the lease reconciler sets it to settled when it settles or
+        // releases the call's reservation (Codex P2 on PR #40), and the usage row (usageLogId) is the authority.
+        accounting: result.accounting,
         createdAt,
       })
-    }), { outputRef, usageLogId: result.usageLogId })
+    }, { maxAttempts: 1 }), { outputRef, usageLogId: result.usageLogId })
     audit.committed()
 
     return {
@@ -252,6 +335,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       classification,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, costMicroUsd: result.costMicroUsd },
       traceId: result.traceId,
+      accounting: result.accounting,
     }
   },
 }
@@ -270,7 +354,8 @@ export type AiUsageResponse = {
   spentPkr: number | null
   pkrPerUsd: number | null
   percentUsed: number | null
-  calls: { ok: number; failed: number; blocked: number }
+  /** `reconciled`: calls whose usage the lease reconciler recorded because the call's own commit never did (Codex P2 on PR #40). */
+  calls: { ok: number; failed: number; blocked: number; reconciled: number }
   inputTokens: number
   outputTokens: number
   alerts: Array<{ threshold: number; at: string }>
@@ -332,7 +417,12 @@ export const getAiUsageOp: FirmOperation<AiUsageResponse> = {
       spentPkr: rate === null ? null : Math.round((spent * rate) / 10_000) / 100,
       pkrPerUsd: rate,
       percentUsed: budget === null ? null : Math.round((spent * 10_000) / budget) / 100,
-      calls: { ok: count(total.get("calls.ok")), failed: count(total.get("calls.failed")), blocked: count(total.get("calls.blocked")) },
+      calls: {
+        ok: count(total.get("calls.ok")),
+        failed: count(total.get("calls.failed")),
+        blocked: count(total.get("calls.blocked")),
+        reconciled: count(total.get("calls.reconciled")),
+      },
       inputTokens: count(total.get("inputTokens")),
       outputTokens: count(total.get("outputTokens")),
       alerts: alertSnaps.flatMap((snap, i) => {

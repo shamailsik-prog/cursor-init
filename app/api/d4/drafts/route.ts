@@ -17,7 +17,7 @@ import { isClassification, type Classification } from "@/platform/p1/types"
 import { rankOf, rankOfStoredOrMax } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import {
   buildDraftTemplateAnalyticsRow,
@@ -222,6 +222,7 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repos, user.firmId)
+  await syncFirmMatters(store, repos, user.firmId)
   const templateAnalytics = await repos.draftTemplateAnalytics.listByFirm(user.firmId)
   const templateUsage = new Map(
     templateAnalytics.map((row) => [row.templateId, row.composeCount])
@@ -309,6 +310,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(input.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const result = runDraftPreflight(store, input)
       const payload = {
         action: "preflight",
@@ -330,6 +332,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       const actor = store.users.get(preflightInput.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       // Pre-check only for the 422 body; composeDraft re-runs the gate and records any override.
       const gate = runDraftPreflight(store, preflightInput, { recordOverride: false })
       if (!gate.ok) {

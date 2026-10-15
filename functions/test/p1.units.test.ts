@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateTokens, priceMicroUsd } from "../src/p1/costTable"
+import * as costTable from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, MODEL_PRICES, PROVIDER_ID, REQUEST_OVERHEAD_TOKENS, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, inputTokenCeiling, modelInputOverhead, priceMicroUsd } from "../src/p1/costTable"
+import { CALL_WORST_CASE_MS, assertOperationTimeBudget, ledgerQueue } from "../src/p1/gateway"
+import { COMMITTEE_HANDLER_OVERHEAD_MS, REQUEST_TIMEOUT_MARGIN_MS } from "../src/p1/ops"
+import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { isMonthKey, monthKeyPkt } from "../src/p1/month"
 import { buildTrace, opikConfig, type TraceRecord } from "../src/p1/opik"
 import { TRANSPORT_ERROR } from "../src/p1/types"
@@ -15,6 +19,9 @@ describe("P1 cost table (P3-62)", () => {
       outputNanoUsdPerToken: 20000,
       source: "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models",
       fetchedAt: "2026-10-11",
+      // Audit F07, Copilot finding on PR #40: the input overhead reserved per request, and whether it is verified (G-1).
+      inputOverheadTokens: 1024,
+      inputOverheadVerified: false,
     })
     expect(MAX_OUTPUT_TOKENS).toBe(4096)
     expect(PROVIDER_ID).toBe("ai-gateway")
@@ -69,6 +76,58 @@ describe("P1 cost table (P3-62)", () => {
     expect(estimateTokens("کک")).toBe(2) // 4 bytes
     expect(estimateTokens("€")).toBe(1) // 3 bytes
     expect(estimateTokens("😀")).toBe(2) // 4 bytes
+  })
+
+  it("the reservation's input ceiling is the largest UTF-8 length of the body and its four normal forms, plus the request overhead (re-audit R2-D3)", () => {
+    expect(bodyTokenCeiling("")).toBe(0)
+    expect(bodyTokenCeiling("abc")).toBe(3)
+    // U+FDFA is 3 bytes as written; NFKC and NFKD expand it to the 33-byte phrase it stands for.
+    expect(Buffer.byteLength("ﷺ", "utf8")).toBe(3)
+    expect(bodyTokenCeiling("ﷺ")).toBe(33)
+    // A precomposed letter whose decomposition is longer: NFD of "é" is 3 bytes against 2.
+    expect(bodyTokenCeiling("é")).toBe(3)
+    expect(inputTokenCeiling("ﷺ")).toBe(33 + REQUEST_OVERHEAD_TOKENS)
+  })
+
+  it("every priced model carries its input overhead, and a model without one is not dispatched (Copilot finding, fail closed)", () => {
+    expect(modelInputOverhead(OPUS)).toBe(1024)
+    for (const unknown of ["x/unknown", "", "constructor", "__proto__", "toString"]) expect([unknown, modelInputOverhead(unknown)]).toEqual([unknown, null])
+    // Every routed model is priced and has an overhead: a task can never route to a model it cannot reserve for.
+    for (const model of Object.values(TASK_MODEL)) expect([model, modelInputOverhead(model) !== null, costMicroUsd(model, 0, 0) !== null]).toEqual([model, true, true])
+  })
+
+  it("a learned overhead counts only up to LEARNED_OVERHEAD_MAX_FACTOR times the model's own overhead (re-audit R3-D1)", () => {
+    const t = costTable as unknown as {
+      LEARNED_OVERHEAD_MAX_FACTOR?: number
+      learnedOverheadCap?: (model: string) => number | null
+      reservationOverheadTokens?: (model: string, learned: unknown) => number | null
+    }
+    expect([t.LEARNED_OVERHEAD_MAX_FACTOR, t.learnedOverheadCap?.(OPUS)]).toEqual([4, 4096])
+    const reserve = (learned: unknown) => t.reservationOverheadTokens?.(OPUS, learned)
+    // Nothing learned, or less than the table's figure: the table's 1,024.
+    expect([reserve(0), reserve(500)]).toEqual([1024, 1024])
+    // Between the table's figure and the clamp: exactly what was learned.
+    expect([reserve(2_000), reserve(4_096)]).toEqual([2_000, 4_096])
+    // Beyond the clamp, however far: the clamp, with no overflow.
+    expect([reserve(4_097), reserve(24_999_972), reserve(Number.MAX_SAFE_INTEGER)]).toEqual([4_096, 4_096, 4_096])
+    // Anything that is not a non-negative safe integer counts as nothing learned.
+    expect([reserve(Number.NaN), reserve(-5), reserve(Number.POSITIVE_INFINITY), reserve(2.5), reserve("4000")]).toEqual([1024, 1024, 1024, 1024, 1024])
+    // A model the cost table does not know has no overhead and no clamp: it is never dispatched.
+    expect([t.learnedOverheadCap?.("x/unknown"), t.reservationOverheadTokens?.("x/unknown", 2_000)]).toEqual([null, null])
+  })
+})
+
+describe("P1 request time budget (Codex P1 on PR #40: the whole committeeBrain request fits the function timeout)", () => {
+  it("the call's phases, the handler's own work and a margin fit the api function's timeout", () => {
+    expect(CALL_WORST_CASE_MS + COMMITTEE_HANDLER_OVERHEAD_MS + REQUEST_TIMEOUT_MARGIN_MS).toBeLessThanOrEqual(FUNCTION_TIMEOUT_SECONDS * 1000)
+    expect(() => assertOperationTimeBudget({ callMs: CALL_WORST_CASE_MS, handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS, marginMs: REQUEST_TIMEOUT_MARGIN_MS, timeoutMs: FUNCTION_TIMEOUT_SECONDS * 1000 })).not.toThrow()
+  })
+
+  it("the import-time check refuses shares that exceed the function timeout", () => {
+    // The round-1 shares: 116 s of call phases left 4 s for everything else in a 120 s request.
+    expect(() => assertOperationTimeBudget({ callMs: 116_000, handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS, marginMs: REQUEST_TIMEOUT_MARGIN_MS, timeoutMs: 120_000 })).toThrow(/must fit in the function timeout/)
+    expect(() => assertOperationTimeBudget({ callMs: 100_000, handlerMs: 16_000, marginMs: 5_000, timeoutMs: 120_000 })).toThrow(/must fit in the function timeout/)
+    expect(() => assertOperationTimeBudget({ callMs: 99_000, handlerMs: 16_000, marginMs: 5_000, timeoutMs: 120_000 })).not.toThrow()
   })
 })
 
@@ -369,5 +428,70 @@ describe("P1 Opik trace payload (P3-67)", () => {
   it("uses the project and ISO times it is given, and fails closed on an unknown classification", () => {
     expect(buildTrace(record(), "other").project_name).toBe("other")
     expect(() => buildTrace(record({ classification: "constructor" as never }), "p")).toThrow()
+  })
+})
+
+describe("P1 ledger queue (audit F07: contention control that never costs liveness)", () => {
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+  const waitError = () => Object.assign(new Error("waited too long"), { code: "test_deadline" })
+  let n = 0
+  const key = () => `firm-queue-${++n}`
+
+  it("runs one firm's operations one at a time, in arrival order, whether they succeed or fail", async () => {
+    const k = key()
+    const log: string[] = []
+    const op = (name: string, ms: number, fail = false) => async () => {
+      log.push(`${name} start`)
+      await sleep(ms)
+      log.push(`${name} end`)
+      if (fail) throw new Error(name)
+      return name
+    }
+    const results = await Promise.allSettled([
+      ledgerQueue(k, 5_000, 5_000, waitError, op("a", 30, true)),
+      ledgerQueue(k, 5_000, 5_000, waitError, op("b", 10)),
+      ledgerQueue(k, 5_000, 5_000, waitError, op("c", 1)),
+    ])
+    expect(log).toEqual(["a start", "a end", "b start", "b end", "c start", "c end"])
+    expect(results.map((r) => r.status)).toEqual(["rejected", "fulfilled", "fulfilled"])
+  })
+
+  it("an operation that holds the queue past the hold time lets the next one run beside it", async () => {
+    const k = key()
+    let finishHung!: () => void
+    const hung = ledgerQueue(k, 5_000, 50, waitError, () => new Promise<string>((resolve) => (finishHung = () => resolve("hung"))))
+    const started = Date.now()
+    const next = await ledgerQueue(k, 5_000, 50, waitError, async () => "next")
+    expect(next).toBe("next")
+    expect(Date.now() - started).toBeLessThan(2_000)
+    finishHung()
+    expect(await hung).toBe("hung")
+  })
+
+  it("a waiter whose wait runs out is refused with its own error and its operation never runs; the queue then moves on", async () => {
+    const k = key()
+    let finishFirst!: () => void
+    const first = ledgerQueue(k, 5_000, 60_000, waitError, () => new Promise<string>((resolve) => (finishFirst = () => resolve("first"))))
+    let ran = false
+    await expect(
+      ledgerQueue(k, 30, 60_000, waitError, async () => {
+        ran = true
+        return "late"
+      })
+    ).rejects.toMatchObject({ code: "test_deadline" })
+    const third = ledgerQueue(k, 5_000, 60_000, waitError, async () => "third")
+    finishFirst()
+    expect(await first).toBe("first")
+    expect(await third).toBe("third")
+    expect(ran).toBe(false)
+  })
+
+  it("different firms never wait for each other", async () => {
+    const [a, b] = [key(), key()]
+    let finishA!: () => void
+    const held = ledgerQueue(a, 5_000, 60_000, waitError, () => new Promise<string>((resolve) => (finishA = () => resolve("a"))))
+    expect(await ledgerQueue(b, 100, 60_000, waitError, async () => "b")).toBe("b")
+    finishA()
+    expect(await held).toBe("a")
   })
 })
