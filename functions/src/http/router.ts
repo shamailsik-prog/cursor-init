@@ -263,13 +263,23 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
  * gets the router's clock as `session.now` and, on POST/PUT, the request's Idempotency-Key as
  * `session.idempotencyKey` (so a job it enqueues carries that key, P3-4; a GET gets none). An operation's RateLimitedError (e.g. 429
  * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
- * (isStorableResult), so a same-key retry after the reset runs.
+ * (isStorableResult), so a same-key retry after the reset runs. `startedAtMs` (the real clock when the router received
+ * the request) is passed on as `session.startedAtMs`.
  */
-async function execute(op: Operation, auth: Authenticated, body: Data, now: number, idempotencyKey?: string, routeName?: string): Promise<HttpResult> {
+async function execute(
+  op: Operation,
+  auth: Authenticated,
+  body: Data,
+  now: number,
+  idempotencyKey?: string,
+  routeName?: string,
+  startedAtMs?: number
+): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
+  const started = startedAtMs === undefined ? {} : { startedAtMs }
   const session = (s: Session): Session =>
-    idempotencyKey === undefined || routeName === undefined ? { ...s, now } : { ...s, now, idempotencyKey, route: routeName }
+    idempotencyKey === undefined || routeName === undefined ? { ...s, now, ...started } : { ...s, now, idempotencyKey, route: routeName, ...started }
   try {
     const result = await runAudited(audit, () =>
       op.auth === "firm" && auth.kind === "firm" ? op.run(session(auth.session), body, audit) : runFirmless(op, auth, body, audit)
@@ -294,6 +304,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
   const clock = opts.now ?? Date.now
 
   return async function router(req: ApiRequest, res: Response): Promise<void> {
+    // The real clock, never the injectable one: an operation bounds its pre-work against it (re-audit R3-D2).
+    const startedAtMs = Date.now()
     try {
       const path = normalisePath(req.path)
       const byMethod = table.get(path)
@@ -328,7 +340,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
 
       const idempotencyKey = hasBody ? header(headers, "idempotency-key") : undefined
       const routeName = `${route.method} ${route.path}`
-      const run = () => execute(op, auth, body, now, idempotencyKey, hasBody ? routeName : undefined)
+      const run = () => execute(op, auth, body, now, idempotencyKey, hasBody ? routeName : undefined, startedAtMs)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
