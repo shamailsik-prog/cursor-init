@@ -247,6 +247,65 @@ jobs:
       - name: next build
         run: npm run build
 
+  document-object-s3:
+    name: Document object store S3 (FA-D16-001/002)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Pull official MinIO image (quay.io, digest-pinned)
+        run: |
+          set -euo pipefail
+          # Official quay.io/minio/minio RELEASE.2025-09-07T16-13-09Z (linux/amd64 manifest digest).
+          MINIO_IMAGE="quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+          set +e
+          pull_log="$(docker pull "${MINIO_IMAGE}" 2>&1)"
+          pull_status=$?
+          set -e
+          if [ "${pull_status}" -ne 0 ]; then
+            echo "::error::Failed to pull official MinIO image ${MINIO_IMAGE}"
+            echo "docker pull exited with status ${pull_status}. Output:"
+            echo "${pull_log}"
+            exit 1
+          fi
+          echo "${pull_log}"
+          echo "MINIO_IMAGE=${MINIO_IMAGE}" >> "$GITHUB_ENV"
+          docker image inspect "${MINIO_IMAGE}" >/dev/null
+          echo "Pulled and verified official MinIO image (digest-pinned)."
+      - name: F03 integrity tests (MinIO via docker run)
+        env:
+          SIKANDER_DOCUMENT_OBJECT_BACKEND: s3
+          SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT: http://127.0.0.1:9000
+          SIKANDER_DOCUMENT_OBJECT_S3_BUCKET: sikander-documents-ci
+          SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID: minioadmin
+          SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY: minioadmin
+          SIKANDER_DOCUMENT_OBJECT_S3_FORCE_PATH_STYLE: "true"
+          SIKANDER_DOCUMENT_OBJECT_S3_SSE: none
+        run: |
+          set -euo pipefail
+          export SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          docker rm -f minio-ci 2>/dev/null || true
+          docker run -d --name minio-ci -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            "$MINIO_IMAGE" server /data --address :9000
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO healthy"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9000/minio/health/live
+          npm run test:document-object-s3
+          docker rm -f minio-ci
+
   postgres-ddl:
     name: Postgres DDL integration (FA-CI-002)
     runs-on: ubuntu-latest

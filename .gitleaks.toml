@@ -52,3 +52,16 @@ regexTarget = "secret"
 regexes = ['''^short-pw-15char$''']
 paths = ['''^corpus_service/tests/e2e/store_security_e2e\.sh$''']
 targetRules = ["generic-api-key"]
+
+# Vitest-only AES-256-GCM fixture for document object store tests (64 hex chars, not a credential).
+[[allowlists]]
+description = "F03 document object encryption test fixture (deterministic vitest key)"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00$''']
+paths = [
+  '''^tests/setup/document-object-store\.ts$''',
+  '''^tests/f03-document-object-store\.unit\.test\.ts$''',
+  '''^tests/f03-document-bytes\.e2e\.test\.ts$''',
+]
+targetRules = ["generic-api-key"]
