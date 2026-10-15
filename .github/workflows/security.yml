@@ -3,9 +3,10 @@ name: Security scans
 # What each job proves and how to run it locally: docs/audits/README.md.
 # Cost (Actions minutes are billed on this private repository): a draft PR runs none of these jobs. CodeQL runs on a
 # push to main, weekly and on demand, not on pull requests; gitleaks and the dependency audit run on every ready PR.
+# A PR converted to draft starts a run whose jobs all skip, and that run cancels the one in flight (concurrency below).
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   schedule:
