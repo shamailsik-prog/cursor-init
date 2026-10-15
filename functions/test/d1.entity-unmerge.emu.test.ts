@@ -53,7 +53,7 @@ async function seed(firmExtra: Record<string, unknown> = {}) {
   await adminDb().collection("matter_parties").add({ firmId, matterId: matterRef.id, role: "opposing", name: "B Trading", names: ["b trading"], keys: { cnic: CNIC }, entityId: b.entityId, matterClassification: "confidential", matterStatus: "live", classification: "confidential" })
   const [left, right] = [a.entityId, b.entityId].sort()
   const linkId = `${firmId}_${left}_${right}_cnic`
-  const check = () => runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [{ name: "Naveed Iqbal" }] } } as never)
+  const check = () => runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
   return { firmId, partner, associate, a, b, linkId, pairId: `${left}_${right}`, check }
 }
 type Seed = Awaited<ReturnType<typeof seed>>
