@@ -86,7 +86,7 @@ Not recorded on `ai_usage_logs`: like `redactionCounts` on main, the accounting 
 
 ### Ruling 8: the Next legacy caller
 
-`platform/p1/internalAICaller.ts` (the Next route, F18, to be retired by O-53) inherits the normalised mask, the client of ruling 3, and the stronger `assertMinimised` with no code change; its rank >= 3 refusal text is unchanged. It does not record residual counts: its persisted output goes through `firestoreSpineRepositories.ts`, which PR #44 holds. `platform/p1/eveTools.ts` `maskPreview` and `platform/p1/translate.ts` get the new mask unchanged.
+`platform/p1/internalAICaller.ts` (the Next route, F18, to be retired by O-53) inherits the normalised mask, the folded names of ruling 3 (for the names it is given; it does not read the client record), and the stronger `assertMinimised` with no code change; its rank >= 3 refusal text is unchanged. It does not record residual counts: its persisted output goes through `firestoreSpineRepositories.ts`, which PR #44 holds. `platform/p1/eveTools.ts` `maskPreview` and `platform/p1/translate.ts` get the new mask unchanged.
 
 ### Ruling 9: documentation states what masking is
 
