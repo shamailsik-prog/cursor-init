@@ -86,7 +86,7 @@ Every Next Firestore write goes through four helpers in `platform/persistence/fi
 - `setDoc`, `updateDoc` and `deleteDoc`;
 - `runTransaction` (inside which `tx.set` and `tx.update` stage the writes).
 
-There is no other writer: only that file and `adminFirestore.ts` import a Firestore SDK, and a static guard now holds that (§7).
+No other writer exists in the tree: only that file and `adminFirestore.ts` import a Firestore SDK. A static guard (§7) keeps new code on the helpers by refusing the common ways around them. It is a text check, not a proof; the behaviour tests prove the fence itself.
 
 `platform/http/idempotency.ts` installs a fence provider there. While a request holds a durable claim (from `beginIdempotentRequest` until the request ends), each helper commits through one transaction that does the following:
 1. Reads the claim record and the marker, first, because a transaction's reads must precede its writes.
@@ -127,7 +127,8 @@ A fence active over a modular client-SDK database is refused with an error: it c
    - **not completed, an unexpired marker exists** → the key never runs again (ruling 9):
      - if the route answered a refusal it decided (any 4xx but 429, whose code is not the catch-all `REQUEST_FAILED` or `INTERNAL_ERROR`), that refusal is stored and replayed as itself;
      - otherwise `done` with the terminal 409;
-     - this request keeps its own 4xx or 2xx answer. A 5xx or a throw is replaced by the terminal 409;
+     - this request keeps its own 4xx (or 2xx) status and body. A 5xx or a throw is replaced by the terminal 409;
+     - every non-2xx answer, on this request and on every retry, carries the effect-committed signal (ruling 15);
    - **not completed, no marker** → released. A first claim is deleted. A taken-over claim stays as the `released` tombstone;
    - **not this attempt's claim** → nothing;
    - **the settle cannot be written** → up to 3 retries, then logged. The record stays `in_progress` until its lease lapses, and then step 1 decides from the marker.
@@ -159,6 +160,7 @@ The N-1 property, that one firm cannot push out another firm's entries, now hold
 | 12 | F11 (effects and audit publication not atomic): bring part of it into F10? | **No** | The fence makes "this effect committed" durable and atomic with the effect write itself. A failed or lost audit flush no longer affects idempotency: a completed claim still stores its payload (final audit F6), and an uncompleted one leaves its marker. F11's defect, that an effect can lack its audit row, is untouched by F10 and stays open. The fence's transaction is the natural place F11 can later stage audit rows, but that needs a request-level unit of work in the repositories (#44's file). |
 | 13 | The 409 for a capacity refusal (memory mode) | 503 `idempotency_capacity_exhausted` | Nothing ran; the client may retry later. It is not a key conflict. |
 | 14 | Changed test expectations | `tests/http.idempotency.test.ts`, `tests/http.idempotency-firm-quota.test.ts`, `tests/http.validation-idempotency-surface.test.ts` and `tests/spine.hardening.test.ts` asserted that a completed key is evicted and runs again. They now assert refusal at capacity and replay of the completed key | That eviction is the F10 defect the audit names. Every other assertion in those tests (TTL and lease boundaries, byte accounting, reuse, the per-firm separation) is kept. |
+| 15 | How a caller learns that its key's effect committed (re-audit of 08c0990, MEDIUM-1) | **Both** a response header `Idempotency-Effect-Committed: <operationId>` and a body field `effectCommitted: { operationId }`. They appear on every answer for such a key other than its completed 2xx replay: this request's own kept 4xx, every replay of a stored refusal, and every terminal 409 (from the settle or from a later claim). The status and the rest of the body are unchanged. A completed 2xx and its replays carry neither | Ruling 9 kept a catch-all 400 `REQUEST_FAILED` unchanged on the request whose effect committed. The auditor's ATK-9b (the write committed, its acknowledgement was lost) answered "client operation failed" while the client existed, and a caller who believed it would resubmit under a new key and duplicate the effect. **Header:** protocol level, so any client, proxy or log sees it without parsing the body, including on a non-JSON answer. **Body field:** survives client wrappers that hand callers only the parsed JSON (the consoles' fetch helpers do). Both carry the `operationId`, the same one the terminal 409 names, so a caller can correlate. The route's own answer is never rewritten (ruling 9 still holds); the signal is added to it. |
 
 ## 4. Survey: the 12 Next callers
 
@@ -180,7 +182,9 @@ Overlap with #44: 9 of these files are in #44's diff (d1/document-workflow, docu
 | 2 | A restart (rolling deploy) after completion | Runs again | Replays |
 | 3 | Capacity pressure (Map) | Completed keys evicted, so they run again | New claims refused (503); completed keys replay |
 | 4 | A throw or 5xx after an effect write | Key released, so the retry repeats the effect | The marker committed with the write. This request and its retries answer the terminal 409; one effect |
-| 4a | The route's catch-all 400 `REQUEST_FAILED` after an effect write (the clients route maps every error to it) | Key released, so the retry repeats the effect | This request keeps its 400; the retry answers the terminal 409; one effect |
+| 4a | The route's catch-all 400 `REQUEST_FAILED` after an effect write (the clients route maps every error to it) | Key released, so the retry repeats the effect | This request keeps its 400 and carries the effect-committed signal (ruling 15); the retry answers the terminal 409; one effect |
+| 4c | Re-audit ATK-9b: an effect write commits but its acknowledgement is lost (the transaction throws after commit) | Released; the retry re-runs | The marker committed in the same transaction. This request's 400 carries the signal; the retry answers 409; one effect |
+| 4d | Re-audit ATK-13: a document ingest writes the document, a later write fails, and the route deletes the document (compensation) | Released; the retry runs | Conservative (LOW-4, §8): the compensated write still counts. The signal is sent and the retry answers 409, although no document remains |
 | 4b | A decided refusal after a write of derived state (filings 422 "already resolved", a G-2 cross-firm denial) | Released; the retry runs again and refuses again | This request keeps its refusal, and the retry replays it (`reused: true`). The derived-state write is not repeated |
 | 5 | Crash after an effect write | Lost on restart (memory) or n/a | Record `in_progress`; after the lease the marker makes it the terminal 409 |
 | 6 | Settle fails for good after a completed request | n/a | `in_progress` until the lease, then the terminal 409; one effect |
@@ -239,11 +243,29 @@ Fault matrix (GREEN):
 - backend selection and fail-closed configuration: production with memory, unset mode outside tests, firestore without a database;
 - the Map's capacity rule: refuse at capacity, keep completed keys, oversize tombstones, per-firm separation.
 
-**Static guard:**
-- only `firestoreDbModular.ts` and `adminFirestore.ts` (and the durable store, which writes only its own two collections) import a Firestore SDK;
-- `firestoreSpineRepositories.ts` and `denyByDefaultWorkflowOpsRepository.ts` write only through the helpers.
+**Re-audit of 08c0990 (PASS 7.5): the auditor's attacks, adopted.** These pin the load-bearing claims; a mutant of each claim now fails:
 
-The guard fails if a future change (for example #44's rewrite) adds a write that bypasses the fence.
+| Claim | Test (e2e file, "re-audit attacks") | Mutant it kills |
+| --- | --- | --- |
+| The marker commits in the same transaction as the effect | ATK-9b: the commit's acknowledgement is lost | M2b: the marker is written in a separate transaction after the effect |
+| The test seam is inert in production | ATK-8a | M6: the seam is live in production |
+| The provider dispatch is marked before it is sent | ATK-14: the output write fails after dispatch | M7: the dispatch is not marked first |
+| The marker's window equals the record's | ATK-11 | M8b: the fresh marker's window is shorter |
+| A refusal before any effect releases the key | ATK-15, plus "a refusal with no write before it … the key is released" (store file) | M12: a refusal is stored without an effect |
+
+ATK-13 (a compensated document ingest) pins LOW-4 as recorded behaviour.
+
+**Static guard** (`tests/f10-write-fence-guard.test.ts`). It is a text check over the non-test sources in `app/`, `platform/`, `lib/`, `services/` and `components/`. It fails when a file outside the allowed ones:
+- imports a Firestore SDK (allowed only in `firestoreDbModular.ts` and `adminFirestore.ts`);
+- requires or imports a module by a computed name;
+- names the Firestore handle `getRuntimeFirestore` / `getProductionFirestore` (allowed only in `adminFirestore.ts`, `runtimeRepositories.ts` and `platform/http/idempotency.ts`);
+- calls `.collection(`, `.collectionGroup(`, `.doc(`, `.runTransaction(`, `.batch(`, `.bulkWriter(`, `.recursiveDelete(` or `.listCollections(` (allowed also in `durableIdempotency.ts`, which reaches only its two collections);
+- reaches one of those members, or `set`, `update`, `delete`, `create`, `add` or `commit`, by bracket access;
+- writes through a ref taken from the helpers' `doc()` / `collection()`, inline or through one assignment.
+
+It also fails when one of the four writing helpers stops assigning and branching on its fence (`fenceFor(ref)` / `writeFence()`).
+
+The re-audit's bypass forms are must-fail samples. **It does not see** a handle passed in from elsewhere under another name, or aliasing beyond one assignment. It keeps new code on the helpers; the behaviour tests prove the fence.
 
 **Existing suites that must stay green:**
 - the unit suite;
@@ -259,4 +281,8 @@ The guard fails if a future change (for example #44's rewrite) adds a write that
 - **Cost.** Each effect write inside a claim is a transaction with two extra reads, and the first one also writes the marker. Next mutations write a handful of documents each.
 - **TTL.** The policy on `idempotency_keys` and `idempotency_effects` (`functions/README.md`) now also purges Next records.
 - **Writes of derived state count as effects.** A request that recomputes a digest and then refuses (ruling 9) leaves its key answered for 24 hours. A same-key retry gets that refusal (or the terminal 409), never a fresh evaluation. A corrected request needs a new key, which is already the contract.
+- **Re-audit LOW-1: a replay is not re-authorised.** A stored answer replays to the same caller, on the same route, with the same body, for up to 24 hours, even after the caller lost access (for example a member removed from the matter). The replay returns only what that caller was already given. Re-checking permission on replay is a follow-up (to be logged on #30).
+- **Re-audit LOW-2: stored answers hold the payload.** A client-create answer stored in `idempotency_keys` holds the raw CNIC and phone for 24 hours plus the TTL purge lag. The collection is server-only (`firestore.rules` catch-all; F09's rules test). Redacting or encrypting stored answers, as F09's `redactReplay` does for recovery codes, is a follow-up.
+- **Re-audit LOW-4: a compensated effect still spends the key.** A route that writes, fails, and rolls its write back (the d1/documents ingest, ATK-13) leaves the marker. The key answers the terminal 409 with the signal although nothing remains. This is conservative: the fence cannot tell a compensation from an effect. A caller retries under a new key.
+- **The `package.json` `test:rules` line conflicts with #44.** Whoever resolves the conflict must keep both F10 files, `tests/f10-durable-idempotency.firestore.test.ts` and `tests/f10-next-idempotency.e2e.firestore.test.ts`, in the list (and in `vitest.config.ts`'s emulator-only exclusions).
 - **Route comments.** The 12 routes still say "check-and-reserve the key in one synchronous step (no await in between)". This holds inside `beginIdempotentRequest`: the Map's check and reserve are one synchronous step, and the durable store's are one transaction. Rewording the comments was left out to keep the route diff to the `await` (#44 overlap).

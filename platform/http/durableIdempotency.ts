@@ -75,7 +75,7 @@ export type DurableClaimRef = {
 export type DurableBegin =
   | { kind: "claimed"; claim: DurableClaimRef }
   | { kind: "replay"; body: unknown }
-  | { kind: "refusal"; status: number; body: unknown }
+  | { kind: "refusal"; status: number; body: unknown; operationId: string }
   | { kind: "unavailable" }
   | { kind: "terminal"; operationId: string }
   | { kind: "reused" }
@@ -84,7 +84,11 @@ export type DurableBegin =
 /** How an attempt ended: completed with its payload, or not (with the refusal the route answered, when it is storable). */
 export type SettleInput = { completed: true; json: string | null } | { completed: false; refusal?: { status: number; json: string } }
 
-export type SettleOutcome = "stored" | "terminal" | "released" | "lost" | "failed"
+/**
+ * How a settle ended: the completed answer `stored`; the route's refusal kept after an effect (`refused`); the terminal
+ * 409 kept after an effect (`terminal`); the key `released` (no effect); the claim `lost` to another attempt; or `failed`.
+ */
+export type SettleOutcome = "stored" | "refused" | "terminal" | "released" | "lost" | "failed"
 
 type Snap = { exists: boolean; data(): Record<string, unknown> | undefined }
 type DocRef = { path: string }
@@ -127,8 +131,8 @@ function answerOf(response: unknown): DurableBegin {
   if (r?.status === 200 && r.omitted === true) return { kind: "unavailable" }
   if (r?.status === 200 && typeof r.json === "string") return { kind: "replay", body: JSON.parse(r.json) as unknown }
   if (r?.status === 409 && r.code === EFFECT_COMMITTED && nonEmpty(r.operationId)) return { kind: "terminal", operationId: r.operationId }
-  if (typeof r?.status === "number" && r.status >= 400 && r.status < 500 && typeof r.json === "string") {
-    return { kind: "refusal", status: r.status, body: JSON.parse(r.json) as unknown }
+  if (typeof r?.status === "number" && r.status >= 400 && r.status < 500 && typeof r.json === "string" && nonEmpty(r.operationId)) {
+    return { kind: "refusal", status: r.status, body: JSON.parse(r.json) as unknown, operationId: r.operationId }
   }
   return { kind: "in_progress" }
 }
@@ -272,14 +276,15 @@ export class DurableIdempotencyStore {
         return "stored"
       }
       if (markerCounts(markerSnap, nowDate.getTime())) {
-        if (outcome.refusal !== undefined) {
-          // The route refused after a write of its own (for example a recomputed digest): its refusal is the answer.
-          const response = { status: outcome.refusal.status, json: outcome.refusal.json }
-          tx.set(refs.record, { ...withoutReleased(record), status: "done", response, answeredAt: nowDate })
-          return "stored"
-        }
         const markerOp = markerSnap.data()?.operationId
         const operationId = nonEmpty(markerOp) ? markerOp : claim.operationId
+        if (outcome.refusal !== undefined) {
+          // The route refused after a write of its own (for example a recomputed digest): its refusal is the answer,
+          // kept with the operation it belongs to, so every replay can say the effect committed (spec ruling 15).
+          const response = { status: outcome.refusal.status, json: outcome.refusal.json, operationId }
+          tx.set(refs.record, { ...withoutReleased(record), status: "done", response, answeredAt: nowDate })
+          return "refused"
+        }
         tx.set(refs.record, { ...withoutReleased(record), status: "done", response: terminalResponse(operationId), answeredAt: nowDate })
         return "terminal"
       }

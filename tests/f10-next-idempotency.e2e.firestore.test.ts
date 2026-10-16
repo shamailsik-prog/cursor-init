@@ -6,11 +6,12 @@
 // "Restart" forgets everything the Next process holds in memory (the runtime store and the idempotency Map); "instance B"
 // is a second firebase-admin app, with its own Firestore client.
 // Spec: docs/superpowers/specs/2026-10-16-f10-durable-next-idempotency-design.md.
-import { randomInt, randomUUID } from "node:crypto"
+import { createHash, randomInt, randomUUID } from "node:crypto"
 import { deleteApp, getApps, initializeApp, type App } from "firebase-admin/app"
 import { getFirestore, type Firestore } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest"
 import { POST as clientsPost } from "@/app/api/d1/clients/route"
+import { POST as documentsPost } from "@/app/api/d1/documents/route"
 import { POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import * as idempotency from "@/platform/http/idempotency"
 import { getProductionFirestore, resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
@@ -73,13 +74,60 @@ afterAll(async () => {
   if (appB && getApps().includes(appB)) await deleteApp(appB)
 })
 
-type Json = Record<string, unknown> & { result?: Record<string, unknown>; reused?: boolean; code?: string; operationId?: string }
+type Json = Record<string, unknown> & {
+  result?: Record<string, unknown>
+  reused?: boolean
+  code?: string
+  operationId?: string
+  effectCommitted?: { operationId?: string }
+}
+type Answer = { status: number; json: Json; committed: string | null }
 
-async function send(handler: (r: Request) => Promise<Response>, url: string, body: unknown, key: string): Promise<{ status: number; json: Json }> {
+/** Re-audit MEDIUM-1 (spec ruling 15): the header that tells a caller its key's effect committed. */
+const COMMITTED_HEADER = "Idempotency-Effect-Committed"
+
+async function send(handler: (r: Request) => Promise<Response>, url: string, body: unknown, key: string): Promise<Answer> {
   const res = await handler(
     new Request(url, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) })
   )
-  return { status: res.status, json: (await res.json()) as Json }
+  return { status: res.status, json: (await res.json()) as Json, committed: res.headers.get(COMMITTED_HEADER) }
+}
+
+/** The answer carries the effect-committed signal for `operationId`, in its header and in its body. */
+function expectSignalled(a: Answer, operationId?: string) {
+  expect(a.committed).toEqual(operationId ?? expect.any(String))
+  expect(a.json.effectCommitted).toEqual({ operationId: a.committed })
+}
+
+/** The durable record's id (spec §2.2), computed here so this file also runs against main. */
+const durableDocId = (firmId: string, userId: string, route: string, key: string) =>
+  "n_" + createHash("sha256").update([firmId, userId, route, key.toLowerCase()].join("|")).digest("hex")
+
+async function recordsOf(userId: string, route: string, key: string) {
+  const db = await getProductionFirestore()
+  const id = durableDocId("firmA", userId, route, key)
+  const record = await db.collection("idempotency_keys").doc(id).get()
+  const marker = await db.collection("idempotency_effects").doc(id).get()
+  return { id, record: record.exists ? record.data() : undefined, marker: marker.exists ? marker.data() : undefined }
+}
+const ms = (v: unknown) => (v as { toMillis(): number }).toMillis()
+
+async function seedMatter(): Promise<string> {
+  const db = await getProductionFirestore()
+  const matterId = `mat_f10_${randomUUID()}`
+  await db.collection("matters").doc(matterId).set({
+    id: matterId,
+    firmId: "firmA",
+    clientId: "client_a",
+    title: "F10 matter",
+    courtId: "SHC",
+    caseNumber: null,
+    caseNumberStatus: "pending",
+    status: "engagement_unconfirmed",
+    classification: "internal",
+  })
+  await db.collection("matter_members").doc(`${matterId}_partner_a`).set({ matterId, userId: "partner_a", firmId: "firmA" })
+  return matterId
 }
 
 /** A client of firm A with a fresh name and CNIC, so no other test's rows link to it. */
@@ -165,28 +213,17 @@ describe("audit F10: the audit's scenarios through the real Next routes (RED on 
     expect(await entitiesNamed(body.canonicalName)).toBe(1)
     const retry = await createClient(body, key)
     expect(await entitiesNamed(body.canonicalName)).toBe(1)
-    // The request itself keeps the route's own catch-all answer (spec ruling 9); its retry is told the effect committed.
+    // The request keeps the route's own catch-all answer (spec ruling 9), and both it and its retry carry the
+    // effect-committed signal (ruling 15, re-audit MEDIUM-1): a caller is never told only "failed" for an effect that landed.
     expect([first.status, first.json.code]).toEqual([400, "REQUEST_FAILED"])
-    expect([retry.status, retry.json.code]).toEqual([409, "idempotency_effect_committed"])
-    expect(retry.json.operationId).toEqual(expect.any(String))
+    expectSignalled(first)
+    expect([retry.status, retry.json.code, retry.json.operationId]).toEqual([409, "idempotency_effect_committed", first.committed])
+    expectSignalled(retry, first.committed!)
   })
 
   it("committee-brain: the provider answered and the output committed, then the request failed; the same-key retry makes no second provider call", async () => {
     // A matter of firm A with partner_a as a member, as the repositories store it.
-    const db = await getProductionFirestore()
-    const matterId = `mat_f10_${randomUUID()}`
-    await db.collection("matters").doc(matterId).set({
-      id: matterId,
-      firmId: "firmA",
-      clientId: "client_a",
-      title: "F10 committee matter",
-      courtId: "SHC",
-      caseNumber: null,
-      caseNumberStatus: "pending",
-      status: "engagement_unconfirmed",
-      classification: "internal",
-    })
-    await db.collection("matter_members").doc(`${matterId}_partner_a`).set({ matterId, userId: "partner_a", firmId: "firmA" })
+    const matterId = await seedMatter()
     let calls = 0
     setTransportForTests({
       async send() {
@@ -202,6 +239,172 @@ describe("audit F10: the audit's scenarios through the real Next routes (RED on 
     expect(first.status).not.toBe(200)
     const retry = await send(committeePost, "http://127.0.0.1/api/p1/committee-brain", body, key)
     expect(calls).toBe(1)
+    expect([retry.status, retry.json.code]).toEqual([409, "idempotency_effect_committed"])
+    expectSignalled(first)
+    expectSignalled(retry, first.committed!)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Re-audit of 08c0990 (PASS 7.5), MEDIUM-2: the auditor's attacks, adopted so that each load-bearing claim has a test
+// that a mutant of it fails (spec §7, the mutant table in the plan's execution record).
+// ---------------------------------------------------------------------------------------------------------------------
+describe("re-audit attacks: the effect fence's load-bearing claims", () => {
+  it("ATK-9b: a fenced write commits but its acknowledgement is lost; the marker committed in the same transaction, so the answer says so and the retry is 409, never a re-run", async () => {
+    const body = clientBody(`F10 ATK-9b ${randomUUID()}`)
+    const key = randomUUID()
+    const db = await getProductionFirestore()
+    const original = db.runTransaction.bind(db)
+    let armed = false
+    let fired = false
+    seam().beforeFencedWrite = async () => {
+      if (!fired) armed = true
+    }
+    ;(db as unknown as { runTransaction: unknown }).runTransaction = async (fn: never, opts?: never) => {
+      const out = await original(fn, opts)
+      if (armed && !fired) {
+        fired = true
+        armed = false
+        throw new Error("DEADLINE_EXCEEDED: commit acknowledgement lost")
+      }
+      return out
+    }
+    try {
+      const first = await createClient(body, key)
+      const after = await recordsOf("partner_a", "POST /api/d1/clients", key)
+      const retry = await createClient(body, key)
+      expect(fired).toBe(true)
+      expect(await entitiesNamed(body.canonicalName)).toBe(1)
+      expect(after.marker).toMatchObject({ kind: "transaction" })
+      expect([first.status, first.json.code]).toEqual([400, "REQUEST_FAILED"])
+      expectSignalled(first, after.marker!.operationId as string)
+      expect([retry.status, retry.json.code]).toEqual([409, "idempotency_effect_committed"])
+    } finally {
+      ;(db as unknown as { runTransaction: unknown }).runTransaction = original
+    }
+  })
+
+  it("ATK-14: committee-brain, the provider answered and the output write failed before committing; the dispatch was marked first, so the retry pays nothing", async () => {
+    const matterId = await seedMatter()
+    let calls = 0
+    let dispatched = false
+    let thrown = false
+    setTransportForTests({
+      async send() {
+        calls += 1
+        dispatched = true
+        return { text: "paid answer" }
+      },
+    })
+    seam().beforeFencedWrite = async () => {
+      if (dispatched && !thrown) {
+        thrown = true
+        throw new Error("UNAVAILABLE: output write failed")
+      }
+    }
+    const key = randomUUID()
+    const body = { actorId: "partner_a", body: "Draft a reply.", matterId, classification: "internal" }
+    const first = await send(committeePost, "http://127.0.0.1/api/p1/committee-brain", body, key)
+    const retry = await send(committeePost, "http://127.0.0.1/api/p1/committee-brain", body, key)
+    expect(thrown).toBe(true)
+    expect(calls).toBe(1)
+    expect((await recordsOf("partner_a", "POST /api/p1/committee-brain", key)).marker).toMatchObject({ kind: "p1_dispatch" })
+    expectSignalled(first)
+    expect([retry.status, retry.json.code]).toEqual([409, "idempotency_effect_committed"])
+  })
+
+  it("ATK-15: a decided refusal before any effect (403, clearance) releases the key: no record is kept, and the same key is evaluated afresh, never a stored refusal replayed", async () => {
+    const db = await getProductionFirestore()
+    const body = { ...clientBody(`F10 ATK-15 ${randomUUID()}`), actorId: "associate_a", classification: "privileged-restricted" }
+    const key = randomUUID()
+    const first = await createClient(body, key)
+    expect(first.status).toBe(403)
+    expect(first.committed).toBeNull()
+    const docId = durableDocId("firmA", "associate_a", "POST /api/d1/clients", key)
+    expect((await db.collection("idempotency_keys").doc(docId).get()).exists).toBe(false)
+    restart()
+    const retry = await createClient(body, key)
+    // A replay would carry `reused: true`; a fresh evaluation does not.
+    expect([retry.status, retry.json.reused, retry.committed]).toEqual([403, undefined, null])
+    expect((await db.collection("idempotency_keys").doc(docId).get()).exists).toBe(false)
+    expect(await entitiesNamed(body.canonicalName)).toBe(0)
+  })
+
+  it("ATK-11: the marker and the record share one window (24 h from the first claim); an adopted orphan keeps it; after it the key is a new operation", async () => {
+    const body = clientBody(`F10 ATK-11 ${randomUUID()}`)
+    const key = randomUUID()
+    expect((await createClient(body, key)).status).toBe(200)
+    const { id, record, marker } = await recordsOf("partner_a", "POST /api/d1/clients", key)
+    expect(ms(marker?.expiresAt)).toBe(ms(record?.expiresAt))
+    expect(ms(record?.expiresAt) - ms(record?.createdAt)).toBe(24 * 60 * 60 * 1000)
+    // The record is lost; instance B adopts the orphan marker within its window and keeps that window.
+    const db = await getProductionFirestore()
+    await db.collection("idempotency_keys").doc(id).delete()
+    restart()
+    setFirestorePersistenceForTests(instanceB())
+    const adopted = await createClient(body, key)
+    expect([adopted.status, adopted.json.code]).toEqual([409, "idempotency_effect_committed"])
+    const after = await recordsOf("partner_a", "POST /api/d1/clients", key)
+    expect(ms(after.record?.expiresAt)).toBe(ms(marker?.expiresAt))
+    // One second past the window: the key is a new operation, by design (24 h keys, spec §8).
+    seam().now = () => Date.now() + 24 * 60 * 60 * 1000 + 1_000
+    const late = await createClient(body, key)
+    expect([late.status, late.json.reused]).toEqual([200, false])
+  })
+
+  it("ATK-8a: production refuses memory and unset modes, and the durable store's test seam is inert in production", async () => {
+    const req = () => new Request("http://127.0.0.1/api/f10/thing", { method: "POST" })
+    const saved = { NODE_ENV: env.NODE_ENV, mode: env.SIKANDER_PERSISTENCE_MODE }
+    const outcome = (p: Promise<{ response?: Response }>) =>
+      p.then(
+        (r) => `resolved ${r.response?.status ?? "claim"}`,
+        (e: Error) => `threw ${e.name}`
+      )
+    const out: Record<string, string> = {}
+    try {
+      env.NODE_ENV = "production"
+      env.SIKANDER_PERSISTENCE_MODE = "memory"
+      out.memory = await outcome(idempotency.beginIdempotentRequest(req(), randomUUID(), "fp"))
+      delete env.SIKANDER_PERSISTENCE_MODE
+      out.unset = await outcome(idempotency.beginIdempotentRequest(req(), randomUUID(), "fp"))
+      env.SIKANDER_PERSISTENCE_MODE = "firestore"
+      seam().claimFailures = [new Error("the seam must be inert in production")]
+      out.seam = await idempotency.runWithIdempotencyScope({ firmId: "firmA", userId: "partner_a" }, async () => {
+        const r = await idempotency.beginIdempotentRequest(req(), randomUUID(), "fp")
+        return r.claim ? "claimed (seam inert)" : `answered ${r.response.status}`
+      })
+    } finally {
+      env.NODE_ENV = saved.NODE_ENV
+      env.SIKANDER_PERSISTENCE_MODE = saved.mode
+    }
+    expect(out).toEqual({ memory: "threw PersistenceConfigurationError", unset: "threw PersistenceConfigurationError", seam: "claimed (seam inert)" })
+  })
+
+  it("ATK-13 (re-audit LOW-4, recorded): a document ingest whose second write fails is rolled back by the route, yet its key still answers that an effect committed", async () => {
+    const matterId = await seedMatter()
+    const db = await getProductionFirestore()
+    const body = {
+      action: "ingest",
+      actorId: "partner_a",
+      firmId: "firmA",
+      matterId,
+      contentBase64: Buffer.from(`F10 ATK-13 ${randomUUID()}`).toString("base64"),
+      sourceChannel: "web",
+      mimeType: "text/plain",
+    }
+    let n = 0
+    seam().beforeFencedWrite = async () => {
+      n += 1
+      if (n === 2) throw new Error("UNAVAILABLE: jobs write failed")
+    }
+    const key = randomUUID()
+    const first = await send(documentsPost, "http://127.0.0.1/api/d1/documents", body, key)
+    delete seam().beforeFencedWrite
+    expect(first.status).toBe(400)
+    expect((await db.collection("documents").where("matterId", "==", matterId).get()).size).toBe(0)
+    // Conservative: the compensated write still counts, so the caller is told, and the key is spent (spec §8, LOW-4).
+    expectSignalled(first)
+    const retry = await send(documentsPost, "http://127.0.0.1/api/d1/documents", body, key)
     expect([retry.status, retry.json.code]).toEqual([409, "idempotency_effect_committed"])
   })
 })

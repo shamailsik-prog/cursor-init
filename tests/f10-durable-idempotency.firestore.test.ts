@@ -280,7 +280,12 @@ describe("F10: the write fence (through firestoreDbModular, inside an idempotent
   })
 
   /** One request that writes `thing` and then answers `answer` without completing its claim. */
-  async function writeThenAnswer(db: Firestore, key: string, thing: string, answer: () => Response): Promise<{ status: number; json: Record<string, unknown> }> {
+  async function writeThenAnswer(
+    db: Firestore,
+    key: string,
+    thing: string,
+    answer: () => Response
+  ): Promise<{ status: number; json: Record<string, unknown>; committed: string | null }> {
     env.SIKANDER_PERSISTENCE_MODE = "firestore"
     setFirestorePersistenceForTests(db)
     const res = await runWithIdempotencyScope({ firmId: "firmF10", userId: "partner_f10" }, async () => {
@@ -291,43 +296,70 @@ describe("F10: the write fence (through firestoreDbModular, inside an idempotent
       await setDoc(ref, { n: (snap.data()?.n ?? 0) + 1 })
       return answer()
     })
-    return { status: res.status, json: (await res.json()) as Record<string, unknown> }
+    return { status: res.status, json: (await res.json()) as Record<string, unknown>, committed: res.headers.get("Idempotency-Effect-Committed") }
   }
+  const markerOpOf = async (db: Firestore, key: string) =>
+    (await db.collection("idempotency_effects").doc(durableDocId("firmF10", "partner_f10", "POST /api/f10/thing", key)).get()).data()?.operationId as string
 
-  it("a refusal the route answers after a write of its own (for example a recomputed digest) is kept and replayed as itself; the write is not repeated", async () => {
+  it("a refusal the route answers after a write of its own (for example a recomputed digest) is kept and replayed as itself, with the effect-committed signal; the write is not repeated", async () => {
     const db = instance()
     const key = randomUUID()
     const thing = randomUUID()
     const refuse = () => Response.json({ error: "closure follow-up queue is already resolved" }, { status: 422 })
     const first = await writeThenAnswer(db, key, thing, refuse)
-    expect(first).toEqual({ status: 422, json: { error: "closure follow-up queue is already resolved" } })
+    const op = await markerOpOf(db, key)
+    expect(op).toEqual(expect.any(String))
+    // Re-audit MEDIUM-1 (spec ruling 15): the status and body stay; the header and `effectCommitted` say the write landed.
+    expect(first).toEqual({ status: 422, json: { error: "closure follow-up queue is already resolved", effectCommitted: { operationId: op } }, committed: op })
     const again = await writeThenAnswer(db, key, thing, refuse)
-    expect(again).toEqual({ status: 422, json: { error: "closure follow-up queue is already resolved", reused: true } })
+    expect(again).toEqual({
+      status: 422,
+      json: { error: "closure follow-up queue is already resolved", reused: true, effectCommitted: { operationId: op } },
+      committed: op,
+    })
     expect((await db.collection("f10_things").doc(thing).get()).data()).toEqual({ n: 1 })
   })
 
-  it("a 5xx after a write answers 409 idempotency_effect_committed, now and on retry; the write is not repeated", async () => {
+  it("a 5xx after a write answers 409 idempotency_effect_committed with the signal, now and on retry; the write is not repeated", async () => {
     const db = instance()
     const key = randomUUID()
     const thing = randomUUID()
     const answer = () => Response.json({ error: "internal error", code: "INTERNAL_ERROR" }, { status: 500 })
     const first = await writeThenAnswer(db, key, thing, answer)
-    expect([first.status, first.json.code]).toEqual([409, "idempotency_effect_committed"])
+    const op = await markerOpOf(db, key)
+    expect([first.status, first.json.code, first.json.operationId, first.committed, first.json.effectCommitted]).toEqual([409, "idempotency_effect_committed", op, op, { operationId: op }])
     const again = await writeThenAnswer(db, key, thing, answer)
-    expect([again.status, again.json.code, again.json.operationId]).toEqual([409, "idempotency_effect_committed", first.json.operationId])
+    expect([again.status, again.json.code, again.json.operationId, again.committed]).toEqual([409, "idempotency_effect_committed", op, op])
     expect((await db.collection("f10_things").doc(thing).get()).data()).toEqual({ n: 1 })
   })
 
-  it("a route's catch-all 400 REQUEST_FAILED after a write (a public refusal or a masked failure) is left as this request's answer; its retry gets 409 idempotency_effect_committed; the write is not repeated", async () => {
+  it("a route's catch-all 400 REQUEST_FAILED after a write (a public refusal or a masked failure) keeps its status and body, gains the signal; its retry gets 409 idempotency_effect_committed; the write is not repeated", async () => {
     const db = instance()
     const key = randomUUID()
     const thing = randomUUID()
     const answer = () => Response.json({ error: "cross-firm actor denied", code: "REQUEST_FAILED" }, { status: 400 })
     const first = await writeThenAnswer(db, key, thing, answer)
-    expect(first).toEqual({ status: 400, json: { error: "cross-firm actor denied", code: "REQUEST_FAILED" } })
+    const op = await markerOpOf(db, key)
+    expect(first).toEqual({ status: 400, json: { error: "cross-firm actor denied", code: "REQUEST_FAILED", effectCommitted: { operationId: op } }, committed: op })
     const again = await writeThenAnswer(db, key, thing, answer)
-    expect([again.status, again.json.code]).toEqual([409, "idempotency_effect_committed"])
+    expect([again.status, again.json.code, again.committed]).toEqual([409, "idempotency_effect_committed", op])
     expect((await db.collection("f10_things").doc(thing).get()).data()).toEqual({ n: 1 })
+  })
+
+  it("a refusal with no write before it carries no signal and keeps nothing: the key is released", async () => {
+    const db = instance()
+    env.SIKANDER_PERSISTENCE_MODE = "firestore"
+    setFirestorePersistenceForTests(db)
+    const key = randomUUID()
+    const res = await runWithIdempotencyScope({ firmId: "firmF10", userId: "partner_f10" }, async () => {
+      const begun = await beginIdempotentRequest(new Request("http://127.0.0.1/api/f10/thing", { method: "POST" }), key, "fp-pre")
+      if (!begun.claim) return begun.response
+      return Response.json({ error: "actor clearance is below the requested classification" }, { status: 403 })
+    })
+    expect([res.status, res.headers.get("Idempotency-Effect-Committed")]).toEqual([403, null])
+    expect(await res.json()).toEqual({ error: "actor clearance is below the requested classification" })
+    const docId = durableDocId("firmF10", "partner_f10", "POST /api/f10/thing", key)
+    expect((await db.collection("idempotency_keys").doc(docId).get()).exists).toBe(false)
   })
 
   it("recordExternalEffect marks a provider dispatch before it happens (kind external)", async () => {

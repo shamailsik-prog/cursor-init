@@ -379,15 +379,40 @@ async function storableRefusalOf(response: Response): Promise<StorableRefusal | 
   }
 }
 
+/**
+ * Re-audit MEDIUM-1 (spec ruling 15): the signal that a key's effect committed. Every answer for such a key other than
+ * its completed 2xx replay carries it: the original request's own 4xx, every replay of a stored refusal, and the
+ * terminal 409. It appears both as this response header (its value is the operationId) and as the body field
+ * `effectCommitted: { operationId }`. A caller told "failed" must never be left to resubmit an effect that landed under
+ * a new key.
+ */
+export const EFFECT_COMMITTED_HEADER = "Idempotency-Effect-Committed"
+
 function effectCommittedResponse(operationId: string | undefined): NextResponse {
   return NextResponse.json(
     {
       error: "this Idempotency-Key's operation already committed its effect; its response is not available",
       code: EFFECT_COMMITTED,
-      ...(operationId === undefined ? {} : { operationId }),
+      ...(operationId === undefined ? {} : { operationId, effectCommitted: { operationId } }),
     },
-    { status: 409 }
+    { status: 409, ...(operationId === undefined ? {} : { headers: { [EFFECT_COMMITTED_HEADER]: operationId } }) }
   )
+}
+
+/** `response` with the effect-committed signal added: the same status, headers and body, plus the header and field. */
+async function signalEffectCommitted(response: Response, operationId: string): Promise<Response> {
+  const headers = new Headers(response.headers)
+  headers.set(EFFECT_COMMITTED_HEADER, operationId)
+  headers.delete("content-length")
+  const text = await response.clone().text()
+  let body = text
+  try {
+    const json = JSON.parse(text) as unknown
+    if (json !== null && typeof json === "object" && !Array.isArray(json)) body = JSON.stringify({ ...json, effectCommitted: { operationId } })
+  } catch {
+    // Not a JSON object: the header alone carries the signal.
+  }
+  return new Response(body, { status: response.status, statusText: response.statusText, headers })
 }
 
 function claimLostResponse(): NextResponse {
@@ -402,8 +427,10 @@ function claimLostResponse(): NextResponse {
  * - **Later same-key requests.** A refusal the route decided (a 4xx other than 429, without a catch-all code) is kept
  *   as the key's answer and replayed as itself. Anything else gets 409 idempotency_effect_committed. That includes a
  *   catch-all 400 REQUEST_FAILED, which the routes use both for a public refusal and for a masked failure.
- * - **This request.** A 4xx answer is left as the route wrote it. A 5xx or a throw is replaced by 409
+ * - **This request.** A 4xx answer keeps its status and body. A 5xx or a throw is replaced by 409
  *   idempotency_effect_committed.
+ * - **The signal (ruling 15).** Every one of those answers, here and on every retry, carries the effect-committed
+ *   signal (EFFECT_COMMITTED_HEADER and `effectCommitted`).
  * - **A refused fenced write.** The attempt's claim was taken over, so any non-2xx answer becomes 409
  *   idempotency_claim_lost.
  */
@@ -420,6 +447,7 @@ export async function runWithIdempotencyScope<T>(scope: IdempotencyScope, run: (
   const failed = failure !== undefined || (result instanceof Response && result.status >= 500)
   const refusal = failure === undefined && result instanceof Response && !answered2xx ? await storableRefusalOf(result) : undefined
   let override: Response | undefined
+  let committed: string | undefined
   for (const claim of ctx.claims) {
     let outcome: SettleOutcome
     try {
@@ -429,11 +457,14 @@ export async function runWithIdempotencyScope<T>(scope: IdempotencyScope, run: (
       outcome = "failed"
     }
     if (answered2xx) continue
+    const effectCommitted = outcome === "terminal" || outcome === "refused" || claim.fenceRefusal === EFFECT_COMMITTED
     if (claim.fenceRefusal === CLAIM_LOST) override = claimLostResponse()
-    else if (failed && (outcome === "terminal" || claim.fenceRefusal === EFFECT_COMMITTED)) override = effectCommittedResponse(claim.operationId)
+    else if (failed && effectCommitted) override = effectCommittedResponse(claim.operationId)
+    else if (effectCommitted && claim.operationId !== undefined) committed = claim.operationId
   }
   if (override !== undefined && (failure !== undefined || result instanceof Response)) return override as T
   if (failure !== undefined) throw failure.error
+  if (committed !== undefined && result instanceof Response) return (await signalEffectCommitted(result, committed)) as T
   return result as T
 }
 
@@ -575,8 +606,14 @@ export async function beginIdempotentRequest(request: Request, key: string, fing
     case "terminal":
       return { response: effectCommittedResponse(begun.operationId) }
     case "refusal": {
+      // A refusal is stored only after an effect committed: its replay carries the signal too (ruling 15).
       const body = begun.body !== null && typeof begun.body === "object" && !Array.isArray(begun.body) ? begun.body : { result: begun.body }
-      return { response: NextResponse.json({ ...body, reused: true }, { status: begun.status }) }
+      return {
+        response: NextResponse.json(
+          { ...body, reused: true, effectCommitted: { operationId: begun.operationId } },
+          { status: begun.status, headers: { [EFFECT_COMMITTED_HEADER]: begun.operationId } }
+        ),
+      }
     }
   }
 }

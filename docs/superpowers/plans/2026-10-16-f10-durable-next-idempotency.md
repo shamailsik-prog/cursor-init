@@ -183,3 +183,27 @@ Execution was native (inline), self-approved under the owner's standing autonomy
 - `npm run typecheck` and `npm run typecheck:tests` exit 0.
 - `npm run lint` exits 0 with 0 errors. Its 89 warnings are identical, line for line, to the pre-F10 baseline.
 - `BASE=origin/main bash ci_gates/gate_g0.sh` and the claim gate: see the PR.
+
+### Re-audit of 08c0990 (PASS 7.5): two MEDIUM fixes and one LOW, in one commit
+
+- **MEDIUM-1, spec ruling 15.** Every answer for a key whose effect committed, other than its completed 2xx replay, carries `Idempotency-Effect-Committed: <operationId>` and `effectCommitted: { operationId }`. That covers this request's own kept 4xx, a replayed stored refusal, and the terminal 409.
+  - RED: the final tests against the 08c0990 source gave **8 failed / 27 passed (35)**, every failure on the missing signal.
+  - GREEN: **35 / 35**.
+- **MEDIUM-2.** The auditor's ATK-9b, 14, 8a, 11 and 15 (and ATK-13, recorded) are adopted into `tests/f10-next-idempotency.e2e.firestore.test.ts`. Each mutant was applied to a scratch snapshot and fails the F10 test set:
+
+  | Mutant | Fails |
+  | --- | --- |
+  | M2b: marker in a separate transaction after the effect | ATK-9b |
+  | M6: test seam live in production | ATK-8a |
+  | M7: provider dispatch not marked first | ATK-14 |
+  | M8b: fresh marker window shorter than the record's | ATK-11 |
+  | M12: refusal stored with no effect | ATK-15, and the store file's pre-effect refusal test |
+
+- **LOW-3.** The guard now refuses:
+  - a write through a helper `doc()` / `collection()` ref;
+  - bracket access to Firestore members;
+  - a computed require/import;
+  - the Firestore handle outside its three files.
+
+  `helperWriters` requires the actual fence lookup. RED: the 08c0990 guard missed **6 of the 7** bypass samples and the helper mutant (7 failed / 5 passed). GREEN: 6 / 6.
+- **Documented in spec §8:** LOW-1 (replay not re-authorised), LOW-2 (stored answers hold CNIC and phone), LOW-4 (a compensated effect spends the key), and the #44 `test:rules` conflict.
