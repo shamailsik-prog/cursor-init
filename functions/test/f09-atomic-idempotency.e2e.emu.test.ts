@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
@@ -142,9 +142,12 @@ const fixedClock = () => {
  * p2.jobs-scheduled scan every firm the earlier files left behind).
  */
 let sharedPartner: Promise<{ firmId: string } & Member> | undefined
+/** The `firms/{id}` docs this file created; deleted after it, so suites that scan every firm see what main leaves. */
+const createdFirms: string[] = []
 function firmPartner(): Promise<{ firmId: string } & Member> {
   sharedPartner ??= (async () => {
     const firmId = uniq("firm")
+    createdFirms.push(firmId)
     await db().collection("firms").doc(firmId).set({ name: "T" })
     return { firmId, ...(await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })) }
   })()
@@ -173,6 +176,7 @@ type Firm = { firmId: string; matterId: string; P: Member; A: Member }
 
 async function brainFirm(): Promise<Firm> {
   const firmId = uniq("firm")
+  createdFirms.push(firmId)
   await db().collection("firms").doc(firmId).set({ name: "F", plan: "internal" })
   await firmConfigRef(firmId).set({ monthlyBudgetMicroUsd: BIG })
   const matterId = uniq("matter")
@@ -228,6 +232,10 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
     await platformConfigRef().delete()
     await db().collection("platform").doc("p1Overhead").delete()
     await db().collection("platform").doc("p1ReconcileCursor").delete()
+  })
+
+  afterAll(async () => {
+    await Promise.all(createdFirms.map((id) => db().collection("firms").doc(id).delete()))
   })
 
   // -------------------------------------------------------------------------
