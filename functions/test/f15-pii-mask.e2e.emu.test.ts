@@ -237,8 +237,16 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
       expect(row.outbound.metadata).not.toHaveProperty("residualCounts")
     })
 
-    it("a receipt whose residual counts are malformed is not published: 409 idempotency_effect_committed, no second call", async () => {
-      const { f, sent, resumed } = await resumeAfter({ "result.outbound.residualCounts": "none" })
+    // Codex P2 on #61: an object-shaped but malformed value fails closed too, not only a non-object.
+    it.each([
+      ["a string", "none"],
+      ["a non-count value", { ...NO_RESIDUAL, address: "none" }],
+      ["a negative count", { ...NO_RESIDUAL, address: -1 }],
+      ["a fractional count", { ...NO_RESIDUAL, kinship_name: 0.5 }],
+      ["a missing kind", { id_digits: 0, labelled_identifier: 0, address: 0 }],
+      ["an unknown kind", { ...NO_RESIDUAL, nickname: 0 }],
+    ])("a receipt whose residual counts are malformed (%s) is not published: 409 idempotency_effect_committed, no second call", async (_label, malformed) => {
+      const { f, sent, resumed } = await resumeAfter({ "result.outbound.residualCounts": malformed })
       const err = await apiErrorOf(resumed)
       expect([err.status, err.code]).toEqual([409, "idempotency_effect_committed"])
       expect(sent).toHaveLength(1)

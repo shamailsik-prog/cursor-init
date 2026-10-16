@@ -1,4 +1,5 @@
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
@@ -343,6 +344,23 @@ function outputRow(o: {
 /** A count, when it is a non-negative integer. */
 const countOf = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null)
 
+/**
+ * Residual counts (audit F15), when they are exactly the detector's four kinds, each a count; null otherwise. An
+ * object-shaped value with a non-count, a missing kind or an unknown kind is malformed too (Codex P2 on #61).
+ */
+function residualCountsOf(value: unknown): Record<string, number> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const entries = value as Record<string, unknown>
+  if (Object.keys(entries).length !== RESIDUAL_KINDS.length) return null
+  const out: Record<string, number> = {}
+  for (const kind of RESIDUAL_KINDS) {
+    const n = Object.hasOwn(entries, kind) ? countOf(entries[kind]) : null
+    if (n === null) return null
+    out[kind] = n
+  }
+  return out
+}
+
 /** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */
 function receiptOf(value: unknown): P1Receipt | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null
@@ -359,9 +377,9 @@ function receiptOf(value: unknown): P1Receipt | null {
   const isCounts = (value: unknown): value is Record<string, number> => value !== null && typeof value === "object" && !Array.isArray(value)
   const counts = outbound.redactionCounts
   if (!isCounts(counts)) return null
-  // Audit F15: validated like the redaction counts when present; a receipt recorded before F15 has none.
-  const residual = outbound.residualCounts
-  if (residual !== undefined && !isCounts(residual)) return null
+  // Audit F15: when present, exactly the four kinds, each a count; a receipt recorded before F15 has none.
+  const residual = outbound.residualCounts === undefined ? undefined : residualCountsOf(outbound.residualCounts)
+  if (residual === null) return null
   return {
     outcome: r.outcome,
     ...(r.outcome === "ok" ? { text: r.text as string } : {}),
