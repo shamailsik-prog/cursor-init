@@ -120,6 +120,21 @@ describe("readCorpusReaderConfig (F05 plan D8)", () => {
     expect(keyOf(env(LOOPBACK, { SIKANDER_CORPUS_MAX_STALENESS_HOURS: "25" }))).not.toBe(base)
   })
 
+  it("only the current password is held: rotating away and back gives a fresh key, so the store is rebuilt", () => {
+    const keyOf = (e: Record<string, string | undefined>) => {
+      const r = readCorpusReaderConfig(e, false)
+      if (!r.ok) throw new Error(r.reason)
+      return r.config.key
+    }
+    const first = keyOf(env(LOOPBACK))
+    const rotated = keyOf(env(LOOPBACK.replace(PASSWORD, `${PASSWORD}r`)))
+    const back = keyOf(env(LOOPBACK))
+    expect(rotated).not.toBe(first)
+    expect(back).not.toBe(first)
+    expect(back).not.toBe(rotated)
+    expect(keyOf(env(LOOPBACK))).toBe(back)
+  })
+
   it("a refusal carries the reason only: never the URL, the password or the CA", () => {
     for (const [e, production] of [
       [env(REMOTE), false],

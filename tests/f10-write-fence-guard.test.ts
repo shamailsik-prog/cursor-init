@@ -84,7 +84,7 @@ export function violations(rel: string, text: string): string[] {
     const inline = INLINE_HELPER_WRITE.exec(blank)
     if (inline) out.push(`${rel}: writes through a helper ref (.${inline[1]}()) instead of setDoc/updateDoc/deleteDoc/runTransaction`)
     for (const [, name] of blank.matchAll(HELPER_REF)) {
-      const w = new RegExp(`(?<![\\w$.])${name!.replace(/\$/g, "\\$")}\\s*\\.\\s*(${WRITE})\\s*\\(`).exec(blank)
+      const w = new RegExp(`(?<![\\w$.])${name!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\.\\s*(${WRITE})\\s*\\(`).exec(blank)
       if (w) out.push(`${rel}: writes through a helper ref (${name}.${w[1]}()) instead of setDoc/updateDoc/deleteDoc/runTransaction`)
     }
   }

@@ -23,7 +23,10 @@ export type CorpusReaderConfig = {
   /** The PEM CA for TLS (verify-full), or null for loopback plaintext outside production. */
   ca: string | null
   maxStalenessHours: number
-  /** sha256 hex of the other fields: the memo key for the store. Never logged. */
+  /**
+   * sha256 hex of the other fields, with the password replaced by its ordinal in this process: the memo key for
+   * the store. Never logged.
+   */
   key: string
 }
 
@@ -33,6 +36,23 @@ export type CorpusReaderConfigResult = { ok: true; config: CorpusReaderConfig } 
 
 export const MAX_STALENESS_HOURS_LIMIT = 8760
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"])
+
+/**
+ * The password's place in this process's sequence of passwords: it moves on whenever the password read differs from
+ * the last one, so the memo key changes when the password does while the password itself never enters a hash (a fast
+ * hash over a password is CodeQL js/insufficient-password-hash, and the key needs no secret in it). Only the current
+ * password is kept, never the ones it replaced.
+ */
+let currentSecret: string | null = null
+let currentOrdinal = 0
+function credentialOrdinal(secret: string): number {
+  if (secret !== currentSecret) {
+    currentSecret = secret
+    currentOrdinal += 1
+  }
+  return currentOrdinal
+}
+
 const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/
 
 const refuse = (reason: CorpusReaderConfigRefusal): CorpusReaderConfigResult => ({ ok: false, reason })
@@ -93,6 +113,7 @@ export function readCorpusReaderConfig(
   }
 
   const fields = { host: parsed.host, port: parsed.port, database: parsed.database, user: parsed.user, password: parsed.password, ca, maxStalenessHours }
-  const key = createHash("sha256").update(JSON.stringify(fields), "utf8").digest("hex")
+  const identity = { host: fields.host, port: fields.port, database: fields.database, user: fields.user, ca, maxStalenessHours, credential: credentialOrdinal(parsed.password) }
+  const key = createHash("sha256").update(JSON.stringify(identity), "utf8").digest("hex")
   return { ok: true, config: { ...fields, key } }
 }
