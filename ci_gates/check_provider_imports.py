@@ -4,8 +4,9 @@
 Scans every file outside the skip rules in g0_guard_common and outside ALLOWED_PREFIXES
 (FA-CI-001):
 - JS/TS: every module specifier in import, export ... from, import(), require() and
-  require.resolve() position, with ', " or ` quotes; subpaths (`openai/client`) count as the
-  package.
+  require.resolve() position, with comments between the tokens and ', " or ` quotes, and calls
+  through createRequire aliases; subpaths (`openai/client`) count as the package. Extensionless
+  node/bun/deno scripts are read as JS and python scripts as Python (by shebang).
 - Python: every import (ast): `import openai`, `from openai import AsyncOpenAI`,
   `from openai.types import X`, `from google.cloud import vision`, importlib.import_module().
 - package.json dependency sections; pip requirements files (requirements*.txt/.in,

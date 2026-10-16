@@ -3,12 +3,16 @@
 
 Scans every file outside the skip rules in g0_guard_common (FA-CI-001):
 - JS/TS: every module specifier in import, export ... from, import(), require() and
-  require.resolve() position, however the statement is laid out across lines, with ', " or `.
+  require.resolve() position, however the statement is laid out across lines, with comments
+  between the tokens, with ', " or `; and calls through createRequire aliases.
+- Extensionless scripts by shebang: node/bun/deno as JS, python as Python, sh/bash/dash/ash/
+  ksh/zsh/busybox (directly or through `env [-S]`) as shell.
 - Python: every import (ast), including importlib.import_module("...") and __import__("...").
 - package.json dependency sections and scripts; pip requirements files (requirements*.txt/.in,
   requirements/*.txt), pyproject.toml and Pipfile, with PEP 508/503 name normalisation.
 - Dockerfiles (Dockerfile, Dockerfile.*, *.Dockerfile, Containerfile) and shell scripts (.sh,
-  .bash, .zsh, .ksh, or a shell shebang) that install Playwright/Puppeteer or their browsers.
+  .bash, .zsh, .ksh, or an extensionless file with a shell shebang) that install
+  Playwright/Puppeteer or their browsers.
 
 The one sanctioned use is the root Playwright e2e suite: the root package.json devDependency
 @playwright/test, the root playwright.config.*, and the root tests/ tree.

@@ -47,7 +47,15 @@ REQUIREMENTS_NAME_RE = re.compile(
     r"^(?:[\w.-]+[-_.])?requirements(?:[-_.][\w.-]+)?\.(?:txt|in)$",
     re.I,
 )
-SHEBANG_SHELL_RE = re.compile(r"^#![^\n]*?\b(?:ba|z|k|da)?sh\b")
+
+# Shebang interpreters (basename of the interpreter, after `env [options]` and `busybox`).
+SHELL_INTERPRETERS = frozenset(
+    {"sh", "bash", "dash", "ash", "ksh", "ksh93", "mksh", "pdksh", "zsh", "yash", "busybox"}
+)
+JS_INTERPRETERS = frozenset({"node", "nodejs", "bun", "deno", "tsx", "ts-node", "ts-node-esm"})
+PY_INTERPRETER_RE = re.compile(r"^(?:python|pypy)(?:\d+(?:\.\d+)*)?$")
+# env options that take a separate argument.
+_ENV_OPTS_WITH_ARG = frozenset({"-u", "--unset", "-C", "--chdir", "-P", "--default-signal"})
 
 
 @dataclass(frozen=True)
@@ -109,17 +117,58 @@ def read_text(p: pathlib.Path) -> str | None:
         return None
 
 
-def _is_shell_script(p: pathlib.Path) -> bool:
-    if p.suffix.lower() in SHELL_SUFFIXES:
-        return True
-    if p.suffix:
-        return False
+def shebang_interpreter(first_line: str) -> str | None:
+    """Basename of the program a `#!` line runs: `#!/bin/ash` -> ash, `#!/usr/bin/env -S deno run`
+    -> deno, `#!/usr/bin/env -u X bash` -> bash, `#!/bin/busybox sh` -> sh. None without `#!`."""
+    if not first_line.startswith("#!"):
+        return None
+    tokens = [t.strip("\"'") for t in first_line[2:].split()]
+    if not tokens:
+        return None
+    name, rest = os.path.basename(tokens[0]), tokens[1:]
+    if name == "env":
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok in {"-S", "--split-string"}:
+                i += 1
+            elif tok.startswith("-S") and len(tok) > 2:  # -Sbash
+                rest[i] = tok[2:]
+                break
+            elif tok.startswith("--split-string="):
+                rest[i] = tok.split("=", 1)[1]
+                break
+            elif tok in _ENV_OPTS_WITH_ARG:
+                i += 2
+            elif tok.startswith("-") or "=" in tok:  # -i, --ignore-environment, VAR=value
+                i += 1
+            else:
+                break
+        if i >= len(rest) or not rest[i]:
+            return None
+        name, rest = os.path.basename(rest[i]), rest[i + 1:]
+    if name == "busybox" and rest:
+        name = os.path.basename(rest[0])
+    return name or None
+
+
+def _shebang_kind(p: pathlib.Path) -> str | None:
+    """shell, js or py for an extensionless script, from its `#!` line."""
     try:
         with p.open("rb") as fh:
-            head = fh.read(256).decode("utf-8", errors="ignore")
+            head = fh.read(512).decode("utf-8", errors="ignore")
     except OSError:
-        return False
-    return bool(SHEBANG_SHELL_RE.match(head))
+        return None
+    interpreter = shebang_interpreter(head.splitlines()[0] if head else "")
+    if interpreter is None:
+        return None
+    if interpreter in SHELL_INTERPRETERS:
+        return "shell"
+    if interpreter in JS_INTERPRETERS:
+        return "js"
+    if PY_INTERPRETER_RE.match(interpreter):
+        return "py"
+    return None
 
 
 def file_kind(p: pathlib.Path) -> str | None:
@@ -143,24 +192,70 @@ def file_kind(p: pathlib.Path) -> str | None:
         return "js"
     if suffix in PY_SUFFIXES:
         return "py"
-    if _is_shell_script(p):
+    if suffix in SHELL_SUFFIXES:
         return "shell"
+    if not suffix:
+        # Extensionless script: its shebang decides (sh/bash/dash/ash/ksh/zsh/busybox -> shell,
+        # node/bun/deno -> js, python -> py).
+        return _shebang_kind(p)
     return None
 
 
 # --- source imports -------------------------------------------------------------------------
 
-# The module specifier in every import position: `from "x"` (import/export ... from, across
-# lines), `import "x"`, `import("x")` (optionally with /* comments */), `require("x")` and
-# `require.resolve("x")`, with ', " or ` quotes.
+# JS whitespace, where `/* block */` and `// line` comments count as whitespace (Codex P2 #1 on
+# PR #57): JS allows a comment anywhere whitespace may appear between tokens.
+_JS_WS = r"(?:\s|/\*.*?\*/|//[^\n]*(?:\n|$))*"
+_JS_IDENT = r"[A-Za-z_$][\w$]*"
+
+
+def _js_string(tag: str = "") -> str:
+    """A quoted module specifier; the quote is group q<tag>, the text group s<tag>."""
+    return rf"""(?P<q{tag}>["'`])(?P<s{tag}>[^"'`\r\n]+)(?P=q{tag})"""
+
+
+# The module specifier in every import position, with comments allowed between the tokens:
+# `from "x"` (import/export ... from, across lines), `import "x"`, `import("x")`,
+# `require("x")` and `require.resolve("x")`, with ', " or ` quotes.
 _JS_SPECIFIER_RE = re.compile(
-    r"""
-    (?:\bfrom|\bimport)\s*(?:\(\s*(?:/\*.*?\*/\s*)*)?(?P<q1>["'`])(?P<s1>[^"'`\r\n]+)(?P=q1)
-    |
-    \brequire(?:\.resolve)?\s*\(\s*(?:/\*.*?\*/\s*)*(?P<q2>["'`])(?P<s2>[^"'`\r\n]+)(?P=q2)
-    """,
-    re.VERBOSE | re.DOTALL,
+    rf"(?:\bfrom|\bimport){_JS_WS}(?:\({_JS_WS})?{_js_string('1')}"
+    rf"|\brequire(?:{_JS_WS}\.{_JS_WS}resolve)?{_JS_WS}\({_JS_WS}{_js_string('2')}",
+    re.DOTALL,
 )
+
+# Names bound to Node's createRequire (auditor LOW-3 on PR #57): the factory itself, renamed on
+# import (`createRequire as mk`) or destructuring (`{ createRequire: mk }`), and the require
+# functions it returns (`const cjs = createRequire(import.meta.url)`), which load like require().
+_CREATE_REQUIRE_RENAME_RE = re.compile(rf"\bcreateRequire\s*(?:\bas\b|:)\s*({_JS_IDENT})")
+
+
+def _create_require_specifiers(text: str) -> list[str]:
+    if "createRequire" not in text:
+        return []
+    factories = {"createRequire", *_CREATE_REQUIRE_RENAME_RE.findall(text)}
+    specs: list[str] = []
+    loaders: set[str] = set()
+    for factory in factories:
+        f = re.escape(factory)
+        # `factory(...)("x")`: the returned require called at once (one level of nested parens).
+        invoked = re.compile(
+            rf"(?<![\w$]){f}{_JS_WS}\((?:[^()]|\([^()]*\))*\){_JS_WS}\({_JS_WS}{_js_string()}",
+            re.DOTALL,
+        )
+        specs.extend(m.group("s") for m in invoked.finditer(text))
+        # `name = factory(` or `name = module.factory(`
+        bound = re.compile(
+            rf"(?<![\w$])({_JS_IDENT}){_JS_WS}={_JS_WS}(?:{_JS_IDENT}{_JS_WS}\.{_JS_WS})?{f}{_JS_WS}\(",
+            re.DOTALL,
+        )
+        loaders.update(m.group(1) for m in bound.finditer(text))
+    for loader in loaders - {"require"}:
+        call = re.compile(
+            rf"(?<![\w$]){re.escape(loader)}(?:{_JS_WS}\.{_JS_WS}resolve)?{_JS_WS}\({_JS_WS}{_js_string()}",
+            re.DOTALL,
+        )
+        specs.extend(m.group("s") for m in call.finditer(text))
+    return specs
 
 
 def js_package_root(spec: str) -> str | None:
@@ -183,9 +278,11 @@ def js_package_root(spec: str) -> str | None:
 
 
 def js_imported_packages(text: str) -> set[str]:
+    specs = [m.group("s1") or m.group("s2") or "" for m in _JS_SPECIFIER_RE.finditer(text)]
+    specs += _create_require_specifiers(text)
     roots: set[str] = set()
-    for m in _JS_SPECIFIER_RE.finditer(text):
-        root = js_package_root(m.group("s1") or m.group("s2") or "")
+    for spec in specs:
+        root = js_package_root(spec)
         if root:
             roots.add(root)
     return roots

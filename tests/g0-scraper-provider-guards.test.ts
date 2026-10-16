@@ -349,6 +349,129 @@ const REAUDIT_ESCAPES: Violation[] = [
   },
 ];
 
+/** An extensionless script that installs Playwright, run by the given shebang. */
+function shebangInstall(name: string, shebang: string): Violation {
+  const rel = `services/bin/${name}`;
+  return {
+    name: `extensionless ${shebang} script runs playwright install`,
+    script: SCRAPER,
+    files: [{ rel, body: `${shebang}\nset -e\nnpx playwright install chromium\n` }],
+    report: `${rel}: Playwright install`,
+  };
+}
+
+// PR #57 review round (Codex P2 #1, P2 #2; auditor LOW-2, LOW-3): each escaped G-0 at 5bbd69e.
+const REVIEW_R2_ESCAPES: Violation[] = [
+  // Codex P2 #1: comments between the import/require/from token and the specifier.
+  {
+    name: "P2#1 block comment between from and the specifier",
+    script: PROVIDER,
+    files: [{ rel: "lib/c1.ts", body: 'import OpenAI from /* rationale */ "openai"\nexport const o = OpenAI\n' }],
+    report: "lib/c1.ts: provider SDK (openai)",
+  },
+  {
+    name: "P2#1 block comment between import and (",
+    script: PROVIDER,
+    files: [{ rel: "lib/c2.mjs", body: 'export const load = () => import /* webpack comment */ ("openai")\n' }],
+    report: "lib/c2.mjs: provider SDK (openai)",
+  },
+  {
+    name: "P2#1 block comment between require and (",
+    script: PROVIDER,
+    files: [{ rel: "services/c3.cjs", body: 'module.exports = require /* comment */ ("openai")\n' }],
+    report: "services/c3.cjs: provider SDK (openai)",
+  },
+  {
+    name: "P2#1 block comment in export ... from playwright",
+    script: SCRAPER,
+    files: [{ rel: "lib/c4.ts", body: 'export { x } from /* c */ "playwright"\n' }],
+    report: "lib/c4.ts: playwright import",
+  },
+  {
+    name: "P2#1 line comment between from and the specifier",
+    script: PROVIDER,
+    files: [{ rel: "lib/c5.ts", body: 'import OpenAI from // why this SDK\n  "openai"\nexport const o = OpenAI\n' }],
+    report: "lib/c5.ts: provider SDK (openai)",
+  },
+  {
+    name: "P2#1 line comment inside require(",
+    script: PROVIDER,
+    files: [{ rel: "services/c6.cjs", body: 'module.exports = require( // pinned\n  "openai")\n' }],
+    report: "services/c6.cjs: provider SDK (openai)",
+  },
+  {
+    name: "P2#1 block comment between require.resolve and (",
+    script: SCRAPER,
+    files: [{ rel: "services/c7.cjs", body: 'module.exports = require.resolve /* c */ ("playwright")\n' }],
+    report: "services/c7.cjs: playwright import",
+  },
+  // Auditor LOW-3: line comment inside import(, and createRequire aliases.
+  {
+    name: "LOW-3 line comment before the specifier inside import(",
+    script: PROVIDER,
+    files: [{ rel: "lib/c8.mts", body: 'export const load = () => import(\n  // lazy: only on the admin path\n  "openai"\n)\n' }],
+    report: "lib/c8.mts: provider SDK (openai)",
+  },
+  {
+    name: "LOW-3 createRequire alias: const cjs = createRequire(import.meta.url); cjs(\"openai\")",
+    script: PROVIDER,
+    files: [{ rel: "lib/cr1.mjs", body: 'import { createRequire } from "node:module"\nconst cjs = createRequire(import.meta.url)\nexport const o = cjs("openai")\n' }],
+    report: "lib/cr1.mjs: provider SDK (openai)",
+  },
+  {
+    name: "LOW-3 createRequire alias via module.createRequire (scraper)",
+    script: SCRAPER,
+    files: [{ rel: "services/cr2.cjs", body: 'const req = module.createRequire(__filename)\nmodule.exports = req("playwright")\n' }],
+    report: "services/cr2.cjs: playwright import",
+  },
+  {
+    name: "LOW-3 createRequire(...) invoked immediately",
+    script: PROVIDER,
+    files: [{ rel: "lib/cr3.mjs", body: 'import { createRequire } from "node:module"\nexport const o = createRequire(import.meta.url)("openai")\n' }],
+    report: "lib/cr3.mjs: provider SDK (openai)",
+  },
+  {
+    name: "LOW-3 renamed createRequire import, then its alias",
+    script: PROVIDER,
+    files: [{ rel: "lib/cr4.mjs", body: 'import { createRequire as mk } from "node:module"\nconst load = mk(import.meta.url)\nexport const a = load("@anthropic-ai/sdk")\n' }],
+    report: "lib/cr4.mjs: provider SDK (@anthropic-ai/sdk)",
+  },
+  // Codex P2 #2: ash shebangs.
+  shebangInstall("ash-setup", "#!/bin/ash"),
+  shebangInstall("env-ash-setup", "#!/usr/bin/env ash"),
+  // Auditor LOW-2: extensionless node/bun/deno scripts are JS, python scripts are Python.
+  {
+    name: "LOW-2 extensionless #!/usr/bin/env node script",
+    script: PROVIDER,
+    files: [{ rel: "services/bin/llm-tool", body: '#!/usr/bin/env node\nconst OpenAI = require("openai")\nnew OpenAI()\n' }],
+    report: "services/bin/llm-tool: provider SDK (openai)",
+  },
+  {
+    name: "LOW-2 extensionless #!/usr/bin/env bun script",
+    script: SCRAPER,
+    files: [{ rel: "services/bin/scrape", body: '#!/usr/bin/env bun\nimport { chromium } from "playwright"\nawait chromium.launch()\n' }],
+    report: "services/bin/scrape: playwright import",
+  },
+  {
+    name: "LOW-2 extensionless #!/usr/bin/env -S deno run script",
+    script: PROVIDER,
+    files: [{ rel: "services/bin/deno-llm", body: '#!/usr/bin/env -S deno run --allow-net\nimport OpenAI from "npm:openai"\nnew OpenAI()\n' }],
+    report: "services/bin/deno-llm: provider SDK (openai)",
+  },
+  {
+    name: "LOW-2 extensionless #!/usr/bin/env python3 script",
+    script: PROVIDER,
+    files: [{ rel: "services/bin/embed", body: "#!/usr/bin/env python3\nfrom openai import AsyncOpenAI\nclient = AsyncOpenAI()\n" }],
+    report: "services/bin/embed: provider SDK (openai)",
+  },
+  {
+    name: "LOW-2 extensionless #!/usr/bin/python script",
+    script: SCRAPER,
+    files: [{ rel: "services/bin/harvest", body: "#!/usr/bin/python\nfrom playwright.sync_api import sync_playwright\n" }],
+    report: "services/bin/harvest: playwright import",
+  },
+];
+
 // The audit's own runtime probe (forensic audit v2, FA-CI-001): OpenAI + Playwright in these trees.
 const AUDIT_PROBE_DIRS = ["app/api/probe/route.ts", "functions/src/probe.ts", "lib/probe.ts", "components/Probe.tsx"];
 
@@ -434,6 +557,13 @@ const STAYS_CAUGHT: Violation[] = [
     files: [{ rel: "services/worker/Dockerfile", body: "FROM node:22\nRUN npm install puppeteer\n" }],
     report: "services/worker/Dockerfile: Puppeteer",
   },
+  // Auditor LOW-6: shebang forms beyond #!/bin/sh, so narrowing shell detection fails a test.
+  shebangInstall("env-bash-setup", "#!/usr/bin/env bash"),
+  shebangInstall("env-s-bash-setup", "#!/usr/bin/env -S bash -e"),
+  shebangInstall("dash-setup", "#!/bin/dash"),
+  shebangInstall("ksh-setup", "#!/bin/ksh"),
+  shebangInstall("zsh-setup", "#!/usr/bin/zsh"),
+  shebangInstall("busybox-setup", "#!/bin/busybox sh"),
 ];
 
 const STAYS_ACCEPTED: Accepted[] = [
@@ -512,6 +642,11 @@ const STAYS_ACCEPTED: Accepted[] = [
     script: SCRAPER,
     files: [{ rel: "lib/uses-helper.ts", body: 'import { x } from "./playwright-helpers"\nexport const y = x\n' }],
   },
+  {
+    name: "an extensionless text file without a shebang is not read as a script",
+    script: SCRAPER,
+    files: [{ rel: "services/NOTES", body: "Locally, run npx playwright install chromium before the e2e suite.\n" }],
+  },
 ];
 
 describe("G-0 full-tree scraper/provider guards (FA-CI-001)", () => {
@@ -540,6 +675,14 @@ describe("G-0 full-tree scraper/provider guards (FA-CI-001)", () => {
   });
 
   it.each(REAUDIT_ESCAPES)("re-audit escape is now caught: $name", ({ script, files, report }) => {
+    const dir = mkProbe();
+    plant(dir, files);
+    const result = runGuard(script, dir);
+    expect(result.out).toContain(report);
+    expect(result.status).toBe(1);
+  });
+
+  it.each(REVIEW_R2_ESCAPES)("review escape is now caught: $name", ({ script, files, report }) => {
     const dir = mkProbe();
     plant(dir, files);
     const result = runGuard(script, dir);

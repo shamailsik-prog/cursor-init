@@ -148,6 +148,9 @@ const PLANTED: GateCase[] = [
   { name: "D4 requirements-test.txt", rel: "corpus_service/requirements-test.txt", body: "pytest==9.1.1\nopenai==1.0.0\n", reports: ["corpus_service/requirements-test.txt: requires openai"] },
   { name: "D4 Dockerfile.worker", rel: "services/worker/Dockerfile.worker", body: "FROM node:22\nRUN npx playwright install chromium\n", reports: ["services/worker/Dockerfile.worker: Playwright install"] },
   { name: "D4 shell script", rel: "scripts/install-browsers.sh", body: "#!/usr/bin/env bash\nnpx playwright install --with-deps chromium\n", reports: ["scripts/install-browsers.sh: Playwright install"] },
+  // PR #57 review round: comments between tokens (Codex P2 #1), ash shebang (Codex P2 #2).
+  { name: "P2#1 comment between from and specifier", rel: "lib/commented.ts", body: 'import OpenAI from /* rationale */ "openai"\nexport const o = OpenAI\n', reports: ["lib/commented.ts: provider SDK (openai)"] },
+  { name: "P2#2 #!/bin/ash script", rel: "services/bin/ash-setup", body: "#!/bin/ash\nnpx playwright install chromium\n", reports: ["services/bin/ash-setup: Playwright install"] },
   // Caught before this change; must stay caught end to end.
   {
     name: "audit probe: OpenAI + Playwright in app/",
