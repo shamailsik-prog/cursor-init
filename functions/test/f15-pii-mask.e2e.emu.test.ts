@@ -1,11 +1,13 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { randomUUID } from "node:crypto"
+import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { firmConfigRef, platformConfigRef } from "../src/p1/config"
+import { p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { setP1TransportForTests } from "../src/p1/transport"
-import { viaApi } from "./api"
+import { apiErrorOf, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -193,5 +195,54 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     const sent = capture()
     await ask(f, "Nura Kalbani asks about the appeal.")
     expect(sent[0]!.body).toBe("Nura Kalbani asks about the appeal.")
+  })
+
+  // Audit F09's resume path publishes the output row from the attempt receipt on the operation's marker. A receipt
+  // carries the residual counts with the redaction counts; one recorded before F15 has none and must still resume.
+  describe("(e) the attempt receipt carries the residual counts (F09 resume)", () => {
+    afterEach(() => {
+      delete (p1TestSeam as Record<string, unknown>).crashAt
+    })
+
+    /** A call that crashes once its receipt is recorded; `edit` then changes the receipt; the same key resumes. */
+    async function resumeAfter(edit: Record<string, unknown> | null): Promise<{ f: Firm; sent: Sent[]; resumed: Promise<Out> }> {
+      const f = await newFirm()
+      const sent = capture()
+      const at = T + createdFirms.length * 3_600_000
+      const fixed = viaApi<Out>("committeeBrain", { now: () => at })
+      const key = randomUUID()
+      const call = () => fixed({ token: f.P.token, data: { firmId: f.firmId, matterId: f.matterId, body: "Tariq s/o Kamran asks." }, headers: { "idempotency-key": key } } as never)
+      ;(p1TestSeam as Record<string, unknown>).crashAt = "recorded"
+      expect((await apiErrorOf(call())).status).toBe(500)
+      delete (p1TestSeam as Record<string, unknown>).crashAt
+      const marker = db().collection("idempotency_effects").doc(`${f.firmId}_${key}`)
+      if (edit !== null) await marker.update(edit)
+      return { f, sent, resumed: call() }
+    }
+
+    it("a receipt with residual counts publishes them on the output row", async () => {
+      const { sent, resumed } = await resumeAfter(null)
+      const out = await resumed
+      expect(sent).toHaveLength(1)
+      const row = await outputOf(out.outputId)
+      expect(row.outbound.metadata.residualCounts).toEqual({ ...NO_RESIDUAL, kinship_name: 1 })
+    })
+
+    it("a receipt recorded before F15 (no residual counts) still resumes, and its row has none", async () => {
+      const { sent, resumed } = await resumeAfter({ "result.outbound.residualCounts": FieldValue.delete() })
+      const out = await resumed
+      expect(sent).toHaveLength(1)
+      const row = await outputOf(out.outputId)
+      expect(row.outbound.metadata.redactionCounts).toMatchObject({ party: 0 })
+      expect(row.outbound.metadata).not.toHaveProperty("residualCounts")
+    })
+
+    it("a receipt whose residual counts are malformed is not published: 409 idempotency_effect_committed, no second call", async () => {
+      const { f, sent, resumed } = await resumeAfter({ "result.outbound.residualCounts": "none" })
+      const err = await apiErrorOf(resumed)
+      expect([err.status, err.code]).toEqual([409, "idempotency_effect_committed"])
+      expect(sent).toHaveLength(1)
+      expect((await db().collection("committee_outputs").where("firmId", "==", f.firmId).get()).size).toBe(0)
+    })
   })
 })

@@ -6,7 +6,7 @@ import { HttpError } from "../http/errors"
 import { CLAIM_LOST, EFFECT_COMMITTED, idempotencyDocId, isUuidV4, type IdempotentOperation } from "../http/idempotency"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
-import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/common"
+import { isSafeDocId, type CallAudit, type Data, type FirmOperation, type FirmlessOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, reservationRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
@@ -203,12 +203,22 @@ function strictest(labels: Classification[]): Classification {
   return labels.reduce((a, b) => (rankOf(b) > rankOf(a) ? b : a))
 }
 
+/** The client record's names the mask uses (audit F15, spec ruling 4). Its identifiers are not used as literals. */
+const CLIENT_NAME_FIELDS = ["canonicalName", "companyName", "concernedPersonName"] as const
+
 /**
- * Every `name` and `names` entry of this firm's `matter_parties` rows for the matter, plus the supplied names,
- * de-duplicated. Longest first, so "Ali Raza Khan" is masked whole before "Ali Raza" can leave "Khan" behind.
+ * Every `name` and `names` entry of this firm's `matter_parties` rows for the matter, the matter's client record's
+ * names (`clients/{matter.clientId}`: `canonicalName`, `companyName`, `concernedPersonName`, only when the record is
+ * this firm's; audit F15), plus the supplied names, de-duplicated. The client read runs beside the party query, so it
+ * adds no sequential round trip before the call. Longest first, so "Ali Raza Khan" is masked whole before "Ali Raza"
+ * can leave "Khan" behind (the mask also orders the names it is given).
  */
-async function partyNamesFor(firmId: string, matterId: string, supplied: string[]): Promise<string[]> {
-  const rows = await adminDb().collection("matter_parties").where("firmId", "==", firmId).where("matterId", "==", matterId).get()
+async function partyNamesFor(firmId: string, matterId: string, clientId: unknown, supplied: string[]): Promise<string[]> {
+  const db = adminDb()
+  const [rows, client] = await Promise.all([
+    db.collection("matter_parties").where("firmId", "==", firmId).where("matterId", "==", matterId).get(),
+    isSafeDocId(clientId) ? db.collection("clients").doc(clientId).get() : Promise.resolve(null),
+  ])
   const names = new Set<string>()
   const add = (value: unknown) => {
     if (typeof value === "string" && value.trim() !== "") names.add(value.trim())
@@ -218,6 +228,8 @@ async function partyNamesFor(firmId: string, matterId: string, supplied: string[
     add(party.name)
     if (Array.isArray(party.names)) party.names.forEach(add)
   }
+  const record = client?.data()
+  if (record !== undefined && record.firmId === firmId) for (const field of CLIENT_NAME_FIELDS) add(record[field])
   supplied.forEach(add)
   return [...names].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))
 }
@@ -309,7 +321,15 @@ function outputRow(o: {
     ...(o.text === undefined ? {} : { text: o.text }),
     outbound: {
       body: o.outbound.body,
-      metadata: { classification: o.classification, provider: PROVIDER_ID, purpose: o.outbound.purpose, redactionCounts: o.outbound.redactionCounts },
+      metadata: {
+        classification: o.classification,
+        provider: PROVIDER_ID,
+        purpose: o.outbound.purpose,
+        redactionCounts: o.outbound.redactionCounts,
+        // Audit F15: the residual detector's counts on the masked body, beside the mask's own (absent only when the row
+        // is published from an attempt receipt recorded before F15).
+        ...(o.outbound.residualCounts === undefined ? {} : { residualCounts: o.outbound.residualCounts }),
+      },
     },
     usageLogId: o.usageLogId,
     traceId: o.traceId,
@@ -336,8 +356,12 @@ function receiptOf(value: unknown): P1Receipt | null {
   if (inputTokens === null || outputTokens === null || costMicroUsd === null || typeof r.tokensEstimated !== "boolean") return null
   if (typeof r.model !== "string" || !isKnownClassification(r.classification)) return null
   if (outbound === null || typeof outbound !== "object" || typeof outbound.body !== "string" || typeof outbound.purpose !== "string") return null
+  const isCounts = (value: unknown): value is Record<string, number> => value !== null && typeof value === "object" && !Array.isArray(value)
   const counts = outbound.redactionCounts
-  if (counts === null || typeof counts !== "object" || Array.isArray(counts)) return null
+  if (!isCounts(counts)) return null
+  // Audit F15: validated like the redaction counts when present; a receipt recorded before F15 has none.
+  const residual = outbound.residualCounts
+  if (residual !== undefined && !isCounts(residual)) return null
   return {
     outcome: r.outcome,
     ...(r.outcome === "ok" ? { text: r.text as string } : {}),
@@ -347,7 +371,7 @@ function receiptOf(value: unknown): P1Receipt | null {
     costMicroUsd,
     model: r.model,
     classification: r.classification,
-    outbound: { body: outbound.body, purpose: outbound.purpose, redactionCounts: counts as Record<string, number> },
+    outbound: { body: outbound.body, purpose: outbound.purpose, redactionCounts: counts, ...(residual === undefined ? {} : { residualCounts: residual }) },
   }
 }
 
@@ -472,7 +496,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       })
     }
 
-    const partyNames = await partyNamesFor(caller.firmId, matterId, input.partyNames)
+    const partyNames = await partyNamesFor(caller.firmId, matterId, matter.clientId, input.partyNames)
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
     const t0 = Date.now()
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)

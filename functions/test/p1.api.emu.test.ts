@@ -480,7 +480,9 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       })
       expect(row.outbound.metadata.redactionCounts).toEqual({ cnic: 0, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 })
       expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata"])
-      expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts"])
+      // Audit F15: the residual detector's counts on the masked body sit beside the mask's own.
+      expect(row.outbound.metadata.residualCounts).toEqual({ id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 })
+      expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts", "residualCounts"])
       // The Next.js CommitteeBrainOutput shape: epoch milliseconds from the op's clock (T plus the time the call took).
       expect(typeof row.createdAt).toBe("number")
       expect(Number.isInteger(row.createdAt)).toBe(true)
