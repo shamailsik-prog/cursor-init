@@ -1,16 +1,16 @@
-import { FieldValue, Timestamp, type DocumentReference } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { HttpError } from "../http/errors"
-import { idempotencyDocId, isUuidV4 } from "../http/idempotency"
+import { CLAIM_LOST, EFFECT_COMMITTED, idempotencyDocId, isUuidV4, type IdempotentOperation } from "../http/idempotency"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
+import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, reservationRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { CALL_WORST_CASE_MS, P1PreCallDeadlineError, assertOperationTimeBudget, callP1, isAlreadyExists, type P1Result } from "./gateway"
+import { CALL_WORST_CASE_MS, P1PreCallDeadlineError, assertOperationTimeBudget, callP1, isAlreadyExists, type P1Receipt, type P1Result } from "./gateway"
 import { isMonthKey, monthKeyPkt } from "./month"
 import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
@@ -88,7 +88,9 @@ assertOperationTimeBudget({
  * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
  * the next error from it and throws it, as if the commit had landed but its answer was lost (an ambiguous
  * commit). `sleep` replaces the back-off wait. `wallClock` replaces `Date.now` as the output write's deadline clock.
- * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2).
+ * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2). `beforePublish`
+ * runs after the call and before the publication transaction (audit F09): a test holds it to stand for an instance
+ * that died between the provider call and output persistence.
  */
 export const p1OpsTestSeam: {
   outputWriteFailures?: Error[]
@@ -96,6 +98,7 @@ export const p1OpsTestSeam: {
   sleep?: (ms: number) => Promise<void>
   wallClock?: () => number
   preCallClock?: () => number
+  beforePublish?: () => Promise<void>
 } = {}
 
 function seam(): typeof p1OpsTestSeam {
@@ -231,6 +234,191 @@ export type CommitteeBrainResponse = {
   accounting: P1Accounting
 }
 
+type CommitteeOutputRow = Record<string, unknown>
+
+/**
+ * The publication (audit F09): one transaction writes the route's allow row, the `committee_outputs` row and, for an
+ * HTTP operation, the request's stored answer, so the answer commits with the output and no window lies between them.
+ * The operation's fence is read first: this attempt must still hold the claim (else 409 idempotency_claim_lost), and its
+ * effect marker must be this call's dispatch (else another attempt of the operation holds its effect: 409
+ * idempotency_claim_lost too); a call that never dispatched (blocked) creates the marker here. An attempt that finds
+ * its answer already stored is an earlier attempt of this transaction whose commit landed and whose reply was lost: done.
+ * Retried by withOutputWriteRetry like the output write before it.
+ */
+async function publish(a: {
+  operation: IdempotentOperation | undefined
+  audit: CallAudit
+  outputRef: DocumentReference
+  row: CommitteeOutputRow
+  response: CommitteeBrainResponse
+  usageLogId: string
+  traceId: string
+}): Promise<void> {
+  await seam().beforePublish?.()
+  // One SDK attempt per try (Codex P1 on PR #40): the retries and their deadline are withOutputWriteRetry's alone.
+  await withOutputWriteRetry(
+    () =>
+      adminDb().runTransaction(
+        async (tx) => {
+          let effect = true
+          if (a.operation !== undefined) {
+            const { answered, marker } = await a.operation.read(tx)
+            if (answered) return
+            if (marker !== null) {
+              if (marker.kind !== "p1_dispatch" || marker.traceId !== a.traceId) throw new HttpError(409, CLAIM_LOST)
+              effect = false
+            }
+          }
+          await a.audit.stage(tx, "allow", "ok", { effect })
+          tx.create(a.outputRef, a.row)
+          a.operation?.stageAnswer(tx, { status: 200, body: a.response })
+        },
+        { maxAttempts: 1 }
+      ),
+    { outputRef: a.outputRef, usageLogId: a.usageLogId }
+  )
+  a.audit.committed()
+}
+
+/** The output row in the Next.js shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock. */
+function outputRow(o: {
+  outputRef: DocumentReference
+  caller: Caller
+  matterId: string
+  classification: Classification
+  purpose: string
+  blocked: boolean
+  reason: string | undefined
+  text: string | undefined
+  outbound: P1Result["outbound"]
+  usageLogId: string
+  traceId: string
+  accounting: P1Accounting
+  createdAt: number
+}): CommitteeOutputRow {
+  return {
+    id: o.outputRef.id,
+    firmId: o.caller.firmId,
+    actorId: o.caller.uid,
+    matterId: o.matterId,
+    documentIds: [],
+    classification: o.classification,
+    purpose: o.purpose,
+    blocked: o.blocked,
+    ...(o.reason === undefined ? {} : { reason: o.reason }),
+    ...(o.text === undefined ? {} : { text: o.text }),
+    outbound: {
+      body: o.outbound.body,
+      metadata: { classification: o.classification, provider: PROVIDER_ID, purpose: o.outbound.purpose, redactionCounts: o.outbound.redactionCounts },
+    },
+    usageLogId: o.usageLogId,
+    traceId: o.traceId,
+    // The accounting state when the call returned; the lease reconciler sets it to settled when it settles or
+    // releases the call's reservation (Codex P2 on PR #40), and the usage row (usageLogId) is the authority.
+    accounting: o.accounting,
+    createdAt: o.createdAt,
+  }
+}
+
+/** A count, when it is a non-negative integer. */
+const countOf = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */
+function receiptOf(value: unknown): P1Receipt | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  const outbound = r.outbound as Record<string, unknown> | undefined
+  const inputTokens = countOf(r.inputTokens)
+  const outputTokens = countOf(r.outputTokens)
+  const costMicroUsd = countOf(r.costMicroUsd)
+  if (r.outcome !== "ok" && r.outcome !== "failed") return null
+  if (r.outcome === "ok" && typeof r.text !== "string") return null
+  if (inputTokens === null || outputTokens === null || costMicroUsd === null || typeof r.tokensEstimated !== "boolean") return null
+  if (typeof r.model !== "string" || !isKnownClassification(r.classification)) return null
+  if (outbound === null || typeof outbound !== "object" || typeof outbound.body !== "string" || typeof outbound.purpose !== "string") return null
+  const counts = outbound.redactionCounts
+  if (counts === null || typeof counts !== "object" || Array.isArray(counts)) return null
+  return {
+    outcome: r.outcome,
+    ...(r.outcome === "ok" ? { text: r.text as string } : {}),
+    inputTokens,
+    outputTokens,
+    tokensEstimated: r.tokensEstimated,
+    costMicroUsd,
+    model: r.model,
+    classification: r.classification,
+    outbound: { body: outbound.body, purpose: outbound.purpose, redactionCounts: counts as Record<string, number> },
+  }
+}
+
+/**
+ * The resume path (audit F09): an earlier attempt of this operation dispatched its one provider call (the marker,
+ * `prior`) and never stored its answer. The answer is published from the attempt receipt, with the call's own usage
+ * row id and trace id, and no provider call. The caller must still be cleared for the label the call was made at, and
+ * the row takes the stricter of that and the current one. `accounting` is `settled` once the call's reservation is
+ * closed, else `pending` (the lease reconciler later settles it and refreshes the row and the stored answer by
+ * `usageLogId` and trace id). With no receipt the answer is gone: 409 idempotency_effect_committed, stored for the key.
+ */
+async function resumeCommittee(a: {
+  operation: IdempotentOperation
+  prior: DocumentData
+  audit: CallAudit
+  caller: Caller
+  matterId: string
+  purpose: string
+  classification: Classification
+  createdAt: number
+}): Promise<CommitteeBrainResponse> {
+  if (a.prior.kind !== "p1_dispatch") throw new HttpError(409, EFFECT_COMMITTED)
+  // The freshest marker: its receipt may have landed after the claim read it.
+  const marker = (await a.operation.markerRef.get()).data()
+  // Re-audit MEDIUM-1: a receipt is published only to the request that made it, on its own matter. The claim admits only
+  // that request already; this holds it here too, where the answer is about to leave: the same user, route and body, and
+  // the matter the call was made on, which is the request's matter, the one gateAiCall has just cleared this caller for.
+  // A marker missing any of these (fail closed) publishes nothing.
+  if (marker !== undefined && (!a.operation.answersThisRequest(marker) || marker.matterId !== a.matterId)) {
+    throw new HttpError(422, "idempotency_key_reused")
+  }
+  const usageLogId = marker?.usageLogId
+  const traceId = marker?.traceId
+  const receipt = marker?.kind === "p1_dispatch" && marker.operationId === a.operation.operationId ? receiptOf(marker.result) : null
+  if (receipt === null || typeof usageLogId !== "string" || typeof traceId !== "string") throw new HttpError(409, EFFECT_COMMITTED)
+  if (rankOf(a.caller.clearanceLevel) < rankOf(receipt.classification)) throw new HttpError(403, "clearance")
+  const classification = strictest([a.classification, receipt.classification])
+  const state = (await reservationRef(usageLogId).get()).get("state")
+  const accounting: P1Accounting = state === "settled" || state === "released" ? "settled" : "pending"
+  const blocked = receipt.outcome !== "ok"
+  const reason = blocked ? TRANSPORT_ERROR : undefined
+  const outputRef = adminDb().collection("committee_outputs").doc()
+  const response: CommitteeBrainResponse = {
+    outputId: outputRef.id,
+    blocked,
+    ...(reason === undefined ? {} : { reason }),
+    ...(receipt.text === undefined ? {} : { text: receipt.text }),
+    classification,
+    usage: { inputTokens: receipt.inputTokens, outputTokens: receipt.outputTokens, costMicroUsd: receipt.costMicroUsd },
+    traceId,
+    accounting,
+  }
+  const row = outputRow({
+    outputRef,
+    caller: a.caller,
+    matterId: a.matterId,
+    classification,
+    purpose: a.purpose,
+    blocked,
+    reason,
+    text: receipt.text,
+    outbound: receipt.outbound,
+    usageLogId,
+    traceId,
+    accounting,
+    createdAt: a.createdAt,
+  })
+  await publish({ operation: a.operation, audit: a.audit, outputRef, row, response, usageLogId, traceId })
+  return response
+}
+
 /**
  * committeeBrain({ matterId, body, purpose?, classification?, partyNames?, documentIds? }) (P3-70). Checks the
  * request, then `ai.call` on the matter (same firm, member, cleared; partner, associate, clerk), derives the
@@ -239,13 +427,18 @@ export type CommitteeBrainResponse = {
  * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text. The response
  * and the row carry `accounting` (audit F08): `pending` when the call's usage could not be committed, so its spend
  * is still held by its reservation until the lease reconciler settles it.
+ *
+ * Audit F09: for an HTTP operation (`session.operation`, route mode `resume`) the call records the operation's effect
+ * marker with its provider attempt and its receipt when the provider answers (callP1), and the output row commits with
+ * the request's stored answer (publish). A same-key request after a dispatch whose answer was never stored resumes
+ * from the receipt (resumeCommittee): at most one provider call per operation.
  */
 export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
   auth: "firm",
   kind: "p1",
   action: "ai.call",
   target: "matters",
-  run: async ({ caller, now: routerNow, idempotencyKey, startedAtMs }, data, audit) => {
+  run: async ({ caller, now: routerNow, idempotencyKey, startedAtMs, operation }, data, audit) => {
     // The pre-call deadline (re-audit R3-D2), on the real clock from when the router received the request.
     const preCallClock = seam().preCallClock ?? Date.now
     const preCallDeadline = { atMs: (startedAtMs ?? Date.now()) + PRE_CALL_ALLOWANCE_MS, clock: preCallClock }
@@ -264,6 +457,20 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     if (input.classification !== undefined) labels.push(input.classification)
     const classification = strictest(labels)
     if (rankOf(caller.clearanceLevel) < rankOf(classification)) throw new HttpError(403, "clearance")
+
+    // Audit F09: an earlier attempt of this operation dispatched its one provider call; publish its answer, call nothing.
+    if (operation?.prior != null) {
+      return resumeCommittee({
+        operation,
+        prior: operation.prior,
+        audit,
+        caller,
+        matterId,
+        purpose: input.purpose,
+        classification,
+        createdAt: Math.floor(routerNow ?? Date.now()),
+      })
+    }
 
     const partyNames = await partyNamesFor(caller.firmId, matterId, input.partyNames)
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
@@ -285,6 +492,9 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
           purpose: input.purpose,
           partyNames,
           idempotencyDoc,
+          // Audit F09: the operation's marker is created with the provider attempt, and the receipt recorded on it.
+          // Its matter too (re-audit MEDIUM-1): resumeCommittee publishes the receipt only on that matter.
+          ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: { ...operation.markerFields(), matterId } } }),
         },
         { now: clock, preCallDeadline }
       )
@@ -297,46 +507,34 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const blocked = result.outcome !== "ok"
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)
     const outputRef = adminDb().collection("committee_outputs").doc()
-    // The Next.js row shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock.
-    const createdAt = Math.floor(clock())
-    // One SDK attempt per try (Codex P1 on PR #40): the retries and their deadline are withOutputWriteRetry's alone.
-    await withOutputWriteRetry(() => adminDb().runTransaction(async (tx) => {
-      await audit.stage(tx, "allow", "ok")
-      tx.create(outputRef, {
-        id: outputRef.id,
-        firmId: caller.firmId,
-        actorId: caller.uid,
-        matterId,
-        documentIds: [],
-        classification,
-        purpose: input.purpose,
-        blocked,
-        ...(reason === undefined ? {} : { reason }),
-        ...(result.outcome === "ok" ? { text: result.text } : {}),
-        outbound: {
-          body: result.outbound.body,
-          metadata: { classification, provider: PROVIDER_ID, purpose: result.outbound.purpose, redactionCounts: result.outbound.redactionCounts },
-        },
-        usageLogId: result.usageLogId,
-        traceId: result.traceId,
-        // The accounting state when the call returned; the lease reconciler sets it to settled when it settles or
-        // releases the call's reservation (Codex P2 on PR #40), and the usage row (usageLogId) is the authority.
-        accounting: result.accounting,
-        createdAt,
-      })
-    }, { maxAttempts: 1 }), { outputRef, usageLogId: result.usageLogId })
-    audit.committed()
-
-    return {
+    const text = result.outcome === "ok" ? result.text : undefined
+    const response: CommitteeBrainResponse = {
       outputId: outputRef.id,
       blocked,
       ...(reason === undefined ? {} : { reason }),
-      ...(result.outcome === "ok" ? { text: result.text } : {}),
+      ...(text === undefined ? {} : { text }),
       classification,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, costMicroUsd: result.costMicroUsd },
       traceId: result.traceId,
       accounting: result.accounting,
     }
+    const row = outputRow({
+      outputRef,
+      caller,
+      matterId,
+      classification,
+      purpose: input.purpose,
+      blocked,
+      reason,
+      text,
+      outbound: result.outbound,
+      usageLogId: result.usageLogId,
+      traceId: result.traceId,
+      accounting: result.accounting,
+      createdAt: Math.floor(clock()),
+    })
+    await publish({ operation, audit, outputRef, row, response, usageLogId: result.usageLogId, traceId: result.traceId })
+    return response
   },
 }
 

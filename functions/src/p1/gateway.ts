@@ -73,6 +73,35 @@ export type P1Request = {
    * (Codex P2 on PR #40): a same-key replay then reports the books as they are.
    */
   idempotencyDoc?: string | null
+  /**
+   * The HTTP operation this call is made for (audit F09), when there is one: its effect marker is created with the
+   * provider-attempt record (step 8c), so the operation dispatches at most once, and the provider's answer is recorded
+   * on it (step 9b), so a same-key retry can publish that answer without a second provider call.
+   */
+  operation?: P1Operation
+}
+
+/**
+ * An HTTP operation's effect marker as P1 records it (audit F09): `markerRef` is `idempotency_effects/{id}` and
+ * `fields` the operation's identity it is created with (IdempotentOperation.markerFields in http/idempotency.ts).
+ */
+export type P1Operation = { markerRef: DocumentReference; fields: Record<string, unknown> }
+
+/**
+ * The attempt receipt (audit F09): what the provider answered for an operation's one call, recorded on its marker as soon
+ * as the answer is in. The masked text and the masked outbound only, like the stored answer and the output row; never
+ * on the reservation or the usage row, which hold no prompt or response text.
+ */
+export type P1Receipt = {
+  outcome: Exclude<P1Outcome, "blocked">
+  text?: string
+  inputTokens: number
+  outputTokens: number
+  tokensEstimated: boolean
+  costMicroUsd: number
+  model: string
+  classification: Classification
+  outbound: P1Result["outbound"]
 }
 
 export type P1Result = {
@@ -102,7 +131,8 @@ export type P1Result = {
  * whose transaction committed takes the next error from it and throws it, as if the commit's answer were lost.
  * `reserveAttemptFailures` and `attemptMarkFailures` are queues the same way for the reservation transaction's
  * attempts and for the provider-attempt record. `crashAt` makes the call throw at that point, leaving what an
- * instance that died there leaves: `reserved` after the reservation commits, `dispatched` after the provider answers.
+ * instance that died there leaves: `reserved` after the reservation commits, `dispatched` after the provider answers,
+ * `recorded` after the provider's answer is recorded (step 9b, audit F09).
  * `unqueued` runs ledger transactions outside the per-firm queue, as calls on separate instances do: "all" of them, or
  * only the commits ("commit"), so that commits race as they would from separate instances. `beforeReserve` runs after
  * the call's first reads and first look, just before its reservation transaction (step 8b), so a test can hold calls
@@ -118,7 +148,7 @@ export const p1TestSeam: {
   lostCommitAnswers?: Error[]
   reserveAttemptFailures?: Error[]
   attemptMarkFailures?: Error[]
-  crashAt?: "reserved" | "dispatched"
+  crashAt?: "reserved" | "dispatched" | "recorded"
   unqueued?: "all" | "commit"
 } = {}
 
@@ -241,6 +271,14 @@ function reserveDeadlineError(): Error {
 /** The reservation is no longer held (the reconciler settled or released it): nothing may move its hold again. */
 function reservationNotLiveError(): Error {
   return Object.assign(new Error("P1 reservation is not live"), { code: "reservation_not_live" })
+}
+
+/**
+ * The call's HTTP operation already dispatched under another attempt (audit F09): its effect marker carries another
+ * call's trace id. Nothing is sent.
+ */
+function operationFencedError(): Error {
+  return Object.assign(new Error("P1 operation already dispatched"), { code: "operation_fenced" })
 }
 
 /** `p1TestSeam.crashAt`: the call stops here as if its instance died. */
@@ -506,10 +544,12 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   if (reservation !== null && blockReason === null && t.crashAt === "reserved") throw simulatedCrash()
 
   // 8c. The provider attempt is recorded on the reservation before dispatch (F08): once this lands, a call
-  // that never settles is charged by the reconciler, never forgotten. Unrecorded, nothing is sent.
+  // that never settles is charged by the reconciler, never forgotten. Unrecorded, nothing is sent. For an HTTP
+  // operation the same transaction creates the operation's effect marker (audit F09): one dispatch per operation.
+  const operation = req.operation ? { operation: req.operation, usageLogId: usageRef.id, traceId } : undefined
   if (reservation !== null && blockReason === null) {
     try {
-      await markAttempt(db, resRef, t)
+      await markAttempt(db, resRef, t, operation)
     } catch (err) {
       blockReason = "reservation_failed"
       logger.warn("p1.attempt_record_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
@@ -581,13 +621,42 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   }
   if (dispatched && t.crashAt === "dispatched") throw simulatedCrash()
   // 9b. What the provider answered goes on the reservation's attempt (F08), fail-open: should the commit fail for
-  // good, the reconciler settles at this charge instead of the worst case.
+  // good, the reconciler settles at this charge instead of the worst case. For an HTTP operation the same transaction
+  // records the attempt receipt on its marker (audit F09), so a same-key retry can publish the answer with no second call.
   if (dispatched) {
-    await recordAttemptOutcome(db, resRef, { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds }).catch((err: unknown) =>
+    const receipt: P1Receipt = {
+      outcome: outcome === "ok" ? "ok" : "failed",
+      ...(outcome === "ok" && text !== undefined ? { text } : {}),
+      inputTokens,
+      outputTokens,
+      tokensEstimated,
+      costMicroUsd: cost,
+      model,
+      classification,
+      outbound,
+    }
+    await recordAttemptOutcomeRetrying(
+      db,
+      resRef,
+      { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds },
+      operation ? { operation: operation.operation, traceId, receipt } : undefined
+    ).catch((err: unknown) => {
       logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
-    )
+      // Re-audit LOW-2: the operation's receipt is lost. A same-key retry answers 409 idempotency_effect_committed for
+      // this charged call (never a second one); this line names what an operator needs to find it.
+      if (operation) {
+        logger.error("p1.receipt_record_failed", {
+          firmId,
+          usageLogId: usageRef.id,
+          operationId: operation.operation.fields.operationId ?? null,
+          traceId,
+          code: errorCode(err),
+        })
+      }
+    })
     reservation = { ref: resRef, state: settledState(true, outcome, cost), mustBeLive: true }
   }
+  if (dispatched && t.crashAt === "recorded") throw simulatedCrash()
 
   // 10. Trace (P3-67): fail-open; the masked text rides along only where buildTrace allows it.
   const status = await exportTrace({
@@ -805,15 +874,32 @@ async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs):
 /**
  * Records the provider attempt on the reservation, before dispatch (F08): `{ attemptedAt, outcome: "pending" }`,
  * only while the reservation is still held. Cut off after ATTEMPT_RECORD_TIMEOUT_MS; a failure means no dispatch.
+ *
+ * For an HTTP operation (audit F09) the same transaction is the dispatch fence: it reads the operation's effect marker
+ * and creates it (`kind: "p1_dispatch"`, this call's usage row id and trace id) when it is absent. A marker carrying
+ * this call's trace id is an earlier attempt of this transaction that committed and lost its answer, and the call goes
+ * on; any other marker means the operation already dispatched (or committed another effect), and nothing is sent.
  */
-async function markAttempt(db: Firestore, ref: DocumentReference, s: typeof p1TestSeam): Promise<void> {
+async function markAttempt(
+  db: Firestore,
+  ref: DocumentReference,
+  s: typeof p1TestSeam,
+  op?: { operation: P1Operation; usageLogId: string; traceId: string }
+): Promise<void> {
   const injected = s.attemptMarkFailures?.shift()
   if (injected) throw injected
   await withTimeout(
     db.runTransaction(
       async (tx) => {
-        const snap = await tx.get(ref)
-        if (!snap.exists || snap.get("state") !== "reserved") throw reservationNotLiveError()
+        const [snap, marker] = op ? await tx.getAll(ref, op.operation.markerRef) : [await tx.get(ref)]
+        if (!snap!.exists || snap!.get("state") !== "reserved") throw reservationNotLiveError()
+        if (op) {
+          if (marker!.exists) {
+            if (marker!.get("traceId") !== op.traceId) throw operationFencedError()
+          } else {
+            tx.create(op.operation.markerRef, { ...op.operation.fields, kind: "p1_dispatch", usageLogId: op.usageLogId, traceId: op.traceId })
+          }
+        }
         tx.update(ref, { providerAttempt: { attemptedAt: FieldValue.serverTimestamp(), outcome: "pending" } })
       },
       { maxAttempts: 3 }
@@ -826,17 +912,55 @@ async function markAttempt(db: Firestore, ref: DocumentReference, s: typeof p1Te
 /**
  * After the provider answers: what it answered, what the call is charged and the provider's own ids, on the attempt
  * (F08, re-audit R1-D5). Only while the reservation is still held (re-audit INFO): once the reconciler has settled it,
- * the attempt keeps saying what that settlement was based on. Cut off like the mark.
+ * the attempt keeps saying what that settlement was based on. For an HTTP operation (audit F09) the same transaction
+ * records the attempt receipt on the operation's marker, only while the marker carries this call's trace id. Cut off
+ * like the mark.
  */
-async function recordAttemptOutcome(
-  db: Firestore,
-  ref: DocumentReference,
-  r: { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string }
-): Promise<void> {
+type AttemptOutcome = { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string }
+type ReceiptArgs = { operation: P1Operation; traceId: string; receipt: P1Receipt }
+
+/** Attempts at the attempt-outcome write (step 9b); after a failed one the wait is 100 ms, then 200 ms (re-audit LOW-2). */
+export const ATTEMPT_OUTCOME_ATTEMPTS = 3
+const ATTEMPT_OUTCOME_BACKOFF_MS = 100
+
+/**
+ * Step 9b with bounded retries (re-audit LOW-2). For an HTTP operation it carries the attempt receipt, so a lost write
+ * would turn a later resume into a terminal 409 for a charged call. Up to ATTEMPT_OUTCOME_ATTEMPTS attempts, waits of
+ * 100 then 200 ms between them, all inside the step's one ATTEMPT_RECORD_TIMEOUT_MS share of the time budget (no attempt
+ * or wait starts past it, and each attempt is cut off at what is left), so CALL_WORST_CASE_MS is unchanged. Each
+ * attempt rewrites the same values, so a retry after an attempt whose commit landed unseen changes nothing. The last
+ * failure is rethrown; the call stays fail-open on it.
+ */
+async function recordAttemptOutcomeRetrying(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op?: ReceiptArgs): Promise<void> {
+  const started = Date.now()
+  const remaining = () => ATTEMPT_RECORD_TIMEOUT_MS - (Date.now() - started)
+  let failure: unknown = Object.assign(new Error("P1 attempt_outcome_timeout"), { code: "attempt_outcome_timeout" })
+  for (let attempt = 1; attempt <= ATTEMPT_OUTCOME_ATTEMPTS; attempt++) {
+    const left = remaining()
+    if (left <= 0) break
+    try {
+      await recordAttemptOutcome(db, ref, r, op, left)
+      return
+    } catch (err) {
+      failure = err
+      const wait = ATTEMPT_OUTCOME_BACKOFF_MS * 2 ** (attempt - 1)
+      if (attempt >= ATTEMPT_OUTCOME_ATTEMPTS || remaining() - wait <= 0) break
+      await new Promise((resolve) => setTimeout(resolve, wait))
+    }
+  }
+  throw failure
+}
+
+async function recordAttemptOutcome(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op: ReceiptArgs | undefined, timeoutMs: number): Promise<void> {
   await withTimeout(
     db.runTransaction(
       async (tx) => {
-        if ((await tx.get(ref)).get("state") !== "reserved") return
+        const [snap, marker] = op ? await tx.getAll(ref, op.operation.markerRef) : [await tx.get(ref)]
+        if (op && marker!.exists && marker!.get("traceId") === op.traceId) {
+          // JSON round trip: the receipt holds no undefined value Firestore would reject.
+          tx.update(op.operation.markerRef, { result: JSON.parse(JSON.stringify(op.receipt)) as P1Receipt, resultAt: FieldValue.serverTimestamp() })
+        }
+        if (snap!.get("state") !== "reserved") return
         tx.update(ref, {
           "providerAttempt.outcome": "returned",
           "providerAttempt.returnedAt": FieldValue.serverTimestamp(),
@@ -851,7 +975,7 @@ async function recordAttemptOutcome(
       },
       { maxAttempts: 3 }
     ),
-    ATTEMPT_RECORD_TIMEOUT_MS,
+    timeoutMs,
     "attempt_outcome_timeout"
   )
 }

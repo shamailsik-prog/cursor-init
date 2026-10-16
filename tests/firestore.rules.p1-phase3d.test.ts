@@ -144,6 +144,40 @@ describe("platform/p1 is server-only", () => {
   })
 })
 
+describe("idempotency_keys and idempotency_effects are server-only (audit F09)", () => {
+  // The operation record holds the stored answer, and the effect marker of a committeeBrain operation holds its attempt
+  // receipt: the masked text and the masked outbound body. A client that could write either could forge an answer or
+  // fence an operation; one that could read either could read another user's answer.
+  const KEY_DOC = `${FIRM}_6f1c1e9e-4d0b-4b8a-9a52-0c3d4e5f6a7b`
+
+  it("no role of either firm, with or without the platformAdmin claim, reads, lists, writes or deletes either", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "idempotency_keys", KEY_DOC), { firmId: FIRM, status: "done", response: { status: 200, body: { text: "masked answer" } } })
+      await setDoc(doc(db, "idempotency_effects", KEY_DOC), { firmId: FIRM, kind: "p1_dispatch", result: { outcome: "ok", text: "masked answer" } })
+    })
+    for (const c of EVERYONE) {
+      const db = await as(c)
+      for (const name of ["idempotency_keys", "idempotency_effects"]) {
+        const who = `${c.uid} on ${name}`
+        await assertFails(getDoc(doc(db, name, KEY_DOC))).catch((e: unknown) => Promise.reject(new Error(`${who} get: ${String(e)}`)))
+        await assertFails(getDocs(query(collection(db, name), where("firmId", "==", FIRM)))).catch((e: unknown) => Promise.reject(new Error(`${who} list: ${String(e)}`)))
+        await assertFails(setDoc(doc(db, name, `${FIRM}_forged`), { firmId: FIRM, status: "done" })).catch((e: unknown) => Promise.reject(new Error(`${who} create: ${String(e)}`)))
+        await assertFails(updateDoc(doc(db, name, KEY_DOC), { status: "in_progress" })).catch((e: unknown) => Promise.reject(new Error(`${who} update: ${String(e)}`)))
+        await assertFails(deleteDoc(doc(db, name, KEY_DOC))).catch((e: unknown) => Promise.reject(new Error(`${who} delete: ${String(e)}`)))
+      }
+    }
+  })
+
+  it("an unauthenticated client is denied", async () => {
+    const db = testEnv.unauthenticatedContext().firestore()
+    for (const name of ["idempotency_keys", "idempotency_effects"]) {
+      await assertFails(getDoc(doc(db, name, KEY_DOC)))
+      await assertFails(setDoc(doc(db, name, `${FIRM}_forged`), { firmId: FIRM }))
+    }
+  })
+})
+
 describe("platform/p1Overhead and platform/p1ReconcileCursor are server-only (Copilot finding and re-audit R2-D2 on PR #40)", () => {
   // The learned request overhead raises every later reservation of a model: a client that could lower it could make
   // reservations smaller than the provider bills. The sweep cursor decides which records the reconciler reads.

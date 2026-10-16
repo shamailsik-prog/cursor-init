@@ -2,6 +2,7 @@ import type { DocumentData, Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
+import type { IdempotentOperation } from "../http/idempotency"
 import type { RateKind } from "../http/rateLimit"
 import { errorCode, logFailure } from "../log"
 import { appendAudit } from "./audit"
@@ -19,10 +20,22 @@ import type { FirmAdminAction } from "@/platform/p5/permissionDecision"
 
 export type Data = Record<string, unknown>
 
+/**
+ * The idempotency side of a call's effect (audit F09): stages the operation's effect marker in the effect's own
+ * transaction (`IdempotentOperation.stageEffect`, a write-only `create`).
+ */
+export type EffectSink = Pick<IdempotentOperation, "stageEffect">
+
 /** Collects the audit context of one call and writes its single row. */
 export class CallAudit {
   firmId = ""
   target: string
+  /**
+   * Set by the HTTP router for a POST route whose mode is not `rerun` (audit F09): staging the call's allow row in a
+   * transaction also stages the operation's effect marker there, so the effect and the operation's "effect committed"
+   * state commit together, and a second effect of the same operation cannot commit.
+   */
+  effects: EffectSink | undefined
   private readonly actorId: string
   private written = false
 
@@ -46,13 +59,19 @@ export class CallAudit {
     if (!this.written) await this.write("deny", reason)
   }
 
-  /** Stages the row in a transaction; call `committed()` once that transaction has committed. */
-  async stage(tx: Transaction, decision: "allow" | "deny", reason: string): Promise<void> {
+  /**
+   * Stages the row in a transaction; call `committed()` once that transaction has committed. When the call runs as an
+   * idempotent operation (`effects`), the operation's effect marker is staged too: for an allow row by default, for a
+   * deny row only with `{ effect: true }` (a refusal that commits a domain change, e.g. approveDraft's `gate_blocked`),
+   * and never with `{ effect: false }` (a caller that handles the marker itself) or after this call's row has committed.
+   */
+  async stage(tx: Transaction, decision: "allow" | "deny", reason: string, opts: { effect?: boolean } = {}): Promise<void> {
     try {
       await appendAudit(this.row(decision, reason), tx)
     } catch {
       throw new HttpError(503, "audit_unavailable")
     }
+    if ((opts.effect ?? decision === "allow") && !this.written) this.effects?.stageEffect(tx)
   }
 
   committed(): void {
@@ -116,8 +135,18 @@ export async function runAudited<T>(audit: CallAudit, body: () => Promise<T>): P
  * jobs the call causes (P3-4, `jobKey`). `route` is the operation's route, `"POST /api/..."` (set with the key; P3-38).
  * `startedAtMs` is when the router received the request on the real clock (`Date.now()`, never the injectable `now`),
  * so an operation can bound the time spent before it starts paid work (P1 committeeBrain, re-audit R3-D2).
+ * `operation` is the request's idempotent operation on POST/PUT (audit F09): its fence, its effect marker and, on a
+ * `resume` route, its `prior`.
  */
-export type Session = { caller: Caller; secondFactor: boolean; now?: number; idempotencyKey?: string; route?: string; startedAtMs?: number }
+export type Session = {
+  caller: Caller
+  secondFactor: boolean
+  now?: number
+  idempotencyKey?: string
+  route?: string
+  startedAtMs?: number
+  operation?: IdempotentOperation
+}
 
 export type { FirmlessIdentity }
 
