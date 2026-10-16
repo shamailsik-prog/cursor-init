@@ -147,24 +147,26 @@ describe("IdempotencyStore bounds", () => {
     s.complete(key, begun.claimId, body, now)
   }
 
-  it("is an LRU bounded by entry count", () => {
+  // Audit F10 (spec ruling 14): the bounds no longer evict an unexpired completed key (the old LRU let it run again).
+  it("is bounded by entry count: at the bound a new key is refused (capacity) and every completed key still replays", () => {
     const s = new IdempotencyStore(limits)
     done(s, "a", 1)
     done(s, "b", 2)
     done(s, "c", 3)
-    expect(s.begin("a", "fp", 1)).toEqual({ kind: "replay", body: 1 }) // a is now most recent
-    done(s, "d", 4, 2)
+    expect(s.begin("a", "fp", 1)).toEqual({ kind: "replay", body: 1 })
+    expect(s.begin("d", "fp", 2)).toEqual({ kind: "capacity" })
     expect(s.size).toBe(3)
-    expect(s.begin("b", "fp", 3).kind).toBe("claimed") // b was least recently used: evicted
+    expect(s.begin("b", "fp", 3)).toEqual({ kind: "replay", body: 2 })
   })
 
-  it("is bounded by stored bytes", () => {
+  it("is bounded by stored bytes: an answer past the budget is kept without its body, and nothing stored is dropped", () => {
     const s = new IdempotencyStore({ ...limits, maxBytes: 800 })
     done(s, "a", "x".repeat(150)) // ~304 bytes
     done(s, "b", "x".repeat(150))
     done(s, "c", "x".repeat(150))
     expect(s.storedBytes).toBeLessThanOrEqual(800)
-    expect(s.begin("a", "fp", 1).kind).toBe("claimed")
+    expect(s.begin("a", "fp", 1)).toEqual({ kind: "replay", body: "x".repeat(150) })
+    expect(s.begin("c", "fp", 1)).toEqual({ kind: "unavailable" })
   })
 
   it("does not keep a response over the per-entry cap, but still refuses to re-run its key", () => {
@@ -181,10 +183,10 @@ describe("IdempotencyStore bounds", () => {
     expect(s.begin("a", "fp", 1_000).kind).toBe("claimed")
   })
 
-  it("never evicts a live in-progress claim; a stale one may be taken over", () => {
+  it("never evicts a live in-progress claim (a new key is refused instead); a stale one may be taken over", () => {
     const s = new IdempotencyStore({ ...limits, maxEntries: 1 })
     expect(s.begin("a", "fp", 0).kind).toBe("claimed")
-    done(s, "b", 2, 1)
+    expect(s.begin("b", "fp", 1)).toEqual({ kind: "capacity" })
     expect(s.begin("a", "fp", 2).kind).toBe("in_progress")
     expect(s.begin("a", "fp", 200).kind).toBe("claimed")
   })

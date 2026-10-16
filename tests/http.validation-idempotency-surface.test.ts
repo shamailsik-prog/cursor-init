@@ -221,29 +221,41 @@ describe("IdempotencyStore boundaries", () => {
     }
   })
 
-  it("keeps exactly maxEntries and evicts the least recently used, counting a replay as a use", () => {
+  // Audit F10 (spec ruling 14): an unexpired operation is never evicted. These two tests asserted the old LRU eviction
+  // of completed keys (the F10 defect); they now assert the refusal at the bound, and keep the boundary and byte checks.
+  it("keeps exactly maxEntries: a new claim at the bound is refused (capacity) and every completed key still replays", () => {
     const s = new IdempotencyStore({ ...limits, maxEntries: 2 })
     done(s, "a", "A", 1)
     done(s, "b", "B", 2)
     expect(s.size).toBe(2)
-    expect(s.begin("a", "fp", 3)).toEqual({ kind: "replay", body: "A" }) // a is now the most recent
-    done(s, "c", "C", 4)
+    expect(s.begin("a", "fp", 3)).toEqual({ kind: "replay", body: "A" })
+    expect(s.begin("c", "fp", 4)).toEqual({ kind: "capacity" })
     expect(s.size).toBe(2)
-    expect(s.begin("b", "fp", 5).kind).toBe("claimed") // b was evicted
-    expect(s.begin("c", "fp", 5)).toEqual({ kind: "replay", body: "C" })
+    expect(s.begin("b", "fp", 5)).toEqual({ kind: "replay", body: "B" })
+    // Once an entry expires, its slot is reused.
+    expect(s.begin("c", "fp", 101)).toEqual({ kind: "claimed", claimId: expect.any(Number) })
+    expect(s.begin("b", "fp", 101)).toEqual({ kind: "replay", body: "B" })
   })
 
-  it("accounts stored bytes as UTF-16 code units, at the per-entry cap inclusive, and frees them on eviction", () => {
+  it("accounts stored bytes as UTF-16 code units, at the per-entry cap inclusive; an answer over a byte bound is kept without its body", () => {
     const body = "x".repeat(498) // JSON "\"x...x\"" = 500 chars = 1000 bytes: exactly the cap
-    const s = new IdempotencyStore({ ...limits, maxEntries: 1 })
+    const s = new IdempotencyStore({ ...limits, maxEntries: 3, maxBytes: 1_006 })
     done(s, "a", body, 0)
     expect(s.storedBytes).toBe(1_000)
     expect(s.begin("a", "fp", 1)).toEqual({ kind: "replay", body })
     done(s, "b", "y", 2)
-    expect(s.storedBytes).toBe(6)
+    expect(s.storedBytes).toBe(1_006)
+    // Over the per-entry cap: kept, never re-run, without its body.
     done(s, "c", "x".repeat(499), 3)
-    expect(s.storedBytes).toBe(0)
+    expect(s.storedBytes).toBe(1_006)
     expect(s.begin("c", "fp", 4)).toEqual({ kind: "unavailable" })
+    // Within the cap but over the remaining byte budget: the same; nothing already stored is dropped.
+    const d = new IdempotencyStore({ ...limits, maxEntries: 3, maxBytes: 1_006 })
+    done(d, "a", body, 0)
+    done(d, "b", "yy", 1)
+    expect(d.storedBytes).toBe(1_000)
+    expect(d.begin("b", "fp", 2)).toEqual({ kind: "unavailable" })
+    expect(d.begin("a", "fp", 2)).toEqual({ kind: "replay", body })
   })
 })
 
@@ -253,14 +265,14 @@ describe("beginIdempotentRequest answers", () => {
   afterEach(() => resetIdempotencyForTests())
 
   it("replays a completed key with reused: true, and refuses reuse, in-progress and an unstorable response", async () => {
-    const first = beginIdempotentRequest(post(), KEY, "fp")
+    const first = await beginIdempotentRequest(post(), KEY, "fp")
     expect(first.claim).toBeDefined()
     first.claim!.complete({ ok: 1 })
-    const replay = beginIdempotentRequest(post(), KEY, "fp").response!
+    const replay = (await beginIdempotentRequest(post(), KEY, "fp")).response!
     expect(replay.status).toBe(200)
     expect(await replay.json()).toEqual({ result: { ok: 1 }, idempotencyKey: KEY, reused: true })
 
-    const reused = beginIdempotentRequest(post(), KEY.toUpperCase(), "other").response!
+    const reused = (await beginIdempotentRequest(post(), KEY.toUpperCase(), "other")).response!
     expect(reused.status).toBe(422)
     expect(await reused.json()).toEqual({
       code: "idempotency_key_reused",
@@ -268,14 +280,14 @@ describe("beginIdempotentRequest answers", () => {
     })
 
     const KEY2 = "3b241101-e2bb-4255-8caf-4136c566a963"
-    expect(beginIdempotentRequest(post(), KEY2, "fp").claim).toBeDefined()
-    const busy = beginIdempotentRequest(post(), KEY2, "fp").response!
+    expect((await beginIdempotentRequest(post(), KEY2, "fp")).claim).toBeDefined()
+    const busy = (await beginIdempotentRequest(post(), KEY2, "fp")).response!
     expect(busy.status).toBe(409)
     expect(await busy.json()).toEqual({ code: "idempotency_in_progress", error: "a request with this Idempotency-Key is in progress" })
 
     const KEY3 = "3b241101-e2bb-4255-8caf-4136c566a964"
-    beginIdempotentRequest(post(), KEY3, "fp").claim!.complete("x".repeat(3 * 1024 * 1024))
-    const gone = beginIdempotentRequest(post(), KEY3, "fp").response!
+    ;(await beginIdempotentRequest(post(), KEY3, "fp")).claim!.complete("x".repeat(3 * 1024 * 1024))
+    const gone = (await beginIdempotentRequest(post(), KEY3, "fp")).response!
     expect(gone.status).toBe(409)
     expect(await gone.json()).toEqual({
       code: "idempotency_replay_unavailable",

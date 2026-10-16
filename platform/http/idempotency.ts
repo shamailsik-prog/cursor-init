@@ -1,39 +1,60 @@
 /**
- * Layer 18 §4.2 — every POST/PUT requires Idempotency-Key (UUID v4).
+ * Layer 18 §4.2: every POST/PUT requires an Idempotency-Key (UUID v4).
  *
- * One process-wide replay store shared by every Next route (final audit F4 + SEC-4), with the
- * semantics of the Cloud Functions store (functions/src/http/idempotency.ts):
+ * One replay store for every Next route (final audit F4 + SEC-4). Audit F10 makes it survive instances and restarts.
  *
- * - The key is scoped `firm|user|METHOD path|Idempotency-Key`, so a key never replays across
- *   tenants, callers or routes.
- * - The request is identified by a fixed-size sha256 fingerprint (`fingerprintOf`); the store
- *   keeps only that hash and the serialised response, never the request payload.
- * - `beginIdempotentRequest` checks and reserves the key in one synchronous step (no await
- *   between them), so of two concurrent requests with the same key exactly one runs:
+ * - **Scope.** The key is scoped `firm|user|METHOD path|Idempotency-Key`, so a key never replays across tenants,
+ *   callers or routes.
+ * - **Fingerprint.** The request is identified by the route's fixed-size sha256 fingerprint (`fingerprintOf`). The store
+ *   keeps only that hash and the completed answer, never the request payload.
+ * - **Answers.** `await beginIdempotentRequest(...)` reserves the key or answers it:
  *     same key, other fingerprint      -> 422 idempotency_key_reused
  *     same key, first still running    -> 409 idempotency_in_progress
  *     same key, first finished         -> the stored response, `reused: true`
- * - The route stores its success payload with `claim.complete(payload)`. withSession settles
- *   every claim at the end of the request: a claim that was not completed (a refusal, a
- *   validation error, a throw) is released so a retry runs again. A completed claim stays
- *   stored even when the end-of-request audit flush fails (final audit F6), so a same-key retry
- *   replays instead of re-running a committed effect.
- * - Bounded: an LRU of at most IDEMPOTENCY_MAX_ENTRIES keys and IDEMPOTENCY_MAX_BYTES of stored
- *   responses, each kept IDEMPOTENCY_TTL_MS (24 h). A response larger than
- *   IDEMPOTENCY_MAX_ENTRY_BYTES is not kept; its key still refuses to run again (409
- *   idempotency_replay_unavailable) until it expires or is evicted.
+ *     same key, its effect committed but its answer was never stored -> 409 idempotency_effect_committed (+ operationId)
+ * - **Completion.** The route stores its success payload with `claim.complete(payload)`. withSession settles every
+ *   claim at the end of the request, after the audit flush (final audit F6: a completed claim stays stored even when the
+ *   flush fails). A claim that did not complete is released so a retry runs again, unless its effect committed.
  *
- * - Per-firm quotas (re-audit N-1): each firm may hold at most IDEMPOTENCY_FIRM_MAX_ENTRIES keys and
- *   IDEMPOTENCY_FIRM_MAX_BYTES of responses (a quarter of the global bounds). A firm over its quota
- *   evicts its own least recently used entries first, so one firm flooding the store cannot push
- *   another firm's entries out.
+ * Backends (audit F10), selected by SIKANDER_PERSISTENCE_MODE exactly as the repositories are (`resolvePersistenceMode`):
  *
- * Still process-local: lost on restart and not shared between instances. A durable store (the
- * functions `idempotency_keys` collection) is the follow-up once the Next API serves Firestore.
+ * - **`firestore`: the durable store** (platform/http/durableIdempotency.ts), in the repositories' own database.
+ *   - It uses the F09 operation record (`idempotency_keys`) and effect marker (`idempotency_effects`), so a key
+ *     completed on one instance replays on every other instance and after a restart.
+ *   - While a request holds a durable claim, every Firestore write it makes through
+ *     platform/persistence/firestoreDbModular.ts goes through the write fence. One transaction reads the claim, refuses
+ *     an attempt whose claim was taken over (409 idempotency_claim_lost), and creates the operation's marker with the
+ *     write.
+ *   - A committed effect therefore never runs again for its key: a throw after it, a lost settle or a crash all leave
+ *     the marker, and the key answers 409 idempotency_effect_committed.
+ *   - A provider dispatch is marked first (`recordExternalEffect`).
+ *   - There is no fallback to memory: an unreachable store answers 503 idempotency_store_unavailable, and a missing
+ *     database is PersistenceConfigurationError (503 PERSISTENCE_NOT_CONFIGURED).
+ * - **`memory`** (refused in production; the default only under the test runner): the in-process Map below.
+ *   - It is bounded by IDEMPOTENCY_MAX_ENTRIES and IDEMPOTENCY_MAX_BYTES, each firm by a quarter of both (re-audit N-1).
+ *   - It never evicts an unexpired operation (audit F10). Only expired entries are pruned. A new claim beyond an
+ *     entry bound is refused (503 idempotency_capacity_exhausted).
+ *   - A completed answer that does not fit the byte budget is kept without its body: its key replays as 409
+ *     idempotency_replay_unavailable and never runs again within its TTL.
+ *
+ * Spec: docs/superpowers/specs/2026-10-16-f10-durable-next-idempotency-design.md.
  */
 import { AsyncLocalStorage } from "node:async_hooks"
 import { NextResponse } from "next/server"
 import { errorResponse } from "@/platform/http/errors"
+import {
+  CLAIM_LOST,
+  DURABLE_MAX_RESPONSE_BYTES,
+  DurableIdempotencyStore,
+  EFFECT_COMMITTED,
+  durableIdempotencyTestSeam,
+  type DurableClaimRef,
+  type SettleOutcome,
+} from "@/platform/http/durableIdempotency"
+import { installWriteFence, type WriteFence } from "@/platform/persistence/firestoreDbModular"
+import { getRuntimeFirestore, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
+
+export type { SettleOutcome } from "@/platform/http/durableIdempotency"
 
 export class IdempotencyError extends Error {
   status = 400
@@ -65,10 +86,14 @@ export const IDEMPOTENCY_MAX_ENTRY_BYTES = 4 * 1024 * 1024
 export const IDEMPOTENCY_FIRM_MAX_ENTRIES = IDEMPOTENCY_MAX_ENTRIES / 4
 export const IDEMPOTENCY_FIRM_MAX_BYTES = IDEMPOTENCY_MAX_BYTES / 4
 /**
- * An in-progress claim outside a withSession request (nothing will settle it) may be taken over
- * after this long, like the functions lease. Inside a request the claim is settled at its end.
+ * An in-progress claim may be taken over by the same request after this long (a crashed or hung attempt), like the
+ * functions lease. In the durable store a takeover never repeats a committed effect: the marker answers it.
  */
 export const IDEMPOTENCY_LEASE_MS = 5 * 60 * 1000
+export { DURABLE_MAX_RESPONSE_BYTES }
+
+/** Test seam of the durable store (claim and settle failures, the clock, a stall before a fenced write). */
+export const idempotencyTestSeam = durableIdempotencyTestSeam
 
 type Entry =
   | { state: "in_progress"; firm: string; fingerprint: string; at: number; claimId: number }
@@ -91,8 +116,13 @@ type Begin =
   | { kind: "reused" }
   | { kind: "in_progress" }
   | { kind: "unavailable" }
+  | { kind: "capacity" }
 
-/** The bounded LRU behind every route. Exported for tests; routes use the module functions. */
+/**
+ * The bounded in-process store of the memory mode. Exported for tests; routes use the module functions. It never
+ * evicts an unexpired entry (audit F10): a new claim beyond an entry bound is refused (`capacity`), and a completed
+ * answer beyond the byte budget is kept without its body (`unavailable` on replay).
+ */
 export class IdempotencyStore {
   private readonly entries = new Map<string, Entry>()
   private bytes = 0
@@ -111,6 +141,7 @@ export class IdempotencyStore {
 
   /** Check-and-reserve in one synchronous step. `firm` names the quota the key counts against. */
   begin(scopedKey: string, fingerprint: string, now: number = Date.now(), firm = ""): Begin {
+    this.pruneExpiredHead(now)
     const hit = this.entries.get(scopedKey)
     if (hit && now - hit.at < this.limits.ttlMs) {
       if (hit.fingerprint !== fingerprint) return { kind: "reused" }
@@ -119,25 +150,31 @@ export class IdempotencyStore {
         return hit.json === null ? { kind: "unavailable" } : { kind: "replay", body: JSON.parse(hit.json) }
       }
       if (now - hit.at <= this.limits.leaseMs) return { kind: "in_progress" }
-      // A stale in-progress lease: take it over.
+      // A stale in-progress lease: the same request takes it over in place (no new entry).
+      this.remove(scopedKey, hit)
+      return this.claim(scopedKey, fingerprint, now, hit.firm)
     }
     if (hit) this.remove(scopedKey, hit)
-    const claimId = this.nextClaimId++
-    this.add(scopedKey, { state: "in_progress", firm, fingerprint, at: now, claimId })
-    this.evictFirm(firm, now)
-    this.evict(now)
-    return { kind: "claimed", claimId }
+    if (this.full(firm)) {
+      this.pruneExpired(now)
+      if (this.full(firm)) return { kind: "capacity" }
+    }
+    return this.claim(scopedKey, fingerprint, now, firm)
   }
 
   /** Stores the response of the claim that holds the key (a no-op for a lost claim). */
   complete(scopedKey: string, claimId: number, body: unknown, now: number = Date.now()): void {
     const hit = this.entries.get(scopedKey)
     if (!hit || hit.state !== "in_progress" || hit.claimId !== claimId) return
+    this.pruneExpiredHead(now)
+    // A claim older than the TTL was pruned with the rest: it has nothing left to complete.
+    if (this.entries.get(scopedKey) !== hit) return
     const json = JSON.stringify(body ?? null)
     // UTF-16 code units: the string's in-memory size.
     const bytes = json.length * 2
-    const kept = bytes <= this.limits.maxEntryBytes ? json : null
     this.remove(scopedKey, hit)
+    if (!this.fits(hit.firm, bytes)) this.pruneExpired(now)
+    const kept = this.fits(hit.firm, bytes) ? json : null
     this.add(scopedKey, {
       state: "done",
       firm: hit.firm,
@@ -146,8 +183,6 @@ export class IdempotencyStore {
       json: kept,
       bytes: kept === null ? 0 : bytes,
     })
-    this.evictFirm(hit.firm, now)
-    this.evict(now)
   }
 
   /** Frees the key of a claim that did not complete, so a retry runs again. */
@@ -160,6 +195,26 @@ export class IdempotencyStore {
     this.entries.clear()
     this.bytes = 0
     this.firmUsage.clear()
+  }
+
+  private claim(scopedKey: string, fingerprint: string, now: number, firm: string): Begin {
+    const claimId = this.nextClaimId++
+    this.add(scopedKey, { state: "in_progress", firm, fingerprint, at: now, claimId })
+    return { kind: "claimed", claimId }
+  }
+
+  /** Whether one more entry would pass the global or `firm`'s entry bound. */
+  private full(firm: string): boolean {
+    if (this.entries.size >= this.limits.maxEntries) return true
+    const max = this.limits.firmMaxEntries
+    return max !== undefined && (this.firmUsage.get(firm)?.count ?? 0) >= max
+  }
+
+  /** Whether an answer of `bytes` fits the per-entry cap and the global and `firm`'s byte budgets. */
+  private fits(firm: string, bytes: number): boolean {
+    if (bytes > this.limits.maxEntryBytes || this.bytes + bytes > this.limits.maxBytes) return false
+    const max = this.limits.firmMaxBytes
+    return max === undefined || (this.firmUsage.get(firm)?.bytes ?? 0) + bytes <= max
   }
 
   private touch(scopedKey: string, entry: Entry): void {
@@ -188,43 +243,18 @@ export class IdempotencyStore {
     if (usage.count <= 0) this.firmUsage.delete(entry.firm)
   }
 
-  /**
-   * Re-audit N-1: while `firm` is over its own quota, drop its least recently used entries
-   * (never a live in-progress claim), before the global bounds are applied to everyone.
-   */
-  private evictFirm(firm: string, now: number): void {
-    const maxEntries = this.limits.firmMaxEntries
-    const maxBytes = this.limits.firmMaxBytes
-    if (maxEntries === undefined && maxBytes === undefined) return
-    const over = () => {
-      const usage = this.firmUsage.get(firm)
-      if (!usage) return false
-      return (maxEntries !== undefined && usage.count > maxEntries) || (maxBytes !== undefined && usage.bytes > maxBytes)
-    }
-    if (!over()) return
-    for (const [key, entry] of this.entries) {
-      if (!over()) return
-      if (entry.firm !== firm) continue
-      if (entry.state === "in_progress" && now - entry.at <= this.limits.leaseMs) continue
-      this.remove(key, entry)
-    }
-  }
-
-  /**
-   * Drops expired entries from the head, then least-recently-used ones until the store is within
-   * its entry and byte bounds. An in-progress entry is skipped (dropping it would let a duplicate
-   * run concurrently) unless it is past its lease.
-   */
-  private evict(now: number): void {
+  /** Drops expired entries from the head (the least recently used end), stopping at the first live one. */
+  private pruneExpiredHead(now: number): void {
     for (const [key, entry] of this.entries) {
       if (now - entry.at < this.limits.ttlMs) break
       this.remove(key, entry)
     }
-    if (this.entries.size <= this.limits.maxEntries && this.bytes <= this.limits.maxBytes) return
+  }
+
+  /** Drops every expired entry, wherever it sits. Run only when a bound is reached. */
+  private pruneExpired(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (this.entries.size <= this.limits.maxEntries && this.bytes <= this.limits.maxBytes) return
-      if (entry.state === "in_progress" && now - entry.at <= this.limits.leaseMs) continue
-      this.remove(key, entry)
+      if (now - entry.at >= this.limits.ttlMs) this.remove(key, entry)
     }
   }
 }
@@ -239,12 +269,28 @@ const store = new IdempotencyStore({
   firmMaxBytes: IDEMPOTENCY_FIRM_MAX_BYTES,
 })
 
-/** Test hook: the shared store (size and byte accounting). */
+/** The durable store of each Firestore instance (one per database client). */
+const durableStores = new WeakMap<object, DurableIdempotencyStore>()
+
+async function durableStore(): Promise<DurableIdempotencyStore> {
+  const db = (await getRuntimeFirestore()) as object
+  let found = durableStores.get(db)
+  if (!found) {
+    found = new DurableIdempotencyStore(db as ConstructorParameters<typeof DurableIdempotencyStore>[0], {
+      ttlMs: IDEMPOTENCY_TTL_MS,
+      leaseMs: IDEMPOTENCY_LEASE_MS,
+    })
+    durableStores.set(db, found)
+  }
+  return found
+}
+
+/** Test hook: the memory-mode store (size and byte accounting). */
 export function idempotencyStoreForTests(): IdempotencyStore {
   return store
 }
 
-/** Test hook: forget every key. */
+/** Test hook: forget every key this process holds in memory (a restart). The durable store keeps its records. */
 export function resetIdempotencyForTests(): void {
   store.clear()
 }
@@ -256,42 +302,161 @@ type RequestClaims = { scope: IdempotencyScope; claims: IdempotencyClaim[] }
 
 const requestClaims = new AsyncLocalStorage<RequestClaims>()
 
+/** A refusal the route answered itself (status and JSON body), kept when the attempt's effect committed. */
+export type StorableRefusal = { status: number; json: string }
+
+/** How a claim is held: in the memory Map, or in the durable store. */
+type ClaimBackend = {
+  complete(payload: unknown): void
+  settle(completed: boolean, payload: unknown, refusal: StorableRefusal | undefined): Promise<SettleOutcome>
+  fence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null
+  operationId?: string
+}
+
 /** A reserved key. The route calls `complete(payload)` once its effect has succeeded. */
 export class IdempotencyClaim {
   private completed = false
+  private payload: unknown = undefined
+  private settled = false
+  /** Set when a fenced write of this attempt was refused (its claim was taken over, or the operation already acted). */
+  fenceRefusal: typeof CLAIM_LOST | typeof EFFECT_COMMITTED | undefined
 
-  constructor(
-    private readonly scopedKey: string,
-    private readonly claimId: number
-  ) {}
+  constructor(private readonly backend: ClaimBackend) {}
 
   get isCompleted(): boolean {
     return this.completed
   }
 
-  /** Stores `payload` as the replayed `result` for this key. */
-  complete(payload: unknown): void {
-    store.complete(this.scopedKey, this.claimId, payload)
-    this.completed = true
+  /** The operation this claim belongs to (durable store only). */
+  get operationId(): string | undefined {
+    return this.backend.operationId
   }
 
-  /** Releases the key unless the claim completed (called by withSession at the end). */
-  settle(): void {
-    if (!this.completed) store.release(this.scopedKey, this.claimId)
+  /** Stores `payload` as the replayed `result` for this key. */
+  complete(payload: unknown): void {
+    if (this.completed) return
+    this.completed = true
+    this.payload = payload
+    this.backend.complete(payload)
+  }
+
+  /** The claim's write fence while it is open (durable store only). */
+  fence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null {
+    return this.settled ? null : this.backend.fence()
+  }
+
+  /**
+   * Ends the claim (called by withSession at the end): stores, releases or answers it (spec §2.4). `refusal` is the
+   * route's own storable refusal, kept as the key's answer if the attempt's effect committed.
+   */
+  async settle(refusal?: StorableRefusal): Promise<SettleOutcome> {
+    if (this.settled) return "lost"
+    this.settled = true
+    return this.backend.settle(this.completed, this.payload, refusal)
   }
 }
 
 /**
- * Runs a request with its idempotency scope; every claim taken during it is settled when it ends
- * (after the audit flush), whatever the outcome. Used by withSession.
+ * A refusal the route decided: any 4xx but 429 (a rate limit is not an answer to the request). The request was refused
+ * for its own reasons (validation, permission, a cross-firm denial, a business conflict) after writes of its own, such
+ * as a recomputed digest; that refusal is the key's answer.
+ */
+const isDecidedRefusalStatus = (status: number) => status >= 400 && status < 500 && status !== 429
+/** Codes that mean the request failed (the routes' catch-alls) or are idempotency answers, never a stored refusal. */
+const FAILURE_CODES = new Set(["REQUEST_FAILED", "INTERNAL_ERROR"])
+
+/** The route's answer as a storable refusal, or undefined (a success, a failure, or a body that is not JSON). */
+async function storableRefusalOf(response: Response): Promise<StorableRefusal | undefined> {
+  if (!isDecidedRefusalStatus(response.status)) return undefined
+  try {
+    const body = (await response.clone().json()) as unknown
+    const code = (body as { code?: unknown } | null)?.code
+    if (typeof code === "string" && (FAILURE_CODES.has(code) || code.startsWith("idempotency_"))) return undefined
+    const json = JSON.stringify(body)
+    return Buffer.byteLength(json, "utf8") <= DURABLE_MAX_RESPONSE_BYTES ? { status: response.status, json } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function effectCommittedResponse(operationId: string | undefined): NextResponse {
+  return NextResponse.json(
+    {
+      error: "this Idempotency-Key's operation already committed its effect; its response is not available",
+      code: EFFECT_COMMITTED,
+      ...(operationId === undefined ? {} : { operationId }),
+    },
+    { status: 409 }
+  )
+}
+
+function claimLostResponse(): NextResponse {
+  return errorResponse(409, CLAIM_LOST, "a later attempt took over this request's Idempotency-Key")
+}
+
+/**
+ * Runs a request with its idempotency scope; every claim taken during it is settled when it ends (after the audit
+ * flush), whatever the outcome. Used by withSession.
+ *
+ * When the request did not complete but its operation's effect committed, the key is never run again (spec ruling 9):
+ * - **Later same-key requests.** A refusal the route decided (a 4xx other than 429, without a catch-all code) is kept
+ *   as the key's answer and replayed as itself. Anything else gets 409 idempotency_effect_committed. That includes a
+ *   catch-all 400 REQUEST_FAILED, which the routes use both for a public refusal and for a masked failure.
+ * - **This request.** A 4xx answer is left as the route wrote it. A 5xx or a throw is replaced by 409
+ *   idempotency_effect_committed.
+ * - **A refused fenced write.** The attempt's claim was taken over, so any non-2xx answer becomes 409
+ *   idempotency_claim_lost.
  */
 export async function runWithIdempotencyScope<T>(scope: IdempotencyScope, run: () => Promise<T>): Promise<T> {
   const ctx: RequestClaims = { scope, claims: [] }
+  let result: T | undefined
+  let failure: { error: unknown } | undefined
   try {
-    return await requestClaims.run(ctx, run)
-  } finally {
-    for (const claim of ctx.claims) claim.settle()
+    result = await requestClaims.run(ctx, run)
+  } catch (error) {
+    failure = { error }
   }
+  const answered2xx = failure === undefined && result instanceof Response && result.status >= 200 && result.status < 300
+  const failed = failure !== undefined || (result instanceof Response && result.status >= 500)
+  const refusal = failure === undefined && result instanceof Response && !answered2xx ? await storableRefusalOf(result) : undefined
+  let override: Response | undefined
+  for (const claim of ctx.claims) {
+    let outcome: SettleOutcome
+    try {
+      outcome = await claim.settle(claim.fenceRefusal === undefined ? refusal : undefined)
+    } catch (err) {
+      console.error("[idempotency] settle failed", err)
+      outcome = "failed"
+    }
+    if (answered2xx) continue
+    if (claim.fenceRefusal === CLAIM_LOST) override = claimLostResponse()
+    else if (failed && (outcome === "terminal" || claim.fenceRefusal === EFFECT_COMMITTED)) override = effectCommittedResponse(claim.operationId)
+  }
+  if (override !== undefined && (failure !== undefined || result instanceof Response)) return override as T
+  if (failure !== undefined) throw failure.error
+  return result as T
+}
+
+/** The current request's open claim with a write fence (durable store), or null. */
+function currentFence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null {
+  const ctx = requestClaims.getStore()
+  if (!ctx) return null
+  for (let i = ctx.claims.length - 1; i >= 0; i--) {
+    const fence = ctx.claims[i]!.fence()
+    if (fence) return fence
+  }
+  return null
+}
+
+installWriteFence(currentFence)
+
+/**
+ * Marks an effect that is not a Firestore write (a provider dispatch) before it happens, through the request's write
+ * fence: an attempt whose claim was taken over is refused, and the operation's marker is created, so a retry of the key
+ * never repeats the effect. A no-op outside a durable claim.
+ */
+export async function recordExternalEffect(kind: string): Promise<void> {
+  await currentFence()?.markEffect(kind)
 }
 
 function routeOf(request: Request): string {
@@ -306,43 +471,112 @@ export type IdempotentStart =
   | { claim: IdempotencyClaim; response?: undefined }
   | { claim?: undefined; response: Response }
 
+function reusedResponse(): NextResponse {
+  return errorResponse(422, "idempotency_key_reused", "Idempotency-Key reused with a different request payload")
+}
+
+function inProgressResponse(): NextResponse {
+  return errorResponse(409, "idempotency_in_progress", "a request with this Idempotency-Key is in progress")
+}
+
+function unavailableResponse(): NextResponse {
+  return errorResponse(
+    409,
+    "idempotency_replay_unavailable",
+    "this Idempotency-Key was already used; its response is not available for replay"
+  )
+}
+
+function replayResponse(body: unknown, key: string): NextResponse {
+  return NextResponse.json({ result: body, idempotencyKey: key, reused: true })
+}
+
 /**
- * Reserves `key` for this request (synchronously: call it after the body is read and before any
- * other await). Returns the claim, or the response to send instead: the stored replay, 422
- * idempotency_key_reused, 409 idempotency_in_progress or 409 idempotency_replay_unavailable.
+ * Reserves `key` for this request, or returns the response to send instead: the stored replay, 422
+ * idempotency_key_reused, 409 idempotency_in_progress, 409 idempotency_replay_unavailable, 409
+ * idempotency_effect_committed, 503 idempotency_capacity_exhausted (memory) or 503 idempotency_store_unavailable
+ * (durable). Throws PersistenceConfigurationError when the persistence mode is refused or has no database.
  */
-export function beginIdempotentRequest(request: Request, key: string, fingerprint: string): IdempotentStart {
+export async function beginIdempotentRequest(request: Request, key: string, fingerprint: string): Promise<IdempotentStart> {
   const ctx = requestClaims.getStore()
   const scope = ctx?.scope ?? { firmId: "_", userId: "_" }
-  const scopedKey = [scope.firmId, scope.userId, routeOf(request), key.toLowerCase()].join("|")
-  const begun = store.begin(scopedKey, fingerprint, Date.now(), scope.firmId)
+  const route = routeOf(request)
+  if (resolvePersistenceMode() === "memory") {
+    // Check-and-reserve in one synchronous step: no await between the mode check and the reserve.
+    const scopedKey = [scope.firmId, scope.userId, route, key.toLowerCase()].join("|")
+    const begun = store.begin(scopedKey, fingerprint, Date.now(), scope.firmId)
+    switch (begun.kind) {
+      case "claimed": {
+        const claimId = begun.claimId
+        const claim = new IdempotencyClaim({
+          complete: (payload) => store.complete(scopedKey, claimId, payload),
+          settle: async (completed) => {
+            if (completed) return "stored"
+            store.release(scopedKey, claimId)
+            return "released"
+          },
+          fence: () => null,
+        })
+        ctx?.claims.push(claim)
+        return { claim }
+      }
+      case "replay":
+        return { response: replayResponse(begun.body, key) }
+      case "reused":
+        return { response: reusedResponse() }
+      case "in_progress":
+        return { response: inProgressResponse() }
+      case "unavailable":
+        return { response: unavailableResponse() }
+      case "capacity":
+        return { response: errorResponse(503, "idempotency_capacity_exhausted", "the idempotency store is full; retry later") }
+    }
+  }
+
+  const durable = await durableStore()
+  let begun: Awaited<ReturnType<DurableIdempotencyStore["begin"]>>
+  try {
+    begun = await durable.begin({ firmId: scope.firmId, userId: scope.userId, route, key, requestHash: fingerprint })
+  } catch (err) {
+    console.error("[idempotency] durable store unavailable at claim", err)
+    return { response: errorResponse(503, "idempotency_store_unavailable", "idempotency store unavailable") }
+  }
   switch (begun.kind) {
     case "claimed": {
-      const claim = new IdempotencyClaim(scopedKey, begun.claimId)
+      const ref: DurableClaimRef = begun.claim
+      // The fence tells the claim when one of its writes is refused; the claim exists before its first write.
+      const holder: { claim?: IdempotencyClaim } = {}
+      const fence = durable.fence(ref, (code) => {
+        if (holder.claim) holder.claim.fenceRefusal = code
+      })
+      const claim = new IdempotencyClaim({
+        complete: () => undefined,
+        settle: (completed, payload, refusal) => {
+          if (!completed) return durable.settle(ref, { completed: false, ...(refusal === undefined ? {} : { refusal }) })
+          const json = JSON.stringify(payload ?? null)
+          const kept = Buffer.byteLength(json, "utf8") <= DURABLE_MAX_RESPONSE_BYTES ? json : null
+          return durable.settle(ref, { completed: true, json: kept })
+        },
+        fence: () => fence,
+        operationId: ref.operationId,
+      })
+      holder.claim = claim
       ctx?.claims.push(claim)
       return { claim }
     }
     case "replay":
-      return { response: NextResponse.json({ result: begun.body, idempotencyKey: key, reused: true }) }
+      return { response: replayResponse(begun.body, key) }
     case "reused":
-      return {
-        response: errorResponse(
-          422,
-          "idempotency_key_reused",
-          "Idempotency-Key reused with a different request payload"
-        ),
-      }
+      return { response: reusedResponse() }
     case "in_progress":
-      return {
-        response: errorResponse(409, "idempotency_in_progress", "a request with this Idempotency-Key is in progress"),
-      }
+      return { response: inProgressResponse() }
     case "unavailable":
-      return {
-        response: errorResponse(
-          409,
-          "idempotency_replay_unavailable",
-          "this Idempotency-Key was already used; its response is not available for replay"
-        ),
-      }
+      return { response: unavailableResponse() }
+    case "terminal":
+      return { response: effectCommittedResponse(begun.operationId) }
+    case "refusal": {
+      const body = begun.body !== null && typeof begun.body === "object" && !Array.isArray(begun.body) ? begun.body : { result: begun.body }
+      return { response: NextResponse.json({ ...body, reused: true }, { status: begun.status }) }
+    }
   }
 }
