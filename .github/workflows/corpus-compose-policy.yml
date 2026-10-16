@@ -6,6 +6,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "corpus_service/**"
+      # Annex A DDL: postgres init applies it (docker/postgres/apply-annex-a.sh), so a change re-runs
+      # the compose e2e (audit F19, PR 2b).
+      - "postgres/ddl/**"
       - "ci_gates/check_compose_policy.py"
       - "ci_gates/test_check_compose_policy.py"
       - "ci_gates/fixtures/**"
@@ -71,7 +74,7 @@ jobs:
           done
           docker compose down --remove-orphans >/dev/null 2>&1 || true
           echo "OK: compose refuses to start without any one of: $vars"
-      - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials (real stores + the app's own code path)
+      - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials, Annex A at init and publishing as corpus_writer (real stores + the app's own code path)
         run: bash corpus_service/tests/e2e/store_security_e2e.sh
-      - name: E2E - upgrade a pre-F30 legal/legal volume in place (TLS on, credentials rotated, roles provisioned, data kept)
+      - name: E2E - upgrade a pre-F30 legal/legal volume in place (TLS on, credentials rotated, roles provisioned, Annex A applied, data kept)
         run: bash corpus_service/tests/e2e/upgrade_e2e.sh

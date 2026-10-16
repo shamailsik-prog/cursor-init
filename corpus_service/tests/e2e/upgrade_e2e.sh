@@ -2,7 +2,9 @@
 # Audit F30 upgrade e2e: a data volume created by the PRE-F30 stack (pgvector:pg16 with the shipped
 # legal/legal defaults, plaintext, application tables owned by the superuser) is brought forward by
 # scripts/rotate_postgres_password.sh and then served by the shipped compose with TLS, rotated
-# credentials and the least-privilege roles -- without losing data.
+# credentials and the least-privilege roles -- without losing data. Since audit F19 (PR 2b) the same
+# script also brings the volume onto the Annex A corpus contract (15-apply-annex-a.sh), owned by the
+# bootstrap role, with the runtime role a corpus_writer member that can publish into it.
 #
 #   corpus_service/tests/e2e/upgrade_e2e.sh [CORPUS_SERVICE_DIR]
 #
@@ -25,6 +27,7 @@ PG_CLIENT=postgres:16-alpine
 # bootstrap role keeps its pre-F30 name, as on a real upgrade.
 new_store_secrets
 POSTGRES_USER=legal
+ANNEX_A_PAGE=$((RANDOM % 30000 + 10000))  # the synthetic "2099 SCMR <page>" judgments probe.py publishes
 COMPOSE=(docker compose -f docker-compose.yml -f "$HERE/compose.e2e.yml")
 
 NEW_DIRS=()
@@ -96,6 +99,7 @@ expect_refused "app role cannot DROP a pre-F30 table" 'must be owner' \
   "drop table keep" -e PGPASSWORD="$APP_DB_PASSWORD"
 expect_out "pre-F30 tables and their sequence now belong to the migration role" '^3$' \
   as_superuser_local "select count(*) from pg_class c where c.relname in ('keep','legacy_items','legacy_items_id_seq') and pg_get_userbyid(c.relowner) = '$MIGRATE_DB_USER'"
+annex_a_checks "upgraded volume"
 expect_ok "re-running the upgrade is idempotent" bash ./scripts/rotate_postgres_password.sh
 
 # 4. The app's own migration and runtime paths on the upgraded volume.
@@ -106,7 +110,15 @@ else
 fi
 expect_ok "migrate service creates the current schema on the upgraded volume" \
   timeout 600 "${COMPOSE[@]}" run --rm -T migrate python -m scraper.migrate
+annex_a_checks "upgraded volume, after the re-run and migrate"
+expect_out "pre-F30 tables still belong to the migration role after the re-run" '^3$' \
+  as_superuser_local "select count(*) from pg_class c where c.relname in ('keep','legacy_items','legacy_items_id_seq') and pg_get_userbyid(c.relowner) = '$MIGRATE_DB_USER'"
+expect_out "app role can still INSERT into the pre-F30 serial table after the re-run (table and sequence grants)" '^again\|true$' \
+  psql_c "host=postgres dbname=legal_scraper user=$APP_DB_USER sslmode=verify-full sslrootcert=/ca/ca.crt" \
+  "insert into legacy_items(v) values ('again') returning v || '|' || (id > 2)::text" -e PGPASSWORD="$APP_DB_PASSWORD"
 run_probe "runtime role on the upgraded volume" \
-  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" api python tests/e2e/probe.py db-runtime
+  timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps -e E2E_BOOTSTRAP_USER="$POSTGRES_USER" -e E2E_ANNEX_A_PAGE="$ANNEX_A_PAGE" \
+  api python tests/e2e/probe.py db-runtime
+annex_a_reader_checks "upgraded volume, Annex A reader" "$ANNEX_A_PAGE"
 
 summary "F30 upgrade e2e"

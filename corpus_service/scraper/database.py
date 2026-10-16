@@ -141,7 +141,8 @@ async def upgrade_staging_bench_type(conn: AsyncConnection) -> None:
 
     Idempotent: when the column is already there, nothing is run. DDL, so like
     upgrade_trust_vocabulary it runs only in `python -m scraper.migrate` as the schema owner, never in
-    the API's init_db(). The Annex A contract itself is never applied here (it needs a superuser; PR 2b).
+    the API's init_db(). The Annex A contract itself is never applied here (it needs a superuser:
+    docker/postgres/apply-annex-a.sh at postgres init, PR 2b).
 
     The check looks at the same relation the ALTER TABLE resolves to ('scraper_staging'::regclass),
     not at current_schema(): with the default search_path a schema named after the migration role

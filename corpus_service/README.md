@@ -83,8 +83,9 @@ record-specific too (Codex P2 on #49), and is quarantined `batch_invalid:<code>`
 models), `nul_character`, or `citation` (a `CitationError` from the key builder). Every
 other failure leaves the record pending for the next run:
 - a transient database error (connection lost, or SQLSTATE class 08, 40, 53 or 57, or 55P03);
-- a systemic or unknown one: permission (42501; before PR 2b grants the runtime role
-  `corpus_writer`, every publication fails this way or as a `PublicationError` with no SQLSTATE),
+- a systemic or unknown one: permission (42501; a runtime role that is not a `corpus_writer` member
+  with SET fails every publication this way or as a `PublicationError` with no SQLSTATE; the shipped
+  compose provisions it, see "Data-store security"),
   schema drift (42P01, 42703), an internal error (XX000), a generic RAISE (P0001), SKP08, any other
   SQLSTATE, or an unknown Python exception with none. These may be
   a deployment or schema fault that would hit every record, so the backlog must survive it. They are
@@ -202,9 +203,11 @@ published, `2` usage error or a structurally invalid batch, `3` batch key reused
 content, `4` a superuser or a role that is not a `corpus_writer` member, `1` anything else (nothing
 is written).
 
-**Who applies the DDL.** Annex A (001, 003) is applied by a superuser (the postgres init script in
-PR 2b; the test fixture's admin in tests). `python -m scraper.migrate` never applies it: 001 needs
-`CREATE ROLE` and `CREATE EXTENSION`, which the `NOCREATEROLE` migration owner cannot do.
+**Who applies the DDL.** Annex A (001, 003) is applied by a superuser: in the compose stack by
+`docker/postgres/apply-annex-a.sh` at postgres init and by `scripts/rotate_postgres_password.sh` on an
+existing volume (see "Data-store security"); in tests by the fixture's admin. `python -m
+scraper.migrate` never applies it: 001 needs `CREATE ROLE` and `CREATE EXTENSION`, which the
+`NOCREATEROLE` migration owner cannot do.
 
 **Tests.** `tests/test_f19_publication_db.py` (and the migrated `test_f20_trust_policy_db.py`) apply
 Annex A to each per-test database and publish as generated `corpus_writer` members; the pure tests
@@ -282,6 +285,33 @@ default, and all four differ.
   only (no DDL, no CREATE on the database or schema, no extension, role, system or large-object
   changes). Redis's `default` user is disabled; the app's ACL user has no `@admin`/`@dangerous`
   commands, cannot flush scripts/functions, and cannot switch databases.
+- **Annex A corpus contract (audit F19).** On a fresh volume the image's init runs `10-init.sql`
+  (extensions), then `15-apply-annex-a.sh`, which applies `../postgres/ddl/001_corpus_contract.sql`
+  and `003_corpus_publication.sql` (mounted read-only) in one transaction as the bootstrap
+  superuser, then `20-provision-roles.sh`, which refuses to run without Annex A or on PostgreSQL
+  older than 16. Annex A stays the superuser's: provisioning leaves every relation that
+  `corpus_contract_relations()` lists out of the move to the migration role and out of the runtime
+  role's DML grants. On every run it resets any grant on those relations (and the sequences they
+  own) to either application role, `corpus_clients` or `PUBLIC`, and any `EXECUTE` on the routines
+  `corpus_contract_routines()` lists to those roles (to `PUBLIC` too, except 001's trigger function,
+  which keeps PostgreSQL's default). These resets, and those on the database, schema `public` and the
+  runtime role's own tables, are `REVOKE … CASCADE`. A grant that one of these roles held `WITH GRANT
+  OPTION` and passed on is taken down with it, so the run does not abort. It also resets the
+  bootstrap superuser's default privileges, in `public`, globally and in any other schema. No object
+  that role creates later goes to either application role or `corpus_clients`, and no table or
+  sequence goes to `PUBLIC`. Functions keep PostgreSQL's default `EXECUTE` for `PUBLIC`, which
+  extension functions created later need. It then fails closed if either role still owns or holds any of
+  it, directly or through `corpus_clients`, `PUBLIC` or an inherited role, or if an Annex A relation
+  or routine is not a superuser's. The grants the DDL makes to `corpus_reader`, `corpus_writer`
+  and `corpus_declassify` are untouched. The migration role could not apply 001 anyway (it creates
+  roles and extensions; that role is `NOCREATEROLE`). The runtime role is a member of
+  `corpus_writer` `WITH INHERIT FALSE, SET TRUE`: it holds none of `corpus_writer`'s rights until
+  `scraper.publication` switches to it (`SET LOCAL ROLE`) for one audited publication, and even then
+  it cannot write the publication grant or the declassify grant, change the audit, or promote a
+  row outside a publication. `corpus_writer` and `corpus_reader` get `USAGE` on schema `public`
+  (which `PUBLIC` no longer has); neither can log in. `docker/postgres/apply-annex-a.sh` is
+  idempotent; `scripts/rotate_postgres_password.sh` re-applies it on an existing volume (the image
+  runs `/docker-entrypoint-initdb.d` only on an empty one).
 - **Policy before every deployment.** `python3 ../ci_gates/check_compose_policy.py
   docker-compose.yml` checks the deployment as `docker compose config` resolves it, **merged with
   any `docker-compose.override.yml` next to it** (compose loads that file automatically), with all
@@ -329,8 +359,10 @@ default, and all four differ.
 - **Upgrading an existing install** (data volume created before F30, e.g. with `legal/legal`):
   stop the stack, set the values in `.env` (keep `POSTGRES_USER` as the existing role name),
   run `./scripts/rotate_postgres_password.sh`, then `docker compose up -d`. The script enables TLS
-  on the old volume, re-hashes the superuser password as SCRAM, creates or updates the two roles,
-  moves existing application tables to the migration role and grants the runtime role DML only.
+  on the old volume, re-hashes the superuser password as SCRAM, applies Annex A (also the way to
+  bring a volume created before F19 onto it, or up to date after a DDL change), creates or updates
+  the two roles, moves existing application tables to the migration role and grants the runtime
+  role DML only, plus its `corpus_writer` membership.
 
 Policy: `ci_gates/check_compose_policy.py`. End-to-end proof (also runnable locally with Docker):
 `tests/e2e/store_security_e2e.sh` and `tests/e2e/upgrade_e2e.sh`, run by

@@ -175,6 +175,78 @@ no_store_secret() {
   if [ -z "$problems" ]; then pass "$label"; else fail "$label" "$problems"; fi
 }
 
+# --- audit F19 (PR 2b): the Annex A corpus contract on the compose postgres -----------------------
+# Both need the calling script's COMPOSE array and as_superuser_local (the bootstrap superuser over the
+# container's own socket, the only superuser path).
+
+# as_role_local ROLE SQL: SQL as ROLE (SET ROLE from the local superuser session).
+as_role_local() {
+  "${COMPOSE[@]}" exec -T -u postgres postgres \
+    psql -U "$POSTGRES_USER" -d legal_scraper -v ON_ERROR_STOP=1 -qtA -c "SET ROLE $1" -c "$2"
+}
+
+# annex_a_checks PREFIX: Annex A is applied (001 + 003 by 15-apply-annex-a.sh) and owned by the
+# bootstrap superuser; neither application role owns or holds anything of it (relations, their
+# sequences, and EXECUTE on the routines the DDL keeps from PUBLIC), nor does corpus_clients or PUBLIC;
+# the runtime role's only corpus_* membership is corpus_writer WITH INHERIT FALSE, SET TRUE (D14, D25;
+# PR 2b fix round 1).
+annex_a_checks() {
+  local p=$1 roles="(values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)"
+  expect_out "$p: server is PostgreSQL 16 (pgvector/pgvector:pg16)" '^16$' \
+    as_superuser_local "select current_setting('server_version_num')::int / 10000"
+  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 29 relations)" '^29$' \
+    as_superuser_local "select count(*) from public.corpus_contract_relations()"
+  expect_out "$p: corpus_metadata.schema_version is L17-AnnexA-1.0" '^L17-AnnexA-1\.0$' \
+    as_superuser_local "select value from public.corpus_metadata where key = 'schema_version'"
+  expect_out "$p: the 9 *_publication_guard triggers exist and are enabled (tgenabled O)" '^9/9$' \
+    as_superuser_local "select count(*) filter (where t.tgenabled = 'O') || '/' || count(*) from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      where not t.tgisinternal and t.tgname = c.relname || '_publication_guard' and c.relnamespace = 'public'::regnamespace"
+  expect_out "$p: corpus_contract_routines() lists the 12 Annex A routines" '^12$' \
+    as_superuser_local "select count(*) from public.corpus_contract_routines()"
+  expect_out "$p: every Annex A relation and routine is owned by the bootstrap superuser" '^0$' \
+    as_superuser_local "select (select count(*) from public.corpus_contract_relations() r join pg_class c on c.oid = r
+        where pg_get_userbyid(c.relowner) <> '$POSTGRES_USER')
+      + (select count(*) from public.corpus_contract_routines() f join pg_proc p on p.oid = f.routine
+        where pg_get_userbyid(p.proowner) <> '$POSTGRES_USER')"
+  expect_out "$p: neither $APP_DB_USER, $MIGRATE_DB_USER, corpus_clients nor PUBLIC may EXECUTE an Annex A routine the DDL keeps from PUBLIC" '^0$' \
+    as_superuser_local "select count(*) from public.corpus_contract_routines() f
+      cross join (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER'), ('corpus_clients'), ('public')) u(n)
+      where not f.public_execute and has_function_privilege(u.n, f.routine, 'EXECUTE')"
+  expect_out "$p: neither corpus_clients nor PUBLIC holds any privilege on an Annex A relation" '^0$' \
+    as_superuser_local "select count(*) from public.corpus_contract_relations() r
+      cross join (values ('corpus_clients'), ('public')) u(n)
+      where has_table_privilege(u.n, r, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+         or has_any_column_privilege(u.n, r, 'SELECT,INSERT,UPDATE,REFERENCES')"
+  expect_out "$p: neither $APP_DB_USER nor $MIGRATE_DB_USER owns or holds any privilege on an Annex A relation or sequence" '^0$' \
+    as_superuser_local "select (select count(*) from public.corpus_contract_relations() r cross join $roles
+        where has_table_privilege(u.n, r, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+           or has_any_column_privilege(u.n, r, 'SELECT,INSERT,UPDATE,REFERENCES')
+           or (select pg_get_userbyid(relowner) from pg_class where oid = r) = u.n)
+      + (select count(*) from pg_class s join pg_depend d on d.classid = 'pg_class'::regclass and d.objid = s.oid
+           and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i') cross join $roles
+        where s.relkind = 'S' and d.refobjid in (select r::oid from public.corpus_contract_relations() r)
+          and (has_sequence_privilege(u.n, s.oid, 'USAGE,SELECT,UPDATE') or pg_get_userbyid(s.relowner) = u.n))"
+  expect_out "$p: the only corpus role membership of $APP_DB_USER and $MIGRATE_DB_USER: $APP_DB_USER in corpus_writer WITH INHERIT FALSE, SET TRUE, no admin" \
+    "^corpus_writer:$APP_DB_USER:inherit=false:set=true:admin=false\$" \
+    as_superuser_local "select coalesce(string_agg(g.rolname || ':' || u.rolname || ':inherit=' || m.inherit_option
+        || ':set=' || m.set_option || ':admin=' || m.admin_option, ',' order by g.rolname, u.rolname), 'none')
+      from pg_auth_members m join pg_roles g on g.oid = m.roleid join pg_roles u on u.oid = m.member
+      where u.rolname in ('$APP_DB_USER', '$MIGRATE_DB_USER') and g.rolname <> 'corpus_clients'"
+}
+
+# annex_a_reader_checks PREFIX PAGE: after probe.py db-runtime published "2099 SCMR PAGE" (publish_batch)
+# and "2099 SCMR PAGE+1" (promotion), corpus_reader sees both through the promoted-only views, and only
+# through them.
+annex_a_reader_checks() {
+  local p=$1 page=$2
+  expect_out "$p: corpus_reader reads both published judgments (publish_batch, promotion) through v_judgment and v_citation" '^2$' \
+    as_role_local corpus_reader "select count(*) from public.v_citation c join public.v_judgment j on j.id = c.judgment_id
+      where c.citation_text in ('2099 SCMR $page', '2099 SCMR $((page + 1))')"
+  expect_refused "$p: corpus_reader cannot read the judgment table itself, only the views" 'permission denied for table judgment' \
+    as_role_local corpus_reader "select count(*) from public.judgment"
+}
+
 # expect_lines LABEL EXPECTED ACTUAL: two newline-separated lists must hold the same lines (sorted).
 expect_lines() {
   local label=$1 want got
