@@ -18,7 +18,11 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  *
  * The audit's failure scenario: a synthetic full-width CNIC and an Urdu-digit phone number passed the mask with zero
  * redactions, and `assertMinimised` re-ran the same detector, so it could not catch what the mask missed. Spec:
- * docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md. Every test here fails on main 0844ed8.
+ * docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md.
+ *
+ * On main 0844ed8, (a) to (d), (e)'s first and malformed-receipt rows, and the round-2 attack rows (f) fail. The rest
+ * are guards that pass on main too and must keep passing: (d') another firm's client record, (e)'s pre-F15 receipt,
+ * the round-2 false-positive rows (g) and the timing row (h).
  *
  * Every name is invented; every number is synthetic.
  */
@@ -190,7 +194,7 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     expect(sent[0]!.body).toBe("[PARTY], through [PARTY], asks whether [PARTY] may appeal.")
   })
 
-  it("(d') another firm's client record is never read", async () => {
+  it("(d') another firm's client record is read by id and discarded, never used", async () => {
     const f = await newFirm({ client: { firmId: uniq("other-firm"), data: { canonicalName: "Nura Kalbani" } } })
     const sent = capture()
     await ask(f, "Nura Kalbani asks about the appeal.")
@@ -252,5 +256,67 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
       expect(sent).toHaveLength(1)
       expect((await db().collection("committee_outputs").where("firmId", "==", f.firmId).get()).size).toBe(0)
     })
+  })
+
+  // Re-audit round 1 (FAIL 6/10): the re-auditor's attack inputs through the privileged route (spec rulings R2-1 to R2-4).
+  describe("(f) round 2: identifiers the re-auditor sent to the provider at rank 3 are masked, or the call is blocked", () => {
+    const CNIC = "3520212345671"
+    const PHONE = "03001234567"
+    const sep = (digits: string, s: string) => [...digits].join(s)
+
+    it.each([
+      ["a CNIC with U+034F between every digit", `Client CNIC ${sep(CNIC, "\u034F")}. Draft the bail grounds.`, "Client CNIC [CNIC]. Draft the bail grounds."],
+      ["a mobile with VS16 between every digit", `Client mobile ${sep(PHONE, "\uFE0F")}. Draft the bail grounds.`, "Client mobile [PHONE]. Draft the bail grounds."],
+      ["a mobile with a spaced dash", "Client can be reached at 0300 - 1234567. Draft the bail grounds.", "Client can be reached at [PHONE]. Draft the bail grounds."],
+      ["a landline with a bracketed area code", "Client office (042) 35761234. Draft the bail grounds.", "Client office [PHONE]. Draft the bail grounds."],
+      ["NTN No.", "Client NTN No. 1234567-8. Draft the reply.", "Client [NTN]. Draft the reply."],
+    ])("%s: the provider receives no digit of it", async (_label, body, expected) => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      const sent = capture()
+      const r = await ask(f, body)
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe(expected)
+      expect(ANY_DIGIT.test(sent[0]!.body)).toBe(false)
+    })
+
+    it("a parentage clause after a party role and a name is blocked not_minimised, and the provider is never called", async () => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      const sent = capture()
+      const r = await ask(f, "The son of the deceased Kamran was examined. Draft the cross.")
+      expect([r.blocked, r.reason]).toEqual([true, "not_minimised"])
+      expect(sent).toHaveLength(0)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts).toEqual({ ...NO_RESIDUAL, kinship_name: 1 })
+    })
+  })
+
+  describe("(g) round 2: clean privileged prose the re-auditor saw blocked is allowed out", () => {
+    it.each([
+      ["an Urdu sentence with a kinship word before a postposition", "اس کی زوجہ نے عدالت میں بیان دیا۔ جواب تیار کریں۔"],
+      ["son of Respondent No. 2", "The petitioner is the son of Respondent No. 2. Draft the grounds."],
+      ["residents of a territory", "Are residents of Islamabad Capital Territory governed by the ICT Rent Restriction Ordinance?"],
+    ])("%s", async (_label, body) => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      const sent = capture()
+      const r = await ask(f, body)
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe(body)
+    })
+  })
+
+  it("(h) round 2: a 100,000-character body that was quadratic (house + spaces) is answered well inside the pre-call allowance", async () => {
+    const f = await newFirm()
+    const sent = capture()
+    const started = Date.now()
+    const r = await ask(f, `house${" ".repeat(99_990)}x`)
+    // Before the fix this request spent 12.5 s in the residual check and answered 503 precall_deadline.
+    expect(r.blocked).toBe(false)
+    expect(sent).toHaveLength(1)
+    expect(Date.now() - started).toBeLessThan(8_000)
   })
 })
