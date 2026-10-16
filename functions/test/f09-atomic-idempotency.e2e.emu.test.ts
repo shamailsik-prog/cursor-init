@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, Transaction, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
@@ -59,6 +59,17 @@ const markerDoc = (firmId: string, key: string) => db().collection("idempotency_
 const byFirm = async (collection: string, firmId: string): Promise<Array<{ id: string; data: DocumentData }>> =>
   (await db().collection(collection).where("firmId", "==", firmId).get()).docs.map((d) => ({ id: d.id, data: d.data() }))
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/**
+ * The 409 idempotency_effect_committed body (re-audit LOW-1): it names the operation whose effect committed, so a client
+ * can correlate it; `reused: true` on a replay.
+ */
+const committedBody = (operationId: string, reused = true) => ({
+  error: { code: "idempotency_effect_committed", operationId },
+  ...(reused ? { reused: true } : {}),
+})
+/** The operation id the key's record names. */
+const operationIdOf = async (firmId: string, key: string): Promise<string> => (await keyDoc(firmId, key).get()).get("operationId") as string
 
 /** A promise the test opens when it chooses, and one that resolves when the held code has reached the gate. */
 function gate(): { open: () => void; wait: Promise<void>; reached: () => void; arrived: Promise<void> } {
@@ -257,10 +268,11 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       // Main: the 500 released the key, the retry ran the handler again and the effect committed twice.
       expect(await effectCount(effectId)).toBe(1)
       expect(runs.n).toBe(1)
-      expect([first.status, errorOf(first)]).toEqual([409, "idempotency_effect_committed"])
+      const operationId = await operationIdOf(firmId, key)
+      expect([first.status, first.body]).toEqual([409, committedBody(operationId, false)])
       expect(second.status).toBe(409)
-      expect(second.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
-      expect((await keyDoc(firmId, key).get()).data()).toMatchObject({ status: "done", response: { status: 409, body: { error: { code: "idempotency_effect_committed" } } } })
+      expect(second.body).toEqual(committedBody(operationId))
+      expect((await keyDoc(firmId, key).get()).data()).toMatchObject({ status: "done", response: { status: 409, body: committedBody(operationId, false) } })
     })
 
     it("the user flow: committeeBrain's output write fails for good after the provider call; the same-key retry publishes that call's answer, with no second provider call", async () => {
@@ -309,6 +321,8 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       // Main: the retry ran committeeBrain again and the provider was called a second time.
       expect(sent).toHaveLength(1)
       expect([retried.status, retried.code]).toEqual([409, "idempotency_effect_committed"])
+      // Re-audit LOW-1: the stored answer names the operation, for a 409 the handler raised too.
+      expect((await keyDoc(f.firmId, key).get()).data()?.response).toEqual({ status: 409, body: committedBody(await operationIdOf(f.firmId, key), false) })
       expect(await byFirm("committee_outputs", f.firmId)).toHaveLength(0)
       // The spend is not lost: the reservation keeps its provider attempt, and the reconciler charges it (F08).
       const [reservation] = await byFirm("ai_reservations", f.firmId)
@@ -424,7 +438,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       expect(await effectCount(effectId)).toBe(1)
       expect(runs.n).toBe(2)
       expect(outC.status).toBe(409)
-      expect(outC.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+      expect(outC.body).toEqual(committedBody(await operationIdOf(firmId, key)))
     })
 
     it("A commits before B releases: B's release finds A's marker and answers 409 idempotency_effect_committed; the effect commits once", async () => {
@@ -446,10 +460,49 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       await outA
       b.open()
       const answeredB = await outB
-      expect([answeredB.status, errorOf(answeredB)]).toEqual([409, "idempotency_effect_committed"])
+      const operationId = await operationIdOf(firmId, key)
+      expect([answeredB.status, answeredB.body]).toEqual([409, committedBody(operationId, false)])
       const outC = await send(later, { path, token, firmId, key, body: { effectId } })
-      expect(outC.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+      expect(outC.body).toEqual(committedBody(operationId))
       expect(await effectCount(effectId)).toBe(1)
+    })
+
+    it("committeeBrain (re-audit ATK-2): A held before reserving; B takes over and fails before reserving; A dispatches, records its receipt and is fenced at publication; C resumes from A's receipt: one provider call, one usage row", async () => {
+      vi.spyOn((await import("firebase-functions")).logger, "error").mockImplementation(() => undefined)
+      const f = await brainFirm()
+      const sent = stubTransport()
+      const a = gate()
+      let reserves = 0
+      gatewaySeam().beforeReserve = async () => {
+        reserves += 1
+        if (reserves === 1) {
+          a.reached()
+          await a.wait
+        } else if (reserves === 2) {
+          throw new Error("B fails before reserving")
+        }
+      }
+      const key = randomUUID()
+      const outA = ask(brainAt(() => T), f, key).then(
+        (out) => ({ ok: true as const, out }),
+        (err: { status: number; code: string }) => ({ ok: false as const, err })
+      )
+      await a.arrived
+      const errB = await apiErrorOf(ask(brainAt(() => pastLease(T)), f, key))
+      expect([errB.status, errB.code]).toEqual([500, "internal"])
+      a.open()
+      const resA = await outA
+      expect(resA.ok ? null : [resA.err.status, resA.err.code]).toEqual([409, "idempotency_claim_lost"])
+      expect(sent).toHaveLength(1)
+      const marker = (await markerDoc(f.firmId, key).get()).data()!
+      expect(marker).toMatchObject({ kind: "p1_dispatch", result: { outcome: "ok", text: "REPLY" } })
+
+      const c = await ask(brainAt(() => pastLease(T)), f, key)
+      // aacaae5: B's release deleted the record, C deleted A's marker as stale and dispatched a second paid call.
+      expect(sent).toHaveLength(1)
+      expect(await byFirm("ai_usage_logs", f.firmId)).toHaveLength(1)
+      expect(c).toMatchObject({ blocked: false, text: "REPLY", traceId: marker.traceId, accounting: "settled" })
+      expect((await byFirm("committee_outputs", f.firmId)).map((o) => o.id)).toEqual([c.outputId])
     })
 
     it("a takeover that ends without an effect keeps the record (released): the same request runs again at once, another body is 422, and the stale holder is still fenced", async () => {
@@ -499,7 +552,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       expect([during.status, errorOf(during)]).toEqual([409, "idempotency_in_progress"])
       const after = await send(later, { path, token, firmId, key, body: { effectId } })
       expect(after.status).toBe(409)
-      expect(after.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+      expect(after.body).toEqual(committedBody(await operationIdOf(firmId, key)))
       expect(runs.n).toBe(1)
       expect(await effectCount(effectId)).toBe(1)
     })
@@ -522,7 +575,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       await held.arrived
       delete idemSeam().beforeSettle
       const after = await send(later, { path, token, firmId, key, body: { effectId } })
-      expect(after.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+      expect(after.body).toEqual(committedBody(await operationIdOf(firmId, key)))
       expect(runs.n).toBe(1)
       expect(await effectCount(effectId)).toBe(1)
       // The holder wakes after the takeover: its settle no longer holds the claim and changes nothing.
@@ -626,6 +679,62 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
   })
 
   describe("committeeBrain: every effect/settlement boundary", () => {
+    /**
+     * The receipt write (step 9b) fails `times` times at the store: every `update` of a marker with its `result` throws
+     * inside the transaction, which aborts it (re-audit LOW-2). Returns how many failures are left to inject.
+     */
+    function failReceiptWrites(times: number): { left: () => number } {
+      let left = times
+      const realUpdate = Transaction.prototype.update
+      vi.spyOn(Transaction.prototype, "update").mockImplementation(function (this: Transaction, ...args: unknown[]) {
+        const [ref, data] = args as [DocumentReference, unknown]
+        if (left > 0 && ref.path.startsWith("idempotency_effects/") && data !== null && typeof data === "object" && "result" in data) {
+          left -= 1
+          throw new Error("injected receipt write failure")
+        }
+        return (realUpdate as (...a: unknown[]) => Transaction).apply(this, args)
+      })
+      return { left: () => left }
+    }
+
+    it("re-audit LOW-2: the receipt write fails twice, then lands; the publication fails for good; the same-key retry resumes from the receipt with no second call", async () => {
+      vi.spyOn((await import("firebase-functions")).logger, "error").mockImplementation(() => undefined)
+      const f = await brainFirm()
+      const sent = stubTransport()
+      const brain = brainAt(() => T)
+      const key = randomUUID()
+      const receipt = failReceiptWrites(2)
+      p1OpsTestSeam.sleep = async () => undefined
+      p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+      const err = await apiErrorOf(ask(brain, f, key))
+      expect([err.status, err.code]).toEqual([500, "internal"])
+      // aacaae5 and 8b7f7ba: the first failure ended the fail-open write, so no receipt was recorded.
+      expect(receipt.left()).toBe(0)
+      expect((await markerDoc(f.firmId, key).get()).data()).toMatchObject({ result: { outcome: "ok", text: "REPLY" } })
+      const resumed = await ask(brain, f, key)
+      expect([resumed.blocked, resumed.text, sent.length]).toEqual([false, "REPLY", 1])
+    })
+
+    it("re-audit LOW-2: a receipt write that fails for good logs p1.receipt_record_failed naming the operation and the trace; the retry answers 409 with that operation id and no second call", async () => {
+      const { logger } = await import("firebase-functions")
+      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const f = await brainFirm()
+      const sent = stubTransport()
+      const brain = brainAt(() => T)
+      const key = randomUUID()
+      failReceiptWrites(1_000)
+      p1OpsTestSeam.sleep = async () => undefined
+      p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+      expect((await apiErrorOf(ask(brain, f, key))).status).toBe(500)
+      const operationId = await operationIdOf(f.firmId, key)
+      const marker = (await markerDoc(f.firmId, key).get()).data()!
+      expect(marker.result).toBeUndefined()
+      expect(errors).toHaveBeenCalledWith("p1.receipt_record_failed", expect.objectContaining({ firmId: f.firmId, operationId, traceId: marker.traceId, usageLogId: marker.usageLogId }))
+      const retried = await apiErrorOf(ask(brain, f, key))
+      expect([retried.status, retried.code, sent.length]).toEqual([409, "idempotency_effect_committed", 1])
+      expect((await keyDoc(f.firmId, key).get()).data()?.response).toEqual({ status: 409, body: committedBody(operationId, false) })
+    })
+
     it("a crash after the provider answered and its receipt was recorded: the same-key retry resumes from the receipt (one call), answers accounting pending, and the reconciler settles the stored answer", async () => {
       const f = await brainFirm()
       const sent = stubTransport()
@@ -760,8 +869,8 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
         return { status: 200, body: {} }
       })
       expect(ran).toBe(false)
-      expect(out).toEqual({ status: 409, body: { error: { code: "idempotency_effect_committed" }, reused: true } })
-      expect((await keyDoc(s.firmId, s.key).get()).data()).toMatchObject({ status: "done", response: { status: 409 } })
+      expect(out).toEqual({ status: 409, body: committedBody("op-1") })
+      expect((await keyDoc(s.firmId, s.key).get()).data()).toMatchObject({ status: "done", response: { status: 409, body: committedBody("op-1", false) } })
       await expect(withIdempotency(s, ok)).resolves.toEqual(out)
     })
 
@@ -809,7 +918,8 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
         return { status: 200, body: {} }
       })
       expect(ran).toBe(false)
-      expect(out).toEqual({ status: 409, body: { error: { code: "idempotency_effect_committed" }, reused: true } })
+      // The marker names the operation that committed: the answer and the record take its id.
+      expect(out).toEqual({ status: 409, body: committedBody("op-other") })
     })
 
     it("an unexpired marker with no record (the record was lost) is adopted: once answers 409 without running, resume runs with it as `prior`", async () => {
@@ -820,7 +930,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
         ran = true
         return { status: 200, body: {} }
       })
-      expect([ran, out]).toEqual([false, { status: 409, body: { error: { code: "idempotency_effect_committed" }, reused: true } }])
+      expect([ran, out]).toEqual([false, { status: 409, body: committedBody("op-lost") }])
       expect((await keyDoc(once.firmId, once.key).get()).data()).toMatchObject({ status: "done", operationId: "op-lost", response: { status: 409 } })
       expect((await markerDoc(once.firmId, once.key).get()).exists).toBe(true)
 

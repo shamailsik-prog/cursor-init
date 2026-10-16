@@ -635,12 +635,25 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       classification,
       outbound,
     }
-    await recordAttemptOutcome(
+    await recordAttemptOutcomeRetrying(
       db,
       resRef,
       { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds },
       operation ? { operation: operation.operation, traceId, receipt } : undefined
-    ).catch((err: unknown) => logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) }))
+    ).catch((err: unknown) => {
+      logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
+      // Re-audit LOW-2: the operation's receipt is lost. A same-key retry answers 409 idempotency_effect_committed for
+      // this charged call (never a second one); this line names what an operator needs to find it.
+      if (operation) {
+        logger.error("p1.receipt_record_failed", {
+          firmId,
+          usageLogId: usageRef.id,
+          operationId: operation.operation.fields.operationId ?? null,
+          traceId,
+          code: errorCode(err),
+        })
+      }
+    })
     reservation = { ref: resRef, state: settledState(true, outcome, cost), mustBeLive: true }
   }
   if (dispatched && t.crashAt === "recorded") throw simulatedCrash()
@@ -903,12 +916,42 @@ async function markAttempt(
  * records the attempt receipt on the operation's marker, only while the marker carries this call's trace id. Cut off
  * like the mark.
  */
-async function recordAttemptOutcome(
-  db: Firestore,
-  ref: DocumentReference,
-  r: { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string },
-  op?: { operation: P1Operation; traceId: string; receipt: P1Receipt }
-): Promise<void> {
+type AttemptOutcome = { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string }
+type ReceiptArgs = { operation: P1Operation; traceId: string; receipt: P1Receipt }
+
+/** Attempts at the attempt-outcome write (step 9b); after a failed one the wait is 100 ms, then 200 ms (re-audit LOW-2). */
+export const ATTEMPT_OUTCOME_ATTEMPTS = 3
+const ATTEMPT_OUTCOME_BACKOFF_MS = 100
+
+/**
+ * Step 9b with bounded retries (re-audit LOW-2). For an HTTP operation it carries the attempt receipt, so a lost write
+ * would turn a later resume into a terminal 409 for a charged call. Up to ATTEMPT_OUTCOME_ATTEMPTS attempts, waits of
+ * 100 then 200 ms between them, all inside the step's one ATTEMPT_RECORD_TIMEOUT_MS share of the time budget (no attempt
+ * or wait starts past it, and each attempt is cut off at what is left), so CALL_WORST_CASE_MS is unchanged. Each
+ * attempt rewrites the same values, so a retry after an attempt whose commit landed unseen changes nothing. The last
+ * failure is rethrown; the call stays fail-open on it.
+ */
+async function recordAttemptOutcomeRetrying(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op?: ReceiptArgs): Promise<void> {
+  const started = Date.now()
+  const remaining = () => ATTEMPT_RECORD_TIMEOUT_MS - (Date.now() - started)
+  let failure: unknown = Object.assign(new Error("P1 attempt_outcome_timeout"), { code: "attempt_outcome_timeout" })
+  for (let attempt = 1; attempt <= ATTEMPT_OUTCOME_ATTEMPTS; attempt++) {
+    const left = remaining()
+    if (left <= 0) break
+    try {
+      await recordAttemptOutcome(db, ref, r, op, left)
+      return
+    } catch (err) {
+      failure = err
+      const wait = ATTEMPT_OUTCOME_BACKOFF_MS * 2 ** (attempt - 1)
+      if (attempt >= ATTEMPT_OUTCOME_ATTEMPTS || remaining() - wait <= 0) break
+      await new Promise((resolve) => setTimeout(resolve, wait))
+    }
+  }
+  throw failure
+}
+
+async function recordAttemptOutcome(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op: ReceiptArgs | undefined, timeoutMs: number): Promise<void> {
   await withTimeout(
     db.runTransaction(
       async (tx) => {
@@ -932,7 +975,7 @@ async function recordAttemptOutcome(
       },
       { maxAttempts: 3 }
     ),
-    ATTEMPT_RECORD_TIMEOUT_MS,
+    timeoutMs,
     "attempt_outcome_timeout"
   )
 }

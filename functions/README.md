@@ -247,6 +247,8 @@ resumes idempotently and returns the same `firmId` (audited as
     `deactivateUser`, `disableMfa`): no marker. These run again, as before;
     each is idempotent by construction.
 
+  The 409 body is `{ error: { code: "idempotency_effect_committed",
+  operationId } }`, so a client can correlate it with the effect.
   A refusal before any effect (401/403, 429, 5xx) still releases the key.
   A first claim is deleted. A claim this request took over is kept as a
   `released` tombstone, because an older holder may still commit (Codex P1 on

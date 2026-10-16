@@ -116,9 +116,17 @@ export function requestHash(body: unknown): string {
  */
 export type HttpResult = { status: number; body: Record<string, unknown>; headers?: Record<string, string> }
 
-/** The terminal answer of an operation whose effect committed without a stored answer (audit F09); a fresh object each call. */
-export function effectCommittedResult(): HttpResult {
-  return { status: 409, body: { error: { code: EFFECT_COMMITTED } } }
+/**
+ * The terminal answer of an operation whose effect committed without a stored answer (audit F09); a fresh object each
+ * call. It names the operation (re-audit LOW-1), so a client can correlate the answer with the effect it stands for.
+ */
+export function effectCommittedResult(operationId: string): HttpResult {
+  return { status: 409, body: { error: { code: EFFECT_COMMITTED, operationId } } }
+}
+
+/** A handler's own 409 idempotency_effect_committed (committeeBrain's resume with no receipt), whatever its body says. */
+function isEffectCommitted(result: HttpResult): boolean {
+  return result.status === 409 && (result.body.error as { code?: unknown } | undefined)?.code === EFFECT_COMMITTED
 }
 
 /**
@@ -323,12 +331,12 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
             claimId,
             claimedAt: nowTs,
             claims,
-            response: effectCommittedResult(),
+            response: effectCommittedResult(operationId),
             answeredAt: FieldValue.serverTimestamp(),
             resumable: FieldValue.delete(),
             released: FieldValue.delete(),
           })
-          return { kind: "replay", response: effectCommittedResult() }
+          return { kind: "replay", response: effectCommittedResult(operationId) }
         }
         tx.update(ref, { operationId, claimId, claimedAt: nowTs, claims, resumable: FieldValue.delete(), released: FieldValue.delete() })
         return { kind: "claimed", operationId, prior: ours && mode === "resume" ? markerSnap!.data()! : null, expiresAt: existing.expiresAt as Timestamp }
@@ -343,8 +351,8 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
         const at: unknown = markerSnap!.get("expiresAt")
         const expiresAt = at instanceof Timestamp ? at : Timestamp.fromMillis(scope.now + IDEMPOTENCY_TTL_MS)
         if (mode !== "resume") {
-          tx.set(ref, { ...binding, operationId, expiresAt, status: "done", response: effectCommittedResult(), answeredAt: FieldValue.serverTimestamp() })
-          return { kind: "replay", response: effectCommittedResult() }
+          tx.set(ref, { ...binding, operationId, expiresAt, status: "done", response: effectCommittedResult(operationId), answeredAt: FieldValue.serverTimestamp() })
+          return { kind: "replay", response: effectCommittedResult(operationId) }
         }
         tx.set(ref, { ...binding, operationId, expiresAt, status: "in_progress" })
         return { kind: "claimed", operationId, prior: markerSnap!.data()!, expiresAt }
@@ -376,11 +384,13 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
   try {
     result = await handler(op)
   } catch (err) {
-    if ((await settle(op, undefined)) === "terminal") return effectCommittedResult()
+    if ((await settle(op, undefined)) === "terminal") return effectCommittedResult(op.operationId)
     throw err
   }
+  // A handler's own 409 idempotency_effect_committed names the operation too (re-audit LOW-1), stored and answered alike.
+  if (isEffectCommitted(result)) result = effectCommittedResult(op.operationId)
   if (!isStorableResult(result)) {
-    if ((await settle(op, undefined)) === "terminal") return effectCommittedResult()
+    if ((await settle(op, undefined)) === "terminal") return effectCommittedResult(op.operationId)
   } else {
     await settle(op, storedForm(result, scope.redact))
   }
@@ -437,7 +447,7 @@ async function settle(op: IdempotentOperation, response: HttpResult | undefined)
           tx.update(op.ref, { resumable: true })
           return "resumable"
         }
-        tx.update(op.ref, { status: "done", response: effectCommittedResult(), answeredAt: FieldValue.serverTimestamp() })
+        tx.update(op.ref, { status: "done", response: effectCommittedResult(op.operationId), answeredAt: FieldValue.serverTimestamp() })
         return "terminal"
       })
     } catch (err) {
