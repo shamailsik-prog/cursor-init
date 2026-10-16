@@ -24,8 +24,8 @@ export type CorpusReaderConfig = {
   ca: string | null
   maxStalenessHours: number
   /**
-   * sha256 hex of the other fields, with the password replaced by its per-process ordinal: the memo key for the
-   * store. Never logged.
+   * sha256 hex of the other fields, with the password replaced by its ordinal in this process: the memo key for
+   * the store. Never logged.
    */
   key: string
 }
@@ -38,18 +38,19 @@ export const MAX_STALENESS_HOURS_LIMIT = 8760
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localhost"])
 
 /**
- * Each distinct password this process reads gets an opaque ordinal, so the memo key changes when the password does
- * while the password itself never enters a hash (a fast hash over a password is CodeQL js/insufficient-password-hash,
- * and the key needs no secret in it). The map holds what the config already holds: the passwords this process was given.
+ * The password's place in this process's sequence of passwords: it moves on whenever the password read differs from
+ * the last one, so the memo key changes when the password does while the password itself never enters a hash (a fast
+ * hash over a password is CodeQL js/insufficient-password-hash, and the key needs no secret in it). Only the current
+ * password is kept, never the ones it replaced.
  */
-const credentialOrdinals = new Map<string, number>()
+let currentSecret: string | null = null
+let currentOrdinal = 0
 function credentialOrdinal(secret: string): number {
-  let ordinal = credentialOrdinals.get(secret)
-  if (ordinal === undefined) {
-    ordinal = credentialOrdinals.size + 1
-    credentialOrdinals.set(secret, ordinal)
+  if (secret !== currentSecret) {
+    currentSecret = secret
+    currentOrdinal += 1
   }
-  return ordinal
+  return currentOrdinal
 }
 
 const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/
