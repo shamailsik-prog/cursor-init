@@ -3,6 +3,7 @@
  * The masked body is the ONLY text sent. Classification travels in metadata, never in the prompt.
  */
 
+import { recordExternalEffect } from "@/platform/http/idempotency"
 import { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 import { gatewayTransport, readGatewayApiKey } from "@/platform/p1/gatewayTransport"
 import { maskOutboundPII, type MaskOptions } from "@/platform/p1/maskOutboundPII"
@@ -109,8 +110,14 @@ export async function callCommitteeBrain(
     }
   }
 
+  const transport = activeTransport()
+  // Audit F10: a dispatch that can reach a provider is an effect. Inside an idempotent request it is marked through the
+  // request's write fence first, so a retry of the same Idempotency-Key never pays for a second call. A transport with
+  // no credentials sends nothing and is not marked.
+  if (transport !== blockedTransport) await recordExternalEffect("p1_dispatch")
+
   try {
-    const result = await activeTransport().send(outbound)
+    const result = await transport.send(outbound)
     const inbound = maskOutboundPII(result.text, {
       partyNames: input.partyNames,
     })

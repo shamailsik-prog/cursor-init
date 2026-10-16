@@ -52,7 +52,7 @@ async function handlePost(request: Request) {
     courtId: body.courtId,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
 

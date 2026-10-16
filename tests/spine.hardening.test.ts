@@ -184,15 +184,18 @@ describe("G-1 spine hardening", () => {
         new Request("http://local", { headers: { "Idempotency-Key": key } })
       )
     ).toBe(key)
+    // Audit F10 (spec ruling 14): at its bound the store refuses a new key; it never evicts a completed one (which
+    // would let that key run again).
     const cache = new IdempotencyStore({ ttlMs: 50_000, maxEntries: 2, maxBytes: 1 << 20, maxEntryBytes: 1 << 20, leaseMs: 1_000 })
-    for (const [k, body] of [["a", "one"], ["b", "two"], ["c", "three"]] as const) {
+    for (const [k, body] of [["a", "one"], ["b", "two"]] as const) {
       const begun = cache.begin(k, "fp")
       if (begun.kind !== "claimed") throw new Error("expected a claim")
       cache.complete(k, begun.claimId, body)
     }
+    expect(cache.begin("c", "fp")).toEqual({ kind: "capacity" })
     expect(cache.size).toBe(2)
-    expect(cache.begin("a", "fp").kind).toBe("claimed") // evicted: runs again
-    expect(cache.begin("c", "fp")).toEqual({ kind: "replay", body: "three" })
+    expect(cache.begin("a", "fp")).toEqual({ kind: "replay", body: "one" })
+    expect(cache.begin("b", "fp")).toEqual({ kind: "replay", body: "two" })
   })
 
   it("refuses cross-firm matter membership and does not list the other firm's matter", () => {
