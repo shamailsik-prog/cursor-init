@@ -135,7 +135,7 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
   - a recorded name written only in part (a surname) or reversed (`Zarvani, Tariq`), or broken by a hyphenated line break;
   - `the deceased's widow Nura` (a kinship word without `of`);
   - `resident of the village` followed by a lower-case or no name.
-- **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost about 1.1 s per mask with three names, about 2.7 s of rank-3 work. That is under the 8 s pre-call allowance, and a longer list of names costs proportionally more.
+- **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost 1.6 s of rank-3 work with no names and 2.7 s with 50 names, under the 8 s pre-call allowance. More names cost more.
 - **Homoglyphs.** Cyrillic and Greek Latin look-alikes are folded (R2-5); look-alikes from other scripts (Armenian, Cherokee, mathematical letters outside NFKC) are not.
 - **A dropped invisible character can remove a word boundary.** `CNIC\u200B3520212345671` becomes `CNIC3520212345671` in the detection view, and the CNIC pattern's leading `\b` no longer holds, so the mask misses it (as main did for the ASCII form `CNIC3520212345671`). The residual detector still counts the 13-digit run, so a rank 3 or 4 call is blocked; below rank 3 it is counted, not masked.
 - **Client identifiers as literals.** The client record's CNIC, mobile, email and address are not used as literal masks (ruling 4).
@@ -186,7 +186,7 @@ The mask header and the README now list exactly what is dropped.
 
 **Speed.** ASCII text, and ASCII runs inside other text, take a fast path in `detectionView`. The units of a view are re-joined only after a match changes them.
 
-**Not closed.** One code point whose NFKC form is long (U+FDFA expands to 18 characters), repeated 100,000 times, costs about 1.1 s per mask with three names. That is within the bound per mask, but two masks and two residual checks come to about 2.7 s of rank-3 work, under the 8 s pre-call allowance. Recorded in §5.
+**Not closed.** One code point whose NFKC form is long (U+FDFA expands to 18 characters), repeated 100,000 times, costs 1.6 s of rank-3 work with no names and 2.7 s with 50 names (measured at the round-2 head). That is under the 8 s pre-call allowance. Recorded in §5.
 
 ### R2-3 (MEDIUM-3): false positives on clean privileged prose
 
