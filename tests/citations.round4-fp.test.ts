@@ -76,9 +76,9 @@ describe("FP2: own case number — wider district/sessions and High Court prefix
 
 describe("FP3: company/acronym tokens need tight year-token-page adjacency", () => {
   it.each([
-    "4. That in 2019 Engro Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons of urea at Rs. 3,850 per bag.",
+    "4. That in 2019 Qalvo Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons of urea at Rs. 3,850 per bag.",
     "The 2022 PTCL bill of Rs. 4,500 was disputed.",
-    "Engro Fertilizers PLC reported revenue of Rs. 5 billion in its 2023 annual report, page 45.",
+    "Qalvo Fertilizers PLC reported revenue of Rs. 5 billion in its 2023 annual report, page 45.",
     "The CLC committee of the Board met on 5 May 2024 and approved 3 resolutions.",
     "In 2021 PTCL Ltd. disconnected 2 lines.",
     "Since 2019 the YLR division employed 40 staff.",

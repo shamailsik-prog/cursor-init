@@ -65,7 +65,7 @@ async function seed(firmExtra: Record<string, unknown> = {}) {
   const [left, right] = [a.entityId, b.entityId].sort()
   const cnicRowId = `${firmId}_${left}_${right}_cnic`
   const check = () =>
-    runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [{ name: "Kamran Akmal" }] } } as never)
+    runCheck({ token: partner.token, data: { firmId, client: { clientId: a.clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
   return { firmId, partner, associate, a, b, third, cnicRowId, check }
 }
 type Seed = Awaited<ReturnType<typeof seed>>

@@ -460,7 +460,7 @@ function reporterFallback(folded: FoldedText): Array<Span & { raw: string }> {
       const lo = Math.max(0, ms - FALLBACK_WINDOW)
       const hi = Math.min(skeleton.length, me + FALLBACK_WINDOW)
       if (!/[0-9]/.test(skeleton.slice(lo, ms) + skeleton.slice(me, hi))) continue
-      // Tokens that double as company names or acronyms ("Engro … PLC entered … 500", "The 2022
+      // Tokens that double as company names or acronyms ("Qalvo … PLC entered … 500", "The 2022
       // PTCL bill of Rs. 4,500", "the CLC committee met on 5 May") need tight citation adjacency
       // (R4 FP3, replacing R3 item 6's "a year within 4 tokens"): digits in the token right
       // before and a number right after (optionally past one bracket group) — which still

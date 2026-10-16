@@ -42,12 +42,12 @@ const nextMobile = () => `0301${String(3000000 + ++mobileSeq)}`
 async function register(token: string, firmId: string, extra: Record<string, unknown> = {}) {
   return registerClient({
     token,
-    data: { firmId, name: "Shahid Afridi", type: "individual", primaryMobile: nextMobile(), classification: "internal", ...extra },
+    data: { firmId, name: "Tariq Zarvani", type: "individual", primaryMobile: nextMobile(), classification: "internal", ...extra },
   } as never)
 }
 
 /** A CLEAR check for a registered client against one distinct opposing party. */
-async function clearCheck(token: string, firmId: string, clientId: string, opposing: Record<string, unknown> = { name: "Kamran Akmal" }) {
+async function clearCheck(token: string, firmId: string, clientId: string, opposing: Record<string, unknown> = { name: "Haris Qalbani" }) {
   const check = await runCheck({ token, data: { firmId, client: { clientId }, opposingParties: [opposing] } } as never)
   expect(check).toMatchObject({ result: "CLEAR", decision: "cleared" })
   return check.checkId
@@ -96,10 +96,10 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
     expect(parties).toHaveLength(2)
     const clientParty = parties.find((p) => p.role === "client")
     const opposingParty = parties.find((p) => p.role === "opposing")
-    expect(clientParty).toMatchObject({ firmId, name: "Shahid Afridi", entityId: client.entityId, matterStatus: "live", classification: "confidential", matterClassification: "confidential" })
-    expect(clientParty?.names).toEqual(["shahid afridi"])
+    expect(clientParty).toMatchObject({ firmId, name: "Tariq Zarvani", entityId: client.entityId, matterStatus: "live", classification: "confidential", matterClassification: "confidential" })
+    expect(clientParty?.names).toEqual(["tariq zarvani"])
     expect(clientParty?.keys.phone).toMatch(/^\+923\d{9}$/)
-    expect(opposingParty).toMatchObject({ firmId, name: "Kamran Akmal", names: ["kamran akmal"], keys: {}, matterStatus: "live" })
+    expect(opposingParty).toMatchObject({ firmId, name: "Haris Qalbani", names: ["haris qalbani"], keys: {}, matterStatus: "live" })
 
     const events = (await adminDb().collection("matter_events").where("matterId", "==", matterId).get()).docs.map((d) => d.data())
     expect(events).toEqual([expect.objectContaining({ firmId, kind: "opened", actorId: partner.uid, classification: "confidential" })])
@@ -135,13 +135,13 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
 
   it("matter_parties keys are normalised: a later check naming a new client with the opposing party's CNIC hits that party by key", async () => {
     const { firmId, partner, client } = await setup()
-    const checkId = await clearCheck(partner.token, firmId, client.clientId, { name: "Kamran Akmal", keys: { cnic: "42101-1234567-1 ", phone: "0300 1112223" } })
+    const checkId = await clearCheck(partner.token, firmId, client.clientId, { name: "Haris Qalbani", keys: { cnic: "42101-1234567-1 ", phone: "0300 1112223" } })
     const { matterId } = await open(partner.token, firmId, checkId)
     const party = (await adminDb().collection("matter_parties").where("matterId", "==", matterId).where("role", "==", "opposing").get()).docs[0].data()
     expect(party.keys).toEqual({ cnic: CNIC_X, phone: "+923001112223" })
 
     const later = await runCheck({ token: partner.token, data: { firmId, client: { name: "Zzz Qqq", keys: { cnic: CNIC_X } }, opposingParties: [{ name: "Yyy Www" }] } } as never)
-    expect(later.hits).toEqual(expect.arrayContaining([expect.objectContaining({ subjectIndex: 0, hitRole: "opposing", basis: "key", matchedName: "Kamran Akmal", matterId })]))
+    expect(later.hits).toEqual(expect.arrayContaining([expect.objectContaining({ subjectIndex: 0, hitRole: "opposing", basis: "key", matchedName: "Haris Qalbani", matterId })]))
     expect(later.result).not.toBe("CLEAR")
   })
 
@@ -189,7 +189,7 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
   it("a check whose client was named, not a registered clientId → 409 subjects_mismatch", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
-    const check = await runCheck({ token: partner.token, data: { firmId, client: { name: "Zainab Bibi" }, opposingParties: [{ name: "Kamran Akmal" }] } } as never)
+    const check = await runCheck({ token: partner.token, data: { firmId, client: { name: "Zainab Bibi" }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
     expect(check.decision).toBe("cleared")
     expectKind(await apiErrorOf(open(partner.token, firmId, check.checkId)), "failed-precondition", "subjects_mismatch")
   })
@@ -287,8 +287,8 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
   })
 
   it("re-screen at open: a CLEAR check whose opposing party has since become a client with a live matter → 409 check_stale, check marked stale (final review I5)", async () => {
-    const { firmId, partner, checkId } = await setup() // Shahid Afridi vs Kamran Akmal, CLEAR
-    const q = await register(partner.token, firmId, { name: "Kamran Akmal" })
+    const { firmId, partner, checkId } = await setup() // Tariq Zarvani vs Haris Qalbani, CLEAR
+    const q = await register(partner.token, firmId, { name: "Haris Qalbani" })
     await open(partner.token, firmId, await clearCheck(partner.token, firmId, q.clientId, { name: "Babar Azam" }))
 
     const counters = async () => (await adminDb().collection("counters").where("firmId", "==", firmId).get()).docs.map((d) => [d.id, d.data().count ?? d.data().next ?? d.data().version])
@@ -308,10 +308,10 @@ describe.skipIf(!EMULATORS)("openMatter", () => {
   it("re-screen at open: a hit already on the check (resolved by review) does not make it stale", async () => {
     const firmId = await newFirm()
     const partner = await mintIdToken(claims(firmId, "partner"))
-    const q = await register(partner.token, firmId, { name: "Kamran Akmal" })
+    const q = await register(partner.token, firmId, { name: "Haris Qalbani" })
     await open(partner.token, firmId, await clearCheck(partner.token, firmId, q.clientId, { name: "Babar Azam" }))
     const p = await register(partner.token, firmId)
-    const check = await runCheck({ token: partner.token, data: { firmId, client: { clientId: p.clientId }, opposingParties: [{ name: "Kamran Akmal" }] } } as never)
+    const check = await runCheck({ token: partner.token, data: { firmId, client: { clientId: p.clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
     expect(check.result).toBe("POSSIBLE_CANDIDATE_REVIEW")
     const hitIndex = check.hits.findIndex((h) => h.outcome === "POSSIBLE_CANDIDATE_REVIEW")
     const resolved = await viaApi<Check>("resolveReviewItem")({
@@ -556,7 +556,7 @@ describe.skipIf(!EMULATORS)("stage flow and closure", () => {
     const { firmId, partner, checkId } = await setup()
     const { matterId } = await open(partner.token, firmId, checkId)
     const newClient = await register(partner.token, firmId, { name: "Babar Azam" })
-    const data = { firmId, client: { clientId: newClient.clientId }, opposingParties: [{ name: "Shahid Afridi" }] }
+    const data = { firmId, client: { clientId: newClient.clientId }, opposingParties: [{ name: "Tariq Zarvani" }] }
     const before = await runCheck({ token: partner.token, data } as never)
     expect(before.hits.filter((h) => h.hitRole === "client" && h.subjectIndex === 1).map((h) => h.type)).toEqual(["direct_adverse"])
     await closeMatter({ token: partner.token, data: { firmId, matterId, reason: REASON20 } } as never)
