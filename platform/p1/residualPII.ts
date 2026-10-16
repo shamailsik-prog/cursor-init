@@ -91,7 +91,26 @@ function labelledIdentifiers(text: string): number {
 const RESIDENCE_ABBREVIATION = /(?<![\p{L}\p{N}])(?:r\s?\/\s?o|ساکن|سکنہ)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(?:address|پتہ|پتا)\s*[:-]/giu
 /** "resident(s) of": counts before a proper noun or a number, after any locative words. */
 const RESIDENT_OF = /(?<![\p{L}\p{N}])residents?\s+of(?![\p{L}\p{N}])/giu
-const LOCATIVE = new Set(["the", "said", "same", "village", "town", "city", "district", "tehsil", "mohallah", "mohalla", "muhalla", "house", "street", "chak", "colony", "sector", "block"])
+const LOCATIVE = new Set([
+  "the",
+  "said",
+  "same",
+  "village",
+  "town",
+  "city",
+  "district",
+  "tehsil",
+  "mohallah",
+  "mohalla",
+  "muhallah",
+  "muhalla",
+  "house",
+  "street",
+  "chak",
+  "colony",
+  "sector",
+  "block",
+])
 const NOT_AN_ADDRESS = new Set(["pakistan", "پاکستان"])
 /** A house or street with its number. */
 const NUMBERED_PLACE =

@@ -44,6 +44,7 @@ describe("residualPII: true positives by kind (English and Urdu)", () => {
     ["resident of a place", "A resident of Mohallah Qalvo Pura, Kasur.", { address: 1 }],
     ["resident of a place after locative words", "A resident of the village Kot Qalvo.", { address: 1 }],
     ["resident of a numbered place", "A resident of Chak 12.", { address: 1 }],
+    ["resident of a named muhallah", "A resident of muhallah Qalvo Pura.", { address: 1 }],
     ["R/O in capitals", "Tariq R/O Qalvo Town.", { address: 1 }],
     ["an address label", "Address: 14-B, Qalvo Town.", { address: 1 }],
     ["house numbers", "H. No. 7, House # 8 and House Number 77.", { address: 3 }],
