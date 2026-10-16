@@ -1,0 +1,210 @@
+/**
+ * FA-CI-001 (re-audit 2026-10-16, defect 5): drive `bash ci_gates/gate_g0.sh` end to end.
+ *
+ * A minimal tree that clean G-0 accepts is copied into a temporary git repository: the gate
+ * scripts, the Phase 0 files the other checks read, the FA-D3C allowlisted corpus_service files,
+ * the root Playwright e2e tooling, and legitimate provider imports inside the P1 boundary. The
+ * control run must pass. Each case then plants one violation in a fresh copy and the whole gate
+ * must fail and name the planted file in the scraper- or provider-guard report.
+ */
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const repoRoot = process.cwd();
+// The gate process is killed before the test times out, so a hang fails with its output.
+const GATE_PROCESS_TIMEOUT_MS = 60_000;
+const GATE_TIMEOUT_MS = 90_000;
+
+// Every temp directory is registered the moment it exists, so afterAll removes it even when
+// populating it throws.
+const tempDirs: string[] = [];
+
+function mkTemp(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function copyFromRepo(dest: string, rel: string): void {
+  fs.cpSync(path.join(repoRoot, rel), path.join(dest, rel), {
+    recursive: true,
+    filter: (src) => path.basename(src) !== "__pycache__",
+  });
+}
+
+function plant(dir: string, rel: string, body: string): void {
+  const abs = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, body);
+}
+
+/** Environment for child processes: no inherited git repository overrides. */
+function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"]) {
+    delete env[key];
+  }
+  return env;
+}
+
+function git(cwd: string, ...args: string[]): void {
+  const res = spawnSync(
+    "git",
+    [
+      "-c", "init.defaultBranch=main",
+      "-c", "user.name=g0-e2e",
+      "-c", "user.email=g0-e2e@example.invalid",
+      "-c", "commit.gpgsign=false",
+      ...args,
+    ],
+    { cwd, encoding: "utf8", env: childEnv({}) },
+  );
+  if (res.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed (${res.status}): ${res.stderr}`);
+  }
+}
+
+function runGate(cwd: string): { status: number | null; out: string } {
+  const res = spawnSync("bash", ["ci_gates/gate_g0.sh"], {
+    cwd,
+    encoding: "utf8",
+    env: childEnv({ BASE: "HEAD", HEAD: "HEAD", SIKANDER_LIVE: "0" }),
+    timeout: GATE_PROCESS_TIMEOUT_MS,
+  });
+  return { status: res.status, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+function buildBaseTree(): string {
+  const dir = mkTemp("g0-e2e-base-");
+  for (const rel of [
+    "ci_gates",
+    "data",
+    "postgres/ddl",
+    "firestore.rules",
+    // Root Playwright e2e tooling: the one sanctioned Playwright use (root devDependency,
+    // root config, root tests/ specs, and the script that runs them).
+    "package.json",
+    "playwright.config.ts",
+    "tests/e2e",
+    "scripts/e2e-console-auth.sh",
+    // Check [16] compares the runner, this ledger and the frontend-real test file names.
+    "docs/audits/lattice-focused-ops-vitest-bundle.md",
+  ]) {
+    copyFromRepo(dir, rel);
+  }
+  for (const name of fs.readdirSync(path.join(repoRoot, "tests"))) {
+    if (/^ops\..*-frontend-real\.test\.ts$/.test(name)) copyFromRepo(dir, `tests/${name}`);
+  }
+  // The FA-D3C-001/002 allowlisted files must be present, or their entries go stale.
+  const allow = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "ci_gates", "g0_guard_allowlist.json"), "utf8"),
+  ) as Record<string, string[]>;
+  const allowlisted = new Set(Object.values(allow).flat().map((entry) => entry.split(":")[0]));
+  for (const rel of allowlisted) copyFromRepo(dir, rel);
+  // Legitimate provider SDK imports inside the P1 boundary.
+  plant(dir, "platform/p1/probe-gateway.ts", 'import OpenAI from "openai"\nexport const client = OpenAI\n');
+  plant(
+    dir,
+    "functions/src/p1/probe-transport.ts",
+    'import Anthropic from "@anthropic-ai/sdk"\nexport const client = Anthropic\n',
+  );
+  git(dir, "init", "-q");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "g0 e2e base tree");
+  return dir;
+}
+
+function caseTree(base: string): string {
+  const dir = mkTemp("g0-e2e-case-");
+  fs.cpSync(base, dir, { recursive: true });
+  return dir;
+}
+
+const PW_IMPORT = 'import { chromium } from "playwright"\nexport const browser = chromium\n';
+const OPENAI_IMPORT = 'import OpenAI from "openai"\nexport const client = OpenAI\n';
+
+type GateCase = { name: string; rel: string; body: string; reports: string[] };
+
+const PLANTED: GateCase[] = [
+  // Re-audit defect 1: skip-anywhere.
+  { name: "D1 playwright in app/ci_gates/", rel: "app/ci_gates/route.ts", body: PW_IMPORT, reports: ["app/ci_gates/route.ts: playwright import"] },
+  { name: "D1 openai in lib/_superseded/", rel: "lib/_superseded/x.ts", body: OPENAI_IMPORT, reports: ["lib/_superseded/x.ts: provider SDK (openai)"] },
+  { name: "D1 playwright in functions/src/.eve/", rel: "functions/src/.eve/x.ts", body: PW_IMPORT, reports: ["functions/src/.eve/x.ts: playwright import"] },
+  // Re-audit defect 2: multi-line import and re-export.
+  { name: "D2 multi-line import in lib/", rel: "lib/browser.ts", body: 'import {\n  chromium,\n} from "playwright"\n', reports: ["lib/browser.ts: playwright import"] },
+  { name: "D2 multi-line import in services/", rel: "services/d9/browser.ts", body: 'import {\n  chromium\n} from "playwright";\n', reports: ["services/d9/browser.ts: playwright import"] },
+  { name: "D2 re-export in lib/", rel: "lib/reexport.ts", body: 'export { chromium } from "playwright"\n', reports: ["lib/reexport.ts: playwright import"] },
+  { name: "D2 re-export in services/", rel: "services/reexport.ts", body: "export { chromium } from 'playwright';\n", reports: ["services/reexport.ts: playwright import"] },
+  // Re-audit defect 3: Python from-imports, subpaths, backtick dynamic import.
+  { name: "D3 from openai import AsyncOpenAI", rel: "services/py/llm.py", body: "from openai import AsyncOpenAI\n", reports: ["services/py/llm.py: provider SDK (openai)"] },
+  { name: "D3 from anthropic import AsyncAnthropic", rel: "services/py/claude.py", body: "from anthropic import AsyncAnthropic\n", reports: ["services/py/claude.py: provider SDK (anthropic)"] },
+  { name: "D3 openai/client subpath", rel: "lib/llm.ts", body: 'import { OpenAI } from "openai/client"\nexport const c = OpenAI\n', reports: ["lib/llm.ts: provider SDK (openai)"] },
+  { name: "D3 backtick import(`openai`)", rel: "lib/lazy.mjs", body: "export const load = () => import(`openai`)\n", reports: ["lib/lazy.mjs: provider SDK (openai)"] },
+  // Re-audit defect 4: manifests, Dockerfile.* and shell scripts.
+  { name: "D4 openai[datalib] in requirements.txt", rel: "services/py/requirements.txt", body: "openai[datalib]==1.0.0\n", reports: ["services/py/requirements.txt: requires openai"] },
+  { name: "D4 requirements-test.txt", rel: "corpus_service/requirements-test.txt", body: "pytest==9.1.1\nopenai==1.0.0\n", reports: ["corpus_service/requirements-test.txt: requires openai"] },
+  { name: "D4 Dockerfile.worker", rel: "services/worker/Dockerfile.worker", body: "FROM node:22\nRUN npx playwright install chromium\n", reports: ["services/worker/Dockerfile.worker: Playwright install"] },
+  { name: "D4 shell script", rel: "scripts/install-browsers.sh", body: "#!/usr/bin/env bash\nnpx playwright install --with-deps chromium\n", reports: ["scripts/install-browsers.sh: Playwright install"] },
+  // PR #57 review round: comments between tokens (Codex P2 #1), ash shebang (Codex P2 #2).
+  { name: "P2#1 comment between from and specifier", rel: "lib/commented.ts", body: 'import OpenAI from /* rationale */ "openai"\nexport const o = OpenAI\n', reports: ["lib/commented.ts: provider SDK (openai)"] },
+  { name: "P2#2 #!/bin/ash script", rel: "services/bin/ash-setup", body: "#!/bin/ash\nnpx playwright install chromium\n", reports: ["services/bin/ash-setup: Playwright install"] },
+  // Caught before this change; must stay caught end to end.
+  {
+    name: "audit probe: OpenAI + Playwright in app/",
+    rel: "app/api/probe/route.ts",
+    body: `${OPENAI_IMPORT}${PW_IMPORT}`,
+    reports: ["app/api/probe/route.ts: playwright import", "app/api/probe/route.ts: provider SDK (openai)"],
+  },
+  {
+    name: "openai dependency in functions/package.json",
+    rel: "functions/package.json",
+    body: JSON.stringify({ dependencies: { openai: "4.0.0" } }),
+    reports: ["functions/package.json: dependencies lists openai"],
+  },
+];
+
+describe("Gate G-0 end to end (FA-CI-001)", () => {
+  let base = "";
+
+  beforeAll(() => {
+    base = buildBaseTree();
+  }, GATE_TIMEOUT_MS);
+
+  afterAll(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it(
+    "control: the minimal tree with allowlisted and P1 uses passes G-0",
+    () => {
+      const result = runGate(caseTree(base));
+      expect(result.out).toContain(
+        "PASS: no unallowlisted Playwright/Puppeteer; FA-D3C-001 allowlist entries verified",
+      );
+      expect(result.out).toContain(
+        "PASS: provider SDK imports confined to P1; FA-D3C-002 allowlist entries verified",
+      );
+      expect(result.out).toContain("=== Gate G-0 PASSED (static) ===");
+      expect(result.status).toBe(0);
+    },
+    GATE_TIMEOUT_MS,
+  );
+
+  it.each(PLANTED)(
+    "planted violation fails G-0: $name",
+    ({ rel, body, reports }) => {
+      const dir = caseTree(base);
+      plant(dir, rel, body);
+      const result = runGate(dir);
+      for (const report of reports) expect(result.out).toContain(report);
+      expect(result.out).toContain("=== Gate G-0 FAILED ===");
+      expect(result.status).toBe(1);
+    },
+    GATE_TIMEOUT_MS,
+  );
+});
