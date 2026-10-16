@@ -38,7 +38,8 @@ describe("residualPII: true positives by kind (English and Urdu)", () => {
     ["an Urdu mobile label", "موبائل نمبر ۳۰۰-۱۲۳-۴۵۶۷ بند ہے۔", { labelled_identifier: 1, id_digits: 1 }],
     ["an Urdu passport label", "پاسپورٹ نمبر A1234567 جاری ہوا۔", { labelled_identifier: 1 }],
     ["an Urdu email label", "ای میل: tariq at qalvo", { labelled_identifier: 1 }],
-    ["an Urdu phone label", "فون نمبر ۴۲۳۵۷۶ ہے۔", { labelled_identifier: 1 }],
+    // Ruling R2-3e: a phone label needs seven digits (round 1 used six; six now passes, see tests/f15-r2-residual.test.ts).
+    ["an Urdu phone label", "فون نمبر ۴۲۳۵۷۶۱ ہے۔", { labelled_identifier: 1 }],
     // address: a residence cue, a house or street number.
     ["the audit's address", "The accused r/o House 12, Street 5, Lahore.", { address: 3 }],
     ["resident of a place", "A resident of Mohallah Qalvo Pura, Kasur.", { address: 1 }],

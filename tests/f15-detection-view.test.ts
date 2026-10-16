@@ -63,11 +63,11 @@ describe("detectionView (ruling 1)", () => {
   })
 
   it("gives every unit of an NFKC expansion the span of the code point it came from", () => {
-    const v = detectionView("⑴x₨5")
-    // U+2474 PARENTHESIZED DIGIT ONE is "(1)"; U+20A8 RUPEE SIGN is "Rs".
-    expect(v.text).toBe("(1)xRs5")
+    const v = detectionView("\uFB01x\u20A85")
+    // U+FB01 LATIN SMALL LIGATURE FI is "fi"; U+20A8 RUPEE SIGN is "Rs". (Round 1 used U+2474, which ruling R2-5
+    // now maps to the bare digit "1"; that mapping is pinned in tests/f15-r2-mask.test.ts.)
+    expect(v.text).toBe("fixRs5")
     expect(spans(v)).toEqual([
-      [0, 1],
       [0, 1],
       [0, 1],
       [1, 2],
@@ -108,8 +108,8 @@ describe("nameView and foldName (ruling 3)", () => {
     expect(foldName("\u0670ا")).toBe("ا") // superscript alef
   })
 
-  it("does not fold letters that are different letters in Urdu", () => {
-    expect(foldName("ھ")).not.toBe(foldName("ہ")) // do-chashmi he
+  it("does not fold yeh barree into yeh; folds do-chashmi he into heh goal (ruling R2-5 reverses round 1 here)", () => {
+    expect(foldName("\u06BE")).toBe(foldName("\u06C1")) // do-chashmi he: a name written with either matches
     expect(foldName("ے")).not.toBe(foldName("ی")) // yeh barree
   })
 
