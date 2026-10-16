@@ -46,15 +46,15 @@ describe("detectionView (ruling 1)", () => {
   })
 
   it("maps dash variants to a hyphen-minus", () => {
-    expect(detectionView("‐‑‒–—―−﹘﹣－⸺").text).toBe("-".repeat(11))
+    expect(detectionView("\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D\u2E3A").text).toBe("-".repeat(11))
   })
 
   it("maps space separators to a space", () => {
-    expect(detectionView("     　 ").text).toBe(" ".repeat(7))
+    expect(detectionView("\u00A0\u2002\u2009\u202F\u205F\u3000\u1680").text).toBe(" ".repeat(7))
   })
 
   it("drops invisible format characters and maps around them", () => {
-    const raw = "3​5‌2‍0‎2‏1­2﻿3؜4⁦5‮6⁩"
+    const raw = "3\u200B5\u200C2\u200D0\u200E2\u200F1\u00AD2\uFEFF3\u061C4\u20665\u202E6\u2069"
     const v = detectionView(raw)
     expect(v.text).toBe("35202123456")
     // Each digit keeps its own position in the original; the dropped characters have no unit.
@@ -78,7 +78,7 @@ describe("detectionView (ruling 1)", () => {
   })
 
   it("maps the audit's counterexample to ASCII", () => {
-    expect(detectionView("３５２０２－１２３４５６７－１ ۰۳۰۰-۱۲۳۴۵۶۷").text).toBe("35202-1234567-1 0300-1234567")
+    expect(detectionView("３５２０２\uFF0D１２３４５６７\uFF0D１ ۰۳۰۰-۱۲۳۴۵۶۷").text).toBe("35202-1234567-1 0300-1234567")
   })
 
   it("leaves letters in other scripts as they are", () => {
@@ -88,7 +88,7 @@ describe("detectionView (ruling 1)", () => {
 
 describe("nameView and foldName (ruling 3)", () => {
   it("folds case, Latin diacritics and whitespace runs", () => {
-    expect(foldName("  Ṭāriq   ZARVĀNI ")).toBe("tariq zarvani")
+    expect(foldName("  Ṭāriq \u00A0 ZARVĀNI ")).toBe("tariq zarvani")
     expect(foldName("İlyas")).toBe("ilyas")
   })
 
@@ -105,7 +105,7 @@ describe("nameView and foldName (ruling 3)", () => {
     expect(foldName("أ")).toBe("ا")
     expect(foldName("إ")).toBe("ا")
     expect(foldName("ئ")).toBe("ی")
-    expect(foldName("ٰا")).toBe("ا") // superscript alef
+    expect(foldName("\u0670ا")).toBe("ا") // superscript alef
   })
 
   it("does not fold letters that are different letters in Urdu", () => {
@@ -114,11 +114,11 @@ describe("nameView and foldName (ruling 3)", () => {
   })
 
   it("a name of marks and invisible characters folds to nothing", () => {
-    expect(foldName("ً​ ")).toBe("")
+    expect(foldName("\u064B\u200B ")).toBe("")
   })
 
   it("maps each name-view unit back to the original span", () => {
-    const original = "Ä​b́C"
+    const original = "Ä\u200Bb\u0301C"
     const v = nameView(detectionView(original))
     expect(v.text).toBe("abc")
     expect(spans(v)).toEqual([

@@ -116,7 +116,7 @@ const NOT_AN_ADDRESS = new Set(["pakistan", "پاکستان"])
 const NUMBERED_PLACE =
   /(?<![\p{L}\p{N}])(?:house\s*(?:no\.?|number|#)?|h\.\s*(?:no\.?|number|#)|مکان\s*(?:نمبر|#)|(?:street|gali|galli|mohallah|mohalla|muhallah|muhalla|گلی|محلہ)\s*(?:no\.?|number|#|نمبر)?)\s*\d/giu
 
-const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/u
+const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'\u2019-]*/u
 /** Between words: spaces, combining marks (an izafat kasra after a cue) and light punctuation. */
 const BETWEEN_WORDS = /^[\s\p{M}.,:;()-]*/u
 

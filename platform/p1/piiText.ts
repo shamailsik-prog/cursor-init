@@ -12,23 +12,23 @@ export type TextView = { text: string; start: number[]; end: number[] }
 
 const ND = /\p{Nd}/u
 const CF = /\p{Cf}/u
-const PD = /[\p{Pd}−]/u
+const PD = /[\p{Pd}\u2212]/u
 const ZS = /\p{Zs}/u
 const MARK = /\p{M}/u
-const TATWEEL = "ـ"
+const TATWEEL = "\u0640"
 
 /**
  * Arabic letters folded to the Urdu letter a name is usually recorded with (ruling 3). Not folded: U+06BE (do-chashmi
  * he, which marks aspiration) and U+06D2 (yeh barree): both are different letters in Urdu.
  */
 const ARABIC_FOLD: Readonly<Record<string, string>> = {
-  "ي": "ی", // ARABIC LETTER YEH -> FARSI YEH (Urdu yeh)
-  "ى": "ی", // ALEF MAKSURA -> FARSI YEH
-  "ك": "ک", // ARABIC LETTER KAF -> KEHEH (Urdu kaf)
-  "ة": "ہ", // TEH MARBUTA -> HEH GOAL
-  "ۃ": "ہ", // TEH MARBUTA GOAL -> HEH GOAL
-  "ه": "ہ", // ARABIC LETTER HEH -> HEH GOAL
-  "ە": "ہ", // AE -> HEH GOAL
+  "\u064A": "\u06CC", // ARABIC LETTER YEH -> FARSI YEH (Urdu yeh)
+  "\u0649": "\u06CC", // ALEF MAKSURA -> FARSI YEH
+  "\u0643": "\u06A9", // ARABIC LETTER KAF -> KEHEH (Urdu kaf)
+  "\u0629": "\u06C1", // TEH MARBUTA -> HEH GOAL
+  "\u06C3": "\u06C1", // TEH MARBUTA GOAL -> HEH GOAL
+  "\u0647": "\u06C1", // ARABIC LETTER HEH -> HEH GOAL
+  "\u06D5": "\u06C1", // AE -> HEH GOAL
 }
 
 /** Bounded memo tables: their keys are code points, so a bound keeps a long-lived instance's memory flat. */

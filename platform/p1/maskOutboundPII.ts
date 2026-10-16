@@ -15,7 +15,7 @@
  *   - identifiers written in words or with look-alike letters ("O3OO" for "0300"), or split by multi-character
  *     separators ("0300 - 123 - 4567");
  *   - a zero-width character between a word and an identifier removes the word boundary a pattern needs
- *     ("CNIC​3520212345671"); `residualPII` still counts the digits.
+ *     ("CNIC\u200B3520212345671"); `residualPII` still counts the digits.
  *
  * How (spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1 to 3): every pattern runs
  * on the detection view (`detectionView`), the names on its folded name view (`nameView`), in one pass; each match is
@@ -81,7 +81,7 @@ const PATTERNS: ReadonlyArray<[RedactionKind, RegExp]> = [
 ]
 
 /** Written over an accepted match in a view: no pattern or name can match it. */
-const BLANK = ""
+const BLANK = "\uE000"
 
 type Span = { start: number; end: number; kind: RedactionKind }
 

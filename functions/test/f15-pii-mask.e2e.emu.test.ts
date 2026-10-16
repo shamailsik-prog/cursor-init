@@ -115,7 +115,7 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
   it("(a) the audit's counterexample: a full-width CNIC, an Urdu-digit mobile and a CNIC split by zero-width spaces never reach the provider, and the output row records the counts", async () => {
     const f = await newFirm()
     const sent = capture()
-    const body = "Client CNIC ３５２０２－１２３４５６７－１, mobile ۰۳۰۰-۱۲۳۴۵۶۷, old CNIC 35202​1234567​1 on file. Draft the bail grounds."
+    const body = "Client CNIC ３５２０２\uFF0D１２３４５６７\uFF0D１, mobile ۰۳۰۰-۱۲۳۴۵۶۷, old CNIC 35202\u200B1234567\u200B1 on file. Draft the bail grounds."
     const r = await ask(f, body)
 
     expect(r.blocked).toBe(false)
@@ -123,7 +123,7 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     expect(sent[0]!.body).toBe("Client CNIC [CNIC], mobile [PHONE], old CNIC [CNIC] on file. Draft the bail grounds.")
     // Nothing of the identifiers leaves: no digit of any script, no invisible character.
     expect(ANY_DIGIT.test(sent[0]!.body)).toBe(false)
-    expect(sent[0]!.body).not.toContain("​")
+    expect(sent[0]!.body).not.toContain("\u200B")
 
     const row = await outputOf(r.outputId)
     expect(row.outbound.body).toBe(sent[0]!.body)
@@ -139,7 +139,7 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     const f = await newFirm({ parties: [{ name: "Tariq Zarvani", names: ["tariq zarvani"] }, { name: "طارق زروانی" }] })
     const sent = capture()
     // Upper case with two spaces; a no-break space; the Urdu spelling with Arabic yeh (U+064A) and a fatha.
-    const r = await ask(f, "TARIQ  ZARVANI met tariq zarvani; طَارق زرواني signed the reply.")
+    const r = await ask(f, "TARIQ  ZARVANI met tariq\u00A0zarvani; طَارق زرواني signed the reply.")
 
     expect(r.blocked).toBe(false)
     expect(sent).toHaveLength(1)

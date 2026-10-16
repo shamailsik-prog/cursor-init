@@ -14,7 +14,7 @@ const countsOf = (r: MaskResult): Record<string, number> => Object.fromEntries(r
 
 describe("audit F15: the mask sees identifiers in every digit script (ruling 1)", () => {
   it("the audit's counterexample: a full-width CNIC and an Urdu-digit mobile are masked", () => {
-    const r = maskOutboundPII("CNIC ３５２０２－１２３４５６７－１, mobile ۰۳۰۰-۱۲۳۴۵۶۷.")
+    const r = maskOutboundPII("CNIC ３５２０２\uFF0D１２３４５６７\uFF0D１, mobile ۰۳۰۰-۱۲۳۴۵۶۷.")
     expect(r.masked).toBe("CNIC [CNIC], mobile [PHONE].")
     expect(countsOf(r)).toEqual({ cnic: 1, phone: 1, party: 0, email: 0, iban: 0, ntn: 0, passport: 0 })
   })
@@ -26,23 +26,23 @@ describe("audit F15: the mask sees identifiers in every digit script (ruling 1)"
     ["a Devanagari CNIC", "id ३५२०२-१२३४५६७-१ end", "id [CNIC] end", "cnic"],
     ["a CNIC in mathematical bold digits (surrogate pairs)", "id 𝟑𝟓𝟐𝟎𝟐-𝟏𝟐𝟑𝟒𝟓𝟔𝟕-𝟏 end", "id [CNIC] end", "cnic"],
     ["a CNIC mixing ASCII and Urdu digits", "id 35202-۱۲۳۴۵۶۷-1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC with en dashes", "id 35202–1234567–1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC with minus signs", "id 35202−1234567−1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC with non-breaking hyphens", "id 35202‑1234567‑1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC with small hyphen-minus", "id 35202﹣1234567﹣1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC separated by no-break spaces", "id 35202 1234567 1 end", "id [CNIC] end", "cnic"],
-    ["a CNIC separated by ideographic spaces", "id 35202　1234567　1 end", "id [CNIC] end", "cnic"],
-    ["a plain CNIC split by zero-width spaces", "id 35202​12345​67​1 end", "id [CNIC] end", "cnic"],
-    ["a plain CNIC split by a soft hyphen and a zero-width joiner", "id 3520­2123‍45671 end", "id [CNIC] end", "cnic"],
+    ["a CNIC with en dashes", "id 35202\u20131234567\u20131 end", "id [CNIC] end", "cnic"],
+    ["a CNIC with minus signs", "id 35202\u22121234567\u22121 end", "id [CNIC] end", "cnic"],
+    ["a CNIC with non-breaking hyphens", "id 35202\u20111234567\u20111 end", "id [CNIC] end", "cnic"],
+    ["a CNIC with small hyphen-minus", "id 35202\uFE631234567\uFE631 end", "id [CNIC] end", "cnic"],
+    ["a CNIC separated by no-break spaces", "id 35202\u00A01234567\u00A01 end", "id [CNIC] end", "cnic"],
+    ["a CNIC separated by ideographic spaces", "id 35202\u30001234567\u30001 end", "id [CNIC] end", "cnic"],
+    ["a plain CNIC split by zero-width spaces", "id 35202\u200B12345\u200B67\u200B1 end", "id [CNIC] end", "cnic"],
+    ["a plain CNIC split by a soft hyphen and a zero-width joiner", "id 3520\u00AD2123\u200D45671 end", "id [CNIC] end", "cnic"],
     // The isolate before the first digit and the pop after the last are outside the match, so they stay.
-    ["a plain CNIC split by bidi controls", "id ⁦352021234⁩‪5671‬ end", "id ⁦[CNIC]‬ end", "cnic"],
+    ["a plain CNIC split by bidi controls", "id \u2066352021234\u2069\u202A5671\u202C end", "id \u2066[CNIC]\u202C end", "cnic"],
     ["a full-width +92 mobile", "call ＋９２ ３００ １２３４５６７ now", "call [PHONE] now", "phone"],
     ["an Arabic-Indic +92 mobile", "call +٩٢ ٣٠٠ ١٢٣٤٥٦٧ now", "call [PHONE] now", "phone"],
     ["an Urdu-digit mobile in brackets", "call (۰۳۰۰) ۱۲۳۴۵۶۷ now", "call [PHONE] now", "phone"],
-    ["an Urdu-digit mobile split by an Arabic letter mark", "call ۰۳۰۰؜-۱۲۳۴۵۶۷ now", "call [PHONE] now", "phone"],
+    ["an Urdu-digit mobile split by an Arabic letter mark", "call ۰۳۰۰\u061C-۱۲۳۴۵۶۷ now", "call [PHONE] now", "phone"],
     ["a full-width email", "mail ｃｏｕｎｓｅｌ＠ｑａｌｖｏ．ｐｋ now", "mail [EMAIL] now", "email"],
     ["an IBAN with Urdu digits", "IBAN PK۳۶SCBL۰۰۰۰۰۰۱۱۲۳۴۵۶۷۰۲ now", "IBAN [IBAN] now", "iban"],
-    ["a full-width NTN", "NTN １２３４５６７－８ now", "[NTN] now", "ntn"],
+    ["a full-width NTN", "NTN １２３４５６７\uFF0D８ now", "[NTN] now", "ntn"],
     ["a passport with full-width characters", "Passport ＡＢ１２３４５６７ now", "[PASSPORT] now", "passport"],
   ])("masks %s", (_label, raw, expected, kind) => {
     const r = maskOutboundPII(raw)
@@ -51,20 +51,20 @@ describe("audit F15: the mask sees identifiers in every digit script (ruling 1)"
   })
 
   it("an invisible character outside a match is kept; the ones inside it go with it", () => {
-    const r = maskOutboundPII("CNIC​ 35202​1234567​1‏.")
-    expect(r.masked).toBe("CNIC​ [CNIC]‏.")
+    const r = maskOutboundPII("CNIC\u200B 35202\u200B1234567\u200B1\u200F.")
+    expect(r.masked).toBe("CNIC\u200B [CNIC]\u200F.")
   })
 
   it("every unmatched code unit of the original is kept exactly", () => {
     // Full-width letters, Urdu digits, NBSP, an em dash, bidi marks and an emoji outside any match stay as written.
-    const before = "Ｑａｌｖｏ​ said «۵ دن» — "
-    const after = " ok ‏۱۲ 🙂 ﬁle ①\n\tend"
-    const r = maskOutboundPII(`${before}３５２０２－１２３４５６７－１${after}`)
+    const before = "Ｑａｌｖｏ\u200B said \u00AB۵ دن\u00BB\u00A0\u2014 "
+    const after = " ok \u200F۱۲ 🙂 ﬁle ①\n\tend"
+    const r = maskOutboundPII(`${before}３５２０２\uFF0D１２３４５６７\uFF0D１${after}`)
     expect(r.masked).toBe(`${before}[CNIC]${after}`)
   })
 
   it("text with no identifier is returned unchanged, whatever its script", () => {
-    const raw = "مقدمہ نمبر ۱۲۳۴/۲۰۲۰ مورخہ ۱۲-۰۵-۲۰۱۹ — PLD 2019 SC 123; Ｒｓ. ５,０００ only."
+    const raw = "مقدمہ نمبر ۱۲۳۴/۲۰۲۰ مورخہ ۱۲-۰۵-۲۰۱۹ \u2014 PLD 2019 SC 123; Ｒｓ. ５,０００\u00A0only."
     expect(maskOutboundPII(raw).masked).toBe(raw)
   })
 })
@@ -72,11 +72,11 @@ describe("audit F15: the mask sees identifiers in every digit script (ruling 1)"
 describe("audit F15: party names match through case, spacing and script variants (ruling 3)", () => {
   it.each([
     ["upper case and a double space", "TARIQ  ZARVANI agreed.", ["Tariq Zarvani"]],
-    ["a no-break space", "tariq zarvani agreed.", ["Tariq Zarvani"]],
+    ["a no-break space", "tariq\u00A0zarvani agreed.", ["Tariq Zarvani"]],
     ["a line break", "Tariq\nZarvani agreed.", ["Tariq Zarvani"]],
     ["no space at all", "TariqZarvani agreed.", ["Tariq Zarvani"]],
     ["full-width letters", "Ｔａｒｉｑ Ｚａｒｖａｎｉ agreed.", ["Tariq Zarvani"]],
-    ["a zero-width space inside", "Tariq Zar​vani agreed.", ["Tariq Zarvani"]],
+    ["a zero-width space inside", "Tariq Zar\u200Bvani agreed.", ["Tariq Zarvani"]],
     ["Latin diacritics in the text", "Nūra Qalvó agreed.", ["Nura Qalvo"]],
     ["Latin diacritics in the stored name", "Nura Qalvo agreed.", ["Nūra Qalvó"]],
     ["Arabic yeh for Urdu yeh", "طارق زرواني agreed.", ["طارق زروانی"]],
@@ -115,7 +115,7 @@ describe("audit F15: party names match through case, spacing and script variants
   })
 
   it("a name that folds to nothing is ignored", () => {
-    expect(maskOutboundPII("The party agrees.", { partyNames: ["ً​", "  "] }).masked).toBe("The party agrees.")
+    expect(maskOutboundPII("The party agrees.", { partyNames: ["\u064B\u200B", "  "] }).masked).toBe("The party agrees.")
   })
 })
 
@@ -127,7 +127,7 @@ describe("audit F15: assertMinimised is an independent check (ruling 6)", () => 
     ["ordinary legal prose", req("In PLD 2019 SC 123 and 2020 SCMR 456, under sections 302/324/148/149 PPC, dated 12-05-2019, Rs. 5,000,000/-; the son of the deceased deposed."), [], true],
     ["masked values after identity cues", req("CNIC No. [CNIC], Mobile: [PHONE], s/o [PARTY], son of late [PARTY], ولد [PARTY]."), [], true],
     ["an ASCII CNIC the mask would still match", req("CNIC 42101-1234567-1"), [], false],
-    ["a full-width CNIC in the body", req("CNIC ３５２０２－１２３４５６７－１"), [], false],
+    ["a full-width CNIC in the body", req("CNIC ３５２０２\uFF0D１２３４５６７\uFF0D１"), [], false],
     ["an Urdu-digit mobile in the purpose", req("[PARTY] asks.", "call ۰۳۰۰-۱۲۳۴۵۶۷"), [], false],
     ["a recorded name written in upper case with two spaces", req("TARIQ  ZARVANI asks."), ["Tariq Zarvani"], false],
     ["an address the mask has no rule for", req("The accused r/o House 12, Street 5, Lahore."), [], false],

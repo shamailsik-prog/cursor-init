@@ -21,11 +21,11 @@ describe("residualPII: true positives by kind (English and Urdu)", () => {
     ["a sixteen-digit number", "Card 1234567890123456 used.", { id_digits: 1 }],
     ["a landline in Urdu digits", "رابطہ ۰۴۲ ۳۵۷۶ ۱۲۳۴ پر کریں۔", { id_digits: 1 }],
     ["a landline in full-width digits", "Office ０４２ ３５７６ １２３４.", { id_digits: 1 }],
-    ["digits split by a zero-width space", "Office 042​35761234.", { id_digits: 1 }],
+    ["digits split by a zero-width space", "Office 042\u200B35761234.", { id_digits: 1 }],
     ["two runs", "Office 042 3576 1234 or 051 2345 6789.", { id_digits: 2 }],
     ["two groups joined by a slash whose second is not a year", "Ref 123456/78901 held.", { id_digits: 1 }],
     ["two groups joined by a dash whose second is a year", "Ref 123456-2021 held.", { id_digits: 1 }],
-    ["a CNIC glued to its label by a zero-width space (the mask's word boundary is gone)", "CNIC​3520212345671", { id_digits: 1 }],
+    ["a CNIC glued to its label by a zero-width space (the mask's word boundary is gone)", "CNIC\u200B3520212345671", { id_digits: 1 }],
     // labelled_identifier: a label, a separator and a value that is not a mask token.
     ["a CNIC one digit short", "CNIC No. 35202-123456-1 on file.", { labelled_identifier: 1, id_digits: 1 }],
     ["a passport in a format the mask misses", "Passport No: A1234567 issued.", { labelled_identifier: 1 }],
