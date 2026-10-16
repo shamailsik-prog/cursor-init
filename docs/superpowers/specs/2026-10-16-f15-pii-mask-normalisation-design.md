@@ -126,8 +126,17 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
 
 - **Not anonymisation.** Names the firm never recorded in `matter_parties`, the client record or the request; semantic identifying facts; free-text addresses and relationships without a cue; identifiers written in words or with look-alike letters; multi-character separators. At ranks 0 to 2 the residual findings are counted, not masked or blocked.
 - **Human review is not built.** L18 §4.6 / L17.13a/h's partner-authorised exception (with a recorded reason) and the deterministic-only path remain `TODO(firm)` (`providerPolicy.ts`). A residual finding at rank 3 or 4 is a hard block with no override; there is no high-risk review queue.
-- **False positives block privileged calls.** The residual detector is tuned to a legal-prose corpus, but unusual numbering (a six-digit case number followed directly by a date) or label-like prose can block a rank 3 or 4 call `not_minimised`. That fails closed.
-- **Homoglyphs.** NFKC does not fold cross-script look-alikes (Cyrillic `а` in a Latin name); such a name is not matched.
+- **False positives block privileged calls.** The residual detector passes two legal-prose corpora (the re-auditor's 126 lines, 0% false positives on the 124 clean ones; round 1's own 36 and the 37 round-2 rows), but the Urdu cue rules rest on word lists (stop words, role nouns, adjectival collocations), and prose outside them can still block a rank 3 or 4 call `not_minimised`. That fails closed.
+- **Known false negatives (R2-5, recorded).** The following still pass:
+  - obfuscated emails without a label (`nura [at] qalvo [dot] pk`);
+  - mobiles without a prefix (`300-1234567`): the residual check counts them, so rank 3 and 4 block, but below rank 3 they leave;
+  - vehicle registration and chassis numbers;
+  - dates of birth, age, caste and other semantic facts;
+  - a recorded name written only in part (a surname) or reversed (`Zarvani, Tariq`), or broken by a hyphenated line break;
+  - `the deceased's widow Nura` (a kinship word without `of`);
+  - `resident of the village` followed by a lower-case or no name.
+- **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost about 1.1 s per mask with three names, about 2.7 s of rank-3 work. That is under the 8 s pre-call allowance, and a longer list of names costs proportionally more.
+- **Homoglyphs.** Cyrillic and Greek Latin look-alikes are folded (R2-5); look-alikes from other scripts (Armenian, Cherokee, mathematical letters outside NFKC) are not.
 - **A dropped invisible character can remove a word boundary.** `CNIC\u200B3520212345671` becomes `CNIC3520212345671` in the detection view, and the CNIC pattern's leading `\b` no longer holds, so the mask misses it (as main did for the ASCII form `CNIC3520212345671`). The residual detector still counts the 13-digit run, so a rank 3 or 4 call is blocked; below rank 3 it is counted, not masked.
 - **Client identifiers as literals.** The client record's CNIC, mobile, email and address are not used as literal masks (ruling 4).
 - **Next legacy path** records no residual counts (ruling 8).
@@ -139,3 +148,136 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
 - **Normalising the outbound text itself** (sending the NFKC form). Rejected: it changes text the firm wrote outside any identifier; the view-and-map approach keeps unmatched text exactly.
 - **A new `BlockReason` (`residual_pii`).** Rejected: the obligation is the same L18 §4.6 minimisation; the residual counts on the output row say why.
 - **Masking residual findings.** Rejected for this finding: the cues are context, not identifier formats, and masking text after `s/o` or `r/o` blindly would replace the wrong span as often as the right one. They block where the obligation applies and are counted elsewhere.
+
+## 7. Re-audit round 1 (FAIL 6/10): rulings R2-1 to R2-6
+
+The independent re-audit of PR #61 at 4f0e2b7 (plus the receipt fix 92cf971) failed the finding at 6/10: one HIGH and three MEDIUM blocking defects, LOW items and INFO notes. The coordinator's rulings are recorded below as R2-1 to R2-6, each with its reason. Where a test showed a better rule, the refinement and its reason are recorded with the ruling. The re-auditor's attack inputs are regression rows:
+- `tests/f15-r2-mask.test.ts` and `tests/f15-r2-residual.test.ts`;
+- `tests/f15-r2-corpus.ts`, which holds the 126-line false-positive corpus verbatim;
+- `tests/f15-r2-bounds.test.ts`;
+- the e2e rows (f) to (h).
+
+### R2-1 (HIGH-1): every invisible character, not only `\p{Cf}`
+
+**Finding.** Characters that are not format characters defeated both detectors end to end at the privileged rank. Examples: the combining grapheme joiner U+034F, variation selectors U+FE00-FE0F and U+E0100-E01EF, Mongolian U+180B-180D, Hangul fillers U+115F/U+3164/U+FFA0, Khmer U+17B4/17B5, U+2065, U+FFF0-FFF8, combining accents, U+0332 (underline) and U+20E3 (keycap). A CNIC with U+034F between its digits was sent to the provider with 13 digits.
+
+**Ruling.** The detection view drops every `\p{Default_Ignorable_Code_Point}` and every `\p{M}`, as well as `\p{Cf}`, and keeps the index map. This applies before NFKC and to each character NFKC produces.
+
+**Refinement.** A match's original span is extended over the combining marks that follow its last character. A keycap or an accent on the last digit would otherwise be left dangling after the token. Marks attach to the previous character, so this takes nothing that belongs to the next one. Default-ignorables that are not marks, such as a direction mark, are not swallowed: round 1's test keeps an RLM after `[CNIC]`.
+
+The mask header and the README now list exactly what is dropped.
+
+### R2-2 (MEDIUM-2): linear time on every input
+
+**Finding.** `NUMBERED_PLACE` contained `house\s*(?:no\.?|number|#)?\s*\d`. Two whitespace quantifiers around an optional group split every whitespace run in O(n²) ways per start. A cue followed by 100,000 spaces took 12.8-20.4 s, and committeeBrain answered 503 `precall_deadline`.
+
+**Ruling.**
+- Every regex is restructured so that no two whitespace quantifiers meet around an optional or repeated part; the optional part now carries its own leading whitespace.
+- Every residual cue regex is generated from the word lists exported as `RESIDUAL_CUES`, and the mask exports `MASK_CUES`.
+- Every mask separator quantifier is bounded (`{0,3}`, or `{1,3}` for the CNIC).
+
+**Audit of every regex.**
+- *Mask:* CNIC (`[.,/\-\s_]{1,3}`, was `+`), the IBAN (`[\s-]{0,3}`, was `\s*`), the mobile, UAN and landline patterns (bounded), EMAIL (anchored, round 1), NTN and passport (bounded separators), and names (`tok\s*tok`, required tokens between).
+- *Residual:* every regex reads either the whole text with fixed-shape alternations, or a window of at most 80 characters.
+
+**Bound test.** Every cue of both lists (175 cues) is followed by 100,000 characters of each of eight fillers: space, tab, newline, NBSP, `.`, `-`, `#` and `7`. Each input runs through rank-3 work: the mask, the residual check, and `assertMinimised`'s mask re-run and residual check, with three party names. The bound is 1.5 s per input.
+- The worst cue takes 0.99 s for all eight inputs, about 0.12 s each.
+- The re-auditor's six inputs take 45-151 ms; before the fix they took 24.4-42.1 s.
+
+**Speed.** ASCII text, and ASCII runs inside other text, take a fast path in `detectionView`. The units of a view are re-joined only after a match changes them.
+
+**Not closed.** One code point whose NFKC form is long (U+FDFA expands to 18 characters), repeated 100,000 times, costs about 1.1 s per mask with three names. That is within the bound per mask, but two masks and two residual checks come to about 2.7 s of rank-3 work, under the 8 s pre-call allowance. Recorded in §5.
+
+### R2-3 (MEDIUM-3): false positives on clean privileged prose
+
+The re-auditor's 126-line corpus is a must-pass test. Two lines are true positives under the rulings below, and `RULED_TRUE_POSITIVE` names each with its reason:
+- "a resident of Lahore" (R2-3c);
+- "the son of the deceased Kamran" (R2-3b).
+
+Result: 124 of 124 clean lines pass, a false-positive rate of 0%. Round 1's own corpus (36 lines) and the 37 new row-by-row cases also pass, also 0%.
+
+**a. Urdu cues.**
+- *Ruling.* ولد, بنت, زوجہ, دختر, ساکن, ساکنہ, سکنہ, رہائشی, پسر and بیوہ count only when the next word is not on the Urdu stop list. The list holds the coordinator's function words, postpositions and auxiliaries, plus ہو, ہوا, ہوئی, ہوئے, رہا, رہی, رہے, تک and لیے.
+- *Refinement 1.* Urdu legal role and heir nouns do not count: قانونی, شرعی, وارث, نابالغ, مدعی, ملزم, مقتول, گواہ and the like. The reason is the corpus line "متوفی کی زوجہ اور دختر قانونی وارث ہیں": "the daughter's legal heirs" names no one, just as an English role does not (R2-3b).
+- *Refinement 2.* ساکن followed by پانی, جائیداد, جائداد, حالت or ہوا is the adjective "still" or "immovable", not "resident" (corpus lines "ساکن پانی میں…" and "یہ ساکن جائیداد ہے…").
+- *Refinement 3.* The idiom بنت حوا ("daughter of Eve", meaning "a woman") does not count.
+- بن is not a cue: in Urdu it is the everyday verb "become".
+
+**b. English kinship cues.**
+- A party-role reference after the cue never counts as the name. The roles are Respondent, Petitioner, Appellant, Accused, Complainant, Plaintiff, Defendant, Applicant, Deceased, Witness, PW, DW, Opposite Party and the like, optionally followed by `No.` and a number.
+- After an honorific title (Mr, Mrs, Ms, Mst, Dr, Ch, Sh, late), any word is the name, lower case too: "son of Mr. omer" counts.
+- *Refinement 1.* After a role word, only a capitalised word is a name. The ruling placed "the deceased" with the titles that accept any word, but the corpus line "The son of the deceased appeared as PW-1" must pass. With this rule, "son of the deceased Kamran" and "wife of the accused Kamran Qalvo" count, while "…deceased appeared" and "…complainant deposed" do not.
+- *Refinement 2.* Name-titles (Malik, Syed, Mian, Haji, Chaudhry, Rana and the like) are skipped before a name, but count as the name when no name follows. "son of Malik was arrested" still counts, because Malik is often the surname.
+- *Refinement 3.* Shaheed and Martyr are role words (corpus line "The widow of Shaheed was granted compensation").
+
+**c. Singular residence cues.**
+- Singular `resident of`, `r/o` and the Urdu cues count before any following word that is not a function word, lower case included: "resident of lahore" counts, and so does "a resident of Lahore" (a true positive).
+- *Refinement.* After "the" (or "the said"), a place noun followed by a capitalised word or a number still counts. This keeps round 1's true positive "resident of the village Kot Qalvo". "the said house for twenty years", "the Province of Punjab" and "the village came forward" still pass.
+
+**d. Plural.** `residents of` is exempt: "Residents of Karachi suffered from load shedding" names no one.
+
+**e. Label minimums.**
+- *Ruling.* Phone labels (cell, mobile, phone, telephone, tel, موبائل, فون) need 7 or more digits. CNIC, NIC and ID-card labels need 5 or more. NTN needs 7 or more. A passport needs an alphanumeric token of 7 or more characters with a digit.
+- *Refinement 1.* An email label needs an address-like value: `@`, a handle such as `a.b`, or "x at y". The reason is the corpus line "Email - see the annexed print-outs."
+- *Refinement 2.* Driving and other licence labels (licence, license, لائسنس) need 5 or more digits, from the re-auditor's false-negative line "Driving licence No. 12345678".
+- Round 1's six-digit Urdu phone row now uses seven digits; six digits now pass, and that is pinned.
+
+**f. The address label.** `address:` (or پتہ / پتا with `:` or `-`) counts only at a field start: the start of the text or a line, or after `|`, `;`, `,`, `(` or `[`. It also counts after permanent, present, postal, residential, home, office, mailing, current, business, correspondence or registered. "Counsel will address: …" passes.
+
+**g. Numbered places.**
+- *Ruling.* A number followed by a unit word does not count: years, months, days, marla, kanal, acre(s), feet, metres, rooms, storeys, residents, persons and the Urdu units.
+- New cues: Plot, Flat and Shop need `No.`; Apartment counts with a bare number.
+- *Refinement.* A bare number (no `No.`) counts only before punctuation, the end of the text, a place cue (optionally after and, & or or), or a proper noun. The reason is the corpus line "The House 2 of the Senate committee met", which has no unit. Round 1's "Street No. 9, Gali 4 and Mohalla 3." still counts three.
+
+**h. id_digits exemptions.**
+- *Ruling.* An amount ending in `/=` or `/-` is exempt. So is a document number after Diary, FIR, Case, Suit, Appeal, Petition, Reference, Challan or Complaint with its `No.` (the `No.` is required), and a group after a land-record cue (khasra, khewat, khatooni, mutation, intiqal, murabba, killa and their Urdu forms).
+- *Refinement.* A currency word after a parenthetical is exempt ("2500000000 (two billion …) rupees"), and so is an amount word before the run ("An amount of 1500000000"). Both are corpus lines.
+
+### R2-4 (MEDIUM-4): real formats are masked at every rank
+
+**Mobiles.**
+- *Ruling.* A +92, 0092, 92 or (0 prefix, brackets allowed, then 3 and nine digits in any grouping, with up to three separator characters between groups. Separators are whitespace, `.`, `,`, `-`, brackets and `_`. This covers `0300 - 1234567`, `+92 300 123 2019`, `03 00 12 34 567` and `(+92) 300-1234567`.
+- *Refinement.* `/` is not a mobile separator: "03/01/2021 123" is a date and a number.
+
+**Landlines and UANs.**
+- Landlines: an area code (0 and two to four digits, bracketed or not, or +92 / 0092 and one to three digits), then six to eight digits.
+- UANs: 111 and six digits, with an optional area code.
+- The IBAN pattern now runs before the phone patterns, so its digit groups are never read as a phone.
+
+**NTN and passport.**
+- NTN: `NTN No.`, `N.T.N`, `N.T.N.`, with an optional check digit.
+- Passport: `Passport No. AB1234567` is masked whole.
+- IBANs with dashes are masked.
+
+**Residual.**
+- *Ruling.* A run starting with 0 or 92 (a `+` before it is outside the run) with 10 to 13 digits keeps no exemption.
+- *Refinement.* A run that starts with a date ("01.02.2021 10.30") is not mobile-shaped, whatever its first digit.
+
+**False-positive guard.** The mask leaves all 126 corpus lines unchanged. Six further prose rows with citations, dates with times, a date followed by a case number, amounts, sections with a leading zero and an FIR stay unmasked too.
+
+### R2-5 (LOW): fixed
+
+- **Name view.** Cyrillic and Greek Latin look-alikes are folded. ھ is folded to ہ: this reverses round 1's note in ruling 3, because a name written with either letter is the same name and folding only adds matches. Full stops are dropped. Underscores and hyphens read as spaces. A recorded name that starts with an honorific (Mr, Mrs, Ms, Mst, Miss, Dr) is also matched without it.
+- **Emails.** Local parts and domains of any script (`\p{L}\p{N}`).
+- **Passports.** An unlabelled `[A-Z]{2}\d{7}` is masked, case-sensitive.
+- **Digits.** Enclosed and dingbat digits map to their numbers: U+2460-24FF and U+2776-2793, including the parenthesised and full-stop forms that NFKC turns into "(1)" and "1.". Round 1's span test used U+2474 and now uses U+FB01.
+- **Separators.** U+066B and U+3002 map to `.`; U+066C and U+060C map to `,`. `_` is accepted as a separator in the CNIC, the mobile and the residual digit run.
+
+**Recorded, not fixed** (in §5):
+- obfuscated emails (`[at]`, `[dot]`) without a label;
+- mobiles without a prefix (the residual check counts them);
+- vehicle registration and chassis numbers;
+- dates of birth and other semantic facts;
+- a recorded name written only in part (a surname) or reversed;
+- a name broken by a hyphenated line break.
+
+### R2-6 (INFO)
+
+- The e2e header now says which rows fail on main and which are guards that pass on main.
+- (d′) is renamed: "another firm's client record is read by id and discarded, never used".
+- Mutant M14 (party count inside one NFKC expansion) is killed by a test: `x U+FDFA y` with the names الله and صلى counts 1.
+
+### Changed round-1 test expectations (each follows a ruling)
+
+- `tests/f15-detection-view.test.ts`: the NFKC-expansion span test uses U+FB01, because U+2474 now maps to "1" (R2-5); the do-chashmi he assertion is now equality (R2-5).
+- `tests/f15-residual-pii.test.ts`: the Urdu phone-label row has seven digits (R2-3e).
