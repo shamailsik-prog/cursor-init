@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
 """provider-guard — AI/OCR/STT/TTS SDK imports only under P1 / committeeBrain (full tree).
 
+Scans every file outside the skip rules in g0_guard_common and outside ALLOWED_PREFIXES
+(FA-CI-001):
+- JS/TS: every module specifier in import, export ... from, import(), require() and
+  require.resolve() position, with ', " or ` quotes; subpaths (`openai/client`) count as the
+  package.
+- Python: every import (ast): `import openai`, `from openai import AsyncOpenAI`,
+  `from openai.types import X`, `from google.cloud import vision`, importlib.import_module().
+- package.json dependency sections; pip requirements files (requirements*.txt/.in,
+  requirements/*.txt), pyproject.toml and Pipfile, with PEP 508/503 name normalisation
+  (`openai[datalib]`, markers, direct references, `google_generativeai`).
+
 FA-D3C-002 violations are allowlisted per file:symbol in g0_guard_allowlist.json.
 """
 from __future__ import annotations
 
-import json
 import pathlib
-import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from g0_guard_common import (
+from g0_guard_common import (  # noqa: E402
     GuardFinding,
-    SOURCE_SUFFIXES,
+    ManifestError,
     apply_allowlist,
+    file_kind,
     iter_scan_files,
+    js_imported_packages,
     load_allowlist,
+    load_package_json,
+    module_matches,
+    python_imported_modules,
+    python_manifest_names,
+    read_text,
     rel_posix,
 )
 
@@ -27,10 +43,12 @@ ALLOWED_PREFIXES = (
     "functions/src/p1/",
 )
 
+# npm packages (matched on the package a specifier resolves to).
 SDK_PACKAGES = (
     "openai",
     "@anthropic-ai/sdk",
     "@google/generative-ai",
+    "@google/genai",
     "groq-sdk",
     "elevenlabs",
     "@google-cloud/vision",
@@ -44,98 +62,104 @@ SDK_PACKAGES = (
     "@perplexity-ai/sdk",
     "together-ai",
 )
+SDK_PACKAGE_SET = frozenset(p.lower() for p in SDK_PACKAGES)
 
-SDK_NAMES = "|".join(re.escape(p) for p in SDK_PACKAGES)
-
-PAT = re.compile(
-    rf"""
-    from\s+['"]({SDK_NAMES})['"]|
-    export\s+[^;\n]*\s+from\s+['"]({SDK_NAMES})['"]|
-    import\s+(openai|anthropic|google\.generativeai|groq|elevenlabs)\b|
-    require\s*\(\s*['"]({SDK_NAMES})['"]\s*\)|
-    (?:await\s+)?import\s*\(\s*['"]({SDK_NAMES})['"]\s*\)
-    """,
-    re.I | re.VERBOSE,
-)
-
-PKG_DEP_RE = re.compile(rf"^({SDK_NAMES})$", re.I)
-
-REQ_TOKENS = {
+# Python modules for the same providers (matched with submodules and versioned siblings).
+PY_SDK_MODULES = (
     "openai",
     "anthropic",
     "groq",
     "elevenlabs",
-    "deepl-node",
-    "together-ai",
-}
+    "google.generativeai",
+    "google.genai",
+    "google.cloud.vision",
+    "google.cloud.translate",
+    "google.cloud.speech",
+    "deepl",
+    "together",
+    "whisper",
+)
+
+# PyPI distributions (PEP 503-normalised) for the same providers. deepl-node and together-ai
+# are the npm names, kept from the original list.
+REQ_NAMES = frozenset(
+    {
+        "openai",
+        "anthropic",
+        "groq",
+        "elevenlabs",
+        "google-generativeai",
+        "google-genai",
+        "google-cloud-vision",
+        "google-cloud-translate",
+        "google-cloud-speech",
+        "deepl",
+        "deepl-node",
+        "together",
+        "together-ai",
+        "openai-whisper",
+    }
+)
 
 BUCKET = "fa_d3c_002_provider"
 
 
-def _normalize_module_symbol(raw: str) -> str:
-    low = raw.lower()
-    if low in {"openai", "anthropic", "groq", "elevenlabs"}:
-        return low
-    return raw.lower()
+def _check_package_json(rel: str, text: str) -> list[GuardFinding]:
+    data = load_package_json(text)
+    out: list[GuardFinding] = []
+    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        for name in data.get(section) or {}:
+            if name.lower() in SDK_PACKAGE_SET:
+                out.append(GuardFinding(rel, name.lower(), f"{rel}: {section} lists {name}"))
+    return out
 
 
-def _symbols_in_source(text: str) -> set[str]:
+def _check_python_manifest(rel: str, kind: str, text: str) -> list[GuardFinding]:
+    return [
+        GuardFinding(rel, name, f"{rel}: requires {name}")
+        for name in python_manifest_names(kind, text)
+        if name in REQ_NAMES
+    ]
+
+
+def _source_symbols(kind: str, text: str) -> set[str]:
+    if kind == "js":
+        return {root for root in js_imported_packages(text) if root in SDK_PACKAGE_SET}
     symbols: set[str] = set()
-    for m in PAT.finditer(text):
-        for g in m.groups():
-            if g:
-                symbols.add(_normalize_module_symbol(g))
+    for module in python_imported_modules(text):
+        for banned in PY_SDK_MODULES:
+            if module_matches(module, banned):
+                symbols.add(banned)
     return symbols
 
 
-def _check_package_json(path: pathlib.Path) -> list[GuardFinding]:
-    rel = rel_posix(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+def findings_for(p: pathlib.Path) -> list[GuardFinding]:
+    rel = rel_posix(p)
+    if rel.startswith(ALLOWED_PREFIXES):
         return []
-    out: list[GuardFinding] = []
-    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-        for name in data.get(section, {}):
-            if PKG_DEP_RE.match(name):
-                sym = name.lower()
-                out.append(GuardFinding(rel, sym, f"{rel}: {section} lists {name}"))
-    return out
-
-
-def _check_requirements_txt(path: pathlib.Path) -> list[GuardFinding]:
-    rel = rel_posix(path)
-    out: list[GuardFinding] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        token = re.split(r"[<>=!~\s]", stripped, maxsplit=1)[0].lower()
-        if token in REQ_TOKENS:
-            out.append(GuardFinding(rel, token, f"{rel}: requires {token}"))
-    return out
+    kind = file_kind(p)
+    if kind not in {"package_json", "requirements", "pyproject", "pipfile", "js", "py"}:
+        return []
+    text = read_text(p)
+    if text is None:
+        return []
+    try:
+        if kind == "package_json":
+            return _check_package_json(rel, text)
+        if kind in {"requirements", "pyproject", "pipfile"}:
+            return _check_python_manifest(rel, kind, text)
+    except ManifestError as err:
+        return [GuardFinding(rel, "unreadable_manifest", f"{rel}: cannot read manifest ({err})")]
+    return [
+        GuardFinding(rel, sym, f"{rel}: provider SDK ({sym})")
+        for sym in sorted(_source_symbols(kind, text))
+    ]
 
 
 def collect_findings() -> list[GuardFinding]:
     findings: list[GuardFinding] = []
     for p in iter_scan_files():
-        rel = rel_posix(p)
-        if any(rel.startswith(prefix) for prefix in ALLOWED_PREFIXES):
-            continue
-        if p.name == "package.json":
-            findings.extend(_check_package_json(p))
-            continue
-        if p.name == "requirements.txt":
-            findings.extend(_check_requirements_txt(p))
-            continue
-        if p.suffix not in SOURCE_SUFFIXES:
-            continue
-        try:
-            text = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        for sym in _symbols_in_source(text):
-            findings.append(GuardFinding(rel, sym, f"{rel}: provider SDK ({sym})"))
+        findings.extend(findings_for(p))
     return findings
 
 
