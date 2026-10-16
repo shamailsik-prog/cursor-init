@@ -1,0 +1,464 @@
+{
+  "format": "corpus-publication-batch/1",
+  "batch_key": "curated/f05-parity-2099",
+  "source_kind": "curated",
+  "items": [
+    {
+      "kind": "judgment",
+      "item_key": "p-single",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/1",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0101010101010101010101010101010101010101010101010101010101010101",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "41",
+            "court": "Lahore",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 parity p-single v. The State 2099",
+      "bench_type": "Single Bench",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-single; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "p-division",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/2",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "42",
+            "court": "Karachi",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 parity p-division v. The State 2099",
+      "bench_type": "D.B.",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-division; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "p-division-2",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/3",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0303030303030303030303030303030303030303030303030303030303030303",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 4301"
+        }
+      ],
+      "case_title": "F05 parity p-division-2 v. The State 2099",
+      "bench_type": "division",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-division-2; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "p-full",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/4",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0404040404040404040404040404040404040404040404040404040404040404",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "44",
+            "court": "SC",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 parity p-full v. The State 2099",
+      "bench_type": "Full Bench",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-full; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "p-larger",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/5",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0505050505050505050505050505050505050505050505050505050505050505",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLD",
+            "year": "2099",
+            "page": "45",
+            "court": "SC",
+            "series": null,
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 parity p-larger v. The State 2099",
+      "bench_type": "LB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-larger; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "p-larger-2",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/6",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0606060606060606060606060606060606060606060606060606060606060606",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "citations": [
+        {
+          "parts": {
+            "reporter": "PLC",
+            "year": "2099",
+            "page": "46",
+            "court": null,
+            "series": "C.S.",
+            "note": null
+          }
+        }
+      ],
+      "case_title": "F05 parity p-larger-2 v. The State 2099",
+      "bench_type": "Larger Bench",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic F05 parity fixture p-larger-2; no real authority."
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-1",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/11",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-larger"
+      },
+      "treated": {
+        "item_key": "p-division"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-2",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/12",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-larger-2"
+      },
+      "treated": {
+        "item_key": "p-single"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-3",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/13",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-full"
+      },
+      "treated": {
+        "item_key": "p-division-2"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "full",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-4",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/14",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-full"
+      },
+      "treated": {
+        "item_key": "p-single"
+      },
+      "treatment": "followed",
+      "passage_anchor": null,
+      "treating_bench_type": "full",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-5",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/15",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-larger-2"
+      },
+      "treated": {
+        "item_key": "p-full"
+      },
+      "treatment": "applied",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "pt-6",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/16",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1010101010101010101010101010101010101010101010101010101010101010",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "treating": {
+        "item_key": "p-single"
+      },
+      "treated": {
+        "item_key": "p-division"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "single",
+      "confidence": 0.6
+    },
+    {
+      "kind": "statute_section_history",
+      "item_key": "ph-federal",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/21",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1515151515151515151515151515151515151515151515151515151515151515",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "statute": {
+        "name": "Test Act 2099",
+        "short_name": null,
+        "year_enacted": 2099,
+        "jurisdiction": "Federal",
+        "status": null
+      },
+      "section": {
+        "section_number": "1",
+        "chapter": null,
+        "current_title": "Test Act 2099 section 1"
+      },
+      "history": "amendment_history",
+      "versions": [
+        {
+          "version_no": 1,
+          "effective_from": "2099-01-01",
+          "effective_to": "2099-04-01",
+          "title": null,
+          "text": "Test Act 2099 s.1 as enacted.",
+          "version_confidence": 0.9
+        },
+        {
+          "version_no": 2,
+          "effective_from": "2099-04-01",
+          "effective_to": "2099-09-01",
+          "title": null,
+          "text": "Test Act 2099 s.1 as first amended.",
+          "version_confidence": 0.9
+        },
+        {
+          "version_no": 3,
+          "effective_from": "2099-09-01",
+          "effective_to": null,
+          "title": null,
+          "text": "Test Act 2099 s.1 as last amended.",
+          "version_confidence": 0.9
+        }
+      ]
+    },
+    {
+      "kind": "statute_section_history",
+      "item_key": "ph-punjab",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "f05-parity-fixture",
+        "source_url": "https://f05.example.invalid/parity/22",
+        "raw_storage_key": null,
+        "fetched_at": "2099-01-02T03:04:05Z",
+        "content_hash": "1616161616161616161616161616161616161616161616161616161616161616",
+        "extraction_method": "manual",
+        "extractor_version": "f05-parity-1"
+      },
+      "statute": {
+        "name": "Test Punjab Act 2099",
+        "short_name": null,
+        "year_enacted": 2099,
+        "jurisdiction": "Punjab",
+        "status": null
+      },
+      "section": {
+        "section_number": "2",
+        "chapter": null,
+        "current_title": "Test Punjab Act 2099 section 2"
+      },
+      "history": "amendment_history",
+      "versions": [
+        {
+          "version_no": 1,
+          "effective_from": "2099-02-01",
+          "effective_to": "2099-05-15",
+          "title": null,
+          "text": "Test Punjab Act 2099 s.2 as enacted.",
+          "version_confidence": 0.9
+        },
+        {
+          "version_no": 2,
+          "effective_from": "2099-05-15",
+          "effective_to": null,
+          "title": null,
+          "text": "Test Punjab Act 2099 s.2 as amended.",
+          "version_confidence": 0.9
+        }
+      ]
+    }
+  ]
+}

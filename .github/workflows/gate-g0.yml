@@ -358,6 +358,64 @@ jobs:
           SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
         run: npm run probe:fa-data-001
 
+  authority-f05:
+    name: Authority corpus e2e (F05)
+    # Audit F05: the draft gate answers from the firm's promoted Annex A corpus. The user-flow e2e drives the HTTP
+    # router under the Auth and Firestore emulators against real Postgres (pgvector), seeded through the corpus
+    # publication CLI (Python, as a corpus_writer member); the adapter and O-59 parity suites run beside it. The
+    # suites run only with F05_AUTHORITY_SUITE=1, which `npm run test:f05-authority` sets, and then a missing
+    # SIKANDER_POSTGRES_URL fails the job instead of skipping it (F05 plan D14).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: corpus_service/requirements-test.txt
+      # The publication CLI (scraper.publication.cli) that seeds the corpus.
+      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: npm ci
+      - name: Functions install
+        run: npm --prefix functions ci
+      - name: F05 user-flow e2e, adapter and parity suites (emulators + real Postgres)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          SIKANDER_CORPUS_PYTHON: python
+        run: npm run test:f05-authority
+
   corpus-service:
     name: corpus_service pytest
     needs: changes
@@ -367,7 +425,7 @@ jobs:
     # The F20 trust-vocabulary tests run against this real Postgres (each test creates and drops
     # its own database); under CI, tests/conftest.py stops the run if CORPUS_TEST_DATABASE_URL is
     # missing, so they cannot pass by being skipped. The F19 publication tests apply the Annex A
-    # contract (postgres/ddl 001 + 003) to each per-test database; the step below applies it once
+    # contract (postgres/ddl 001 + 003 + 004, in that order) to each per-test database; the step below applies it once
     # (twice) to the service database first, which creates the cluster-global corpus roles once
     # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest
@@ -398,11 +456,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: python -m pip install -r corpus_service/requirements-test.txt
-      - name: Annex A DDL (001, 003) applies as the superuser, twice (idempotent)
+      - name: Annex A DDL (001, 003, 004) applies as the superuser, twice (idempotent)
         run: |
           set -euo pipefail
           for pass in 1 2; do
-            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql; do
+            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql; do
               docker exec -i "${{ job.services.postgres.id }}" \
                 psql -v ON_ERROR_STOP=1 --no-psqlrc -q -U postgres -d corpus_ci < "$f"
             done

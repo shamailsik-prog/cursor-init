@@ -2,7 +2,7 @@
 
 The gated draft in Cloud Functions (spec `docs/superpowers/specs/2026-10-11-phase4a-gated-draft-design.md`, rulings P4-1 to P4-15; errata E-50 and E-51 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`). It is the D4-1 draft store (versions, restore, lock) and the D4-2 citation and temporal gate, with an audited partner override and a partner approval stand-in. The safety property is L1716's: no unverified or overruled authority reaches a partner's approval unflagged, and every court-facing draft passes the gate and a human approval (R-3, L6713-6715). Since audit finding F06 (2026-10-13) an empty check is not a pass: a gate run that assessed nothing (no citation, no temporal check) is `NOT_ASSESSED`, and approving a law-dependent document needs the type's review checklist with evidence.
 
-Phase 4a has no AI generation. A partner pastes or types the text; generation through P1 is Phase 4b. In production the authority port is empty (below), so every citation is UNVERIFIED and every temporal check unavailable until the corpus connector exists (O-59), and the partner override carries the load.
+Phase 4a has no AI generation. A partner pastes or types the text; generation through P1 is Phase 4b. Since audit finding F05 the gate answers from the firm's promoted Annex A corpus when a corpus reader is configured (below). Without one, the authority port is empty: every citation is UNVERIFIED, every temporal check unavailable, and the partner override carries the load.
 
 The pure gate code is shared with the Next.js tree through the `@/` alias: `services/d4-2/citations.ts` (the extractor), `draftCharset.ts` (the charset and size rule) and `citationVerdict.ts` (the verdict rule, `verdictFromTreatments`). The Next.js `/api/d4/drafts` route and the filing-package stand-in stay as the transitional path (E-23) until the app calls Functions (O-67).
 
@@ -120,7 +120,76 @@ After an override, a worsened status needs a title or body edit (either makes a 
 - `listTreatments(judgmentId)` → the recorded treatments (`kind`, treating bench)
 - `getSectionAsAt(sectionId, asAtDate, jurisdiction)` → `{ text } | "no_history"`
 
-A call carries only a canonical citation, a judgment id or a section key (with a date and a jurisdiction), never a matter id or party data (L9633). Every adapter returns a treatment `kind` in lower case (`"overruled"`, `"followed"`, ...) and a bench as one of `"single"`, `"division"`, `"full"`, `"larger"`: the verdict rule counts only a kind that is exactly `"overruled"`, so an adapter that returned `"Overruled"` would pass an overruled judgment as VERIFIED (the O-59 parity test asserts it). The production adapter is `EMPTY_AUTHORITY_STORE`: no judgment, no treatment, no history. Until the corpus connector exists (O-59) every draft that cites an authority is UNVERIFIED and every temporal check is `TEMPORAL_UNAVAILABLE`, so every draft that cites an authority or carries a check needs a partner override to be approved (a check, once supplied, is carried to every later run and version, R10, and approval is bound to the result the partner reviewed, R9); a draft that cites nothing and was never given a check is NOT_ASSESSED (F06) and needs one too. That is honest and fails closed: on the production store no draft is approved without a partner's explicit override. `activeAuthorityStore()` returns the empty store unless a test has set another with `setAuthorityStoreForTests`, which throws when `NODE_ENV` is `production`. `InMemoryAuthorityStore` is for tests; its fixtures use the year 2099 and `test_act_s1`-style ids so they never look like real authority (P4-13).
+A call carries only a canonical citation, a judgment id or a section key (with a date and a jurisdiction), never a matter id or party data (L9633). Every adapter returns a treatment `kind` in lower case (`"overruled"`, `"followed"`, ...) and a bench as one of `"single"`, `"division"`, `"full"`, `"larger"`: the verdict rule counts only a kind that is exactly `"overruled"`, so an adapter that returned `"Overruled"` would pass an overruled judgment as VERIFIED (the O-59 parity test asserts it). The production adapter is `EMPTY_AUTHORITY_STORE`: no judgment, no treatment, no history. Until the corpus connector exists (O-59) every draft that cites an authority is UNVERIFIED and every temporal check is `TEMPORAL_UNAVAILABLE`, so every draft that cites an authority or carries a check needs a partner override to be approved (a check, once supplied, is carried to every later run and version, R10, and approval is bound to the result the partner reviewed, R9); a draft that cites nothing and was never given a check is NOT_ASSESSED (F06) and needs one too. That is honest and fails closed: on the empty store no draft is approved without a partner's explicit override. `InMemoryAuthorityStore` is for tests; its fixtures use the year 2099 and `test_act_s1`-style ids so they never look like real authority (P4-13).
+
+### The corpus reader (audit F05, O-59)
+
+`activeAuthorityStore()` returns, in order: a test's store (`setAuthorityStoreForTests`, which throws when `NODE_ENV` is `production`); the `PgAuthorityStore` (`corpusAuthorityStore.ts`) for the configured corpus reader, memoised per configuration; otherwise `EMPTY_AUTHORITY_STORE`, logging `d4.authority_not_configured {reason}` once per reason. The configuration (`corpusReaderConfig.ts`) comes from the environment only:
+
+| Variable | Rule |
+| --- | --- |
+| `SIKANDER_CORPUS_READER_URL` | `postgres://` or `postgresql://` with a user, a password, a host and one database. The only parameter allowed is `sslmode`: `verify-full` is TLS; `disable`, or none, is plaintext; anything else is refused. |
+| `SIKANDER_CORPUS_MAX_STALENESS_HOURS` | Required (spec ruling 5): an integer from 1 to 8760. |
+| `SIKANDER_CORPUS_READER_CA` | The PEM CA certificate, required whenever TLS is. |
+
+In production the URL must ask for `verify-full`. Outside production, plaintext is allowed to loopback only. The deployment binding (the secret, the corpus host, the network path) is out of scope here (spec §7).
+
+The login must be a member of `corpus_authority_reader`, the NOLOGIN role 004 creates, and (for CONNECT only) of `corpus_clients`, and of nothing else (ruling 13 as amended by plan D21; #51 fix rounds 1 and 2). That role can read the four `v_authority_*` views and `corpus_metadata`, and nothing else. It is not 001's `corpus_reader`, which can also read `v_judgment`, `v_source_provenance` and the other `v_*` views (FA-DATA-003). Before its first read, and again every 30 s, the store checks the session and refuses it (`wrong_role`) unless all of these hold:
+
+- it inherits `corpus_authority_reader`;
+- its memberships are an allowlist: `corpus_authority_reader` and, for CONNECT only (PR 2b's pg_hba lets only its members in), `corpus_clients`, and no other role however held, inherited or SET-only, directly or through another role, or implicitly (the database's owner, any predefined role such as `pg_read_server_files`) (#51 fix round 2);
+- no role it is a member of, itself included, is a superuser or holds CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS;
+- it holds no write privilege (INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, or a column's INSERT, UPDATE or REFERENCES) on any relation in schema `public`, and neither USAGE (`nextval`) nor UPDATE (`setval`) on any sequence there (#51 fix round 3; SELECT on a sequence, which only reads its last value, is allowed);
+- it can SELECT no relation in schema `public` (the table or any column, however granted, including to PUBLIC) other than the four views and `corpus_metadata`;
+- the session is read-only.
+
+A database without 004 has no `corpus_authority_reader`, and that is `schema_missing`.
+
+#### Creating the reader login
+
+Create the login with plain SQL, as a superuser of the corpus database, after 004 is applied. Give it a generated password; `SIKANDER_CORPUS_READER_URL` carries it.
+
+```sql
+CREATE ROLE <login> LOGIN PASSWORD '<generated secret>';
+GRANT corpus_authority_reader, corpus_clients TO <login>;
+```
+
+`corpus_clients` exists where PR 2b provisioned the database (the compose corpus host). There pg_hba admits only its members over TCP, and it carries CONNECT and schema USAGE, nothing else. Where `corpus_clients` does not exist, grant CONNECT on the database instead:
+
+```sql
+CREATE ROLE <login> LOGIN PASSWORD '<generated secret>';
+GRANT corpus_authority_reader TO <login>;
+GRANT CONNECT ON DATABASE <database> TO <login>;
+```
+
+Grant it nothing else: no other role, no attribute (CREATEDB, CREATEROLE and the like), and no privilege on any table or sequence. The store refuses (`wrong_role`) a login that belongs to any other role, however the membership is held. The reason is that any further membership can give the gate's credential more than reading the four views, even one that holds nothing today:
+
+- a SET-only member of a superuser role can `SET ROLE` to it;
+- a member of `pg_read_server_files` can read files on the server;
+- a role that is granted something later passes it on to its members.
+
+So the check is an allowlist, not a list of known-bad roles. The compose e2e makes a login this way (`annex_a_d7_reader_checks` in `corpus_service/tests/e2e/lib.sh`) and runs the store's own check as it over TLS after provisioning.
+
+A caution for managed databases: a user created through a provider's console or tooling, or through its IAM integration, may be given provider roles or rely on token authentication. The allowlist refuses such a login, and the static URL cannot carry a short-lived token. Create the reader login with the plain SQL above, as a superuser or the provider's equivalent administrative user.
+
+The store reads only 004's views (`postgres/ddl/004_authority_read_views.sql`) and `corpus_metadata`. A row shows only when it is promoted, written by a finished publication, and carries complete provenance, and so is every parent it reports. A judgment must also be public and have a bench. A row a superuser wrote outside any publication never shows (ruling 2). An overruling the reader cannot show (held for review, or hidden by these rules) is never absent. `listTreatments` reports it as `PENDING_OVERRULING`, an overruling whose bench cannot be relied on. On its own the citation reads UNVERIFIED (ruling 3), never VERIFIED. Beside a qualifying overruling the citation stays OVERRULED: a pending overruling never hides the strongest warning (P4-2; #51 fix round 1, D-1). `InMemoryAuthorityStore.addPendingOverruling` gives the same answer, for O-59 parity. Jurisdiction codes map to Annex A values by upper-case equality only (`FEDERAL` is `Federal`; `PK` maps to nothing, ruling 6). A section version is usable only with a confidence strictly above 0.5 (ruling 4). Dates travel as text, so the process time zone cannot move them.
+
+It fails closed. Every failure throws `AuthorityUnavailableError(reason)`, which the gate reads as UNVERIFIED / TEMPORAL_UNAVAILABLE. The gate catches that class and only that class: any other error still fails the request. The store wraps only a driver error or its own explicit refusal. A programming error in the adapter (a `TypeError`, say) propagates unchanged: the request fails with a 500, a draft being approved stays a draft, and no breaker opens (plan D5 and D23; #51 fix round 1, D-6). The reasons are:
+
+- `unreachable`, `timeout`, `auth`, `tls`, `permission`, `schema_missing`: the connection or the server (`schema_missing` also when 004's role is absent);
+- `contract_missing`: `publication_contract` is not `1`, or `last_refresh` is malformed or missing;
+- `stale`: `last_refresh` is older than the bound, or more than 5 minutes ahead;
+- `wrong_role`: the session can do more than read the four views and `corpus_metadata` (above);
+- `pending_review`: kept for adapters that cannot list treatments at all; the corpus store reports a pending overruling as a fact instead (above);
+- `inconsistent`: data that breaks the contract;
+- `circuit_open`: the breaker is open;
+- `busy`: every pooled connection was in use for the whole connect timeout; that call alone fails, no breaker opens, and the log line comes at most once per 30 s;
+- `budget`: the gate run spent its authority time (below);
+- `error`: anything else.
+
+Any failure except `pending_review`, `inconsistent` and `busy` opens a 30 s breaker. A gate over many citations therefore costs one connect timeout, and the store logs `d4.authority_unavailable {reason}` once per opening. Logs carry the reason token only, never a URL, a credential or driver text. Nothing about the corpus is stored with a gate result (ruling 12).
+
+Each gate run has an authority budget, `AUTHORITY_BUDGET_MS` = 60 s, half the 120 s function timeout (plan D24; #51 fix round 1, D-7). `runGate` adds up the time its store calls take. A call still running when the budget runs out is cut off, and so is every call after it, with `AuthorityUnavailableError("budget")`. Every remaining citation is then UNVERIFIED and every remaining temporal check TEMPORAL_UNAVAILABLE, and the run logs `d4.authority_unavailable {reason: "budget"}` once. A long draft against a slow corpus therefore still returns a recorded, fail-closed result instead of timing out.
 
 ## Events and audit
 
@@ -146,11 +215,11 @@ The shape of a request (the 400 codes) is checked before the permission, in a st
 
 ## Test seams
 
-`setAuthorityStoreForTests` (`authority.ts`) is the only seam. It is test-only and throws when `NODE_ENV` is `production`. Production code never references it.
+`setAuthorityStoreForTests` and `resetCorpusAuthorityStoreForTests` (`authority.ts`) are the seams. Both are test-only and throw when `NODE_ENV` is `production`. Production code never references them. `PgAuthorityStore` takes an optional `sessionOptions`, only so a test can prove that a session which is not read-only is refused; selection never passes it.
 
 ## Tests and gate
 
-`functions/test/d4.boot.test.ts` (the twelve D4 routes with every layer flag off, the production `EMPTY_AUTHORITY_STORE`, the index exemptions), `d4.gate.test.ts` and `d4.doctypes.test.ts` need no emulator. `d4.drafts.emu.test.ts` and `d4.gate.emu.test.ts` run under the Auth and Firestore emulators. The rules are covered by `tests/firestore.rules.d4-phase4a.test.ts`, the verdict rule by `tests/citationVerdict.test.ts`, the new permission actions by `tests/p5.permission-draft-actions.test.ts`, and the routes by `functions/test/g2.cross-firm.test.ts` (Gate G-2). The G-1 forensic test 4 and test 5 equivalents are in `d4.gate.emu.test.ts`. `f06-not-assessed.e2e.emu.test.ts` is the end-to-end proof for audit finding F06 (NOT_ASSESSED, the partner override, the review checklist), through the HTTP routes under the emulators. `npm run gate:g4:phase4a` (`ci_gates/gate_g4_phase4a.sh`) checks route coverage (8 + 4 routes), runs the named tests by exact full name, lints `functions` at zero warnings and runs G-2; it runs in CI after the Phase 3d gate. Renaming a named test fails the gate until the name in the script is changed with it.
+`functions/test/d4.boot.test.ts` (the twelve D4 routes with every layer flag off, the production `EMPTY_AUTHORITY_STORE`, the index exemptions), `d4.gate.test.ts` and `d4.doctypes.test.ts` need no emulator. `d4.drafts.emu.test.ts` and `d4.gate.emu.test.ts` run under the Auth and Firestore emulators. The rules are covered by `tests/firestore.rules.d4-phase4a.test.ts`, the verdict rule by `tests/citationVerdict.test.ts`, the new permission actions by `tests/p5.permission-draft-actions.test.ts`, and the routes by `functions/test/g2.cross-firm.test.ts` (Gate G-2). The G-1 forensic test 4 and test 5 equivalents are in `d4.gate.emu.test.ts`. `f06-not-assessed.e2e.emu.test.ts` is the end-to-end proof for audit finding F06 (NOT_ASSESSED, the partner override, the review checklist), through the HTTP routes under the emulators. `f05-authority-corpus.e2e.emu.test.ts` is the end-to-end proof for audit finding F05. It drives the gate and the partner's approval through the HTTP routes, against real Postgres seeded through the corpus publication CLI. `d4.corpus-authority.pg.test.ts` covers the adapter and `d4.authority-parity.pg.test.ts` the O-59 parity with `InMemoryAuthorityStore`. These three run only in `npm run test:f05-authority` (`F05_AUTHORITY_SUITE=1`, a superuser `SIKANDER_POSTGRES_URL`, Python with `corpus_service/requirements-test.txt` as `SIKANDER_CORPUS_PYTHON`, default `python3`), in the gate-g0 job `authority-f05`. `d4.corpus-config.test.ts` (the configuration rules) needs nothing. `npm run gate:g4:phase4a` (`ci_gates/gate_g4_phase4a.sh`) checks route coverage (8 + 4 routes), runs the named tests by exact full name, lints `functions` at zero warnings and runs G-2; it runs in CI after the Phase 3d gate. Renaming a named test fails the gate until the name in the script is changed with it.
 
 ## Not in this phase
 
@@ -165,4 +234,4 @@ The shape of a request (the 400 codes) is checked before the permission, in a st
 
 ## Open items
 
-O-59 the corpus connector: a production `AuthorityStore` over the Annex A read views, a producer for `citation`, `treatment` and `statute_section_version`, and a parity test with the extractor's canonical form; until then every citation is UNVERIFIED. O-60 L17.11 treatment coverage. O-61 D2-3 routing replaces `approveDraft`. O-62 P6 master versions. O-63 version retention and caps. O-64 4c statute extraction. O-65 4d checklist and marking. O-66 the own-case exemption. O-67 retire the Next.js drafts route (and, per the F06 dependency on F01, retire or fix the Next.js filings `create_package`/`decide_package` gate copy before Next.js persistence or identity is made production-capable). O-69 eleven seed types are restricted to courts absent from `data/courts.json` (38 name at least one). O-70 saves and restores on drafts of a closed matter. O-71 approval's match keys ignore the in-force text; add a text hash with 4c. O-72 an immutable override: a worsened status needs a title or body edit. O-73 `unsupported_characters` carries no code-point details. O-74 `runAudited` logs an unexpected D4 failure as "identity operation failed" (shared wording). O-75 a temporal check never leaves a draft's set. O-76 `documents` reads ignore a later matter-label raise. E-39(1), E-39(2) and O-68 are closed for this gate. All are in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`, ES2-4.
+O-59 the corpus connector: the reader side, the parity test and the canonical-form check landed with audit F05 (above). The producer for `citation`, `treatment` and `statute_section_version` is the F19 publication (`corpus_service/scraper/publication`). The deployment binding (secret, host, network path) remains. O-60 L17.11 treatment coverage. O-61 D2-3 routing replaces `approveDraft`. O-62 P6 master versions. O-63 version retention and caps. O-64 4c statute extraction. O-65 4d checklist and marking. O-66 the own-case exemption. O-67 retire the Next.js drafts route (and, per the F06 dependency on F01, retire or fix the Next.js filings `create_package`/`decide_package` gate copy before Next.js persistence or identity is made production-capable). O-69 eleven seed types are restricted to courts absent from `data/courts.json` (38 name at least one). O-70 saves and restores on drafts of a closed matter. O-71 approval's match keys ignore the in-force text; add a text hash with 4c. O-72 an immutable override: a worsened status needs a title or body edit. O-73 `unsupported_characters` carries no code-point details. O-74 `runAudited` logs an unexpected D4 failure as "identity operation failed" (shared wording). O-75 a temporal check never leaves a draft's set. O-76 `documents` reads ignore a later matter-label raise. E-39(1), E-39(2) and O-68 are closed for this gate. All are in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`, ES2-4.

@@ -139,7 +139,7 @@ annex_a_checks "Annex A at init"
 expect_refused "postgres: app role over TLS cannot INSERT into an Annex A table directly" 'permission denied for table judgment' \
   psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" \
   "insert into judgment (case_title) values ('F19 E2E Probe v. Test 2099')" -e PGPASSWORD="$APP_DB_PASSWORD"
-for role in corpus_reader corpus_declassify; do
+for role in corpus_reader corpus_declassify corpus_authority_reader; do
   expect_refused "postgres: app role over TLS cannot SET ROLE $role (not a member)" 'permission denied to set role' \
     psql_c "$APP_CONN sslmode=verify-full sslrootcert=/ca/ca.crt" "set role $role" -e PGPASSWORD="$APP_DB_PASSWORD"
 done
@@ -208,24 +208,26 @@ writer_membership() {
 }
 expect_out "re-running 20-provision-roles.sh on the running stack succeeds (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after re-provisioning"
-# The grants 001/003 make to corpus_writer, corpus_reader and corpus_declassify, as initialised (object:grantee:
-# privilege:grantor). Every reset below (REVOKE ... CASCADE included, #50 round 2) must leave exactly these.
+# The grants 001/003/004 make to corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader (004,
+# #51 R1 D-3), as initialised (object:grantee:privilege:grantor). Every reset below (REVOKE ... CASCADE included,
+# #50 round 2) must leave exactly these.
 ddl_role_grants() {
   as_superuser_local "select coalesce(string_agg(x, ',' order by x collate \"C\"), 'none') from (
       select a::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor) as x
         from public.corpus_contract_relations() a join pg_class c on c.oid = a
         cross join lateral aclexplode(c.relacl) e join pg_roles g on g.oid = e.grantee
-       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify', 'corpus_authority_reader')
       union all
       select f.routine::text || ':' || g.rolname || ':' || e.privilege_type || ':' || pg_get_userbyid(e.grantor)
         from public.corpus_contract_routines() f join pg_proc p on p.oid = f.routine
         cross join lateral aclexplode(p.proacl) e join pg_roles g on g.oid = e.grantee
-       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify')) s"
+       where g.rolname in ('corpus_writer', 'corpus_reader', 'corpus_declassify', 'corpus_authority_reader')) s"
 }
 DDL_ROLE_GRANTS=$(ddl_role_grants 2>&1)
 for want in 'corpus_publication_begin\(text,text,text,text\):corpus_writer:EXECUTE:' \
             'declassify\(uuid,text,text,text\):corpus_declassify:EXECUTE:' 'v_judgment:corpus_reader:SELECT:' \
-            'judgment:corpus_writer:INSERT:'; do
+            'judgment:corpus_writer:INSERT:' 'v_authority_citation:corpus_authority_reader:SELECT:' \
+            'corpus_metadata:corpus_authority_reader:SELECT:'; do
   expect_out "control: the DDL's own grants are read ($want)" "$want" printf '%s' "$DDL_ROLE_GRANTS"
 done
 # Drift an operator (or an older script) could leave behind; a re-run must put every one of them back.
@@ -408,13 +410,17 @@ expect_out "a function, table, sequence and schema the superuser creates afterwa
 as_superuser_local "drop function public.f19_l2_probe(); drop table public.f19_l2_probe_t; drop sequence public.f19_l2_probe_s;
   drop schema f19_l2_s cascade; drop schema f19_l2_s2" >/dev/null 2>&1 || fail "L2: dropping the probe objects"
 if [ "$(ddl_role_grants 2>&1)" = "$DDL_ROLE_GRANTS" ]; then
-  pass "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)"
+  pass "corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader keep exactly the DDL's grants after every reset (CASCADE removed none)"
 else
-  fail "corpus_writer, corpus_reader and corpus_declassify keep exactly the DDL's grants after every reset (CASCADE removed none)" \
+  fail "corpus_writer, corpus_reader, corpus_declassify and corpus_authority_reader keep exactly the DDL's grants after every reset (CASCADE removed none)" \
     "before: $DDL_ROLE_GRANTS; after: $(ddl_role_grants 2>&1)"
 fi
 expect_out "corpus_reader still reads v_judgment after the resets (its own grant is untouched)" '^true$' \
   as_superuser_local "select has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT')::text"
+expect_out "corpus_authority_reader still reads v_authority_citation and uses schema public after the resets" '^true\|true$' \
+  as_superuser_local "select has_table_privilege('corpus_authority_reader', 'public.v_authority_citation', 'SELECT') || '|'
+    || has_schema_privilege('corpus_authority_reader', 'public', 'USAGE')"
+annex_a_d7_reader_checks "Annex A reader login after every provisioning reset" "$ANNEX_A_PAGE"
 expect_out "corpus_writer still executes corpus_publication_begin/finish and corpus_declassify declassify after the resets" \
   '^true\|true\|true$' \
   as_superuser_local "select has_function_privilege('corpus_writer', '$BEGIN_FN', 'EXECUTE') || '|'
@@ -442,6 +448,40 @@ expect_refused "provision-roles refuses when an Annex A function has passed to t
   'an Annex A function is not owned by a superuser' provision
 as_superuser_local "alter function public.corpus_contract_relations() owner to \"$POSTGRES_USER\"" >/dev/null
 expect_out "after the operator restores ownership, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
+# Audit F05, plan D20: re-applying 003 alone after 004 shrinks corpus_contract_relations() back to 003's 29.
+# Provisioning must then refuse before changing anything, rather than hand 004's views to the migration role
+# (which could redefine them); re-applying the whole chain (15-apply-annex-a.sh) recovers.
+apply_003_alone() {
+  "${COMPOSE[@]}" exec -T -u postgres postgres psql -U "$POSTGRES_USER" -d legal_scraper -v ON_ERROR_STOP=1 -q \
+    -c "SET client_min_messages = warning" -f /etc/postgresql/corpus/ddl/003_corpus_publication.sql
+}
+v_authority_owners() {
+  as_superuser_local "select coalesce(string_agg(distinct pg_get_userbyid(relowner), ','), 'none') from pg_class
+    where relnamespace = 'public'::regnamespace and relname like 'v\\_authority\\_%'"
+}
+apply_003_alone >/dev/null 2>&1 || fail "D20: re-applying 003 alone"
+expect_out "D20 control: after 003 alone the inventory is 003's 29 again, while 004's four views remain" '^29:4$' \
+  as_superuser_local "select (select count(*) from public.corpus_contract_relations()) || ':'
+    || (select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname like 'v\\_authority\\_%')"
+expect_refused "D20: provision-roles refuses an Annex A view missing from corpus_contract_relations()" \
+  'an Annex A view is missing from corpus_contract_relations\(\): .*v_authority_citation' provision
+expect_out "D20: ... and the authority views stay the bootstrap superuser's" "^$POSTGRES_USER\$" v_authority_owners
+expect_out "D20: ... and neither application role holds anything on them" '^0$' \
+  as_superuser_local "select count(*) from pg_class c cross join (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)
+    where c.relnamespace = 'public'::regnamespace and c.relname like 'v\\_authority\\_%'
+      and has_table_privilege(u.n, c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"
+expect_out "D20: re-applying the chain (15-apply-annex-a.sh) restores the 33-relation inventory" 'Annex A \(001, 003, 004\) applied' \
+  "${COMPOSE[@]}" exec -T -u postgres postgres /docker-entrypoint-initdb.d/15-apply-annex-a.sh
+expect_out "D20: after the chain is re-applied, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
+# Whatever its name: a view whose rewrite rule depends on an inventory relation, outside the inventory.
+as_superuser_local "create view public.f05_d20_probe as select citation_text from public.citation" >/dev/null 2>&1 \
+  || fail "D20: creating a view over citation"
+expect_refused "D20: provision-roles refuses any view over an Annex A relation that the inventory does not list (pg_depend)" \
+  'an Annex A view is missing from corpus_contract_relations\(\): f05_d20_probe' provision
+expect_out "D20: ... and that view stays the bootstrap superuser's" "^$POSTGRES_USER\$" \
+  as_superuser_local "select pg_get_userbyid(relowner) from pg_class where oid = 'public.f05_d20_probe'::regclass"
+as_superuser_local "drop view public.f05_d20_probe" >/dev/null 2>&1 || fail "D20: dropping the view"
+expect_out "D20: once it is gone, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after the fail-closed cases"
 WRONG_CA_URL="postgresql+asyncpg://$APP_DB_USER:$APP_DB_PASSWORD@postgres:5432/legal_scraper?sslmode=verify-full&sslrootcert=/wrongca/ca.crt"
 run_probe "app engine, wrong CA" \

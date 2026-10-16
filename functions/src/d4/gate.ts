@@ -1,15 +1,17 @@
 /**
- * The citation and temporal gate as a pure function of a draft and an authority store (spec P4-6; E-22, E-39).
- * It reports and never edits the body. Persistence, the draft's current version and the audit row belong to the
+ * The citation and temporal gate as a pure function of a draft and an authority store (spec P4-6; E-22, E-39); its one
+ * side effect is a log line when a run spends its authority budget (D24). It reports and never edits the body. Persistence, the draft's current version and the audit row belong to the
  * route, not here. It reports what it assessed (F06): a run with no citation and no temporal check is NOT_ASSESSED.
  *
  * Citations come from the one extractor the Next.js gate uses, de-duplicated as verifyCitations does (by judgment
  * id when found, else by canonical ref), and are judged by the one verdict rule (P4-2).
  */
+import { logger } from "firebase-functions"
 import { extractCitations, isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
 import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
 import { normaliseDraftBody } from "@/services/d4-2/draftCharset"
 import type { AuthorityStore } from "./authority"
+import { AuthorityUnavailableError } from "./authorityErrors"
 import {
   GATE_SEVERITY,
   type CitationFinding,
@@ -19,6 +21,71 @@ import {
   type TemporalCheck,
   type TemporalFinding,
 } from "./types"
+
+/**
+ * The authority time one gate run may spend (#51 R1 D-7, plan D24): half the function timeout (120 s), so a long draft
+ * against a slow corpus still returns a recorded, fail-closed result.
+ */
+export const AUTHORITY_BUDGET_MS = 60_000
+
+/** Options for one run. `budgetMs` replaces AUTHORITY_BUDGET_MS (tests use a short one); `now` is the clock. */
+export type GateRunOptions = { budgetMs?: number; now?: () => number }
+
+/**
+ * `store`, with its calls counted against one run's authority budget (D24). The time each call takes is added up. A
+ * call still running when the budget runs out, and every call after it, throws AuthorityUnavailableError("budget"),
+ * which the gate reads as any unavailable store: every remaining citation is UNVERIFIED and every remaining temporal
+ * check TEMPORAL_UNAVAILABLE. A call cut off this way is not awaited: it settles on its own, within the adapter's
+ * connect and statement timeouts, and its answer is dropped. The run logs `d4.authority_unavailable {reason: budget}`
+ * once. Any other error from the store passes through unchanged.
+ */
+function withBudget(store: AuthorityStore, budgetMs: number, now: () => number): AuthorityStore {
+  let used = 0
+  let logged = false
+  const spent = (): AuthorityUnavailableError => {
+    if (!logged) {
+      logged = true
+      logger.warn("d4.authority_unavailable", { reason: "budget" })
+    }
+    return new AuthorityUnavailableError("budget")
+  }
+  const call = async <T>(lookup: () => Promise<T>): Promise<T> => {
+    const left = budgetMs - used
+    if (left <= 0) throw spent()
+    const started = now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const work = (async () => lookup())()
+    // A lookup the budget cut off may still fail later; that failure has nobody left to tell.
+    work.catch(() => undefined)
+    const expiry = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(spent()), left)
+    })
+    try {
+      return await Promise.race([work, expiry])
+    } finally {
+      clearTimeout(timer)
+      used += Math.max(0, now() - started)
+    }
+  }
+  return {
+    findJudgment: (canonical) => call(() => store.findJudgment(canonical)),
+    listTreatments: (judgmentId) => call(() => store.listTreatments(judgmentId)),
+    getSectionAsAt: (sectionId, asAtDate, jurisdiction) => call(() => store.getSectionAsAt(sectionId, asAtDate, jurisdiction)),
+  }
+}
+
+/**
+ * `lookup()`, or `fallback` when the store throws AuthorityUnavailableError (F05): an authority that cannot answer has
+ * proven nothing, so the finding fails closed. Any other error is not caught: it is a bug and fails the request.
+ */
+async function orUnavailable<T, F>(lookup: () => Promise<T>, fallback: F): Promise<T | F> {
+  try {
+    return await lookup()
+  } catch (e) {
+    if (e instanceof AuthorityUnavailableError) return fallback
+    throw e
+  }
+}
 
 async function checkCitations(text: string, store: AuthorityStore): Promise<CitationFinding[]> {
   const findings: CitationFinding[] = []
@@ -36,21 +103,24 @@ async function checkCitations(text: string, store: AuthorityStore): Promise<Cita
     // The store is asked for the canonical form only. A ref that does not normalise cannot be resolved.
     const canonical = normaliseCitation(ref)
     const displayRef = canonical ?? ref
-    const found = canonical ? await store.findJudgment(canonical) : null
+    // An unavailable store finds nothing: UNVERIFIED with no judgment id (F05).
+    const found = canonical ? await orUnavailable(() => store.findJudgment(canonical), null) : null
     const key = found ? `j:${found.judgmentId}` : `r:${displayRef}`
     if (seen.has(key)) continue
     seen.add(key)
-    findings.push({
-      ref: displayRef,
-      judgmentId: found?.judgmentId ?? null,
-      status: found ? verdictFromTreatments(found.benchType, await store.listTreatments(found.judgmentId)) : "UNVERIFIED",
-    })
+    // Treatments it cannot list (unreachable, or an overruling still pending review) leave the found judgment
+    // UNVERIFIED, never VERIFIED (F05).
+    const status = found
+      ? await orUnavailable(async () => verdictFromTreatments(found.benchType, await store.listTreatments(found.judgmentId)), "UNVERIFIED" as const)
+      : "UNVERIFIED"
+    findings.push({ ref: displayRef, judgmentId: found?.judgmentId ?? null, status })
   }
   return findings
 }
 
 async function checkTemporal(check: TemporalCheck, store: AuthorityStore): Promise<TemporalFinding> {
-  const inForce = await store.getSectionAsAt(check.sectionId, check.asAtDate, check.jurisdiction)
+  // An unavailable store reads as no history: TEMPORAL_UNAVAILABLE (F05).
+  const inForce = await orUnavailable(() => store.getSectionAsAt(check.sectionId, check.asAtDate, check.jurisdiction), "no_history" as const)
   // No history is "verify manually", never a silent pass (L6900, E-39(2)). A null from an adapter reads the same way.
   // The finding is built from the four check fields and the outcome only, never by spreading the input: nothing
   // else a caller sent (an extra property, a forged status) can reach the stored result.
@@ -106,11 +176,16 @@ function overall(citations: readonly CitationFinding[], temporal: readonly Tempo
   return GATE_SEVERITY.find((s) => present.has(s)) ?? "UNVERIFIED"
 }
 
-/** One gate run: the findings, the overall status and the assessed scope (F06). */
+/**
+ * One gate run: the findings, the overall status and the assessed scope (F06). Every authority lookup of the run shares
+ * one budget (D24).
+ */
 export async function runGate(
   input: { title: string; body: string; temporalChecks: readonly TemporalCheck[] },
-  store: AuthorityStore
+  authority: AuthorityStore,
+  options: GateRunOptions = {}
 ): Promise<GateEvaluation> {
+  const store = withBudget(authority, options.budgetMs ?? AUTHORITY_BUDGET_MS, options.now ?? Date.now)
   const citations = await checkCitations(`${input.title}\n${input.body}`, store)
   const temporal: TemporalFinding[] = []
   for (const check of input.temporalChecks) temporal.push(await checkTemporal(check, store))
