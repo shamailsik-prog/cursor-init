@@ -372,6 +372,13 @@ async function resumeCommittee(a: {
   if (a.prior.kind !== "p1_dispatch") throw new HttpError(409, EFFECT_COMMITTED)
   // The freshest marker: its receipt may have landed after the claim read it.
   const marker = (await a.operation.markerRef.get()).data()
+  // Re-audit MEDIUM-1: a receipt is published only to the request that made it, on its own matter. The claim admits only
+  // that request already; this holds it here too, where the answer is about to leave: the same user, route and body, and
+  // the matter the call was made on, which is the request's matter, the one gateAiCall has just cleared this caller for.
+  // A marker missing any of these (fail closed) publishes nothing.
+  if (marker !== undefined && (!a.operation.answersThisRequest(marker) || marker.matterId !== a.matterId)) {
+    throw new HttpError(422, "idempotency_key_reused")
+  }
   const usageLogId = marker?.usageLogId
   const traceId = marker?.traceId
   const receipt = marker?.kind === "p1_dispatch" && marker.operationId === a.operation.operationId ? receiptOf(marker.result) : null
@@ -486,7 +493,8 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
           partyNames,
           idempotencyDoc,
           // Audit F09: the operation's marker is created with the provider attempt, and the receipt recorded on it.
-          ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: operation.markerFields() } }),
+          // Its matter too (re-audit MEDIUM-1): resumeCommittee publishes the receipt only on that matter.
+          ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: { ...operation.markerFields(), matterId } } }),
         },
         { now: clock, preCallDeadline }
       )

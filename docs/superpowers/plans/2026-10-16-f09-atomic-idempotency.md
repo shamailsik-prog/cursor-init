@@ -119,3 +119,16 @@ All emulator runs used the repo's rules and indexes. They differed from the repo
   - Lint: 0 errors and 0 warnings in touched paths, and `eslint --max-warnings 0 functions` exits 0.
   - Rules: `tests/firestore.rules.p1-phase3d.test.ts` 23 / 23.
   - Route coverage: PASS ×3.
+
+### Delta re-audit of 226a54e (PASS 8.0; one MEDIUM and one LOW fixed before merge)
+
+- **MEDIUM-1 (ATK-7, a matter-wall leak), ruling 17.** Markers carry `uid`, `route` and `requestHash`, and a committeeBrain marker carries `matterId`. An orphan marker is adopted only by the request that made it; otherwise 422 `idempotency_key_reused` with nothing written. `resumeCommittee` re-checks the binding and the matter on the fresh marker.
+  - RED: the 226a54e source with this round's tests (F09 and guard files) gave **8 failed / 40 passed (48)**. ATK-7 answered 200 with X's text on Y's matter.
+  - GREEN: **48 / 48**. A mutant without the `resumeCommittee` matter check fails the forged-matter test.
+- **LOW-A, ruling 18.** The static guard flags writes and task dispatches outside a transaction on each `once` route's path, following same-file and relative-import functions.
+  - The 226a54e guard accepted both G3 samples: **2 / 2 RED**.
+  - Allowlist: `*` for `p5/audit.ts#appendAudit: ref.create`; `retryFailedJob` for `run: runtimeDeps().dispatcher.dispatch`.
+- **Verification.**
+  - Targeted emulator set (9 files): **526 / 526**.
+  - Functions typecheck exits 0, and `eslint --max-warnings 0 functions` exits 0.
+  - `npm run lint` exits 0 with 0 errors. Its 89 warnings are all pre-existing, the same files as the previous round, none in touched paths.

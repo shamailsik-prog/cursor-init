@@ -253,7 +253,10 @@ resumes idempotently and returns the same `firmId` (audited as
   A first claim is deleted. A claim this request took over is kept as a
   `released` tombstone, because an older holder may still commit (Codex P1 on
   PR #58). An unexpired marker counts as the key's committed effect even if
-  its record is gone.
+  its record is gone. The marker carries the request that made it (`uid`,
+  `route`, `requestHash`), and a marker whose record is gone answers only that
+  request: any other user, route or body gets 422 `idempotency_key_reused`,
+  with nothing written (re-audit MEDIUM-1).
   Spec: `docs/superpowers/specs/2026-10-16-f09-atomic-idempotency-design.md`.
 - **Audit:** a replay is not audited. It is the stored answer to a decision
   that already has its row. The idempotency refusals (400

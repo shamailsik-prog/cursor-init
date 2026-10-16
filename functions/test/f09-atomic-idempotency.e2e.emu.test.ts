@@ -171,13 +171,13 @@ function firmPartner(): Promise<{ firmId: string } & Member> {
 
 type Sent = { model: string; body: string; maxTokens: number }
 
-function stubTransport(hold?: Promise<void>): Sent[] {
+function stubTransport(hold?: Promise<void>, text = "REPLY"): Sent[] {
   const sent: Sent[] = []
   setP1TransportForTests({
     async send(r) {
       sent.push({ ...r })
       if (hold) await hold
-      return { text: "REPLY", inputTokens: 1000, outputTokens: 500 }
+      return { text, inputTokens: 1000, outputTokens: 500 }
     },
   })
   return sent
@@ -526,6 +526,96 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       a.open()
       expect((await outA).status).not.toBe(200)
       expect([runs.n, await effectCount(effectId)]).toEqual([3, 1])
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Re-audit of 226a54e, MEDIUM-1 (ATK-7): an orphan marker (its record lost out of band) was adopted for whoever sent
+  // the key next, with that request's binding, and committeeBrain published the marker's receipt to them: another
+  // user's answer, on another matter. A marker answers only the request that made it.
+  // -------------------------------------------------------------------------
+  describe("re-audit MEDIUM-1: an orphan marker answers only its own request (ATK-7)", () => {
+    const SECRET = "X-PRIVATE-ANSWER about matter one"
+
+    /** X's call dispatches and records its receipt, its publication fails for good, then the key's record is lost. */
+    async function orphan(f: Firm, key: string): Promise<Sent[]> {
+      const sent = stubTransport(undefined, SECRET)
+      p1OpsTestSeam.sleep = async () => undefined
+      p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+      expect((await apiErrorOf(ask(brainAt(() => T), f, key))).status).toBe(500)
+      expect((await markerDoc(f.firmId, key).get()).data()).toMatchObject({ kind: "p1_dispatch", result: { text: SECRET } })
+      await keyDoc(f.firmId, key).delete()
+      return sent
+    }
+
+    async function secondMatter(f: Firm, members: Member[]): Promise<string> {
+      const m2 = uniq("matter")
+      await db().collection("matters").doc(m2).set({ firmId: f.firmId, classification: "internal", title: "Another suit", stage: "pre_filing", status: "open", createdAt: Timestamp.now() })
+      for (const m of members) await db().collection("matter_members").doc(`${m2}_${m.uid}`).set({ firmId: f.firmId, matterId: m2, userId: m.uid, classification: "internal" })
+      return m2
+    }
+
+    const askOn = (f: Firm, m: Member, key: string, matterId: string, body: string) =>
+      brainAt(() => T)({ token: m.token, data: { firmId: f.firmId, matterId, body }, headers: { "idempotency-key": key } } as never).then(
+        (out) => ({ status: 200, code: null as string | null, out: out as unknown }),
+        (e: { status: number; code: string }) => ({ status: e.status, code: e.code as string | null, out: null as unknown })
+      )
+
+    it("ATK-7: another user, another payload, another matter: 422 idempotency_key_reused; no output row; X's text appears nowhere", async () => {
+      const f = await brainFirm()
+      const key = randomUUID()
+      const sent = await orphan(f, key)
+      const Y = await mintIdToken({ firmId: f.firmId, role: "associate", clearanceLevel: "privileged-restricted" })
+      const m2 = await secondMatter(f, [Y])
+      const answer = await askOn(f, Y, key, m2, "What is the limitation period here?")
+      // 226a54e: Y got 200 with X's receipt text, published as Y's output on M2.
+      expect(JSON.stringify(answer)).not.toContain(SECRET)
+      expect([answer.status, answer.code]).toEqual([422, "idempotency_key_reused"])
+      expect(await byFirm("committee_outputs", f.firmId)).toHaveLength(0)
+      expect((await keyDoc(f.firmId, key).get()).exists).toBe(false)
+      expect(sent).toHaveLength(1)
+    })
+
+    it("ATK-7b: the same user with another payload, on a second matter: 422; matter one's answer is never published under matter two", async () => {
+      const f = await brainFirm()
+      const key = randomUUID()
+      const sent = await orphan(f, key)
+      const m2 = await secondMatter(f, [f.P])
+      const answer = await askOn(f, f.P, key, m2, "Summarise the second matter.")
+      expect(JSON.stringify(answer)).not.toContain(SECRET)
+      expect([answer.status, answer.code]).toEqual([422, "idempotency_key_reused"])
+      expect(await byFirm("committee_outputs", f.firmId)).toHaveLength(0)
+      expect(sent).toHaveLength(1)
+    })
+
+    it("resume publishes a receipt only for the request's own matter: a marker naming another matter is refused 422, nothing is published", async () => {
+      const f = await brainFirm()
+      const key = randomUUID()
+      const sent = await orphan(f, key)
+      // A corrupted (or forged) marker: the request's binding, another matter's receipt.
+      await markerDoc(f.firmId, key).set({ uid: f.P.uid, route: "POST /api/platform/brain/committeeBrain", requestHash: requestHash({ matterId: f.matterId, body: BODY }), matterId: "matter-elsewhere" }, { merge: true })
+      const answer = await askOn(f, f.P, key, f.matterId, BODY)
+      expect(JSON.stringify(answer)).not.toContain(SECRET)
+      expect([answer.status, answer.code]).toEqual([422, "idempotency_key_reused"])
+      expect(await byFirm("committee_outputs", f.firmId)).toHaveLength(0)
+      expect(sent).toHaveLength(1)
+    })
+
+    it("the same user with the same payload still adopts the orphan and resumes from its receipt: one provider call", async () => {
+      const f = await brainFirm()
+      const key = randomUUID()
+      const sent = await orphan(f, key)
+      // The marker carries the request's binding and, for P1, its matter.
+      expect((await markerDoc(f.firmId, key).get()).data()).toMatchObject({
+        uid: f.P.uid,
+        route: "POST /api/platform/brain/committeeBrain",
+        requestHash: requestHash({ matterId: f.matterId, body: BODY }),
+        matterId: f.matterId,
+      })
+      const resumed = await ask(brainAt(() => T), f, key)
+      expect([resumed.blocked, resumed.text, sent.length]).toEqual([false, SECRET, 1])
+      const outputs = await byFirm("committee_outputs", f.firmId)
+      expect(outputs.map((o) => [o.id, o.data.matterId])).toEqual([[resumed.outputId, f.matterId]])
     })
   })
 
@@ -922,9 +1012,10 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       expect(out).toEqual({ status: 409, body: committedBody("op-other") })
     })
 
-    it("an unexpired marker with no record (the record was lost) is adopted: once answers 409 without running, resume runs with it as `prior`", async () => {
+    it("an unexpired marker with no record (the record was lost) is adopted when it is bound to this request: once answers 409 without running, resume runs with it as `prior`", async () => {
+      const bound = (s: ReturnType<typeof scope>) => ({ uid: s.uid, route: ROUTE, requestHash: requestHash(s.body) })
       const once = scope()
-      await seedMarker(once, { operationId: "op-lost", kind: "transaction", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
+      await seedMarker(once, { ...bound(once), operationId: "op-lost", kind: "transaction", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
       let ran = false
       const out = await withIdempotency(once, async () => {
         ran = true
@@ -935,7 +1026,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       expect((await markerDoc(once.firmId, once.key).get()).exists).toBe(true)
 
       const resume = scope({ mode: "resume" })
-      await seedMarker(resume, { operationId: "op-lost-2", kind: "p1_dispatch", usageLogId: "u", traceId: "t", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
+      await seedMarker(resume, { ...bound(resume), operationId: "op-lost-2", kind: "p1_dispatch", usageLogId: "u", traceId: "t", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
       let prior: unknown
       await withIdempotency(resume, async (op) => {
         prior = (op as unknown as { prior: unknown }).prior
@@ -943,6 +1034,26 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       })
       expect(prior).toMatchObject({ operationId: "op-lost-2", kind: "p1_dispatch" })
       expect((await keyDoc(resume.firmId, resume.key).get()).data()).toMatchObject({ status: "done", operationId: "op-lost-2" })
+    })
+
+    it.each([
+      ["another user", (s: ReturnType<typeof scope>) => ({ uid: "someone-else", route: ROUTE, requestHash: requestHash(s.body) })],
+      ["another body", (s: ReturnType<typeof scope>) => ({ uid: s.uid, route: ROUTE, requestHash: requestHash({ a: 2 }) })],
+      ["another route", (s: ReturnType<typeof scope>) => ({ uid: s.uid, route: "POST /api/t/f09/other", requestHash: requestHash(s.body) })],
+      ["nothing (no binding fields)", () => ({})],
+    ])("re-audit MEDIUM-1: an orphan marker bound to %s is never adopted: 422 idempotency_key_reused, the handler never runs, nothing is written", async (_label, binding) => {
+      for (const mode of ["once", "resume"] as const) {
+        const s = scope({ mode })
+        await seedMarker(s, { ...binding(s), operationId: "op-x", kind: "p1_dispatch", usageLogId: "u", traceId: "t", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
+        let ran = false
+        await expect(
+          withIdempotency(s, async () => {
+            ran = true
+            return { status: 200, body: {} }
+          })
+        ).rejects.toMatchObject({ status: 422, code: "idempotency_key_reused" })
+        expect([mode, ran, (await keyDoc(s.firmId, s.key).get()).exists, (await markerDoc(s.firmId, s.key).get()).exists]).toEqual([mode, false, false, true])
+      }
     })
 
     it("an expired operation's marker is deleted by the next fresh claim, so it never fences the new operation", async () => {

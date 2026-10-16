@@ -199,7 +199,7 @@ export class IdempotentOperation {
     readonly mode: IdempotencyMode,
     readonly operationId: string,
     readonly claimId: string,
-    readonly scope: { firmId: string; route: string; redact?: boolean; expiresAt: Timestamp; now: number },
+    readonly scope: { firmId: string; uid: string; route: string; requestHash: string; redact?: boolean; expiresAt: Timestamp; now: number },
     /** `resume` mode: the marker an earlier attempt of this operation committed; null when none did. */
     readonly prior: DocumentData | null
   ) {
@@ -207,16 +207,26 @@ export class IdempotentOperation {
     this.markerRef = effectMarkerRef(docId)
   }
 
-  /** The fields every marker of this operation is created with. */
+  /**
+   * The fields every marker of this operation is created with: its identity, and the request it answers (`uid`, `route`,
+   * `requestHash`, re-audit MEDIUM-1), so an orphan marker is adopted only by that same request (markerBoundTo).
+   */
   markerFields(): Record<string, unknown> {
     return {
       operationId: this.operationId,
       claimId: this.claimId,
       firmId: this.scope.firmId,
+      uid: this.scope.uid,
       route: this.scope.route,
+      requestHash: this.scope.requestHash,
       expiresAt: this.scope.expiresAt,
       createdAt: FieldValue.serverTimestamp(),
     }
+  }
+
+  /** Whether `marker` (a marker's data) was made by this operation's request: the same user, route and body. */
+  answersThisRequest(marker: DocumentData): boolean {
+    return markerBoundTo(marker, this.scope.uid, this.scope.route, this.scope.requestHash)
   }
 
   /**
@@ -277,6 +287,16 @@ function markerCounts(marker: DocumentSnapshot, nowMs: number): boolean {
 }
 
 /**
+ * Whether a marker's data names the request (`uid`, `route`, `requestHash`) as the one that made it (re-audit MEDIUM-1).
+ * A marker answers only its own request: adopting one for another user or another body would hand that caller the
+ * operation's outcome (for committeeBrain, another matter's answer). A marker missing any of the three matches nothing
+ * (fail closed).
+ */
+function markerBoundTo(marker: DocumentData, uid: string, route: string, hash: string): boolean {
+  return nonEmpty(marker.uid) && nonEmpty(marker.route) && nonEmpty(marker.requestHash) && marker.uid === uid && marker.route === route && marker.requestHash === hash
+}
+
+/**
  * Runs `handler` at most once per key, and never repeats a committed effect (audit F09). No UUID v4 key → 400
  * idempotency_key_required. A completed key replays its stored response with `reused: true`; the same key with another
  * body, route or user → 422 idempotency_key_reused; a duplicate while the first is running → 409
@@ -284,7 +304,8 @@ function markerCounts(marker: DocumentSnapshot, nowMs: number): boolean {
  * `released`. Then: if the operation's effect committed (an unexpired marker exists), a `once` route answers 409
  * idempotency_effect_committed (stored) without running, and a `resume` route takes the claim over and runs the handler
  * with the marker as `prior`; otherwise the duplicate takes the claim over and runs. An unexpired marker with no record
- * beside it is adopted the same way. Results allowed by isStorableResult are stored (unless the handler stored its
+ * beside it is adopted the same way, by the request that made it only (its user, route and body; any other request is
+ * 422 idempotency_key_reused, re-audit MEDIUM-1). Results allowed by isStorableResult are stored (unless the handler stored its
  * answer with its effect); any other result, or a throw, releases the claim when no effect committed (a first claim is
  * deleted; a taken-over claim stays as a `released` tombstone, because an older holder may still commit), and otherwise
  * stores the terminal 409 (`once`, which this request then answers) or marks the claim `resumable`.
@@ -344,8 +365,11 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
       const binding = { firmId: scope.firmId, uid: scope.uid, route: scope.route, requestHash: hash, claimId, claims: 1, claimedAt: nowTs, createdAt: nowTs }
       if (markerCounts(markerSnap!, scope.now)) {
         // No live record, but an unexpired marker (Codex P1 on PR #58): the key's operation committed an effect and its
-        // record is gone. The marker's operation is adopted, in its own window: `once` answers the terminal 409 (stored),
-        // `resume` runs with the marker as `prior`. The effect never runs a second time.
+        // record is gone. Only the request that made the marker may adopt it (re-audit MEDIUM-1): any other user, route
+        // or body is 422 idempotency_key_reused, exactly as against the record, with nothing written and the marker kept.
+        if (!markerBoundTo(markerSnap!.data()!, scope.uid, scope.route, hash)) return { kind: "reused" }
+        // The marker's operation is adopted, in its own window: `once` answers the terminal 409 (stored), `resume` runs
+        // with the marker as `prior`. The effect never runs a second time.
         const markerOp: unknown = markerSnap!.get("operationId")
         const operationId = nonEmpty(markerOp) ? markerOp : randomUUID()
         const at: unknown = markerSnap!.get("expiresAt")
@@ -377,7 +401,7 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
     mode,
     claim.operationId,
     claimId,
-    { firmId: scope.firmId, route: scope.route, redact: scope.redact, expiresAt: claim.expiresAt, now: scope.now },
+    { firmId: scope.firmId, uid: scope.uid, route: scope.route, requestHash: hash, redact: scope.redact, expiresAt: claim.expiresAt, now: scope.now },
     claim.prior
   )
   let result: HttpResult
