@@ -1,137 +1,173 @@
 #!/usr/bin/env python3
 """scraper-guard — no Playwright/Puppeteer in application source (full tree).
 
+Scans every file outside the skip rules in g0_guard_common (FA-CI-001):
+- JS/TS: every module specifier in import, export ... from, import(), require() and
+  require.resolve() position, however the statement is laid out across lines, with comments
+  between the tokens, with ', " or `; and calls through createRequire aliases.
+- Extensionless scripts by shebang: node/bun/deno as JS, python as Python, sh/bash/dash/ash/
+  ksh/zsh/busybox (directly or through `env [-S]`) as shell.
+- Python: every import (ast), including importlib.import_module("...") and __import__("...").
+- package.json dependency sections and scripts; pip requirements files (requirements*.txt/.in,
+  requirements/*.txt), pyproject.toml and Pipfile, with PEP 508/503 name normalisation.
+- Dockerfiles (Dockerfile, Dockerfile.*, *.Dockerfile, Containerfile) and shell scripts (.sh,
+  .bash, .zsh, .ksh, or an extensionless file with a shell shebang) that install
+  Playwright/Puppeteer or their browsers.
+
+The one sanctioned use is the root Playwright e2e suite: the root package.json devDependency
+@playwright/test, the root playwright.config.*, and the root tests/ tree.
+
 FA-D3C-001 violations are allowlisted per file:symbol in g0_guard_allowlist.json.
 Stale allowlist entries (fixed violations still listed) fail the build.
 """
 from __future__ import annotations
 
-import json
 import pathlib
 import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from g0_guard_common import (
+from g0_guard_common import (  # noqa: E402
     GuardFinding,
-    SOURCE_SUFFIXES,
+    ManifestError,
     apply_allowlist,
+    command_text,
+    file_kind,
     iter_scan_files,
+    js_imported_packages,
     load_allowlist,
+    load_package_json,
+    python_imported_modules,
+    python_manifest_names,
+    read_text,
     rel_posix,
 )
-
-PLAYWRIGHT_IMPORT_RE = re.compile(
-    r"""
-    from\s+(?:["']playwright[\w./-]*["']|playwright[\w.]*)\s+import|
-    import\s+[^;\n]*\bplaywright\b|
-    require\s*\(\s*["']playwright[\w./-]*["']|
-    import\s*\(\s*["']playwright[\w./-]*["']
-    """,
-    re.I | re.VERBOSE,
-)
-PUPPETEER_IMPORT_RE = re.compile(
-    r"""
-    from\s+(?:["']puppeteer[\w./-]*["']|puppeteer[\w.]*)\s+import|
-    import\s+[^;\n]*\bpuppeteer\b|
-    require\s*\(\s*["']puppeteer[\w./-]*["']|
-    import\s*\(\s*["']puppeteer[\w./-]*["']
-    """,
-    re.I | re.VERBOSE,
-)
-
-DOCKER_PLAYWRIGHT_RE = re.compile(r"\bplaywright\s+install\b", re.I)
 
 ROOT_PACKAGE_JSON = "package.json"
 ROOT_PLAYWRIGHT_TEST_DEV = "@playwright/test"
 
 BUCKET = "fa_d3c_001_scraper"
 
+# npm packages: playwright, playwright-core, playwright-chromium, @playwright/*, puppeteer,
+# puppeteer-core, puppeteer-extra, @puppeteer/*, ...
+JS_SCRAPER_PACKAGE_RE = re.compile(r"^@?(playwright|puppeteer)")
+# Python top-level modules: playwright (sync_api, async_api, ...), playwright_stealth, pyppeteer.
+PY_SCRAPER_MODULE_RE = re.compile(r"^(playwright|pyppeteer|puppeteer)", re.I)
 
-def _pkg_symbol(name: str) -> str | None:
+_PKG_MANAGER = r"\b(?:pip3?|pipx|uv|poetry|pdm|conda|mamba|npm|pnpm|yarn|bun)\b"
+_INSTALL_VERB = r"\b(?:install|add|i)\b"
+
+# `playwright install chromium`, `npx playwright@1.48 install`, `python -m playwright install`,
+# `playwright install-deps`, or a package manager installing a Playwright package.
+PLAYWRIGHT_INSTALL_RE = re.compile(
+    r"\bplaywright(?:-core)?(?:@[\w.^~-]+)?\s+install(?:-deps)?\b"
+    rf"|{_PKG_MANAGER}[^\n]*?{_INSTALL_VERB}[^\n]*\bplaywright",
+    re.I,
+)
+PUPPETEER_INSTALL_RE = re.compile(
+    r"\b(?:puppeteer|@puppeteer/browsers)(?:@[\w.^~-]+)?\s+(?:browsers\s+)?install\b"
+    r"|\bpyppeteer-install\b"
+    rf"|{_PKG_MANAGER}[^\n]*?{_INSTALL_VERB}[^\n]*(?:puppeteer|pyppeteer)"
+    r"|npm\s+.*puppeteer|pip\s+.*puppeteer",
+    re.I,
+)
+
+
+def _dist_symbol(name: str) -> str | None:
     low = name.lower()
     if "playwright" in low:
         return "playwright"
-    if "puppeteer" in low:
+    if "puppeteer" in low or "pyppeteer" in low:
         return "puppeteer"
     return None
 
 
-def _check_package_json(path: pathlib.Path) -> list[GuardFinding]:
-    rel = rel_posix(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+def _install_findings(rel: str, text: str, where: str) -> list[GuardFinding]:
+    out: list[GuardFinding] = []
+    if PLAYWRIGHT_INSTALL_RE.search(text):
+        out.append(GuardFinding(rel, "playwright_install", f"{rel}: Playwright install in {where}"))
+    if PUPPETEER_INSTALL_RE.search(text):
+        out.append(GuardFinding(rel, "puppeteer_install", f"{rel}: Puppeteer install in {where}"))
+    return out
+
+
+def _check_package_json(rel: str, text: str) -> list[GuardFinding]:
+    data = load_package_json(text)
     out: list[GuardFinding] = []
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-        for name in data.get(section, {}):
+        for name in data.get(section) or {}:
             if rel == ROOT_PACKAGE_JSON and section == "devDependencies" and name == ROOT_PLAYWRIGHT_TEST_DEV:
                 continue
-            sym = _pkg_symbol(name)
+            sym = _dist_symbol(name)
             if sym:
-                out.append(
-                    GuardFinding(rel, sym, f"{rel}: {section} lists {name}"),
-                )
+                out.append(GuardFinding(rel, sym, f"{rel}: {section} lists {name}"))
+    scripts = data.get("scripts") or {}
+    if isinstance(scripts, dict):
+        body = "\n".join(v for v in scripts.values() if isinstance(v, str))
+        out.extend(_install_findings(rel, body, "package.json scripts"))
     return out
 
 
-def _check_requirements_txt(path: pathlib.Path) -> list[GuardFinding]:
-    rel = rel_posix(path)
+def _check_python_manifest(rel: str, kind: str, text: str) -> list[GuardFinding]:
     out: list[GuardFinding] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        token = re.split(r"[<>=!~\s]", stripped, maxsplit=1)[0].lower()
-        if token in {"playwright", "puppeteer"}:
-            out.append(GuardFinding(rel, token, f"{rel}: requires {token}"))
+    for name in python_manifest_names(kind, text):
+        sym = _dist_symbol(name)
+        if sym:
+            out.append(GuardFinding(rel, sym, f"{rel}: requires {name}"))
     return out
 
 
-def _check_dockerfile(path: pathlib.Path) -> list[GuardFinding]:
-    rel = rel_posix(path)
-    text = path.read_text(encoding="utf-8", errors="ignore")
+def _check_js(rel: str, text: str) -> list[GuardFinding]:
     out: list[GuardFinding] = []
-    if DOCKER_PLAYWRIGHT_RE.search(text):
-        out.append(
-            GuardFinding(rel, "playwright_install", f"{rel}: Playwright install in Dockerfile"),
-        )
-    if re.search(r"puppeteer\s+install|npm\s+.*puppeteer|pip\s+.*puppeteer", text, re.I):
-        out.append(GuardFinding(rel, "puppeteer_install", f"{rel}: Puppeteer in Dockerfile"))
+    for root in js_imported_packages(text):
+        m = JS_SCRAPER_PACKAGE_RE.match(root)
+        if m:
+            sym = m.group(1)
+            out.append(GuardFinding(rel, sym, f"{rel}: {sym} import"))
     return out
 
 
-def _check_source(path: pathlib.Path, text: str) -> list[GuardFinding]:
-    rel = rel_posix(path)
+def _check_python(rel: str, text: str) -> list[GuardFinding]:
     out: list[GuardFinding] = []
-    if PLAYWRIGHT_IMPORT_RE.search(text):
-        out.append(GuardFinding(rel, "playwright", f"{rel}: playwright import"))
-    if PUPPETEER_IMPORT_RE.search(text):
-        out.append(GuardFinding(rel, "puppeteer", f"{rel}: puppeteer import"))
+    for module in python_imported_modules(text):
+        m = PY_SCRAPER_MODULE_RE.match(module)
+        if m:
+            sym = "playwright" if m.group(1).lower() == "playwright" else "puppeteer"
+            out.append(GuardFinding(rel, sym, f"{rel}: {sym} import"))
     return out
+
+
+def findings_for(p: pathlib.Path) -> list[GuardFinding]:
+    kind = file_kind(p)
+    if kind is None:
+        return []
+    text = read_text(p)
+    if text is None:
+        return []
+    rel = rel_posix(p)
+    try:
+        if kind == "package_json":
+            return _check_package_json(rel, text)
+        if kind in {"requirements", "pyproject", "pipfile"}:
+            return _check_python_manifest(rel, kind, text)
+        if kind == "dockerfile":
+            return _install_findings(rel, command_text(text), "Dockerfile")
+        if kind == "shell":
+            return _install_findings(rel, command_text(text), "shell script")
+        if kind == "js":
+            return _check_js(rel, text)
+        if kind == "py":
+            return _check_python(rel, text)
+    except ManifestError as err:
+        return [GuardFinding(rel, "unreadable_manifest", f"{rel}: cannot read manifest ({err})")]
+    return []
 
 
 def collect_findings() -> list[GuardFinding]:
     findings: list[GuardFinding] = []
     for p in iter_scan_files():
-        if p.name == "package.json":
-            findings.extend(_check_package_json(p))
-            continue
-        if p.name == "requirements.txt":
-            findings.extend(_check_requirements_txt(p))
-            continue
-        if p.name == "Dockerfile" or p.name.endswith(".Dockerfile"):
-            findings.extend(_check_dockerfile(p))
-            continue
-        if p.suffix not in SOURCE_SUFFIXES:
-            continue
-        try:
-            text = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        findings.extend(_check_source(p, text))
+        findings.extend(findings_for(p))
     return findings
 
 
