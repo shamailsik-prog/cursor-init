@@ -47,6 +47,7 @@ The provider call cannot be made atomic with any database write. What can be mad
 | `claimId`, `claimedAt` | The current attempt and when it claimed. Unchanged. |
 | `claims` | New. 1 at the first claim, +1 per takeover (diagnostics). |
 | `resumable` | New, resume routes only: `true` when the last holder ended after a committed effect without an answer. The next same-key request may take over at once, without waiting out the lease. |
+| `released` | New (ruling 13): `true` when an attempt that took the claim over ended without an effect. The record stays as the key's tombstone, because an older holder may still commit. The next same-key request may take over at once. |
 | `response` | `{ status, body }` once `done`. Unchanged. |
 | `createdAt`, `expiresAt` | The operation's 24 h window. **No longer reset on takeover** (ruling 6). |
 
@@ -84,12 +85,14 @@ Each route declares `idempotency: "once" | "rerun" | "resume"` in `ROUTES` (`htt
    - another uid, route or body → 422 `idempotency_key_reused`;
    - `done` with a well-formed response → replay with `reused: true`;
    - `done` with a malformed response, or any status other than `in_progress` → 409 `idempotency_in_progress` (unchanged);
-   - `in_progress` with a live lease and not `resumable` → 409 `idempotency_in_progress`.
-3. A lapsed or `resumable` claim:
-   - The marker belongs to this operation (same `operationId`) and the mode is not `resume`: the claim transaction itself stores the terminal answer, 409 `idempotency_effect_committed`, and returns it. The handler is not run.
+   - `in_progress` with a live lease and neither `resumable` nor `released` → 409 `idempotency_in_progress`.
+3. A lapsed, `resumable` or `released` claim:
+   - An unexpired marker exists (any `operationId`, ruling 13) and the mode is not `resume`: the claim transaction itself stores the terminal answer, 409 `idempotency_effect_committed`, and returns it. The handler is not run.
    - The mode is `resume`: take over (new `claimId`, `claims` + 1, same `operationId`, `expiresAt` kept) and run the handler with `prior` = the marker, or null when no effect committed.
    - No marker: take over and run, as before.
-4. No live record (absent or expired): a fresh operation with a new `operationId`. A marker left from an expired operation is deleted in the same transaction, so it cannot fence the new one.
+4. No live record (absent or expired):
+   - An unexpired marker is adopted: the record is recreated with the marker's `operationId` and expiry, then `once` stores and answers the terminal 409, and `resume` runs with the marker as `prior` (ruling 13).
+   - Otherwise this is a fresh operation with a new `operationId`. An expired marker is deleted in the same transaction, so it cannot fence the new one.
 
 **After the handler**, in one settle transaction (retried as before: 3 retries, 100/200/400 ms):
 
@@ -98,9 +101,11 @@ Each route declares `idempotency: "once" | "rerun" | "resume"` in `ROUTES` (`htt
   - our claim and `in_progress` → `done` with the response, as before.
 - **A non-storable result, or a throw**:
   - not our claim → nothing;
-  - our operation's marker exists, mode `resume` → `resumable: true`; the handler's answer is returned;
-  - our operation's marker exists, mode `once` → `done` with the terminal 409 `idempotency_effect_committed`, and **that is what this request answers**, because the effect did commit;
-  - no marker → delete the claim (release), as before.
+  - an unexpired marker exists, mode `resume` → `resumable: true`; the handler's answer is returned;
+  - an unexpired marker exists, mode `once` → `done` with the terminal 409 `idempotency_effect_committed`, and **that is what this request answers**, because the effect did commit;
+  - no unexpired marker:
+    - a first claim (`claims == 1`) is deleted (released), as before;
+    - a taken-over claim (`claims > 1`) is kept as a `released` tombstone (ruling 13).
 - **The settle cannot be written**: logged, as before. The claim answers 409 `idempotency_in_progress` until its lease lapses. Then rule 3 above decides from the marker, which is the durable truth.
 
 **The fence for answers stored in an effect transaction.**
@@ -138,6 +143,11 @@ A publication whose fence read finds a marker with another `traceId` (a fenced-o
   - its dispatch fails on the marker.
 - `resumable: true` ends the lease at once. Only the holder itself sets it, and only as its last write.
 - A takeover keeps `operationId` and `expiresAt`. The marker's expiry equals the record's, so TTL can never purge a marker while its record still lives (ruling 6).
+- **A release never reopens the key while an older holder may still commit (ruling 13; Codex P1 on PR #58).**
+  - **The defect at aacaae5:** A stalls, B takes over, and B ends without an effect, which deleted the record. A then commits (its marker lands on no record). The next request's fresh-claim path deleted A's marker as "left from an expired operation" and committed the effect a second time.
+  - **Two rules close it, each sufficient alone:**
+    1. **Tombstone.** A release by an attempt that took the claim over (`claims > 1`) keeps the record as `released`. Only a first claim (`claims == 1`), which no other attempt ever held, is deleted, so the normal retry after a 5xx is unchanged.
+    2. **Marker authority.** An unexpired marker is the key's committed effect, whatever operation id it names and whether or not a record exists. Only an expired marker is ever deleted. A marker with no record is adopted (`once`: the terminal 409; `resume`: `prior`). The settle also counts any unexpired marker as an effect.
 
 ## 3. Rulings
 
@@ -155,6 +165,7 @@ A publication whose fence read finds a marker with another `traceId` (a fenced-o
 | 10 | Resume re-checks permission and clearance | Yes. The response classification is the stricter of the current label and the call's | Fail closed: text produced for a matter must not reach a caller who has since lost access. Labels are monotonic (P2-13). |
 | 11 | New test seams | `idempotencyTestSeam` (`settleFailures`, `beforeSettle`), `p1OpsTestSeam.beforePublish`, `p1TestSeam.crashAt: "recorded"` | Fault injection at every boundary. Each is inert when `NODE_ENV` is `production`, like the existing seams, and the bundle defines it so (`functions/build.mjs`). |
 | 12 | Time budget | Unchanged | The claim reads two documents in one `getAll`. 8c and 9b add one document each to transactions they already run. The publication now stores the answer, and settle confirms it. `POST_CALL_ALLOWANCE_MS` already counts the 3 s completion. |
+| 13 | A release while an older holder may still commit (Codex P1 on PR #58) | Two rules, together (§2.5): (1) a taken-over claim that ends without an effect stays as a `released` tombstone; (2) an unexpired marker always counts and is never deleted early, and a marker whose record is gone is adopted | Each rule alone stops the double effect; together they hold even if a record disappears by another path. A **fence read in the effect transaction** (reading and verifying the claim generation) was rejected: it needs a read before any write in every handler's transaction, the per-handler reordering ruling 1 avoids (`runConflictCheck` writes before it audits). The tombstone keeps the key bound to its body (another body still gets 422). The marker rule fails closed: a marker naming another operation, or one with no readable expiry, counts. |
 
 ## 4. Survey: every `withIdempotency` caller
 
@@ -215,6 +226,9 @@ This was checked against the source by searching every `once` and `resume` handl
 | 15 | Key reused across the 24 h boundary while a stale holder runs | n/a | At most one effect per operation. A request after expiry is a new operation by definition (residual, §8). |
 | 16 | Store down at settle | Logged; lease | Logged; lease; the marker decides afterwards |
 | 17 | A refusal before any effect (401/403/429/503 precall) | Released | Released (no marker): a refreshed token or a later retry runs |
+| 18 | Stale holder A; B takes over and ends without an effect; A then commits (Codex P1 on PR #58) | n/a (at aacaae5: the record was deleted, the next request deleted A's marker and committed again) | B leaves a `released` tombstone; the next request takes over, counts A's unexpired marker → terminal 409; one effect |
+| 19 | The same, but A commits before B releases | n/a | B's settle finds A's marker → terminal 409; one effect |
+| 20 | A record lost while its marker lives | n/a | The marker is adopted (`once` 409, `resume` `prior`); never deleted before its expiry |
 
 ## 6. Files that change
 

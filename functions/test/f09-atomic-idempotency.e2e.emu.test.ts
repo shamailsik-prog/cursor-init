@@ -377,6 +377,106 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
   })
 
   // -------------------------------------------------------------------------
+  // Codex P1 on PR #58: a stale holder that commits after a takeover ended without an effect. Holder A stalls, its
+  // lease lapses, B takes the claim over and answers non-storably before any effect, then A commits. At aacaae5 B's
+  // release deleted the operation record, A's marker landed on no record, and the next same-key request deleted that
+  // marker as "left from an expired operation" and committed the effect a second time.
+  // -------------------------------------------------------------------------
+  describe("a stale holder after a takeover that ended without an effect (Codex P1 on PR #58)", () => {
+    /** Run 1 (A) waits at `a`; run 2 (B) waits at `b` when given, then answers 503 before any effect; later runs commit. */
+    function staleHolderOp(a: ReturnType<typeof gate>, b?: ReturnType<typeof gate>) {
+      return effectOp({
+        before: async (run) => {
+          if (run === 1) {
+            a.reached()
+            await a.wait
+          }
+          if (run === 2) {
+            if (b) {
+              b.reached()
+              await b.wait
+            }
+            throw new HttpError(503, "audit_unavailable")
+          }
+        },
+      })
+    }
+
+    it("A commits after B released: a third same-key request does not commit a second effect", async () => {
+      const a = gate()
+      const { op, runs } = staleHolderOp(a)
+      const t0 = freshMinute()
+      const path = "/api/t/f09/stale-after-release"
+      const routerA = createRouter([route(path, op)], { now: () => t0 })
+      const later = createRouter([route(path, op)], { now: () => pastLease(t0) })
+      const { firmId, token } = await firmPartner()
+      const key = randomUUID()
+      const effectId = uniq("e")
+      const outA = send(routerA, { path, token, firmId, key, body: { effectId } })
+      await a.arrived
+      const outB = await send(later, { path, token, firmId, key, body: { effectId } })
+      expect([outB.status, errorOf(outB)]).toEqual([503, "audit_unavailable"])
+      a.open()
+      await outA
+      expect(await effectCount(effectId)).toBe(1) // A's effect
+      const outC = await send(later, { path, token, firmId, key, body: { effectId } })
+      // aacaae5: B's release deleted the record, so C deleted A's marker as stale and committed the effect again.
+      expect(await effectCount(effectId)).toBe(1)
+      expect(runs.n).toBe(2)
+      expect(outC.status).toBe(409)
+      expect(outC.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+    })
+
+    it("A commits before B releases: B's release finds A's marker and answers 409 idempotency_effect_committed; the effect commits once", async () => {
+      const a = gate()
+      const b = gate()
+      const { op } = staleHolderOp(a, b)
+      const t0 = freshMinute()
+      const path = "/api/t/f09/stale-before-release"
+      const routerA = createRouter([route(path, op)], { now: () => t0 })
+      const later = createRouter([route(path, op)], { now: () => pastLease(t0) })
+      const { firmId, token } = await firmPartner()
+      const key = randomUUID()
+      const effectId = uniq("e")
+      const outA = send(routerA, { path, token, firmId, key, body: { effectId } })
+      await a.arrived
+      const outB = send(later, { path, token, firmId, key, body: { effectId } })
+      await b.arrived
+      a.open()
+      await outA
+      b.open()
+      const answeredB = await outB
+      expect([answeredB.status, errorOf(answeredB)]).toEqual([409, "idempotency_effect_committed"])
+      const outC = await send(later, { path, token, firmId, key, body: { effectId } })
+      expect(outC.body).toEqual({ error: { code: "idempotency_effect_committed" }, reused: true })
+      expect(await effectCount(effectId)).toBe(1)
+    })
+
+    it("a takeover that ends without an effect keeps the record (released): the same request runs again at once, another body is 422, and the stale holder is still fenced", async () => {
+      const a = gate()
+      const { op, runs } = staleHolderOp(a)
+      const t0 = freshMinute()
+      const path = "/api/t/f09/stale-tombstone"
+      const routerA = createRouter([route(path, op)], { now: () => t0 })
+      const later = createRouter([route(path, op)], { now: () => pastLease(t0) })
+      const { firmId, token } = await firmPartner()
+      const key = randomUUID()
+      const effectId = uniq("e")
+      const outA = send(routerA, { path, token, firmId, key, body: { effectId } })
+      await a.arrived
+      expect((await send(later, { path, token, firmId, key, body: { effectId } })).status).toBe(503)
+      expect((await keyDoc(firmId, key).get()).data()).toMatchObject({ status: "in_progress", released: true, claims: 2 })
+      const other = await send(later, { path, token, firmId, key, body: { effectId: uniq("other") } })
+      expect([other.status, errorOf(other)]).toEqual([422, "idempotency_key_reused"])
+      const outC = await send(later, { path, token, firmId, key, body: { effectId } })
+      expect([outC.status, outC.body]).toEqual([200, { effectId, run: 3 }])
+      a.open()
+      expect((await outA).status).not.toBe(200)
+      expect([runs.n, await effectCount(effectId)]).toEqual([3, 1])
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // The fault matrix: every effect/settlement boundary.
   // -------------------------------------------------------------------------
   describe("generic routes: every effect/settlement boundary", () => {
@@ -691,11 +791,48 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       await expect(withIdempotency(live, ok)).rejects.toMatchObject({ status: 409, code: "idempotency_in_progress" })
     })
 
-    it("a marker of another operation does not count: the lapsed claim is taken over and runs", async () => {
+    it("an expired marker of another operation does not count: the lapsed claim is taken over and runs", async () => {
       const s = scope()
       await seedRecord(s, lapsed("op-5"))
-      await seedMarker(s, { operationId: "op-other", kind: "transaction" })
+      await seedMarker(s, { operationId: "op-other", kind: "transaction", expiresAt: Timestamp.fromMillis(NOW - 1) })
       await expect(withIdempotency(s, ok)).resolves.toEqual({ status: 200, body: { ran: true } })
+      expect((await markerDoc(s.firmId, s.key).get()).exists).toBe(false)
+    })
+
+    it("an unexpired marker is the key's committed effect whatever operation id it names (fail closed): a lapsed claim answers 409, the handler never runs", async () => {
+      const s = scope()
+      await seedRecord(s, lapsed("op-6"))
+      await seedMarker(s, { operationId: "op-other", kind: "transaction", expiresAt: Timestamp.fromMillis(NOW + IDEMPOTENCY_TTL_MS) })
+      let ran = false
+      const out = await withIdempotency(s, async () => {
+        ran = true
+        return { status: 200, body: {} }
+      })
+      expect(ran).toBe(false)
+      expect(out).toEqual({ status: 409, body: { error: { code: "idempotency_effect_committed" }, reused: true } })
+    })
+
+    it("an unexpired marker with no record (the record was lost) is adopted: once answers 409 without running, resume runs with it as `prior`", async () => {
+      const once = scope()
+      await seedMarker(once, { operationId: "op-lost", kind: "transaction", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
+      let ran = false
+      const out = await withIdempotency(once, async () => {
+        ran = true
+        return { status: 200, body: {} }
+      })
+      expect([ran, out]).toEqual([false, { status: 409, body: { error: { code: "idempotency_effect_committed" }, reused: true } }])
+      expect((await keyDoc(once.firmId, once.key).get()).data()).toMatchObject({ status: "done", operationId: "op-lost", response: { status: 409 } })
+      expect((await markerDoc(once.firmId, once.key).get()).exists).toBe(true)
+
+      const resume = scope({ mode: "resume" })
+      await seedMarker(resume, { operationId: "op-lost-2", kind: "p1_dispatch", usageLogId: "u", traceId: "t", expiresAt: Timestamp.fromMillis(NOW + 60_000) })
+      let prior: unknown
+      await withIdempotency(resume, async (op) => {
+        prior = (op as unknown as { prior: unknown }).prior
+        return { status: 200, body: { resumed: true } }
+      })
+      expect(prior).toMatchObject({ operationId: "op-lost-2", kind: "p1_dispatch" })
+      expect((await keyDoc(resume.firmId, resume.key).get()).data()).toMatchObject({ status: "done", operationId: "op-lost-2" })
     })
 
     it("an expired operation's marker is deleted by the next fresh claim, so it never fences the new operation", async () => {

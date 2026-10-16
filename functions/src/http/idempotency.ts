@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { logFailure } from "../log"
@@ -13,15 +13,19 @@ import { HttpError } from "./errors"
  * it runs an expired one is treated as absent):
  *
  * - The operation record `idempotency_keys/{firmId}_{key}` = { firmId, uid, route, requestHash, operationId,
- *   status: "in_progress" | "done", claimId, claimedAt, claims, resumable?, response?: { status, body }, createdAt,
- *   expiresAt (+24 h from the first claim) }. `operationId` names the operation and survives every takeover; `claimId`
- *   names the attempt that holds it. An `in_progress` claim is a lease: once its `claimedAt` is more than
- *   IDEMPOTENCY_LEASE_MS old (the request died, or its result could not be stored), or once its holder set `resumable`,
- *   the same request may take it over. The old holder can no longer store or release it (claimId check).
+ *   status: "in_progress" | "done", claimId, claimedAt, claims, resumable?, released?, response?: { status, body },
+ *   createdAt, expiresAt (+24 h from the first claim) }. `operationId` names the operation and survives every
+ *   takeover; `claimId` names the attempt that holds it. An `in_progress` claim is a lease: once its `claimedAt` is more
+ *   than IDEMPOTENCY_LEASE_MS old (the request died, or its result could not be stored), or once its holder set
+ *   `resumable` (ended after its effect) or `released` (a taken-over claim that ended without one: the key's tombstone,
+ *   kept because an older holder may still commit), the same request may take it over. The old holder can no longer
+ *   store or release it (claimId check).
  * - The effect marker `idempotency_effects/{same id}` = { operationId, claimId, firmId, route, kind, expiresAt, ... },
  *   created with `tx.create` inside the effect's own transaction (CallAudit.stage of the allow row, or committeeBrain's
  *   provider-attempt record). It exists exactly when the operation's effect committed, and a second effect of the same
- *   operation cannot commit: its `create` fails the whole transaction (a write-only fence).
+ *   operation cannot commit: its `create` fails the whole transaction (a write-only fence). Until it expires it is the
+ *   key's committed effect whatever the record says, so it is never deleted early and a lost record cannot reopen the key
+ *   (Codex P1 on PR #58).
  *
  * A route's mode says what a same-key request gets once an effect committed and no answer was stored: `once` (the
  * default) answers 409 `idempotency_effect_committed`, stored; `resume` takes the operation over and runs the handler
@@ -187,7 +191,7 @@ export class IdempotentOperation {
     readonly mode: IdempotencyMode,
     readonly operationId: string,
     readonly claimId: string,
-    private readonly scope: { firmId: string; route: string; redact?: boolean; expiresAt: Timestamp },
+    readonly scope: { firmId: string; route: string; redact?: boolean; expiresAt: Timestamp; now: number },
     /** `resume` mode: the marker an earlier attempt of this operation committed; null when none did. */
     readonly prior: DocumentData | null
   ) {
@@ -253,15 +257,29 @@ function claimedAtMs(doc: Record<string, unknown>): number {
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== ""
 
 /**
+ * Whether an effect marker still counts at `nowMs` (Codex P1 on PR #58): until its `expiresAt` passes, a marker is the
+ * evidence that the key's operation committed an effect, whatever record exists (or no longer exists) beside it, and
+ * whatever operation id it names. Only an expired marker is ever deleted. A marker with no readable expiry counts (fail
+ * closed); every marker this code writes carries its operation's expiry.
+ */
+function markerCounts(marker: DocumentSnapshot, nowMs: number): boolean {
+  if (!marker.exists) return false
+  const at = marker.get("expiresAt")
+  return !(at instanceof Timestamp) || at.toMillis() >= nowMs
+}
+
+/**
  * Runs `handler` at most once per key, and never repeats a committed effect (audit F09). No UUID v4 key → 400
  * idempotency_key_required. A completed key replays its stored response with `reused: true`; the same key with another
  * body, route or user → 422 idempotency_key_reused; a duplicate while the first is running → 409
- * idempotency_in_progress, until the claim is over IDEMPOTENCY_LEASE_MS old or its holder marked it `resumable`. Then:
- * if the operation's effect committed (its marker exists), a `once` route answers 409 idempotency_effect_committed
- * (stored) without running, and a `resume` route takes the claim over and runs the handler with the marker as `prior`;
- * otherwise the duplicate takes the claim over and runs. Results allowed by isStorableResult are stored (unless the
- * handler stored its answer with its effect); any other result, or a throw, releases the claim when no effect committed,
- * and otherwise stores the terminal 409 (`once`, which this request then answers) or marks the claim `resumable`.
+ * idempotency_in_progress, until the claim is over IDEMPOTENCY_LEASE_MS old or its holder marked it `resumable` or
+ * `released`. Then: if the operation's effect committed (an unexpired marker exists), a `once` route answers 409
+ * idempotency_effect_committed (stored) without running, and a `resume` route takes the claim over and runs the handler
+ * with the marker as `prior`; otherwise the duplicate takes the claim over and runs. An unexpired marker with no record
+ * beside it is adopted the same way. Results allowed by isStorableResult are stored (unless the handler stored its
+ * answer with its effect); any other result, or a throw, releases the claim when no effect committed (a first claim is
+ * deleted; a taken-over claim stays as a `released` tombstone, because an older holder may still commit), and otherwise
+ * stores the terminal 409 (`once`, which this request then answers) or marks the claim `resumable`.
  */
 export async function withIdempotency(scope: IdempotencyScope, handler: (op: IdempotentOperation) => Promise<HttpResult>): Promise<HttpResult> {
   if (!isUuidV4(scope.key)) throw new HttpError(400, "idempotency_key_required")
@@ -286,47 +304,56 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
         }
         if (existing.status === "done" && isHttpResult(existing.response)) return { kind: "replay", response: existing.response }
         if (existing.status !== "in_progress") return { kind: "in_progress" }
-        if (existing.resumable !== true && scope.now - claimedAtMs(existing) <= IDEMPOTENCY_LEASE_MS) return { kind: "in_progress" }
-        // A lapsed lease, or a holder that ended after its effect (`resumable`): take the claim over, keeping the
-        // operation's identity and its window (the marker carries the same expiry, spec ruling 6).
-        const operationId = nonEmpty(existing.operationId) ? existing.operationId : randomUUID()
-        const ours = markerSnap!.exists && nonEmpty(existing.operationId) && markerSnap!.get("operationId") === existing.operationId
-        // A marker of another operation under this id can only be left from an expired one: it must not fence this one.
+        const leaseEnded = existing.resumable === true || existing.released === true
+        if (!leaseEnded && scope.now - claimedAtMs(existing) <= IDEMPOTENCY_LEASE_MS) return { kind: "in_progress" }
+        // A lapsed lease, a holder that ended after its effect (`resumable`), or a taken-over holder that ended without
+        // one (`released`): take the claim over, keeping the operation's identity and its window (the marker carries
+        // the same expiry, spec ruling 6). An unexpired marker is the operation's committed effect, whichever attempt
+        // (or operation id) wrote it: it is adopted, never deleted (Codex P1 on PR #58). Only an expired one is deleted.
+        const ours = markerCounts(markerSnap!, scope.now)
         if (markerSnap!.exists && !ours) tx.delete(markerRef)
+        const markerOp: unknown = ours ? markerSnap!.get("operationId") : undefined
+        const operationId = nonEmpty(markerOp) ? markerOp : nonEmpty(existing.operationId) ? existing.operationId : randomUUID()
         const claims = (typeof existing.claims === "number" && Number.isSafeInteger(existing.claims) ? existing.claims : 1) + 1
         if (ours && mode !== "resume") {
           // The effect committed and its answer was never stored: the answer is final, and the handler never runs again.
           tx.update(ref, {
             status: "done",
+            operationId,
             claimId,
             claimedAt: nowTs,
             claims,
             response: effectCommittedResult(),
             answeredAt: FieldValue.serverTimestamp(),
             resumable: FieldValue.delete(),
+            released: FieldValue.delete(),
           })
           return { kind: "replay", response: effectCommittedResult() }
         }
-        tx.update(ref, { operationId, claimId, claimedAt: nowTs, claims, resumable: FieldValue.delete() })
+        tx.update(ref, { operationId, claimId, claimedAt: nowTs, claims, resumable: FieldValue.delete(), released: FieldValue.delete() })
         return { kind: "claimed", operationId, prior: ours && mode === "resume" ? markerSnap!.data()! : null, expiresAt: existing.expiresAt as Timestamp }
+      }
+      const binding = { firmId: scope.firmId, uid: scope.uid, route: scope.route, requestHash: hash, claimId, claims: 1, claimedAt: nowTs, createdAt: nowTs }
+      if (markerCounts(markerSnap!, scope.now)) {
+        // No live record, but an unexpired marker (Codex P1 on PR #58): the key's operation committed an effect and its
+        // record is gone. The marker's operation is adopted, in its own window: `once` answers the terminal 409 (stored),
+        // `resume` runs with the marker as `prior`. The effect never runs a second time.
+        const markerOp: unknown = markerSnap!.get("operationId")
+        const operationId = nonEmpty(markerOp) ? markerOp : randomUUID()
+        const at: unknown = markerSnap!.get("expiresAt")
+        const expiresAt = at instanceof Timestamp ? at : Timestamp.fromMillis(scope.now + IDEMPOTENCY_TTL_MS)
+        if (mode !== "resume") {
+          tx.set(ref, { ...binding, operationId, expiresAt, status: "done", response: effectCommittedResult(), answeredAt: FieldValue.serverTimestamp() })
+          return { kind: "replay", response: effectCommittedResult() }
+        }
+        tx.set(ref, { ...binding, operationId, expiresAt, status: "in_progress" })
+        return { kind: "claimed", operationId, prior: markerSnap!.data()!, expiresAt }
       }
       // No live operation under this key: a fresh one. A marker left from an expired operation is deleted with it.
       if (markerSnap!.exists) tx.delete(markerRef)
       const operationId = randomUUID()
       const expiresAt = Timestamp.fromMillis(scope.now + IDEMPOTENCY_TTL_MS)
-      tx.set(ref, {
-        firmId: scope.firmId,
-        uid: scope.uid,
-        route: scope.route,
-        requestHash: hash,
-        status: "in_progress",
-        operationId,
-        claimId,
-        claims: 1,
-        claimedAt: nowTs,
-        createdAt: nowTs,
-        expiresAt,
-      })
+      tx.set(ref, { ...binding, status: "in_progress", operationId, expiresAt })
       return { kind: "claimed", operationId, prior: null, expiresAt }
     })
   } catch (err) {
@@ -337,7 +364,14 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
   if (claim.kind === "in_progress") throw new HttpError(409, "idempotency_in_progress")
   if (claim.kind === "replay") return { status: claim.response.status, body: { ...claim.response.body, reused: true } }
 
-  const op = new IdempotentOperation(docId, mode, claim.operationId, claimId, { firmId: scope.firmId, route: scope.route, redact: scope.redact, expiresAt: claim.expiresAt }, claim.prior)
+  const op = new IdempotentOperation(
+    docId,
+    mode,
+    claim.operationId,
+    claimId,
+    { firmId: scope.firmId, route: scope.route, redact: scope.redact, expiresAt: claim.expiresAt, now: scope.now },
+    claim.prior
+  )
   let result: HttpResult
   try {
     result = await handler(op)
@@ -363,7 +397,8 @@ type Settled = "stored" | "answered" | "released" | "resumable" | "terminal" | "
  * Settles our claim after the handler, only while the record still holds our claimId, in one transaction that reads
  * the record and the operation's effect marker. With `response` (a storable result): `done` with it, unless the handler
  * already stored its answer with its effect. Without (a non-storable result or a throw): when no effect of this
- * operation committed, the claim is deleted (released); when one did, a `resume` claim is marked `resumable` and any
+ * operation committed (no unexpired marker), the claim is released, deleted when it was a first claim and kept as a
+ * `released` tombstone when this attempt took it over; when one did, a `resume` claim is marked `resumable` and any
  * other gets the terminal 409 idempotency_effect_committed. Retried SETTLE_RETRIES times with exponential backoff
  * (100/200/400 ms); then best effort: the failure is logged, the claim answers 409 until its lease ends, and the next
  * claim decides from the marker.
@@ -383,8 +418,18 @@ async function settle(op: IdempotentOperation, response: HttpResult | undefined)
           tx.update(op.ref, { status: "done", response, answeredAt: FieldValue.serverTimestamp() })
           return "stored"
         }
-        const effect = markerSnap!.exists && markerSnap!.get("operationId") === op.operationId
+        // Any unexpired marker is a committed effect of the key's operation (Codex P1 on PR #58), whichever attempt wrote it.
+        const effect = markerCounts(markerSnap!, op.scope.now)
         if (!effect) {
+          const claims: unknown = recordSnap!.get("claims")
+          if (typeof claims === "number" && claims > 1) {
+            // This attempt took the claim over, so an older holder of the operation may still be alive and commit its
+            // effect after this release (Codex P1 on PR #58). The record stays, `released`, as the key's tombstone: the
+            // next same-key request takes it over at once (another body still gets 422), and the older holder's marker,
+            // should it land, then fences the key. Only a first claim, which no other attempt ever held, is deleted.
+            tx.update(op.ref, { released: true })
+            return "released"
+          }
           tx.delete(op.ref)
           return "released"
         }

@@ -248,6 +248,10 @@ resumes idempotently and returns the same `firmId` (audited as
     each is idempotent by construction.
 
   A refusal before any effect (401/403, 429, 5xx) still releases the key.
+  A first claim is deleted. A claim this request took over is kept as a
+  `released` tombstone, because an older holder may still commit (Codex P1 on
+  PR #58). An unexpired marker counts as the key's committed effect even if
+  its record is gone.
   Spec: `docs/superpowers/specs/2026-10-16-f09-atomic-idempotency-design.md`.
 - **Audit:** a replay is not audited. It is the stored answer to a decision
   that already has its row. The idempotency refusals (400
