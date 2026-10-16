@@ -339,6 +339,35 @@ expect_out "the runtime role keeps its DML on the migration role's table and its
   as_superuser_local "select has_table_privilege('$APP_DB_USER', 'public.f19_l1_t', 'SELECT,INSERT,UPDATE,DELETE') || '|'
     || has_sequence_privilege('$APP_DB_USER', 'public.f19_l1_t_i_seq', 'USAGE,SELECT,UPDATE')"
 as_role_local "$MIGRATE_DB_USER" "drop table public.f19_l1_t" >/dev/null 2>&1 || fail "L1: dropping the migration role's table"
+# Codex P1 (#50): corpus_writer itself. The runtime role can SET ROLE corpus_writer, so an attribute or a
+# membership corpus_writer gained outside 001 would reach it. Every privileged attribute, a membership in
+# pg_execute_server_program and in the bootstrap superuser (granted by the superuser), and one in
+# pg_monitor granted by another role holding it WITH ADMIN; provisioning resets all of them.
+writer_role() { # SUPERUSER:CREATEROLE:CREATEDB:REPLICATION:BYPASSRLS:memberships of corpus_writer
+  as_superuser_local "select rolsuper || ':' || rolcreaterole || ':' || rolcreatedb || ':' || rolreplication || ':'
+    || rolbypassrls || ':' || (select count(*) from pg_auth_members m where m.member = r.oid)
+    from pg_roles r where rolname = 'corpus_writer'"
+}
+for sql in "alter role corpus_writer superuser createrole createdb replication bypassrls" \
+           "grant pg_execute_server_program to corpus_writer" \
+           "grant \"$POSTGRES_USER\" to corpus_writer" \
+           "create role f19_writer_admin" "grant pg_monitor to f19_writer_admin with admin option"; do
+  as_superuser_local "$sql" >/dev/null 2>&1 || fail "corpus_writer drift setup failed: $sql"
+done
+as_role_local f19_writer_admin "grant pg_monitor to corpus_writer" >/dev/null 2>&1 \
+  || fail "corpus_writer drift setup failed: pg_monitor granted by f19_writer_admin"
+expect_out "drift control (corpus_writer): every privileged attribute and three memberships, one from another grantor" \
+  '^true:true:true:true:true:3$' writer_role
+expect_out "the runtime role reaches superuser through SET ROLE corpus_writer (drift control)" '^on$' \
+  as_role_local corpus_writer "select current_setting('is_superuser')"
+expect_out "re-provisioning after corpus_writer drift succeeds (prints ready)" 'ready in legal_scraper' provision
+expect_out "re-provisioning resets corpus_writer: no privileged attribute, no membership" '^false:false:false:false:false:0$' \
+  writer_role
+expect_out "SET ROLE corpus_writer no longer reaches superuser" '^off$' \
+  as_role_local corpus_writer "select current_setting('is_superuser')"
+expect_out "the runtime role keeps its one corpus_writer membership (INHERIT FALSE, SET TRUE, no admin)" \
+  '^inherit=false:set=true:admin=false$' writer_membership
+as_superuser_local "drop role f19_writer_admin" >/dev/null 2>&1 || fail "corpus_writer drift: dropping f19_writer_admin"
 # Re-audit L2 (#50 round 2): the bootstrap role's default privileges. Objects it creates later (in public, in
 # another schema, or anywhere) grant nothing to the application roles or corpus_clients, and no table or
 # sequence of it grants anything to PUBLIC.
