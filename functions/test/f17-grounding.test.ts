@@ -1,5 +1,7 @@
 import { logger } from "firebase-functions"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { normaliseCitation } from "@/services/d4-2/citations"
 import { AuthorityUnavailableError, EMPTY_AUTHORITY_STORE, InMemoryAuthorityStore, type AuthorityStore } from "../src/d4/authority"
 
 /**
@@ -310,5 +312,40 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
       expect(m.isAdvisory({ status } as Grounding), status).toBe(true)
     }
     expect(m.isAdvisory({ status: "grounded" } as Grounding)).toBe(false)
+  })
+})
+
+// Re-audit L2: the re-mask of a canonical ref was untested (mutants R1e and R1f survived). The D4 normaliser keeps a
+// bracketed sub-series, joined and upper-cased; a party name the route's mask does not see (its letters spaced out) is
+// joined into a form the mask does see, so the canonical ref must be masked again before it is recorded.
+describe("audit F17 re-audit L2: a canonical ref is masked again with the party names", () => {
+  const NAMES = ["Tariq Zarvani"]
+  const SPACED = "PLD 2099 SC(T a r i q Zarvani) 1"
+  /** The answer as the route grounds it: masked first (callP1), with the same party names. */
+  const routeMasked = (text: string) => maskOutboundPII(text, { partyNames: NAMES }).masked
+  const leaks = /TARIQ|ZARVANI|Tariq|Zarvani/u
+
+  it("the normaliser keeps a bracketed name in the canonical citation, and the route's mask misses the spaced form", () => {
+    expect(normaliseCitation("PLD 2099 SC(Tariq Zarvani) 1")).toBe("PLD 2099 SC(TARIQZARVANI) 1")
+    expect(normaliseCitation(SPACED)).toBe("PLD 2099 SC(TARIQZARVANI) 1")
+    expect(routeMasked(SPACED)).toBe(SPACED)
+  })
+
+  it("a judgment authority: its canonical ref is recorded masked", async () => {
+    const g = await ground(routeMasked(answer([claim("Bail is the rule.", auth(SPACED))])), corpus(), NAMES)
+    expect(g.citations).toEqual([{ ref: "PLD 2099 SC([PARTY]) 1", kind: "judgment", source: "claim", status: "UNVERIFIED", judgmentId: null }])
+    expect(JSON.stringify(g)).not.toMatch(leaks)
+  })
+
+  it("a statute authority with a judgment's citation: its canonical ref is recorded masked, kindMismatch", async () => {
+    const g = await ground(routeMasked(answer([claim("Bail is the rule.", auth(SPACED, "statute"))])), corpus(), NAMES)
+    expect(g.citations).toEqual([{ ref: "PLD 2099 SC([PARTY]) 1", kind: "statute", source: "claim", status: "UNVERIFIED", judgmentId: null, kindMismatch: true }])
+    expect(JSON.stringify(g)).not.toMatch(leaks)
+  })
+
+  it("a citation in the prose: its canonical ref is recorded masked", async () => {
+    const g = await ground(routeMasked(answer([claim("Bail is the rule.", auth("PLD 2099 SC 101"))], `See ${SPACED}.`)), corpus(), NAMES)
+    expect(g.citations.map((c) => c.ref)).toContain("PLD 2099 SC([PARTY]) 1")
+    expect(JSON.stringify(g)).not.toMatch(leaks)
   })
 })
