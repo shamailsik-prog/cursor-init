@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
-import { SYSTEM_POLICIES, SYSTEM_POLICY_VERSION } from "@/platform/p1/systemPolicy"
+import { SYSTEM_POLICIES, SYSTEM_POLICY_VERSION, systemPolicyText } from "@/platform/p1/systemPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { MAX_OUTPUT_TOKENS, REQUEST_OVERHEAD_TOKENS, costMicroUsd, estimateTokens, requestTokenCeiling } from "../src/p1/costTable"
@@ -34,7 +34,7 @@ const estimatedInput = (userText: string) => estimateTokens(COMMITTEE) + estimat
 /** Audit F07 with F16: the reserved input of a result's request, `[system, user]`, plus the request overhead. */
 const reservedInputOf = (r: P1Result) =>
   requestTokenCeiling([
-    { role: "system", content: r.outbound.system!.text },
+    { role: "system", content: systemPolicyText(r.outbound.system!.policyId, r.outbound.system!.version)! },
     { role: "user", content: r.outbound.body },
   ]) + REQUEST_OVERHEAD_TOKENS
 
@@ -313,18 +313,19 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
         body: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail.",
         purpose: "committee-brain for [PARTY]",
         redactionCounts: { cnic: 1, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 },
-        // Audit F15: the residual detector finds nothing left in the masked body (or, since F16, in the system message).
+        // Audit F15: the residual detector finds nothing left in the masked body (audit F16 R3a: the system message is
+        // verified platform text, not user data, and is not counted).
         residualCounts: { id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 },
-        // Audit F16: the system message that was sent with the body.
-        system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION, text: COMMITTEE },
+        // Audit F16: the system policy the sent system message came from (review round R4a: id and version, never text).
+        system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION },
       })
 
       const row = await rowOf(r.usageLogId)
       expect((row as DocumentData).trace.status).toBe("exported")
       expect(opik.bodies).toHaveLength(1)
       const trace = traceOf(opik.bodies)
-      // Audit F16: the trace records the request as the system message plus the body.
-      expect(trace.input).toEqual({ system: COMMITTEE, prompt: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail." })
+      // Audit F16: the trace names the system policy beside the body (review round R4a: never its text).
+      expect(trace.input).toEqual({ system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION }, prompt: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail." })
       expect(trace.output).toEqual({ text: "[PARTY] should apply; call [PHONE]." })
 
       for (const seen of [JSON.stringify(sent), JSON.stringify(row), JSON.stringify(await eventsOf(firmId)), JSON.stringify(await auditsOf(firmId)), opik.bodies.join(""), logs.all(), JSON.stringify(r)]) {

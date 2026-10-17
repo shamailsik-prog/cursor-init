@@ -1,14 +1,19 @@
+import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { residualPII, residualTotal } from "@/platform/p1/residualPII"
+import { AGENT_INSTRUCTIONS, AGENT_INSTRUCTIONS_SHA256 } from "@/platform/p1/agentInstructions"
 import {
   DEFAULT_SYSTEM_POLICY_ID,
   SYSTEM_POLICIES,
   SYSTEM_POLICY_IDS,
+  SYSTEM_POLICY_VERSION,
+  isKnownSystemPolicy,
   isSystemPolicyId,
   systemPolicyFor,
+  systemPolicyText,
 } from "@/platform/p1/systemPolicy"
 import { envelopeTagCount } from "@/platform/p1/promptEnvelope"
 import { CLASSIFICATION_RANKS } from "@/platform/p1/types"
@@ -58,6 +63,27 @@ describe("audit F16: the system-policy registry (ruling 1)", () => {
   })
 })
 
+describe("audit F16 review round: stored records name a policy by id and version (R4a)", () => {
+  it("knows every current policy at its version, and nothing else", () => {
+    for (const id of SYSTEM_POLICY_IDS) {
+      expect(isKnownSystemPolicy(id, SYSTEM_POLICY_VERSION), id).toBe(true)
+      expect(systemPolicyText(id, SYSTEM_POLICY_VERSION)).toBe(SYSTEM_POLICIES[id].text)
+    }
+    for (const [id, version] of [["committee-brain", "f16.0"], ["constructor", SYSTEM_POLICY_VERSION], ["committee-brain", "toString"], ["attacker", "f16.1"], [42, "f16.1"], ["committee-brain", 1]] as const) {
+      expect(isKnownSystemPolicy(id, version), `${String(id)}@${String(version)}`).toBe(false)
+      expect(systemPolicyText(id, version)).toBeNull()
+    }
+  })
+})
+
+describe("audit F16 review round: the pinned agent instructions (R1b, R3a)", () => {
+  it("are agent/instructions.md exactly (trimmed, as eve compiles them), with their SHA-256", () => {
+    const file = readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8")
+    expect(AGENT_INSTRUCTIONS).toBe(file.trim())
+    expect(AGENT_INSTRUCTIONS_SHA256).toBe(createHash("sha256").update(AGENT_INSTRUCTIONS, "utf8").digest("hex"))
+  })
+})
+
 describe("audit F16: the eve agent's system text has one static source (R1b)", () => {
   const agentDir = path.resolve(__dirname, "..", "agent")
 
@@ -71,7 +97,8 @@ describe("audit F16: the eve agent's system text has one static source (R1b)", (
     const text = readFileSync(path.join(agentDir, "instructions.md"), "utf8")
     expect(text).not.toMatch(/\$\{|\{\{/)
     expect(envelopeTagCount(text)).toBe(0)
-    // They ride in the system message after the registry policy (R1b), which at rank >= 3 must pass assertMinimised.
+    // They ride in the system message after the registry policy (R1b). That message is verified platform text and is left out
+    // of the minimisation check (R3a); this keeps the premise true that it carries nothing the check would act on.
     expect(maskOutboundPII(text).masked).toBe(text)
     expect(residualTotal(residualPII(text))).toBe(0)
   })

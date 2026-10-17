@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, beforeAll, describe, expect, it } from "vitest"
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider"
 import { committeeBrainLanguageModel } from "@/platform/p1/committeeBrainModel"
@@ -36,7 +38,9 @@ afterEach(() => {
   setTransportForTests(null)
 })
 
-const AGENT_SYSTEM = "You are SIKANDER Committee Brain."
+/** The pinned agent instructions (agent/instructions.md, trimmed), and the system message as eve composes it. */
+const INSTRUCTIONS = readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8").trim()
+const AGENT_SYSTEM = `Instructions (instructions)\n${INSTRUCTIONS}`
 
 async function viaBridge(prompt: LanguageModelV3Prompt): Promise<Msg[] | undefined> {
   let captured: { messages?: Msg[] } | null = null
@@ -96,7 +100,7 @@ describe(`audit F16: injection corpus ${F16_CORPUS_VERSION}, request structure (
 
   it.each(F16_INJECTION_CORPUS.map((c) => [c.id, c] as const))("%s as a tool result through the eve bridge: inside its envelope", async (_id, c) => {
     const messages = await viaBridge(toolPrompt(c))
-    const holder = checkStructure(messages, c, `${committeeText}\n\nAgent instructions:\n${AGENT_SYSTEM}`)
+    const holder = checkStructure(messages, c, `${committeeText}\n\nAgent instructions:\n${INSTRUCTIONS}`)
     const open = envelope!.envelopeOpen("tool:mask_preview")
     const start = holder.content.indexOf(`${open}\n`)
     const end = holder.content.indexOf(`\n${envelope!.ENVELOPE_CLOSE}`, start)
@@ -108,7 +112,7 @@ describe(`audit F16: injection corpus ${F16_CORPUS_VERSION}, request structure (
 
   it.each(F16_INJECTION_CORPUS.map((c) => [c.id, c] as const))("%s as a user turn through the eve bridge", async (_id, c) => {
     const messages = await viaBridge(userPrompt(c))
-    checkStructure(messages, c, `${committeeText}\n\nAgent instructions:\n${AGENT_SYSTEM}`)
+    checkStructure(messages, c, `${committeeText}\n\nAgent instructions:\n${INSTRUCTIONS}`)
     expect(messages!.map((m) => m.role)).toEqual(["system", "user"])
   })
 })

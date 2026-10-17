@@ -494,7 +494,9 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(row.outbound.metadata.redactionCounts).toEqual({ cnic: 0, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 })
       // Audit F16: the system message that was sent with the body is recorded beside it.
       expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata", "system"])
-      expect(row.outbound.system).toEqual({ policyId: "summarise", version: SYSTEM_POLICY_VERSION, text: SYSTEM_POLICIES.summarise.text })
+      expect(row.outbound.system).toEqual({ policyId: "summarise", version: SYSTEM_POLICY_VERSION })
+      // Review round (R4a): the row names the policy; its text is never stored.
+      expect(JSON.stringify(row)).not.toContain(SYSTEM_POLICIES.summarise.text.slice(0, 80))
       // Audit F15: the residual detector's counts on the masked body sit beside the mask's own.
       expect(row.outbound.metadata.residualCounts).toEqual({ id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 })
       expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts", "residualCounts"])
