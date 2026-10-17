@@ -198,7 +198,11 @@ describe("R3-6: the even-numbered lines of the re-auditor's fresh false-positive
 })
 
 // R3-6: added only after the measurement (at 76902de: fresh odd 2 of 60, lines 37 and 69; the new held-out corpus 1 of
-// 134, line 121), so the rates reported in the spec are held-out rates. Every line must pass from here on.
+// 134, line 121), so the rates reported in the spec are held-out rates. Every line must pass from here on, except the
+// lines a later ruling makes true positives (each with its ruling).
+/** Ruling R4-3: an explicit "House No." with a number always counts, so fresh line 69 is a true positive. */
+const RULED_TRUE_POSITIVE_R4: ReadonlyMap<number, "address"> = new Map([[69, "address"]])
+
 describe("R3-6: the held-out lines pass (regression rows, added after the measurement)", () => {
   it("has the 60 held-out fresh lines and the 134 lines of the new corpus", () => {
     expect(FRESH_HELDOUT).toHaveLength(60)
@@ -206,8 +210,13 @@ describe("R3-6: the held-out lines pass (regression rows, added after the measur
     expect(HELDOUT_CORPUS_R3).toHaveLength(134)
   })
 
+  it.each([...RULED_TRUE_POSITIVE_R4])("fresh line %i is a true positive by ruling R4-3 (%s)", (line, kind) => {
+    const text = FRESH_HELDOUT.find(([n]) => n === line)![2]
+    expect(residualPII(maskOutboundPII(text).masked)).toEqual({ ...ZERO, [kind]: 1 })
+  })
+
   it.each([
-    ...FRESH_HELDOUT.map(([line, lang, text]) => [`fresh line ${line}`, lang, text]),
+    ...FRESH_HELDOUT.filter(([line]) => !RULED_TRUE_POSITIVE_R4.has(line)).map(([line, lang, text]) => [`fresh line ${line}`, lang, text]),
     ...HELDOUT_CORPUS_R3.map(([category, text], i) => [`new corpus line ${i + 1}`, category, text]),
   ])("%s [%s] %s", (_line, _lang, text) => {
     const masked = maskOutboundPII(text).masked

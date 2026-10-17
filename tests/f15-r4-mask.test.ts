@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import * as mask from "@/platform/p1/maskOutboundPII"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { residualPII } from "@/platform/p1/residualPII"
 
@@ -68,15 +69,72 @@ function replaced(s: string, m: string): Set<number> | null {
   return out
 }
 
-/** The units main replaced that the mask kept, or null when either output does not align. */
+type Spans = ReadonlyArray<{ start: number; end: number; kind: string }>
+const TOKEN: Readonly<Record<string, string>> = {
+  cnic: "[CNIC]", phone: "[PHONE]", party: "[PARTY]", email: "[EMAIL]", iban: "[IBAN]", ntn: "[NTN]", passport: "[PASSPORT]",
+}
+const render = (s: string, spans: Spans) => {
+  let out = ""
+  let at = 0
+  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
+    out += s.slice(at, span.start) + TOKEN[span.kind]
+    at = span.end
+  }
+  return out + s.slice(at)
+}
+
+/**
+ * Main's replaced spans, exactly: main's regexes in main's order over the text with each earlier match blanked to the
+ * same length (a blank is, like main's token brackets, no word character and no separator). Each input checks that
+ * these spans written as tokens give main's own output, so the emulation is main.
+ */
+function mainSpans(s: string, partyNames: string[]): Spans {
+  const spans: Array<{ start: number; end: number; kind: string }> = []
+  let work = s
+  const run = (re: RegExp, kind: string) => {
+    let out = ""
+    let at = 0
+    for (const m of work.matchAll(re)) {
+      spans.push({ start: m.index, end: m.index + m[0].length, kind })
+      out += work.slice(at, m.index) + "\uE000".repeat(m[0].length)
+      at = m.index + m[0].length
+    }
+    work = out + work.slice(at)
+  }
+  run(MAIN_CNIC_SEPARATED, "cnic")
+  run(MAIN_CNIC_PLAIN, "cnic")
+  run(MAIN_PK_MOBILE_PAREN, "phone")
+  run(MAIN_PK_MOBILE, "phone")
+  run(MAIN_EMAIL, "email")
+  run(MAIN_PK_IBAN, "iban")
+  run(MAIN_NTN, "ntn")
+  run(MAIN_PASSPORT, "passport")
+  for (const name of partyNames) if (name.trim() !== "") run(new RegExp(mainEscape(name.trim()), "gi"), "party")
+  return spans
+}
+
+const unitsOf = (spans: Spans) => new Set(spans.flatMap(({ start, end }) => Array.from({ length: end - start }, (_, k) => start + k)))
+
+/**
+ * The units main replaced that the mask kept. Exact when the mask exports its spans (`outboundPIISpans`): both span
+ * sets are checked against the outputs they produce. On a mask without that export (round 3's head), the re-auditor's
+ * greedy alignment of the outputs is the measure; it can attribute a unit to the wrong token when a literal segment
+ * also occurs inside a replaced region, so it is used only there.
+ */
 function lostUnits(s: string, partyNames: string[] = []): string | null {
-  const a = replaced(s, maskMain(s, partyNames))
-  const b = replaced(s, maskOutboundPII(s, { partyNames }).masked)
-  if (a === null || b === null) return null
-  return [...a]
-    .filter((p) => !b.has(p))
-    .map((p) => s[p])
-    .join("")
+  const spansOf = (mask as Record<string, unknown>).outboundPIISpans as ((t: string, o: { partyNames: string[] }) => Spans) | undefined
+  if (spansOf === undefined) {
+    const a = replaced(s, maskMain(s, partyNames))
+    const b = replaced(s, maskOutboundPII(s, { partyNames }).masked)
+    if (a === null || b === null) return null
+    return [...a].filter((p) => !b.has(p)).map((p) => s[p]).join("")
+  }
+  const main = mainSpans(s, partyNames)
+  const ours = spansOf(s, { partyNames })
+  if (render(s, main) !== maskMain(s, partyNames)) return null
+  if (render(s, ours) !== maskOutboundPII(s, { partyNames }).masked) return null
+  const kept = unitsOf(ours)
+  return [...unitsOf(main)].filter((p) => !kept.has(p)).sort((x, y) => x - y).map((p) => s[p]).join("")
 }
 
 const SEVEN_DIGITS = /\p{Nd}(?:[^\p{L}\p{Nd}]{0,3}\p{Nd}){6}/u

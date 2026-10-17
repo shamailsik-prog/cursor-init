@@ -170,6 +170,66 @@ const PASSPORT = new RegExp(`\\b(?:passport|ppt\\.?)${LABEL_GAP}[A-Z]{2}\\d{7}\\
 /** Two capitals and seven digits, the Pakistani passport number, without a label (R2-5). Case-sensitive. */
 const PASSPORT_UNLABELLED = /\b[A-Z]{2}\d{7}\b/g
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 0 (ruling R4-1): main's algorithm on the RAW text as well. Main ran its regexes on the text as written, where
+// a format character, a combining mark, a private-use character or a ligature is a word boundary; the detection view
+// drops or expands them, which can join an identifier to a word and lose the boundary a pattern needs ("(371)
+// 6656495ﬁle"). Running main's patterns on the raw text and taking the union of the spans makes "never masks less
+// than main" hold by construction. Main's patterns run in main's order, each over the text with the earlier matches
+// blanked (main replaced them with a token; a blank is, like the token's brackets, no word character and no
+// separator), then main's party-name pass. Main's email regex backtracked quadratically; EMAIL_RAW is its linear
+// equivalent on the raw text (ASCII classes and ASCII word boundaries, as main's non-Unicode regex had).
+// ---------------------------------------------------------------------------------------------------------------------
+
+const EMAIL_RAW = /(?<![A-Za-z0-9._%+-])[.%+-]*[A-Za-z0-9_][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9_])/g
+const EMAIL_RAW_AT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9_])/y
+/** Main's patterns in main's order, for the raw text (the mobiles without stage 1's prefix widening). */
+const RAW_PATTERNS: readonly Pattern[] = [
+  { kind: "cnic", re: /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g },
+  { kind: "cnic", re: /\b\d{13}\b/g },
+  { kind: "phone", re: /\(0?3\d{2}\)[.\s-]?\d{7}\b/g },
+  { kind: "phone", re: /(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g },
+  { kind: "email", re: EMAIL_RAW, chain: EMAIL_RAW_AT },
+  { kind: "iban", re: /\bPK\s*\d{2}\s*[A-Z]{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\b/gi },
+  { kind: "ntn", re: /\bNTN[:\s-]*\d{7}-\d\b/gi },
+  { kind: "passport", re: /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi },
+]
+
+/** The spans main's algorithm replaces in the raw text, in original offsets. */
+function mainSpans(text: string, partyNames: readonly string[]): Span[] {
+  const spans: Span[] = []
+  let work = text
+  const run = (pattern: Pattern) => {
+    const found: Array<[number, number]> = []
+    for (const m of work.matchAll(pattern.re)) {
+      found.push([m.index, m.index + m[0].length])
+      let next = m.index + m[0].length
+      while (pattern.chain !== undefined) {
+        pattern.chain.lastIndex = next
+        const c = pattern.chain.exec(work)
+        if (c === null) break
+        found.push([c.index, c.index + c[0].length])
+        next = c.index + c[0].length
+      }
+    }
+    if (found.length === 0) return
+    let blanked = ""
+    let at = 0
+    for (const [start, end] of found) {
+      spans.push({ start, end, kind: pattern.kind })
+      blanked += work.slice(at, start) + BLANK.repeat(end - start)
+      at = end
+    }
+    work = blanked + work.slice(at)
+  }
+  for (const pattern of RAW_PATTERNS) run(pattern)
+  for (const name of partyNames) {
+    const trimmed = name.trim()
+    if (trimmed !== "") run({ kind: "party", re: new RegExp(escapeRegExp(trimmed), "gi") })
+  }
+  return spans
+}
+
 /**
  * A pattern: its kind, its regex, an optional test a match must pass (`accept`) and an optional sticky regex tried at
  * the end of each accepted match (`chain`).
@@ -260,13 +320,12 @@ function pastMarks(original: string, end: number): number {
  * Accepts every match of the pattern in `units` that its `accept` keeps (all of them by default), and every match of its
  * `chain` that starts exactly where an accepted match ends: records its original span (moved past any trailing
  * combining marks) and blanks every unit whose original span overlaps it (so the units an NFKC expansion shares with it
- * go too). Returns the number of matches accepted.
+ * go too).
  */
-function take(original: string, units: Units, pattern: Pattern, spans: Span[]): number {
+function take(original: string, units: Units, pattern: Pattern, spans: Span[]): void {
   const { kind, re, accept, chain } = pattern
   const view = units.view
   const text = units.text()
-  let count = 0
   const accepted = (first: number, length: number): number => {
     const last = first + length - 1
     const start = view.start[first]!
@@ -277,7 +336,6 @@ function take(original: string, units: Units, pattern: Pattern, spans: Span[]): 
     while (to + 1 < units.length && view.start[to + 1]! < end) to += 1
     units.blank(from, to)
     spans.push({ start, end, kind })
-    count += 1
     return last + 1
   }
   for (const m of text.matchAll(re)) {
@@ -290,7 +348,6 @@ function take(original: string, units: Units, pattern: Pattern, spans: Span[]): 
       next = accepted(c.index, c[0].length)
     }
   }
-  return count
 }
 
 /**
@@ -312,33 +369,49 @@ function namePatterns(partyNames: string[]): RegExp[] {
     .map((f) => new RegExp(f.split(" ").map(escapeRegExp).join("\\s*"), "gu"))
 }
 
-export function maskOutboundPII(text: string, options: MaskOptions = {}): MaskResult {
-  const counts: Record<RedactionKind, number> = { cnic: 0, phone: 0, party: 0, email: 0, iban: 0, ntn: 0, passport: 0 }
-  const spans: Span[] = []
+/** A replaced span of the original text: code units [start, end), and the kind of its token. */
+export type MaskSpan = { readonly start: number; readonly end: number; readonly kind: RedactionKind }
+
+/**
+ * The spans the mask replaces in `text`, in order, disjoint: the union of main's algorithm on the raw text (stage 0)
+ * and the patterns and names on the detection and name views (stages 1 and 2). Overlapping spans (the raw pass and the
+ * detection view finding the same identifier, or two matches inside one NFKC expansion) are merged into the earlier
+ * one. `maskOutboundPII` writes exactly these spans; the differential test reads them to compare with main exactly.
+ */
+export function outboundPIISpans(text: string, options: MaskOptions = {}): MaskSpan[] {
+  // 0. Main's algorithm on the raw text (ruling R4-1).
+  const spans: Span[] = mainSpans(text, options.partyNames ?? [])
 
   // 1. The identifier patterns, on the detection view.
   const detection = new Units(detectionView(text))
-  for (const pattern of PATTERNS) counts[pattern.kind] += take(text, detection, pattern, spans)
+  for (const pattern of PATTERNS) take(text, detection, pattern, spans)
 
   // 2. The party names, on the name view of what the patterns left.
   const names = namePatterns(options.partyNames ?? [])
   if (names.length > 0) {
     const blanked: TextView = { text: detection.text(), start: detection.view.start, end: detection.view.end }
     const units = new Units(nameView(blanked))
-    for (const re of names) counts.party += take(text, units, { kind: "party", re }, spans)
+    for (const re of names) take(text, units, { kind: "party", re }, spans)
   }
 
-  // 3. The original text with each accepted span replaced by its token; spans that share an original code point (only
-  // possible inside one NFKC expansion) are merged into the earlier token.
+  // 3. The union: sorted, overlaps merged into the earlier span.
   spans.sort((a, b) => a.start - b.start || b.end - a.end)
+  const merged: Span[] = []
+  for (const span of spans) {
+    const last = merged.at(-1)
+    if (last !== undefined && span.start < last.end) last.end = Math.max(last.end, span.end)
+    else merged.push({ ...span })
+  }
+  return merged
+}
+
+export function maskOutboundPII(text: string, options: MaskOptions = {}): MaskResult {
+  const counts: Record<RedactionKind, number> = { cnic: 0, phone: 0, party: 0, email: 0, iban: 0, ntn: 0, passport: 0 }
   let masked = ""
   let at = 0
-  for (const span of spans) {
-    if (span.start < at) {
-      at = Math.max(at, span.end)
-      continue
-    }
+  for (const span of outboundPIISpans(text, options)) {
     masked += text.slice(at, span.start) + TOKEN[span.kind]
+    counts[span.kind] += 1
     at = span.end
   }
   masked += text.slice(at)
