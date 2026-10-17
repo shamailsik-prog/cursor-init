@@ -4,13 +4,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
+import { SYSTEM_POLICIES, SYSTEM_POLICY_VERSION, systemPolicyText } from "@/platform/p1/systemPolicy"
 import { adminDb } from "../src/admin"
 import { THRESHOLDS, alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
-import { MAX_OUTPUT_TOKENS, costMicroUsd, estimateTokens, inputTokenCeiling } from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, REQUEST_OVERHEAD_TOKENS, costMicroUsd, estimateTokens, requestTokenCeiling } from "../src/p1/costTable"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_BACKOFF_CAP_MS, COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { OPIK_TIMEOUT_MS, setOpikFetchForTests } from "../src/p1/opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, uniq } from "./emu"
 
 /**
@@ -25,6 +27,16 @@ const MONTH = "2026-10"
 const at = { now: () => T }
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const BIG_BUDGET = 1_000_000_000
+/** Audit F16: the system message every committee call carries (the registry's committee-brain policy; ASCII, unmasked). */
+const COMMITTEE = SYSTEM_POLICIES["committee-brain"].text
+/** Audit F16: the charge estimate's input side covers every message sent, the system message included. */
+const estimatedInput = (userText: string) => estimateTokens(COMMITTEE) + estimateTokens(userText)
+/** Audit F07 with F16: the reserved input of a result's request, `[system, user]`, plus the request overhead. */
+const reservedInputOf = (r: P1Result) =>
+  requestTokenCeiling([
+    { role: "system", content: systemPolicyText(r.outbound.system!.policyId, r.outbound.system!.version)! },
+    { role: "user", content: r.outbound.body },
+  ]) + REQUEST_OVERHEAD_TOKENS
 
 /** The P3-63 usage row fields, exactly. */
 const ROW_FIELDS = [
@@ -52,14 +64,14 @@ const ROW_FIELDS = [
 const db = () => adminDb()
 
 type Reply = { text?: unknown; inputTokens?: number | null; outputTokens?: number | null }
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 
 /** Installs a fake transport that records what it was sent; the default reply costs 14000 micro-USD (1000 in, 500 out). */
 function fakeTransport(reply: Reply | (() => Promise<never>) = {}): Sent[] {
   const sent: Sent[] = []
   const t: P1Transport = {
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       if (typeof reply === "function") return reply()
       return {
         text: (reply.text === undefined ? "REPLY" : reply.text) as string,
@@ -89,7 +101,7 @@ function costingTogether(micro: number, n: number): Sent[] {
   const together = new Promise<void>((resolve) => (release = resolve))
   setP1TransportForTests({
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       if (sent.length >= n) release()
       await together
       return { text: "REPLY", inputTokens: 0, outputTokens: micro / 20 }
@@ -193,7 +205,18 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
       expect(r).toMatchObject({ outcome: "ok", blockReason: null, text: "Reply for [PARTY]", model: OPUS, classification: "internal", inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 })
       expect(r.traceId).toMatch(UUID_V7)
-      expect(sent).toEqual([{ model: OPUS, body: "Draft a reply to the notice.", maxTokens: 4096 }])
+      // Audit F16: the registry's system message, then the body as the user's own turn; nothing flattened.
+      expect(sent).toEqual([
+        {
+          model: OPUS,
+          messages: [
+            { role: "system", content: COMMITTEE },
+            { role: "user", content: "Draft a reply to the notice." },
+          ],
+          maxTokens: 4096,
+          body: "Draft a reply to the notice.",
+        },
+      ])
 
       const row = (await rowOf(r.usageLogId))!
       expect(Object.keys(row).sort()).toEqual([...ROW_FIELDS].sort())
@@ -290,15 +313,19 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
         body: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail.",
         purpose: "committee-brain for [PARTY]",
         redactionCounts: { cnic: 1, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 },
-        // Audit F15: the residual detector finds nothing left in the masked body.
+        // Audit F15: the residual detector finds nothing left in the masked body (audit F16 R3a: the system message is
+        // verified platform text, not user data, and is not counted).
         residualCounts: { id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 },
+        // Audit F16: the system policy the sent system message came from (review round R4a: id and version, never text).
+        system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION },
       })
 
       const row = await rowOf(r.usageLogId)
       expect((row as DocumentData).trace.status).toBe("exported")
       expect(opik.bodies).toHaveLength(1)
       const trace = traceOf(opik.bodies)
-      expect(trace.input).toEqual({ prompt: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail." })
+      // Audit F16: the trace names the system policy beside the body (review round R4a: never its text).
+      expect(trace.input).toEqual({ system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION }, prompt: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail." })
       expect(trace.output).toEqual({ text: "[PARTY] should apply; call [PHONE]." })
 
       for (const seen of [JSON.stringify(sent), JSON.stringify(row), JSON.stringify(await eventsOf(firmId)), JSON.stringify(await auditsOf(firmId)), opik.bodies.join(""), logs.all(), JSON.stringify(r)]) {
@@ -602,7 +629,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
       fakeTransport(() => Promise.reject(new P1TransportError("gateway_not_json", { billable: true })))
       const billed = await callP1(req(firmId, { body: "Client Ali Raza asks.", partyNames: ["Ali Raza"] }), at)
-      const inTok = estimateTokens("Client [PARTY] asks.")
+      const inTok = estimatedInput("Client [PARTY] asks.")
       expect(billed).toMatchObject({ outcome: "failed", inputTokens: inTok, outputTokens: MAX_OUTPUT_TOKENS, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
       expect(await rowOf(billed.usageLogId)).toMatchObject({ inputTokens: inTok, outputTokens: 4096, tokensEstimated: true, costMicroUsd: costMicroUsd(OPUS, inTok, 4096) })
       expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: costMicroUsd(OPUS, inTok, 4096), inputTokens: inTok, outputTokens: 4096, calls: { ok: 0, failed: 2, blocked: 0 } })
@@ -635,8 +662,9 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       }
 
       // I1: what each failure is charged. The body is "Draft a reply to the notice.", so an estimated input side is
-      // estimateTokens of it; a timeout is charged at the 4,096-token ceiling.
-      const BODY_TOKENS = estimateTokens("Draft a reply to the notice.")
+      // estimateTokens of it and of the system message sent with it (audit F16); a timeout is charged at the 4,096-token
+      // ceiling.
+      const BODY_TOKENS = estimatedInput("Draft a reply to the notice.")
       it.each([
         ["a non-2xx", json(503, { error: { message: "Ali Raza overloaded quota-xyz" } }), "gateway_status", { inputTokens: 0, outputTokens: 0, tokensEstimated: false, costMicroUsd: 0 }],
         [
@@ -687,7 +715,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       fakeTransport({ text: "Reply to Ali Raza at 0300-1234567", inputTokens: null, outputTokens: null })
       const r = await callP1(req(firmId, { body: "Ali Raza's bail ک", partyNames: ["Ali Raza"] }), at)
       // The input side is what was sent (the masked body); the output side is what the provider produced (the raw text).
-      const inTok = estimateTokens("[PARTY]'s bail ک")
+      const inTok = estimatedInput("[PARTY]'s bail ک")
       const outTok = estimateTokens("Reply to Ali Raza at 0300-1234567")
       expect(r).toMatchObject({ outcome: "ok", inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
       expect(await rowOf(r.usageLogId)).toMatchObject({ tokensEstimated: true, inputTokens: inTok, outputTokens: outTok, costMicroUsd: costMicroUsd(OPUS, inTok, outTok) })
@@ -728,7 +756,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
       fakeTransport({ text: "abc", inputTokens: null, outputTokens: 9 })
       const r2 = await callP1(req(firmId, { body: "abcdefghi" }), at)
-      expect(r2).toMatchObject({ inputTokens: 3, outputTokens: 9 })
+      expect(r2).toMatchObject({ inputTokens: estimatedInput("abcdefghi"), outputTokens: 9 })
       expect((await rowOf(r2.usageLogId))!.tokensEstimated).toBe(true)
     })
   })
@@ -959,7 +987,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       // Audit F08: the spend is not lost from the books. The reservation made before the call keeps holding its worst
       // case, with the provider attempt, until the reconciler settles it, and the result says accounting is pending.
       expect(r.accounting).toBe("pending")
-      const worst = costMicroUsd(OPUS, inputTokenCeiling(r.outbound.body), MAX_OUTPUT_TOKENS)
+      const worst = costMicroUsd(OPUS, reservedInputOf(r), MAX_OUTPUT_TOKENS)
       const month = (await monthOf(firmId))!
       expect(month).toMatchObject({ reservedMicroUsd: worst })
       expect(month).not.toHaveProperty("spentMicroUsd")
@@ -991,7 +1019,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       // The commit wrote nothing; the reservation made before the call still holds its worst case (audit F08).
       expect(r.accounting).toBe("pending")
       const month = (await monthOf(firmId))!
-      expect(month).toMatchObject({ reservedMicroUsd: costMicroUsd(OPUS, inputTokenCeiling(r.outbound.body), MAX_OUTPUT_TOKENS) })
+      expect(month).toMatchObject({ reservedMicroUsd: costMicroUsd(OPUS, reservedInputOf(r), MAX_OUTPUT_TOKENS) })
       expect(month).not.toHaveProperty("spentMicroUsd")
       expect((await reservationOf(r.usageLogId))!.state).toBe("reserved")
     })

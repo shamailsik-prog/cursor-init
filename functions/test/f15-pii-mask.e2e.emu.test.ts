@@ -8,6 +8,7 @@ import { p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { setP1TransportForTests } from "../src/p1/transport"
 import { apiErrorOf, viaApi } from "./api"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -34,7 +35,7 @@ const BIG = 1_000_000_000
 
 type Member = { uid: string; token: string }
 type Out = { outputId: string; blocked: boolean; reason?: string; text?: string; classification: string }
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 type Firm = { firmId: string; matterId: string; P: Member }
 
 const db = () => adminDb()
@@ -51,7 +52,7 @@ function capture(text = "REPLY"): Sent[] {
   const sent: Sent[] = []
   setP1TransportForTests({
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       return { text, inputTokens: 1000, outputTokens: 500 }
     },
   })

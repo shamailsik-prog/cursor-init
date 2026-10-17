@@ -1,5 +1,7 @@
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
+import { isKnownSystemPolicy } from "@/platform/p1/systemPolicy"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
@@ -322,6 +324,10 @@ function outputRow(o: {
     ...(o.text === undefined ? {} : { text: o.text }),
     outbound: {
       body: o.outbound.body,
+      // Audit F16: which registry policy the system message sent with the body was, by id and version, never its text
+      // (review round R4a; absent only when the row is published from an attempt receipt recorded before F16, which
+      // resumes as a single user turn).
+      ...(o.outbound.system === undefined ? {} : { system: o.outbound.system }),
       metadata: {
         classification: o.classification,
         provider: PROVIDER_ID,
@@ -361,6 +367,23 @@ function residualCountsOf(value: unknown): Record<string, number> | null {
   return out
 }
 
+const SYSTEM_RECORD_KEYS = ["policyId", "version"]
+
+/**
+ * A system record (audit F16, spec ruling 4, review round R4a), when it is exactly `{ policyId, version }` and the
+ * registry knows that policy at that version (own keys only), so the text that was sent can be re-derived
+ * (`systemPolicyText`); null otherwise. The Functions request never carries the eve agent's instructions, so a record
+ * with their hash, or with a `text`, is malformed here. The registry keeps every version's texts
+ * (platform/p1/systemPolicy.ts), so a version it has since replaced still resolves.
+ */
+function systemRecordOf(value: unknown): SystemRecord | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  if (Object.keys(r).sort().join() !== SYSTEM_RECORD_KEYS.join()) return null
+  if (!isKnownSystemPolicy(r.policyId, r.version)) return null
+  return { policyId: r.policyId, version: r.version as string }
+}
+
 /** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */
 function receiptOf(value: unknown): P1Receipt | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null
@@ -380,6 +403,10 @@ function receiptOf(value: unknown): P1Receipt | null {
   // Audit F15: when present, exactly the four kinds, each a count; a receipt recorded before F15 has none.
   const residual = outbound.residualCounts === undefined ? undefined : residualCountsOf(outbound.residualCounts)
   if (residual === null) return null
+  // Audit F16: when present, exactly a system record; a receipt recorded before F16 has none and resumes as a single user
+  // turn. A malformed one makes the receipt unreadable (fail closed: 409, never a row that misstates what was sent).
+  const system = outbound.system === undefined ? undefined : systemRecordOf(outbound.system)
+  if (system === null) return null
   return {
     outcome: r.outcome,
     ...(r.outcome === "ok" ? { text: r.text as string } : {}),
@@ -389,7 +416,13 @@ function receiptOf(value: unknown): P1Receipt | null {
     costMicroUsd,
     model: r.model,
     classification: r.classification,
-    outbound: { body: outbound.body, purpose: outbound.purpose, redactionCounts: counts, ...(residual === undefined ? {} : { residualCounts: residual }) },
+    outbound: {
+      body: outbound.body,
+      purpose: outbound.purpose,
+      redactionCounts: counts,
+      ...(residual === undefined ? {} : { residualCounts: residual }),
+      ...(system === undefined ? {} : { system }),
+    },
   }
 }
 

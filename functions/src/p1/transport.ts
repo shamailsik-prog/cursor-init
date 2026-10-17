@@ -12,8 +12,15 @@
  */
 export type P1TransportReply = { text: string; inputTokens: number | null; outputTokens: number | null; responseId?: string; requestId?: string }
 
+/** A message as P1 sends it: the system message first, then the user and assistant turns (audit F16). */
+export type P1Message = { role: "system" | "user" | "assistant"; content: string }
+
+/**
+ * Audit F16 (spec ruling 1): a request is role-separated `messages`, built and masked by `callP1`
+ * (platform/p1/outboundPrompt.ts). A transport sends them as given; it never receives or sends a flattened body.
+ */
 export type P1Transport = {
-  send(req: { model: string; body: string; maxTokens: number }): Promise<P1TransportReply>
+  send(req: { model: string; messages: P1Message[]; maxTokens: number }): Promise<P1TransportReply>
 }
 
 /**
@@ -110,8 +117,8 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
         res = await fetch(url, {
           method: "POST",
           headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-          body: JSON.stringify({ model: req.model, messages: [{ role: "user", content: req.body }], max_tokens: req.maxTokens }),
-          // A redirect is refused, never followed: the bearer key and the masked body go to the Gateway URL only.
+          body: JSON.stringify({ model: req.model, messages: req.messages.map((m) => ({ role: m.role, content: m.content })), max_tokens: req.maxTokens }),
+          // A redirect is refused, never followed: the bearer key and the masked messages go to the Gateway URL only.
           redirect: "error",
           // Covers the response body too, so a server that stalls after its headers also times out.
           signal: AbortSignal.timeout(opts?.timeoutMs ?? TRANSPORT_TIMEOUT_MS),

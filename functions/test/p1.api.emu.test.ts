@@ -3,6 +3,7 @@ import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
+import { SYSTEM_POLICIES, SYSTEM_POLICY_VERSION } from "@/platform/p1/systemPolicy"
 import { adminDb } from "../src/admin"
 import { alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { p1TestSeam } from "../src/p1/gateway"
@@ -11,6 +12,7 @@ import { p1OpsTestSeam } from "../src/p1/ops"
 import { setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { HttpError } from "../src/http/errors"
 import { apiErrorOf, expectKind, viaApi } from "./api"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -126,14 +128,14 @@ async function memberOf(f: Firm, role: string, clearance: string): Promise<Membe
   return m
 }
 
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 
 /** A fake Gateway transport that records what it is sent; the default reply costs 14000 micro-USD (1000 in, 500 out). */
 function fakeTransport(reply: { text?: string } | (() => Promise<never>) = {}): Sent[] {
   const sent: Sent[] = []
   const t: P1Transport = {
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       if (typeof reply === "function") return reply()
       return { text: reply.text ?? "REPLY", inputTokens: 1000, outputTokens: 500 }
     },
@@ -455,7 +457,18 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "text", "traceId", "usage"])
       expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
       expect(r.traceId).toMatch(UUID_V7)
-      expect(sent).toEqual([{ model: OPUS, body: "Draft for [PARTY], [PHONE].", maxTokens: 4096 }])
+      // Audit F16: the registry's system message for the purpose ("summarise"), then the masked body as the user's turn.
+      expect(sent).toEqual([
+        {
+          model: OPUS,
+          messages: [
+            { role: "system", content: SYSTEM_POLICIES.summarise.text },
+            { role: "user", content: "Draft for [PARTY], [PHONE]." },
+          ],
+          maxTokens: 4096,
+          body: "Draft for [PARTY], [PHONE].",
+        },
+      ])
 
       const outputs = await outputsOf(f.firmId)
       expect(outputs).toHaveLength(1)
@@ -479,7 +492,11 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         outbound: { body: sent[0]!.body, metadata: { classification: "internal", provider: "ai-gateway", purpose: "summarise" } },
       })
       expect(row.outbound.metadata.redactionCounts).toEqual({ cnic: 0, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 })
-      expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata"])
+      // Audit F16: the system message that was sent with the body is recorded beside it.
+      expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata", "system"])
+      expect(row.outbound.system).toEqual({ policyId: "summarise", version: SYSTEM_POLICY_VERSION })
+      // Review round (R4a): the row names the policy; its text is never stored.
+      expect(JSON.stringify(row)).not.toContain(SYSTEM_POLICIES.summarise.text.slice(0, 80))
       // Audit F15: the residual detector's counts on the masked body sit beside the mask's own.
       expect(row.outbound.metadata.residualCounts).toEqual({ id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 })
       expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts", "residualCounts"])

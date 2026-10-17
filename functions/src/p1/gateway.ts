@@ -1,8 +1,8 @@
 import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { buildOutbound, residualCountsOfMessages, verifySystemMessage, type OutboundMessage, type SystemRecord } from "@/platform/p1/outboundPrompt"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
-import { residualPII } from "@/platform/p1/residualPII"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { isContentionAbort } from "../d1/contention"
@@ -26,7 +26,7 @@ import {
   reservedOf,
   spentOf,
 } from "./config"
-import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, bodyTokenCeiling, costMicroUsd, estimateTokens, learnedOverheadCap, reservationOverheadTokens } from "./costTable"
+import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, plainId, type TransportCode } from "./transport"
@@ -35,15 +35,18 @@ import { uuidv7 } from "./uuidv7"
 
 /**
  * `callP1`, the single chokepoint for every AI call (spec P3-61). It decides in this order, and the first
- * refusal wins: classification guard, kill switch (platform, then firm), route, outbound mask, provider
+ * refusal wins: classification guard, kill switch (platform, then firm), route, outbound request (audit F16: the
+ * registry's system message and the user's body as a separate user message, the body masked; review round R3a: the
+ * system message is immutable platform text, verified before anything else is decided about it), provider
  * policy, price, budget, credentials; then the reservation and the provider-attempt record (audit F07, F08);
  * then the transport call and the response mask; then the trace; then one transaction writing the usage row,
  * the month total, any threshold alerts, the audit row and the event, and settling the reservation.
  *
  * Spend is a limit, not a report (F07). Before the provider is called, one transaction re-reads both kill switches,
  * the month total, the firm's config and the learned request overhead, and creates `ai_reservations/{usageLogId}`
- * holding the call's worst case (the input ceiling of the masked body, one token per UTF-8 byte of its largest Unicode
- * normal form plus the model's request overhead, and the 4,096-token output ceiling: re-audit R1-D1, R2-D3), refusing
+ * holding the call's worst case (the input ceiling of the masked messages, one token per UTF-8 byte of each one's largest
+ * Unicode normal form plus a per-message overhead (audit F16), plus the model's request overhead, and the 4,096-token
+ * output ceiling: re-audit R1-D1, R2-D3), refusing
  * unless no switch blocks the model, spent + reserved + the new reservation fits the budget and the firm holds fewer
  * than its maximum of live reservations. Spent stays within budget unless a provider bills more input than bytes +
  * overhead; any such breach is recorded, raises an event, and raises the overhead for later calls of that model
@@ -55,7 +58,9 @@ import { uuidv7 } from "./uuidv7"
  * the lease reconciler (`reconciler.ts`) settles it.
  *
  * No raw body, purpose or response text reaches the transport, the trace, a row, an event, an audit row or a
- * log line, and no provider error text is returned, stored or logged.
+ * log line, and no provider error text is returned, stored or logged. The transport receives the role-separated
+ * messages only (audit F16): no caller can supply or change system text, which comes from platform/p1/systemPolicy.ts by
+ * purpose and is recorded by reference, never by its text (review round R4a).
  */
 
 export type P1Request = {
@@ -118,11 +123,15 @@ export type P1Result = {
   outputTokens: number
   costMicroUsd: number
   /**
-   * What was (or would have been) sent: the masked body and purpose, the body's redaction counts, and the residual
-   * detector's counts on the masked body (audit F15). `callP1` always sets `residualCounts`; an attempt receipt recorded
-   * before F15 has none.
+   * What was (or would have been) sent, recorded as the system message's reference plus the body (audit F16, spec ruling
+   * 4, review round R4a): the request is exactly `[{ role: "system", content: <registry text of system> }, { role:
+   * "user", content: body }]`. `body` is the masked user message as sent (tag look-alikes neutralised); `system` names the
+   * registry policy by id and version, never its text (`systemPolicyText` re-derives it); the masked purpose (metadata,
+   * never sent to the model); the redaction counts and the residual detector's counts (audit F15) over the body, the user
+   * data (the system message is platform text, R3a). `callP1` always sets `residualCounts` and `system`; an attempt
+   * receipt recorded before F15 has no `residualCounts`, and one recorded before F16 has no `system`.
    */
-  outbound: { body: string; purpose: string; redactionCounts: Record<string, number>; residualCounts?: Record<string, number> }
+  outbound: { body: string; purpose: string; redactionCounts: Record<string, number>; residualCounts?: Record<string, number>; system?: SystemRecord }
   /** Whether this call's books are complete, apart from whether its result is available (F08; see P1Accounting). */
   accounting: P1Accounting
 }
@@ -155,6 +164,8 @@ export const p1TestSeam: {
   attemptMarkFailures?: Error[]
   crashAt?: "reserved" | "dispatched" | "recorded"
   unqueued?: "all" | "commit"
+  /** Audit F16 review round (R3a): replaces the built system message's text, so a test can show the send-time check. */
+  systemOverride?: string
 } = {}
 
 function seam(): typeof p1TestSeam {
@@ -464,22 +475,29 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const [platformSnap, configSnap, totalSnap, overheadSnap] = await db.getAll(platformConfigRef(), configRef, totalRef, overheadRef())
   const config = configSnap.data()
 
-  // 3. Route (P3-62). 4. Mask the body and the purpose with the party names, and count what the independent residual
-  // detector still finds in the masked body (audit F15): counts by kind only, recorded on every call, blocked or not.
+  // 3. Route (P3-62). 4. The role-separated request (audit F16, spec rulings 1 to 3): the registry's system message for
+  // the purpose, then the body as the user's own turn, masked with the party names and its envelope tag look-alikes
+  // neutralised. The system message is immutable platform text (review round R3a): never masked, so no party name can
+  // change it, and verified at step 4a. The purpose is masked too (it is metadata, never sent). The independent residual
+  // detector's counts over the body (audit F15): counts by kind only, recorded on every call, blocked or not.
   const model = t.modelOverride ?? (Object.hasOwn(TASK_MODEL, taskType) ? TASK_MODEL[taskType] : "")
-  const bodyMask = maskOutboundPII(req.body, { partyNames })
+  const built = buildOutbound({ purpose: req.purpose, turns: [{ role: "user", segments: [{ kind: "text", text: req.body }] }], partyNames })
+  const messages: OutboundMessage[] =
+    t.systemOverride === undefined ? built.messages : [{ role: "system", content: t.systemOverride }, ...built.messages.slice(1)]
   const outbound: P1Result["outbound"] = {
-    body: bodyMask.masked,
+    body: messages[1]!.content,
     purpose: maskOutboundPII(req.purpose, { partyNames }).masked,
-    redactionCounts: Object.fromEntries(bodyMask.redactions.map((r) => [r.kind, r.count])),
-    residualCounts: residualPII(bodyMask.masked),
+    redactionCounts: built.redactionCounts,
+    residualCounts: residualCountsOfMessages(messages),
+    system: built.system,
   }
-  // The call's worst case (F07, re-audit R1-D1, R2-D3): the input ceiling of the masked body that is sent (one token
-  // per UTF-8 byte of its largest normal form, plus the model's request overhead or the larger overhead learned from a
-  // breach, counted only up to the clamp: re-audit R3-D1), plus the output ceiling sent as max_tokens, at the model's
-  // price. This is the first look; the reservation transaction recomputes it on the overhead it reads. Null for a model
-  // with no price or no overhead in the cost table, which is never dispatched (step 6, fail closed).
-  const bodyTokens = bodyTokenCeiling(outbound.body)
+  // The call's worst case (F07, re-audit R1-D1, R2-D3, audit F16): the input ceiling of the masked messages that are
+  // sent (for each, one token per UTF-8 byte of its largest normal form plus a per-message overhead; then the model's
+  // request overhead or the larger overhead learned from a breach, counted only up to the clamp: re-audit R3-D1), plus
+  // the output ceiling sent as max_tokens, at the model's price. This is the first look; the reservation transaction
+  // recomputes it on the overhead it reads. Null for a model with no price or no overhead in the cost table, which is
+  // never dispatched (step 6, fail closed).
+  const bodyTokens = requestTokenCeiling(messages)
   const firstLookOverhead = reservationOverheadTokens(model, learnedOverheadOf(overheadSnap.data(), model))
   const worstCase = firstLookOverhead === null ? null : costMicroUsd(model, bodyTokens + firstLookOverhead, MAX_OUTPUT_TOKENS)
 
@@ -487,9 +505,12 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const refusal = (): BlockReason | null => {
     if (killSwitchBlocks(platformSnap.get("killSwitch"), model)) return "kill_switch_platform"
     if (killSwitchBlocks(config?.killSwitch, model)) return "kill_switch_firm"
+    // 4a. Review round (R3a): the system message is exactly the registry text its record names, or nothing is sent.
+    if (!verifySystemMessage(messages, built.system)) return "system_unverified"
     const policy = providerAllowedFor(PROVIDER_ID, classification)
     if (!policy.allowed) return "policy_denied"
-    if (policy.requirements && !assertMinimised({ body: outbound.body, metadata: { purpose: outbound.purpose } }, partyNames)) return "not_minimised"
+    // Every user message that would be sent (audit F16) and the purpose; the verified system message is platform text.
+    if (policy.requirements && !assertMinimised({ messages, metadata: { purpose: outbound.purpose } }, partyNames)) return "not_minimised"
     if (worstCase === null) return "model_unpriced"
     const budget = budgetOf(config)
     if (budget === null) return "budget_not_set"
@@ -576,7 +597,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     dispatched = true
     // 9. The transport call, then the response mask (P3-68).
     try {
-      const res = await transport.send({ model, body: outbound.body, maxTokens: MAX_OUTPUT_TOKENS })
+      const res = await transport.send({ model, messages, maxTokens: MAX_OUTPUT_TOKENS })
       // A response came back without text: billed like the Gateway's own gateway_no_text, on the usage it reported.
       if (typeof res?.text !== "string") {
         throw new P1TransportError("gateway_no_text", {
@@ -592,10 +613,10 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       const masked = maskOutboundPII(res.text, { partyNames }).masked
       const reportedIn = tokenCount(res.inputTokens)
       const reportedOut = tokenCount(res.outputTokens)
-      // Each side is estimated from what was billed: the input from the masked body that was sent, the output from
-      // the raw response the provider produced (masking shortens it). The raw text is used for this count only; the
-      // masked text is the only one returned, stored, traced or logged.
-      inputTokens = reportedIn ?? estimateTokens(outbound.body)
+      // Each side is estimated from what was billed: the input from every masked message that was sent, the system
+      // message included (audit F16), the output from the raw response the provider produced (masking shortens it).
+      // The raw text is used for this count only; the masked text is the only one returned, stored, traced or logged.
+      inputTokens = reportedIn ?? estimateRequestTokens(messages)
       outputTokens = reportedOut ?? estimateTokens(res.text)
       tokensEstimated = reportedIn === null || reportedOut === null
       cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
@@ -610,7 +631,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       if (err instanceof P1TransportError && err.billable) {
         const reportedIn = tokenCount(err.inputTokens)
         const reportedOut = tokenCount(err.outputTokens)
-        inputTokens = reportedIn ?? estimateTokens(outbound.body)
+        inputTokens = reportedIn ?? estimateRequestTokens(messages)
         outputTokens = reportedOut ?? MAX_OUTPUT_TOKENS
         tokensEstimated = reportedIn === null || reportedOut === null
         cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
@@ -683,6 +704,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     matterId: req.matterId ?? null,
     usageLogId: usageRef.id,
     maskedBody: outcome === "blocked" ? null : outbound.body,
+    system: outcome === "blocked" ? null : built.system,
     maskedResponse: text ?? null,
   })
   if (status === "failed") logger.warn("p1.trace_export_failed", { firmId, usageLogId: usageRef.id, traceId })
@@ -745,7 +767,10 @@ type ReserveArgs = {
   monthKey: string
   /** The call's clock when it reserves: the lease runs from it, and a live reservation is one whose lease is later. */
   nowMs: number
-  /** The masked body's token ceiling (`bodyTokenCeiling`); the transaction adds the overhead it reads (`reservationOverheadTokens`). */
+  /**
+   * The masked request's content ceiling (`requestTokenCeiling` over its messages, audit F16), stored as
+   * `reservedBodyTokens`; the transaction adds the overhead it reads (`reservationOverheadTokens`).
+   */
   bodyTokens: number
   reservationRef: DocumentReference
   configRef: DocumentReference

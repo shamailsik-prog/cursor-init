@@ -4,17 +4,27 @@ import type { TaskType } from "./types"
 export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "anthropic/claude-opus-5.5" })
 
 /**
- * Input tokens a request may carry beyond its body (audit F07, re-audit R1-D1, Copilot finding on PR #40): the
- * provider's chat template around the one user message the transport sends (role and turn markers, begin and end
- * tokens, and anything the Gateway or the provider adds on its own side). The request carries no system prompt and
- * no tools (transport.ts sends `model`, one user message and `max_tokens`), so the visible template is a handful of
- * tokens; 1,024 is deliberately generous, because what a provider adds unseen is not documented. At the Opus input
- * price it holds 4,096 micro-USD per call. The exact figure is [REQUIRES VERIFICATION] at G-1: measure the Gateway's
- * `prompt_tokens` for a one-byte body (O-57). A provider that bills more than this is still charged in full; the
- * breach is recorded and raises the overhead for later calls of that model (`platform/p1Overhead`, gateway.ts), up to
+ * Input tokens a request may carry beyond its messages' content (audit F07, re-audit R1-D1, Copilot finding on PR #40):
+ * the begin and end tokens of the provider's chat template and anything the Gateway or the provider adds on its own
+ * side. Each message's own role and turn markers are reserved per message (MESSAGE_OVERHEAD_TOKENS, audit F16). The
+ * request carries no tools (transport.ts sends `model`, the role-separated `messages` and `max_tokens`); 1,024 is
+ * deliberately generous, because what a provider adds unseen is not documented. At the Opus input price it holds 4,096
+ * micro-USD per call. The exact figure is [REQUIRES VERIFICATION] at G-1: measure the Gateway's `prompt_tokens` for a
+ * one-byte body (O-57). A provider that bills more than this is still charged in full; the breach is recorded and
+ * raises the overhead for later calls of that model (`platform/p1Overhead`, gateway.ts), up to
  * LEARNED_OVERHEAD_MAX_FACTOR times this figure (re-audit R3-D1).
  */
 export const REQUEST_OVERHEAD_TOKENS = 1024
+
+/**
+ * Input tokens reserved per message for its role and turn markers (audit F16, spec ruling 3). Chat templates spend a
+ * handful of tokens per message on them; 16 is generous. [REQUIRES VERIFICATION] at G-1 with the request overhead; a
+ * provider that bills more is still charged in full and the breach is learned.
+ */
+export const MESSAGE_OVERHEAD_TOKENS = 16
+
+/** A message as the transport sends it (platform/p1/outboundPrompt.ts `OutboundMessage`). */
+type SentMessage = { readonly role: string; readonly content: string }
 
 /**
  * Per model: integer nano-USD per token, with where and when the price was taken (P3-62), and the request overhead
@@ -130,4 +140,19 @@ export function bodyTokenCeiling(text: string): number {
  */
 export function inputTokenCeiling(text: string, overheadTokens: number = REQUEST_OVERHEAD_TOKENS): number {
   return bodyTokenCeiling(text) + overheadTokens
+}
+
+/**
+ * The content ceiling of a role-separated request (audit F16, spec ruling 3, with F07): for each message,
+ * `bodyTokenCeiling` of its content plus MESSAGE_OVERHEAD_TOKENS. A tokenizer splits each message on its own, so the
+ * per-byte bound holds message by message. For the same user text it is never below the pre-F16 body ceiling, and a
+ * system message raises it. The reservation adds the model's request overhead to it, as before.
+ */
+export function requestTokenCeiling(messages: readonly SentMessage[]): number {
+  return messages.reduce((total, m) => total + bodyTokenCeiling(m.content) + MESSAGE_OVERHEAD_TOKENS, 0)
+}
+
+/** The charge estimate for the input side when no usage is reported (P3-62), over every message sent (audit F16). */
+export function estimateRequestTokens(messages: readonly SentMessage[]): number {
+  return messages.reduce((total, m) => total + estimateTokens(m.content), 0)
 }
