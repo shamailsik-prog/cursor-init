@@ -110,3 +110,16 @@
 Verification at the branch head (code as of f65c2d8): `npm run test:unit` 195 files, 5,576 passed, 54 skipped (pre-existing live-only); `npm run test:rules` 14 files, 682 passed; the F05 suite with the F17 file 90 passed; the full Functions emulator run 75 files passed and 1 failed (4 tests in `p2.jobs-scheduled.emu.test.ts`, 15 s timeouts), which fail the same way on origin/main b48f79d in the same environment (the tick is O(firms) over the shared emulator, order-dependent) and pass 6 of 6 alone on the branch; `npm run typecheck`, `typecheck:tests`, functions typecheck and build exit 0; `npm run lint` 0 errors (89 pre-existing warnings, none in changed files); `npx eslint --max-warnings 0 functions` exit 0; `BASE=origin/main bash ci_gates/gate_g0.sh` PASSED.
 
 RED against main: origin/main b48f79d exported by `git archive` into a scratch directory, the new F17 test files copied in, private-port emulators: functions 5 files, 58 failed and 8 passed (the guards named above); root 48 failed and 1 passed; the F05-suite file 3 failed and 1 passed.
+
+## Review round (Codex P1, P2 and P2 on PR #63, head 6ac73a6)
+
+Spec section 2a (rulings R2a, R5a, R4a).
+
+| Finding | Commit | RED (each new test seen failing first) | GREEN |
+| --- | --- | --- | --- |
+| P1 `grounding.ts`: a report-style citation declared `statute`, `rule` or `other` entered the judgment path (R2a) | d62a22d | `f17-grounding.test.ts` 5 failed, 22 passed (`expected 'grounded' to be 'ungrounded'`); the e2e's new Codex-example case failed (`grounding status: expected 'grounded' to be 'ungrounded'`). Mutant with the kind check dropped: 6 unit and 1 e2e failures, reverted | 27 passed; e2e 19 passed; the set f17.2 (60 items, 3 `mislabelled_authority`) graded as authored; the gate then required the record update (set and rules f17.1 to f17.2) |
+| P2 `check_committee_eval_record.py`: `liveRun {passed: 0, failed: 0}` passed (R5a) | d62a22d, 4cc74a7 | `tests/f17-eval-record-gate.test.ts` 6 failed, 29 passed; after the raw-float cases were corrected to the set's own count (4cc74a7), against the 6ac73a6 gate 9 failed, 29 passed (adds live `failed: 0.0`, deterministic `passed: N.0` and `failed: 0.0`) | 38 passed; G-0 [17] PASS |
+| P2 `gateway.ts`: `modelReported` was not on `providerAttempt`, so a reconciled usage row lost it (R4a) | 7807678 | `f17-reconcile-model.emu.test.ts` 6 failed of 6 (`expected undefined to be 'claude-opus-5.5'`) | 6 passed |
+| Spec and README | 6e3e396 | n/a | n/a |
+
+Verification for the review round: the P1/F06/F07-F08/F09/F15/F16/F17/D4 emulator files 22 files, 813 passed; the F05 suite with the F17 file 4 files, 90 passed; the Functions F17 unit files 115 passed; typecheck, typecheck:tests, functions typecheck and build exit 0; lint 0 errors (89 pre-existing warnings, none in changed files); functions eslint exit 0; G-0 PASSED with [17] PASS; the live harness without a key prints NOT RUN for the 60 items of f17.2 and exits 0. The root `npm run test:unit` runs alongside a parallel emulator workload (load average 4 to 5 on 4 cores) failed only wall-clock budget tests, in files this branch does not touch (`tests/citations.time-budget.test.ts`, `tests/f15-r4-bounds.test.ts`), different ones per run; both files pass alone (65 passed). The PR body records the final run.
