@@ -703,7 +703,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     await recordAttemptOutcomeRetrying(
       db,
       resRef,
-      { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds },
+      { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds, ...(modelReported === null ? {} : { modelReported }) },
       operation ? { operation: operation.operation, traceId, receipt } : undefined
     ).catch((err: unknown) => {
       logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
@@ -988,7 +988,20 @@ async function markAttempt(
  * records the attempt receipt on the operation's marker, only while the marker carries this call's trace id. Cut off
  * like the mark.
  */
-type AttemptOutcome = { result: P1Outcome; inputTokens: number; outputTokens: number; tokensEstimated: boolean; costMicroUsd: number; responseId?: string; requestId?: string }
+type AttemptOutcome = {
+  result: P1Outcome
+  inputTokens: number
+  outputTokens: number
+  tokensEstimated: boolean
+  costMicroUsd: number
+  responseId?: string
+  requestId?: string
+  /**
+   * Audit F17 review round (Codex P2 on PR #63): the model the provider reported, a model id (`modelId`), so the lease
+   * reconciler can carry it into a usage row it rebuilds from this attempt. Absent when none was reported.
+   */
+  modelReported?: string
+}
 type ReceiptArgs = { operation: P1Operation; traceId: string; receipt: P1Receipt }
 
 /** Attempts at the attempt-outcome write (step 9b); after a failed one the wait is 100 ms, then 200 ms (re-audit LOW-2). */
@@ -1043,6 +1056,7 @@ async function recordAttemptOutcome(db: Firestore, ref: DocumentReference, r: At
           "providerAttempt.costMicroUsd": r.costMicroUsd,
           ...(r.responseId === undefined ? {} : { "providerAttempt.responseId": r.responseId }),
           ...(r.requestId === undefined ? {} : { "providerAttempt.requestId": r.requestId }),
+          ...(r.modelReported === undefined ? {} : { "providerAttempt.modelReported": r.modelReported }),
         })
       },
       { maxAttempts: 3 }
