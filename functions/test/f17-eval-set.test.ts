@@ -106,7 +106,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       ["Urdu مقدمہ with a name", /مقدمہ قلوو/u, ["ur"]],
       ["Urdu کیس", /قلوو کیس/u, ["ur"]],
       ["Urdu digits", /[۰-۹]{4}/u, ["ur"]],
-      ["a statute with a year (stays grounded)", /Act, 1872|ایکٹ، 1872/u, ["en", "ur"]],
+      ["a statute with a year (stays grounded)", /Act, 2099|ایکٹ، 2099/u, ["en", "ur"]],
     ]
     for (const [family, re, languages] of families) {
       for (const language of languages) expect(prose.some((i) => i.language === language && re.test(i.response)), `${family} ${language}`).toBe(true)

@@ -3,7 +3,7 @@
   "evalSet": {
     "path": "docs/evals/committee-brain-eval-set.json",
     "version": "f17.4",
-    "sha256": "afa30c72e2a3391b68626f76eb9180e4f568e6273d94f1fd38c40894eb074509",
+    "sha256": "dae2920bf8f4f2387bdb7fcef71d4593709f7fe35b1f10d415e04fcb778bdf08",
     "items": 89
   },
   "routing": {

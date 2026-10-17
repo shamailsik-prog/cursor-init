@@ -232,7 +232,7 @@ const NAME_STOP = new Set([
   "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "monday", "tuesday",
   "wednesday", "thursday", "friday", "saturday", "sunday",
 ])
-/** A name whose last word is one of these is a statute's ("the Contract Act (1872)"), not a case's. */
+/** A name whose last word is one of these is a statute's ("the Contract Act (2099)"), not a case's. */
 const STATUTE_HEADS = new Set(["act", "ordinance", "order", "rule", "rules", "code", "constitution", "regulation", "regulations", "law", "laws", "amendment", "article", "section", "schedule"])
 /** Tokens a case name takes on each side of its connector. */
 const NAME_TOKENS = 6
@@ -409,7 +409,7 @@ function nameMentions(prose: string, toks: Token[], reportStarts: ReadonlySet<nu
       if (first >= 0) push(first, closing)
       continue
     }
-    // "Qalvo (2099)": a name and a bracketed year, not a statute's ("the Contract Act (1872)").
+    // "Qalvo (2099)": a name and a bracketed year, not a statute's ("the Contract Act (2099)").
     if (text === "(" && RE_YEAR_TOKEN.test(toks[i + 1]?.text ?? "") && toks[i + 2]?.text === ")") {
       const first = nameBefore(toks, i, 3)
       if (first >= 0 && !STATUTE_HEADS.has(base(toks[i - 1]!))) push(first, i + 2)

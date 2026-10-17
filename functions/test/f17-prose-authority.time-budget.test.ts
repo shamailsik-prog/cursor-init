@@ -73,7 +73,7 @@ const ADVERSARIAL: ReadonlyArray<readonly [string, string]> = [
   ["years near capitals", "2099 AB CD EF "],
   ["Urdu digits", "۲۰۹۹ "],
   ["full-width digits", "２０９９ "],
-  ["zero-width characters", "​"],
+  ["zero-width characters", "\u200B"],
   ["dashes", "C.A. 7–"],
   ["prefixes", "M/s Messrs Mst. "],
   ["brackets before connectors", "(a b) v "],

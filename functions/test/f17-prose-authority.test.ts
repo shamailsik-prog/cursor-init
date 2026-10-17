@@ -285,8 +285,8 @@ describe("audit F17 re-audit round 2: forms that still leaked at d729ff8 (ruling
     "(２０９９) ３ SCC ７７７ settles it",
     "(۲۰۹۹) ۳ SCC ۷۷۷ settles it",
     "(٢٠٩٩) ٣ SCC ٧٧٧ settles it",
-    "(2099) 3 S​CC 777 settles it",
-    "(2099)​3 SCC 777 settles it",
+    "(2099) 3 S\u200BCC 777 settles it",
+    "(2099)\u200B3 SCC 777 settles it",
     "2099 (3) SCALE 777 settles it",
     "JT 2099 (3) SC 777 settles it",
     "550 U.S. 544 (2099) settles it",
@@ -410,11 +410,11 @@ describe("audit F17 re-audit round 2: forms that still leaked at d729ff8 (ruling
   // them would make sound answers advisory wholesale. A statute in the prose is not an authority the corpus resolves
   // (residual risk 9).
   it.each([
-    "The Contract Act, 1872 governs the agreement.",
-    "Section 497 of the Code of Criminal Procedure, 1898 applies.",
-    "Section 302 PPC, 1860 read with section 34 PPC applies.",
+    "The Contract Act, 2099 governs the agreement.",
+    "Section 497 of the Code of Criminal Procedure, 2099 applies.",
+    "Section 302 PPC, 2099 read with section 34 PPC applies.",
     "The Ordinance, 2099 and the Rules of 2099 apply.",
-    "Order XXXIX Rule 1 of the Code of Civil Procedure, 1908 applies.",
+    "Order XXXIX Rule 1 of the Code of Civil Procedure, 2099 applies.",
     "Under the Constitution of 2099, Article 10-A applies.",
     "Act No. 7 of 2099 and Notification No. 7 of 2099 apply.",
     "The FIR No. 77/2099 was registered at the police station.",
@@ -433,7 +433,7 @@ describe("audit F17 re-audit round 2: forms that still leaked at d729ff8 (ruling
   })
 
   it("normalises before reading: a name split by a zero-width character is masked whole", async () => {
-    const g = await ground(answerText("The rule in Tariq Zar​vani v. The State applies."), ["Tariq Zarvani"])
+    const g = await ground(answerText("The rule in Tariq Zar\u200Bvani v. The State applies."), ["Tariq Zarvani"])
     expect(g.status).toBe("partially_grounded")
     expect(suspects(g).map((c) => c.ref)).toContain("UNRECOGNISED: [PARTY] v. The State")
     expect(JSON.stringify(g.citations)).not.toMatch(/Tariq|Zarvani|Zar|vani/u)
