@@ -14,9 +14,10 @@ and fails unless docs/evals/committee-brain-eval-record.json names exactly those
 and result, a date, and `live` as a boolean: a live run that did not happen is `live: false` with a note starting
 "NOT RUN"; one that did is `live: true` with `liveRun.passed` equal to the set's item count, `liveRun.failed == 0`
 (integers only: never a bool, a float or a string; review round, Codex P2 on PR #63) and a `liveRun.date`. The
-deterministic counts are held to the same rule. Re-audit L3: a live record whose note says NOT RUN fails; a record
-date or a live run date more than one day ahead of today (UTC) fails; each value is read from its one declaration
-outside comments (a commented-out declaration above the real one is never read; none, or two, fail closed).
+deterministic counts are held to the same rule. Re-audit L3: a live record whose note says NOT RUN (in any case: re-audit
+round 2) fails; a record date or a live run date more than one day ahead of today (UTC) fails; each value is read from
+its one declaration in code, outside comments and outside string and template literals, as a plain string literal (a
+commented-out declaration, or one written inside a literal, is never read; none, or two, fail closed).
 State-based, not diff-based: any change without a matching record fails, whatever the diff. It fails closed when it
 cannot read any of the values.
 

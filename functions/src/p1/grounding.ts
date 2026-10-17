@@ -22,12 +22,16 @@
  * under its own key (kind and ref), so the same citation found in the prose (resolved as a judgment, source `text`)
  * stays a separate entry: a claim is supported only by its own declared judgment authorities, never by a prose hit.
  *
- * Every prose field is also read by `proseAuthority.ts` for what the D4 extractor does not see (rules f17.3, re-audit
- * ruling R7a): a report shape that reads as one reported citation is resolved like any other; any other report shape,
- * and every case name, case number, page-only reference or "reported at/in/as" that is not bound to a VERIFIED citation
- * next to it, is an UNRECOGNISED suspect from the text (masked, then bounded), under the same cap.
+ * Every prose field is also read by `proseAuthority.ts` for what the D4 extractor does not see (rules f17.3 and f17.4,
+ * re-audit rulings R7a and R7b): the field is normalised (NFKC, format characters, digits, dashes) and masked whole
+ * first; a report shape that reads as one reported citation is resolved like any other; any other report shape, and
+ * every case name, case number, page or paragraph reference or "reported at/in/as" that is not bound to a VERIFIED
+ * citation next to it, is an UNRECOGNISED suspect from the text (masked, then cut at a word boundary), under the same cap.
  *
- * Status rules `f17.3`, in order: no text, `not_assessed`; the contract not met, `unstructured`; no citation at all,
+ * What `grounded` means (R7b): every claim's authorities are VERIFIED and the prose holds no unverified authority in a
+ * recognised form. A bare name with no case marker ("as observed in Qalvo") cannot be detected.
+ *
+ * Status rules `f17.4`, in order: no text, `not_assessed`; the contract not met, `unstructured`; no citation at all,
  * `not_assessed` (F06: never OK); any OVERRULED, PENDING_OVERRULING, UNVERIFIED or UNRECOGNISED citation,
  * `partially_grounded` when some claim is supported (it cites at least one authority and every one is VERIFIED), else
  * `ungrounded`; any UNAVAILABLE citation or any omitted, `unverifiable`; otherwise `grounded` when every claim (at least
@@ -52,7 +56,9 @@ import { authorityMentions, normaliseProse, unboundMentions, type VerifiedSpan }
  * The status rules above. A change to them changes the evaluation's outcomes: the CI gate requires a new record.
  * f17.1 (PR #63 round 1); f17.2 (review round): a statute, rule or other authority is never resolved as a judgment;
  * f17.3 (re-audit round, ruling R7a): an authority-like mention in the prose that is not bound to a VERIFIED citation is
- * an UNRECOGNISED suspect.
+ * an UNRECOGNISED suspect; f17.4 (re-audit round 2, ruling R7b): the prose is normalised and masked first and read by
+ * shape (possessive and prefixed case names, supra and ibid, capital-group case numbers, paragraphs, reporters in any
+ * case, US and bracketed-volume reports, a catch-all), statutes and record numbers aside.
  */
 export const GROUNDING_RULES_VERSION = "f17.4"
 
@@ -92,6 +98,11 @@ export type GroundedCitation = {
 /** The system policy the answer was asked under, by reference (F16); null for an answer recorded before F16. */
 export type GroundingPolicy = { policyId: string; version: string }
 
+/**
+ * The grounding record (ruling 3). `status: "grounded"` means every claim's authorities are VERIFIED and the prose holds
+ * no unverified authority in a recognised form (rulings R7a, R7b); a bare name with no case marker ("as observed in
+ * Qalvo") cannot be detected, so it does not prevent `grounded`. Anything else is advisory.
+ */
 export type Grounding = {
   status: GroundingStatus
   rules: string
@@ -104,7 +115,11 @@ export type Grounding = {
 export type GroundInput = { text: string | undefined; policy: GroundingPolicy | null; partyNames: readonly string[] }
 export type GroundOptions = { budgetMs?: number; now?: () => number }
 
-/** True unless the answer is grounded (ruling 3): advisory content needs a lawyer's check before it is relied on. */
+/**
+ * True unless the answer is grounded (ruling 3): advisory content needs a lawyer's check before it is relied on.
+ * Grounded means every claim's authorities are VERIFIED and the prose holds no unverified authority in a recognised
+ * form; a bare name with no case marker cannot be detected (R7b).
+ */
 export function isAdvisory(grounding: Pick<Grounding, "status">): boolean {
   return grounding.status !== "grounded"
 }
