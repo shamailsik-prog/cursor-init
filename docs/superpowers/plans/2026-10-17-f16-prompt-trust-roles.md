@@ -89,6 +89,17 @@
 
 - [x] `npm run test:unit`; the `test:rules` set; the Functions P1/F07-F08/F09/F15/F16 files and one full Functions emulator run (hard timeout); `npm run typecheck`, `npm run typecheck:tests`, functions typecheck and build; `npm run lint`; `BASE=origin/main bash ci_gates/gate_g0.sh`; adversarial re-read of the diff.
 
+### Task 9: Review round (Codex P1 and P2 on PR #62; spec section 2a, rulings R3a and R4a)
+
+**Files:** create `platform/p1/agentInstructions.ts`, `tests/f16-system-verify.test.ts`, `tests/f16-next-output-size.firestore.test.ts` (added to `test:rules` and to the emulator-only exclusion list in `vitest.config.ts`, like its F10 and F14 siblings); modify `platform/p1/systemPolicy.ts`, `outboundPrompt.ts`, `providerPolicy.ts`, `internalAICaller.ts`, `constants.ts`, `gatewayTransport.ts`, `promptText.ts`, `committeeBrainModel.ts`, `platform/spine/store.ts`, `functions/src/p1/types.ts`, `gateway.ts`, `opik.ts`, `ops.ts`, `README.md`, and the tests listed in spec section 3 (review round table).
+
+- [x] RED first, on c56cf4d's sources: party names equal to every sentence of every policy (and of the instructions) leave the system message byte-identical; a tampered system message fails closed; the bridge refuses foreign system text and forwards nothing else; records name the system message by reference; receipts strict; the Next outbound holds the body once; the 900 KiB guard (exact boundary, before the provider policy); the near-limit body persists in Firestore; the Next answer is bounded at 4,096 tokens.
+- [x] R3a: the system message is never masked or neutralised, not counted, left out of `assertMinimised`, verified at send time (`verifySystemMessage`; Functions step 4a `system_unverified` with the `systemOverride` seam; Next `SYSTEM_UNVERIFIED_REASON`).
+- [x] R3a: the eve bridge passes on only agent/instructions.md as pinned by digest and length; `buildOutbound` refuses other instructions text.
+- [x] R4a: `SystemRecord` by reference everywhere (results, rows, receipts, traces, Next outbound); registry history; receipts exactly `{ policyId, version }`; Next outbound in the Functions shape plus compact `turns`; `MAX_STORED_OUTBOUND_BYTES` guard in `platform/p1`; Next `maxOutputTokens: 4096`.
+- [x] Spec section 2a, the changed-expectations table, residual risk 8 and 10 to 12; README.
+- [x] Verification (ledger below).
+
 ## Ledger
 
 ### Decisions
@@ -114,3 +125,28 @@
 - `npm run lint`: 0 errors, 89 warnings, none in a touched file; `npx eslint --max-warnings 0 functions`: exit 0.
 - `BASE=origin/main bash ci_gates/gate_g0.sh`: Gate G-0 PASSED.
 - Not run here: the live corpus evaluation (no key) and `eve info` (the eve CLI needs Node 24; this host has Node 22). The agent and its tools load and execute in vitest, and the root typecheck covers `agent/tools/*`.
+
+
+### Review round (Codex P1 and P2 on PR #62), decisions
+
+- R3a: the system message is immutable platform text: never masked or neutralised, not counted in the redaction or residual counts, left out of `assertMinimised` (index 0 only; any other system message is checked as a turn), verified just before dispatch. The round-1 ruling "mask every part, the system text included" was wrong for the system message.
+- R3a: the eve bridge passes on, of the prompt's system text, only one whole `Instructions (instructions)` block whose text has the pinned SHA-256 and length; eve's other blocks are not sent (no tools are sent). A copy of the instructions in code was tried first and dropped: Gate G-0's fee-guard (E-15) refuses the court-fee identifiers the file names in its prohibition, escaping letters to pass it would game the guard, and a copy can drift. The digest keeps the file as the single source.
+- R3a: eve's compaction call (its own system prompt) is refused by the bridge; it was already refused for the missing classification on main and round 1. Recorded as residual risk 10, not widened here.
+- R4a: records name the system message by policy id and version (plus the instructions' digest on the eve path); the registry keeps every version's texts; receipts are exactly `{ policyId, version }` of a registry entry (round-1 receipts with `text` were never written outside tests: the PR is unmerged).
+- R4a: the Next outbound is the Functions shape plus compact `turns` for a conversation; the messages go to the transport only. The size guard (900 KiB of JSON in UTF-8) runs first, so a blocked row fits too; the Next transport asks for at most 4,096 output tokens, as the Functions path does, so the answer fits the 124 KiB left in the document.
+- The Firestore test as inherited created its matter through the frozen `create` action (`LEGACY_D1_NEXT_WRITES`, 404) and never reached the bug; it now seeds the matter as the F10 suite does, on a project of its own, and its RED is the bug itself.
+- Inherited uncommitted work kept: the tests and the `package.json` / `vitest.config.ts` entries for the new Firestore file (needed: `test:rules` runs it; plain `vitest run` excludes it like its siblings). Tightened: the residual-counts row now expects exact counts.
+
+### Review round, RED (each new or changed test in its final form, run on c56cf4d's exact tree: `git archive c56cf4d` with the final test files copied in)
+
+- Root, 7 files: 140 failed, 80 passed (round-1 guard rows), 54 skipped (live corpus). Failure lines: injection structure, eve-bridge carriers x108 `expected 'You are a legal assistant to the lawy...' to be ...` (the prompt's system text was forwarded); `tests/f16-next-transport.test.ts` "bounds the answer" `expected undefined to be 4096`; `tests/f16-outbound-prompt.test.ts`: record `expected { policyId: 'committee-brain', ...(2) } to deeply equal { ...(1) }`, instructions rows `(input.agentInstructions ?? []).filter is not a function` x5, party-name rows x5 `expected { role: 'system', ...(1) } to deeply equal ...`, `verifySystemMessage is not a function`, residual counts `expected { id_digits: +0, ...(3) } to deeply equal ...`; `tests/f16-prompt-roles.test.ts`: byte-identical and forwards-nothing rows x2 `expected { role: 'system', ...(1) } to deeply equal ...`, refusal rows x4 `expected [ { body: 'Draft the reply.', ...(3) } ] to have a length of +0 but got 1`, stored shape `expected { ...(4) } to not have property "messages"`, near-limit `expected 1736050 to be less than or equal to 921600`, over-limit `... to have a length of +0 but got 1`, guard before policy `expected [ true, ...(1) ] to deeply equal [ true, StringMatching ]`, exact bound `expected 1841148 to be 921600`, compact turns `(input.agentInstructions ?? []).filter is not a function`, `assertMinimised` skip `expected false to be true`; `tests/f16-system-verify.test.ts` x4 `expected [ { body: 'Draft the reply.', ...(3) } ] to have a length of +0 but got 1` (control passes); `tests/f16-system-policy.test.ts` `Cannot find module '@/platform/p1/agentInstructions'`.
+- Functions (emulators, private ports), 3 files: 13 failed, 219 passed. (a) and the resumed row `expected { policyId: 'committee-brain', ...(2) } to deeply equal { ...(1) }`; malformed receipt with `text` `expected an ApiError, the call succeeded`; (f) x5 `expected { role: 'system', ...(1) } to deeply equal ...`; (g) `expected [ false, undefined ] to deeply equal [ true, 'system_unverified' ]`; `p1.api` row `expected { policyId: 'summarise', ...(2) } to deeply equal { ...(1) }`; `p1.gateway` masking row `expected { ...(5) } to deeply equal { ...(5) }` and two rows `systemPolicyText is not a function`. The unknown-version and other malformed rows are guards (409 on c56cf4d too).
+- Firestore (`tests/f16-next-output-size.firestore.test.ts`): both rows `expected 400 to be 200`, the route logging `committee brain write failed: 3 INVALID_ARGUMENT: maximum entity size is 1048576 bytes`.
+
+### Review round, GREEN
+
+- Affected unit files (7): 232 passed, 54 skipped (live corpus: NOT RUN, no `AI_GATEWAY_API_KEY`).
+- `npm run test:unit`: 192 files, 5,509 passed, 54 skipped, 0 failed. One earlier full run missed the `tests/citations.time-budget.test.ts` timing budget (3,108 ms against 3,000 ms; `services/d4-2`, untouched by F16, the flake round 1 also met); the file alone passed 44/44 and the next full run passed.
+- Functions emulator files (f07-f08, f09 x2, f15, f16 e2e and ceiling, p1.api, p1.gateway, p1.transport, p1.units): 10 files, 467 passed.
+- `test:rules` set (Firestore emulator, private ports): 14 files, 682 passed (the new file 2/2).
+- `npm run typecheck`, `npm run typecheck:tests`, functions typecheck and functions build: exit 0. `npm run lint`: 0 errors, 89 warnings, none in a touched file; `npx eslint --max-warnings 0 functions`: exit 0. `BASE=origin/main bash ci_gates/gate_g0.sh`: PASSED.
