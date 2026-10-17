@@ -170,3 +170,81 @@ Spec §7, rulings R2-1 to R2-6. Same constraints: TDD (each new test seen failin
 - the NFKC-expansion span test now uses U+FB01;
 - do-chashmi he now folds to heh goal;
 - the Urdu phone-label row now has seven digits.
+
+## Round 3: re-audit round 2 (FAIL 7/10)
+
+Spec §8, rulings R3-1 to R3-8. Same constraints: TDD (each new test seen failing first, RED recorded against 15a5385), no #44 files, no `app/api/**`, escapes for invisible characters, no PR opened or edited by the builder.
+
+### Task R3-A: held-out corpus, before any code (R3-6)
+
+- [x] Write `tests/f15-r3-heldout-corpus.ts` (134 lines, English and Urdu, FIR, plaint, judgment, bail and bond style) and commit it alone (d8d53cf), before reading the re-auditor's fresh corpus.
+- [x] Split the fresh corpus by 1-based line number; read only the even lines (`FRESH_TUNING` in `tests/f15-r3-fresh-corpus.ts`).
+
+### Task R3-B: the re-auditor's inputs as RED tests
+
+**Files:** create `tests/f15-r3-mask.test.ts` (with main's patterns as the differential oracle), `tests/f15-r3-residual.test.ts`, `tests/f15-r3-bounds.test.ts` and `tests/f15-r3-fresh-corpus.ts`. Modify `functions/test/f15-pii-mask.e2e.emu.test.ts`: add rows (i) and correct the header.
+
+- [x] Commit them (8ab390b) and run them against 15a5385's sources.
+
+### Task R3-C: the mask (R3-1, R3-2, R3-7)
+
+- [x] Stage 1: main's patterns in main's order (the mobiles also take the country prefix; the anchored email ends where main's did).
+- [x] Stage 2: unbounded CNIC, IBAN, NTN and passport separators; the mobile separator class with the exclusive slash alternatives and the date guard; the wider email ending; the grouped CNIC last.
+- [x] Detection view: U+2800 and U+303F to a space, `\p{Co}` dropped.
+
+### Task R3-D: the residual detector (R3-2 to R3-7)
+
+- [x] Dates read off a digit run; whole-value label minimums; the kinship walk; plural, verb and locality residence cues; the address label anywhere; numbered-place followers; exemption limits.
+
+### Task R3-E: measure, then fix and add the held-out rows (R3-6)
+
+- [x] Measure the three rates at 76902de. Then fix the three held-out failures and the e2e sentence-end regression (c532fe4), and add every held-out line as a regression row.
+
+### Task R3-F: docs and verification
+
+- [x] Spec §8 and §5; mask header; README; this record; PR body `pr-body-r3.md` through `ci_gates/check_pr_phase_claims.py`.
+
+### Round-3 execution record
+
+**Order of work.**
+1. d8d53cf: the held-out corpus, alone.
+2. 8ab390b: the RED tests.
+3. 76902de: the implementation, the measured state.
+4. c532fe4: the held-out fixes and regression rows.
+5. 53ecdc6: docs, and the wider-class CNIC rows.
+6. This record.
+
+**RED, against 15a5385's sources:**
+- `tests/f15-r3-mask.test.ts`: 46 failed / 22 passed (68), all three differential seeds included.
+- `tests/f15-r3-residual.test.ts`: 86 failed / 81 passed (167), including 15 of the 60 tuning lines.
+- The three wider-class CNIC rows added at 53ecdc6: 3 failed / 3.
+- `functions/test/f15-pii-mask.e2e.emu.test.ts`: 14 failed / 23 passed (37), every row of (i).
+- `tests/f15-r3-bounds.test.ts`: 46 / 46 (15a5385's separators were bounded). Mutants M1 and M2 show it catches what it guards.
+- After the measurement, 4 failed at 76902de and pass at c532fe4: held-out lines 37, 69 and 121, and "son of Respondent No. 2. Draft the grounds."
+
+**False-positive rates (R3-6), at 76902de:**
+- fresh even (tuned on): 0 / 60;
+- fresh odd (held out): 2 / 60, lines 37 and 69;
+- new corpus (held out): 1 / 134, line 121;
+- both held-out sets: 3 / 194 (1.5%).
+
+At the head: 0 of 254.
+
+**Mutants** (spec §8): M1 to M6 are all killed.
+
+**GREEN, at 53ecdc6:**
+- `npm run test:unit`: 176 files, 4506/4506.
+- The `test:rules` set: 13 files, 680/680.
+- The Functions F15 e2e, p1.api, p1.gateway, both f09 files and p1.units: 338/338.
+- The full Functions emulator suite, under a hard timeout: 66 of 67 files, 1660/1661. The one failure is a 15 s timeout in `p2.jobs-invariants` (skewed clocks), late in the run. That file passes alone (5/5; the test takes 1.8 s) and beside the F15 file and `p2.jobs-scheduled` (48/48). Late-run 15 s timeouts in the p2 job files also occur on an exact `origin/main` tree in this environment (round 1, and the re-auditor's main run). This is environmental, not an F15 regression.
+- `npm run typecheck`, `npm run typecheck:tests`, `npm --prefix functions run typecheck` and `build`: exit 0.
+- `npm run lint`: 0 errors (89 warnings, none in a touched file).
+- G-0: PASSED.
+
+**Timings** (rank-3 work at 100,000 characters, best of three, `profile3.ts`):
+- every separator-run and repetition shape: at most 296 ms with 50 names;
+- U+FDFA × 100,000: 1.8 s with no names, 3.0 s with 50.
+
+The bound tests: the round-2 matrix (258 tests, with the round-3 cues) and the round-3 shapes (46 tests) pass at 1.5 s per input.
+
+**Changed earlier expectations:** none.
