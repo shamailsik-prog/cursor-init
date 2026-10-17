@@ -104,6 +104,58 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
     expect(prose.some((i) => /Baz v\. Qux/u.test(i.response)), "the bypass").toBe(true)
   })
 
+  // Re-audit L1: the comparator itself. With `groundingProblems` reduced to `return []` every test above stayed green
+  // (mutant M16). Each case changes one expectation of en-fab-01 (ungrounded, advisory, claims 1/0, one UNVERIFIED claim
+  // citation) and must be reported as exactly that difference.
+  describe("the comparator reports every difference between an item's expectation and its grade (re-audit L1)", () => {
+    type Expected = { status: string; advisory: boolean; claims: { total: number; supported: number }; citations: Array<Record<string, unknown>> }
+    const regrade = async (change: (e: Expected) => Expected) => {
+      const m = await load()
+      const base = JSON.parse(raw) as { items: Array<{ id: string; expected: Expected }> }
+      const item = base.items.find((i) => i.id === "en-fab-01")!
+      const report = await m.gradeRecorded(m.parseEvalSet({ ...base, items: [{ ...item, expected: change(structuredClone(item.expected)) }] }))
+      return report
+    }
+    const CITED = { ref: "PLD 2099 SC 7777", status: "UNVERIFIED", source: "claim" }
+
+    it("an expected status that differs from the actual one", async () => {
+      const r = await regrade((e) => ({ ...e, status: "grounded" }))
+      expect([r.passed, r.failed]).toEqual([0, 1])
+      expect(r.items[0]!.problems).toEqual(["status ungrounded, expected grounded"])
+    })
+
+    it("an expected advisory that differs from the actual one", async () => {
+      const r = await regrade((e) => ({ ...e, advisory: false }))
+      expect([r.passed, r.failed]).toEqual([0, 1])
+      expect(r.items[0]!.problems).toEqual(["advisory true, expected false"])
+    })
+
+    it("expected claims that differ", async () => {
+      const r = await regrade((e) => ({ ...e, claims: { total: 1, supported: 1 } }))
+      expect(r.items[0]!.problems).toEqual(["claims 0/1, expected 1/1"])
+    })
+
+    it("a citation the grade lacks, and one it has that is not expected", async () => {
+      const r = await regrade((e) => ({ ...e, citations: [{ ...CITED, ref: "PLD 2099 SC 7778" }] }))
+      expect(r.items[0]!.problems).toEqual([
+        `missing citation ${JSON.stringify({ ...CITED, ref: "PLD 2099 SC 7778" })}`,
+        `unexpected citation ${JSON.stringify(CITED)}`,
+      ])
+    })
+
+    it("a citation's source, status or kindMismatch that differs", async () => {
+      for (const changed of [{ ...CITED, source: "text" }, { ...CITED, status: "UNRECOGNISED" }, { ...CITED, kindMismatch: true }]) {
+        const r = await regrade((e) => ({ ...e, citations: [changed] }))
+        expect(r.items[0]!.problems, JSON.stringify(changed)).toEqual([`missing citation ${JSON.stringify(changed)}`, `unexpected citation ${JSON.stringify(CITED)}`])
+      }
+    })
+
+    it("nothing for the item as authored", async () => {
+      const r = await regrade((e) => e)
+      expect([r.passed, r.failed, r.items[0]!.problems]).toEqual([1, 0, []])
+    })
+  })
+
   it("refuses a malformed set: an unknown key, a duplicate id, an unknown category", async () => {
     const m = await load()
     const base = JSON.parse(raw) as Record<string, unknown> & { items: Array<Record<string, unknown>> }
