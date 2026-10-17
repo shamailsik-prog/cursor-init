@@ -29,7 +29,7 @@ import {
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
-import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, plainId, type TransportCode } from "./transport"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
 import { uuidv7 } from "./uuidv7"
 
@@ -85,6 +85,14 @@ export type P1Request = {
    * on it (step 9b), so a same-key retry can publish that answer without a second provider call.
    */
   operation?: P1Operation
+  /**
+   * Audit F17 (spec ruling 6, refinement R6a): called once, synchronously, with the masked answer as soon as the provider
+   * has answered `ok` and the answer is masked, before the attempt outcome, the trace and the commit, so the caller can
+   * start work on it (committeeBrain grounds it) while those run. Never called for a blocked or failed call, and never
+   * with unmasked text. It must not throw; a throw is caught and logged by its code (`p1.on_answer_failed`), and the
+   * call goes on.
+   */
+  onAnswer?: (maskedText: string) => void
 }
 
 /**
@@ -106,6 +114,8 @@ export type P1Receipt = {
   tokensEstimated: boolean
   costMicroUsd: number
   model: string
+  /** Audit F17 (ruling 4): the model the provider reported, when it reported a model id; absent on a receipt recorded before F17. */
+  modelReported?: string
   classification: Classification
   outbound: P1Result["outbound"]
 }
@@ -117,7 +127,13 @@ export type P1Result = {
   text?: string
   usageLogId: string
   traceId: string
+  /** The configured model the call was routed to (P3-62). */
   model: string
+  /**
+   * Audit F17 (ruling 4): the model the provider reported having used (`P1TransportReply.model`), when the call was
+   * answered and the answer named a model id; null otherwise. Recorded beside `model`, never assumed equal to it.
+   */
+  modelReported: string | null
   classification: Classification
   inputTokens: number
   outputTokens: number
@@ -233,6 +249,13 @@ const CALL_PHASES_MS = {
  * record 2, transport 60, attempt outcome 2, trace 2, commit 20 + 5.
  */
 export const CALL_WORST_CASE_MS = Object.values(CALL_PHASES_MS).reduce((a, b) => a + b, 0)
+
+/**
+ * The phases a call can still take after the provider has answered (audit F17, refinement R6a): the attempt outcome, the
+ * trace and the commit, 29 s. Work the caller starts from `onAnswer` runs beside them; ops.ts holds committeeBrain's
+ * grounding budget within this at import, so grounding adds nothing to the operation's worst case.
+ */
+export const CALL_PHASES_AFTER_ANSWER_MS = CALL_PHASES_MS.attemptOutcome + CALL_PHASES_MS.trace + CALL_PHASES_MS.commit + CALL_PHASES_MS.commitAttempt
 
 /**
  * The import-time check that a whole HTTP operation fits its function's timeout (Codex P1 on PR #40): the call's
@@ -593,6 +616,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   let dispatched = false
   // The provider's own ids for this call, when its answer carried plain ones (re-audit R1-D5).
   let providerIds: { responseId?: string; requestId?: string } = {}
+  // Audit F17 (ruling 4): the model the provider reported, when its answer named a model id.
+  let modelReported: string | null = null
   if (blockReason === null && transport !== null) {
     dispatched = true
     // 9. The transport call, then the response mask (P3-68).
@@ -622,6 +647,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       cost = costMicroUsd(model, inputTokens, outputTokens)! // step 6 refused an unpriced model
       text = masked
       outcome = "ok"
+      // Any transport may answer; only a model id is kept (the Gateway transport checks it too).
+      modelReported = modelId(res.model) ?? null
     } catch (err) {
       outcome = "failed"
       // I1: a failure the provider may have billed is charged, conservatively: the reported usage where the
@@ -647,6 +674,15 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       logger.warn("p1.transport_failed", { firmId, usageLogId: usageRef.id, traceId, code: transportCode(err) })
     }
   }
+  // Audit F17 (ruling 6, R6a): the masked answer goes to the caller now, so its own work on it (grounding) runs beside
+  // steps 9b to 11 instead of after them. Outside the transport's try: a hook that throws is never a transport failure.
+  if (outcome === "ok" && text !== undefined && req.onAnswer !== undefined) {
+    try {
+      req.onAnswer(text)
+    } catch (err) {
+      logger.warn("p1.on_answer_failed", { firmId, usageLogId: usageRef.id, traceId, code: errorCode(err) })
+    }
+  }
   if (dispatched && t.crashAt === "dispatched") throw simulatedCrash()
   // 9b. What the provider answered goes on the reservation's attempt (F08), fail-open: should the commit fail for
   // good, the reconciler settles at this charge instead of the worst case. For an HTTP operation the same transaction
@@ -660,6 +696,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       tokensEstimated,
       costMicroUsd: cost,
       model,
+      ...(modelReported === null ? {} : { modelReported }),
       classification,
       outbound,
     }
@@ -719,6 +756,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     taskType,
     provider: PROVIDER_ID,
     model,
+    // Audit F17 (ruling 4): beside the configured model, what the provider reported (null when it named none).
+    modelReported,
     classification,
     outcome,
     blockReason,
@@ -753,6 +792,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     usageLogId: usageRef.id,
     traceId,
     model,
+    modelReported,
     classification,
     inputTokens,
     outputTokens,
