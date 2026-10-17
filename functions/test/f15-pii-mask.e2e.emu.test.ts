@@ -24,7 +24,7 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  * are guards that pass on main too and must keep passing: (d') another firm's client record, (e)'s pre-F15 receipt,
  * the round-2 false-positive rows (g) and the timing row (h). On round 2's head 15a5385 every row of (i) fails: its
  * identifiers reached the provider, and its two clean rows were blocked. On round 3's head adc5aa0 the rows of (j) fail,
- * except the Urdu پسر اکبر row, which pins a fail-closed decision (R4-4).
+ * except the Urdu پسر اکبر row, which pins a fail-closed decision (R4-4). On round 4's head 810fa74 the rows of (k) fail.
  *
  * Every name is invented; every number is synthetic.
  */
@@ -399,6 +399,58 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
       ["r/o a colony named after a province (R4-3)", "Tariq r/o Punjab Colony, Karachi was arrested. Draft the bail grounds.", "address"],
       ["plural residents of Kot and a name (R4-3)", "Tariq and Haris, both residents of Kot Qalvo, were arrested. Draft the bail grounds.", "address"],
       ["House No. of a named society (R4-3)", "The occurrence took place at House No. 12 of the Qalvo Housing Society, Lahore. Draft the grounds.", "address"],
+    ])("%s: blocked not_minimised, and the provider is never called", async (_label, body, kind) => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, body)
+      expect([r.blocked, r.reason]).toEqual([true, "not_minimised"])
+      expect(sent).toHaveLength(0)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts[kind]).toBeGreaterThan(0)
+    })
+  })
+
+  // Re-audit round 4 (FAIL 7/10): the re-auditor's privileged probes (r4-drift2, r4-e2e-dos48k, r4-attack, r4-walk2),
+  // spec rulings R5-1 to R5-3.
+  describe("(k) round 5: joined emails, the kinship walk and residence at rank 3", () => {
+    const privileged = async () => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      return f
+    }
+    /** Seven digits, with up to three non-digit, non-letter characters between them. */
+    const SEVEN_DIGITS = /\p{Nd}(?:[^\p{L}\p{Nd}]{0,3}\p{Nd}){6}/u
+
+    it("an NTN after three dot-joined emails: the provider receives main's masking and no NTN digit (R5-1)", async () => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, "Emails a@b.pk.a@b.pk.a@b.pk then \u00E9ntn: 1739403-5 and more words follow here.")
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe("Emails [EMAIL][EMAIL][EMAIL] then \u00E9[NTN] and more words follow here.")
+      expect(ANY_DIGIT.test(sent[0]!.body)).toBe(false)
+    })
+
+    it("a 48,000-character run of joined emails is answered well inside the pre-call allowance (R5-1)", { timeout: 180_000 }, async () => {
+      const f = await privileged()
+      const sent = capture()
+      const started = Date.now()
+      const r = await ask(f, "a@b.pk.".repeat(6858).slice(0, 48_000))
+      // Before the fix the mask was quadratic here: 29.5 s, then 503 precall_deadline (the re-auditor's run).
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body.includes("@")).toBe(false)
+      expect(SEVEN_DIGITS.test(sent[0]!.body)).toBe(false)
+      expect(Date.now() - started).toBeLessThan(8_000)
+    })
+
+    it.each([
+      ["the then SHO and a name (R5-2)", "Tariq, son of the then SHO Kamran Qalvo, was transferred. Draft the reply.", "kinship_name"],
+      ["none other than and a name (R5-2)", "The accused is the son of none other than Kamran Qalvo. Draft the bail grounds.", "kinship_name"],
+      ["s/o in a table cell (R5-3)", "| Tariq | s/o | Kamran Qalvo |\nDraft the reply.", "kinship_name"],
+      ["hails from a named place (R5-3)", "The accused hails from Kot Qalvo, Tehsil Kasur. Draft the bail grounds.", "address"],
+      ["lives with eight words before at (R5-3)", "He lives with his widowed mother and two sisters at 12-B Qalvo Road. Draft the reply.", "address"],
+      ["Urdu: رہائش پذیر after a place (R5-3)", "مدعی قلوو ٹاؤن میں رہائش پذیر ہے۔ جواب تیار کریں۔", "address"],
     ])("%s: blocked not_minimised, and the provider is never called", async (_label, body, kind) => {
       const f = await privileged()
       const sent = capture()

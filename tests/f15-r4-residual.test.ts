@@ -60,7 +60,6 @@ describe("R4-2: the walk after a kinship cue skips determiners, roles, occupatio
     ["son of an Army officer", "He is the son of an Army officer."],
     ["son of a retired school teacher", "The appellant, son of a retired school teacher, has no previous criminal record."],
     ["wife of a Federal Minister", "The wife of a Federal Minister is not a public office holder."],
-    ["wife of a Pakistani national", "The respondent is the wife of a Pakistani national residing abroad."],
     ["son of an Advocate", "He is the son of an Advocate of the High Court."],
     ["son of his parents", "The deceased was the only son of his parents."],
     ["son of the deceased employee", "The widow of the deceased employee is entitled to family pension."],
@@ -71,6 +70,12 @@ describe("R4-2: the walk after a kinship cue skips determiners, roles, occupatio
     ["Urdu: a widowed woman", "بیوہ عورت کی جائیداد پر قبضہ کر لیا گیا۔"],
     ["Urdu: a widow, then a list of heirs", "متوفیہ کے قانونی ورثاء میں بیوہ، دو بیٹے اور تین بیٹیاں شامل ہیں۔"],
   ])("passes: %s", (_label, text) => expectClean(text))
+
+  // Changed expectation, ruling R5-2 (round 5): an -ing word no longer ends the walk (mutant U13's rule is gone), so after
+  // the occupation "national" the next word is read as a name in any case. A false positive accepted under R4-0.
+  it("counts since R5-2: wife of a Pakistani national residing abroad", () => {
+    expectCounts("The respondent is the wife of a Pakistani national residing abroad.", "kinship_name")
+  })
 })
 
 describe("R4-3: residence", () => {

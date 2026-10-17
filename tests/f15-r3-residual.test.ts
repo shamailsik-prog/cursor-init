@@ -200,8 +200,16 @@ describe("R3-6: the even-numbered lines of the re-auditor's fresh false-positive
 // R3-6: added only after the measurement (at 76902de: fresh odd 2 of 60, lines 37 and 69; the new held-out corpus 1 of
 // 134, line 121), so the rates reported in the spec are held-out rates. Every line must pass from here on, except the
 // lines a later ruling makes true positives (each with its ruling).
-/** Ruling R4-3: an explicit "House No." with a number always counts, so fresh line 69 is a true positive. */
-const RULED_TRUE_POSITIVE_R4: ReadonlyMap<number, "address"> = new Map([[69, "address"]])
+/**
+ * Lines a later ruling makes count. Ruling R4-3: an explicit "House No." with a number always counts, so fresh line 69 is
+ * a true positive. Ruling R5-2 (changed expectation, round 5): after a kinship cue an -ing word no longer ends the walk
+ * (mutant U13's rule is gone), so in "the wife of a Pakistani national residing abroad" the word after the occupation
+ * "national" is read as a name in any case; fresh line 49 counts, a false positive accepted under R4-0.
+ */
+const RULED_TRUE_POSITIVE_R4: ReadonlyMap<number, ResidualKind> = new Map([
+  [69, "address"],
+  [49, "kinship_name"],
+])
 
 describe("R3-6: the held-out lines pass (regression rows, added after the measurement)", () => {
   it("has the 60 held-out fresh lines and the 134 lines of the new corpus", () => {
@@ -210,7 +218,7 @@ describe("R3-6: the held-out lines pass (regression rows, added after the measur
     expect(HELDOUT_CORPUS_R3).toHaveLength(134)
   })
 
-  it.each([...RULED_TRUE_POSITIVE_R4])("fresh line %i is a true positive by ruling R4-3 (%s)", (line, kind) => {
+  it.each([...RULED_TRUE_POSITIVE_R4])("fresh line %i counts by a later ruling (R4-3 or R5-2: %s)", (line, kind) => {
     const text = FRESH_HELDOUT.find(([n]) => n === line)![2]
     expect(residualPII(maskOutboundPII(text).masked)).toEqual({ ...ZERO, [kind]: 1 })
   })
