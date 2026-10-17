@@ -124,20 +124,24 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
 
 ## 5. Residual risk (stated, not closed)
 
-- **Not anonymisation.** Names the firm never recorded in `matter_parties`, the client record or the request; semantic identifying facts; free-text addresses and relationships without a cue; identifiers written in words or with look-alike letters; multi-character separators. At ranks 0 to 2 the residual findings are counted, not masked or blocked.
+- **Not anonymisation.** Names the firm never recorded in `matter_parties`, the client record or the request; semantic identifying facts; free-text addresses and relationships without a cue; identifiers written in words or with look-alike letters; separators the patterns do not list. At ranks 0 to 2 the residual findings are counted, not masked or blocked.
 - **Human review is not built.** L18 §4.6 / L17.13a/h's partner-authorised exception (with a recorded reason) and the deterministic-only path remain `TODO(firm)` (`providerPolicy.ts`). A residual finding at rank 3 or 4 is a hard block with no override; there is no high-risk review queue.
-- **False positives block privileged calls.** The residual detector passes two legal-prose corpora (the re-auditor's 126 lines, 0% false positives on the 124 clean ones; round 1's own 36 and the 37 round-2 rows), but the Urdu cue rules rest on word lists (stop words, role nouns, adjectival collocations), and prose outside them can still block a rank 3 or 4 call `not_minimised`. That fails closed.
-- **Known false negatives (R2-5, recorded).** The following still pass:
+- **False positives block privileged calls.** Measured on held-out prose (R3-6): 2 of the re-auditor's 60 held-out fresh lines and 1 of 134 new lines written before the round-3 code were flagged, 3 of 194 (1.5%); all four corpora now pass as regression rows. The cue rules still rest on word lists (stop words, role nouns, verbs after a role, adjectival collocations), and prose outside them can block a rank 3 or 4 call `not_minimised`. That fails closed. Known: an amount of 3 billion rupees or more written as one bare run of ten or eleven digits starting with 3 counts as a mobile without its prefix (R3-7).
+- **Known false negatives (R2-5, R3, recorded).** The following still pass:
   - obfuscated emails without a label (`nura [at] qalvo [dot] pk`);
-  - mobiles without a prefix (`300-1234567`): the residual check counts them, so rank 3 and 4 block, but below rank 3 they leave;
+  - identifiers in words (`zero three zero zero one two three ...`, `CNIC three five two zero two`, `house number twelve`);
+  - a CNIC or licence label with four digits (`CNIC No. 3520`, `Licence No. 1234`): below the label minimums (R2-3e);
+  - `ولد کا کامران` (a stop word between the cue and the name: `ولد کا نام` is ordinary prose) and `بن کامران` (R2-3a);
+  - an email that runs into a recorded name (`...@0.TTariq Zarvanix4-p`): the email pattern takes the name's first letters, and the rest of the name no longer matches (R3-8);
+  - mobiles without a prefix (`300-1234567`) and `0300/1234567` (a slash without whitespace, R3-2): the residual check counts them, so rank 3 and 4 block, but below rank 3 they leave;
   - vehicle registration and chassis numbers;
   - dates of birth, age, caste and other semantic facts;
   - a recorded name written only in part (a surname) or reversed (`Zarvani, Tariq`), or broken by a hyphenated line break;
   - `the deceased's widow Nura` (a kinship word without `of`);
   - `resident of the village` followed by a lower-case or no name.
-- **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost 1.6 s of rank-3 work with no names and 2.7 s with 50 names, under the 8 s pre-call allowance. More names cost more.
+- **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost 1.8 s of rank-3 work with no names and 3.0 s with 50 names (measured at the round-3 head), under the 8 s pre-call allowance. More names cost more.
 - **Homoglyphs.** Cyrillic and Greek Latin look-alikes are folded (R2-5); look-alikes from other scripts (Armenian, Cherokee, mathematical letters outside NFKC) are not.
-- **A dropped invisible character can remove a word boundary.** `CNIC\u200B3520212345671` becomes `CNIC3520212345671` in the detection view, and the CNIC pattern's leading `\b` no longer holds, so the mask misses it (as main did for the ASCII form `CNIC3520212345671`). The residual detector still counts the 13-digit run, so a rank 3 or 4 call is blocked; below rank 3 it is counted, not masked.
+- **A dropped invisible character can remove a word boundary.** `CNIC\u200B3520212345671` becomes `CNIC3520212345671` in the detection view, and the CNIC pattern's leading `\b` no longer holds, so the mask misses it (as main did for the ASCII form `CNIC3520212345671`). The residual detector still counts the 13-digit run, so a rank 3 or 4 call is blocked; below rank 3 it is counted, not masked. A grouped form glued to a label (`CNIC\u200B35202-1234567-1`) is masked since round 3, by the grouped CNIC pattern (R3-7).
 - **Client identifiers as literals.** The client record's CNIC, mobile, email and address are not used as literal masks (ruling 4).
 - **Next legacy path** records no residual counts (ruling 8).
 - **Classification is still the gate.** A privileged text mislabelled `internal` is masked and counted, not blocked: the audit's mislabelling scenario is reduced (the counterexample's identifiers are now masked) but not eliminated.
@@ -281,3 +285,171 @@ Result: 124 of 124 clean lines pass, a false-positive rate of 0%. Round 1's own 
 
 - `tests/f15-detection-view.test.ts`: the NFKC-expansion span test uses U+FB01, because U+2474 now maps to "1" (R2-5); the do-chashmi he assertion is now equality (R2-5).
 - `tests/f15-residual-pii.test.ts`: the Urdu phone-label row has seven digits (R2-3e).
+
+## 8. Re-audit round 2 (FAIL 7/10): rulings R3-1 to R3-8
+
+The independent re-audit of PR #61 at 15a5385 failed the finding at 7/10. Every round-1 finding was verified fixed. The blocker was a regression that R2-2 introduced: inputs main masked reached the provider. There were also bypasses through the new exemptions. The coordinator's rulings are recorded below as R3-1 to R3-8, each with its reason; refinements a test showed are recorded with theirs. The re-auditor's inputs (`r2-mainregress`, `r2-sepregress`, `r2-smuggle`, `r2-misc`, `r2-e2e-attack`, `r2-fresh-fp`) are regression rows:
+- `tests/f15-r3-mask.test.ts`: R3-1, R3-2 and R3-7, and the differential test against main's patterns;
+- `tests/f15-r3-residual.test.ts`: R3-2 to R3-7, and every line of both false-positive corpora;
+- `tests/f15-r3-bounds.test.ts`: the separator runs R3-1 and R3-2 unbound;
+- `tests/f15-r3-fresh-corpus.ts` (the re-auditor's 120 fresh lines, split) and `tests/f15-r3-heldout-corpus.ts` (134 new lines);
+- the e2e rows (i): five identifiers masked, seven clauses blocked, two clean lines allowed.
+
+### R3-1 (HIGH, blocking): everything main masked is masked again
+
+**Finding.** R2-2 bounded the mask's separators: `{1,3}` for the CNIC, `{0,3}` for the IBAN and the NTN and passport label gaps. Main's were unbounded. A CNIC with five spaces or four line breaks between its groups, an IBAN with four spaces, `NTN:     1234567-8` and `passport -    ab1234567` were masked on main and reached the provider at rank 3 on the branch.
+
+**Ruling.**
+- The separators are unbounded again: CNIC `[.\-\s_,/]+`, IBAN `\s*` (here `[\s-]*`, keeping round 2's dashes), NTN and passport label gaps `[:\s\-#.]*`.
+- They are linear because each separator class is disjoint from the digits after it: a run is consumed once and given back once per start.
+- Proof:
+  - the bound test (below);
+  - every main-masked input of `r2-mainregress` and `r2-sepregress` is a must-mask row;
+  - the e2e rows: a privileged CNIC with five spaces, a CNIC wrapped over a line and indented, and an IBAN with four spaces;
+  - a differential test with main's patterns kept in the test file as the oracle.
+
+**Refinement: main's patterns run first.** The first run of the differential test found inputs where a wider pattern read a different grouping than main did and left letters or digits main removed:
+- a CNIC run of `., _` swallowed the 0 that opens a mobile;
+- the unbounded mobile separators cut a passport number;
+- the anchored email took an NTN that main's email, which needs a word boundary, left alone.
+
+Patching each order conflict would have been a list of special cases. Instead, the mask runs in two stages:
+- **Stage 1** is main's patterns verbatim, in main's order, so nothing main masked is read differently. Two changes, both only widening a match:
+  - the mobiles also take the country prefix main left to their left (`+92 (300) 1234567`, `0092-300-1234567`: round 2's R2-4 rows);
+  - main's quadratic email is replaced by the anchored one. It ends where main's ended (before an ASCII letter, digit or underscore) and needs a word character in its local part, as main's `\b` did. A sticky continuation catches a second email that starts exactly where the first ended, which main's `\b` restart caught.
+- **Stage 2** is the wider patterns, on what stage 1 left: CNIC with `,`, `/` and `_` separators, the IBAN, NTN and passport with the R3-1 gaps, the R2-4/R3-2 mobile, UAN and landline, the wider email ending, the unlabelled passport, and the grouped CNIC (R3-7).
+
+The NTN and passport label gap is `[:\s\-#.]*(?:(?:No|Nos|Number)(?![A-Za-z])[:\s\-#.]*)?`. The second run comes only after the required word, so the two runs never compete for the same characters (mutant M1 below shows the alternative is quadratic).
+
+R2-2's bound on the mask's separators is withdrawn; its other parts stand.
+
+**Differential evidence.** The committed test runs three seeds of 3,000 generated ASCII inputs (main's shapes with random separator runs, labels in random case, joined with random context). It checks that the letters and digits the mask leaves are a subsequence of those main leaves. A scratch run of 300 more seeds (900,000 inputs) found no input where the mask leaves a letter or digit main removed.
+
+### R3-2 (blocking): mobile separators
+
+**Ruling.** Between mobile groups: `[\s.\-:_]*`, plus `/` only when it touches whitespace (` / `, `/ `, ` /`). `0300    1234567`, `0300 / 1234567`, `0300 -- 1234567` and `0300:1234567` are masked; `03/01/2021 123` is not. The DATE_PREFIX rule stays and is pinned: "The hearing on 01.02.2021 10.30 a.m." counts nothing (mutant N41, killed: M3 below).
+
+**Refinements.**
+- Round 2's `,`, `(`, `)` stay in the class (R2-4's bracketed and comma-split formats).
+- The two slash alternatives are `(?<=\s)/` and `(?<!\s)/(?=\s)`. They exclude each other, so every character of a run has one parse. Overlapping alternatives backtrack exponentially on ` / / / ...` (mutant M2 below).
+- The mask carries the same date guard: `On 03.01.2021 123 accused were present` is a date and a count, not a mobile (round 2 masked it).
+- The residual check reads dates off the front of a digit run and judges the rest alone. So `dated 01.02.2021 1234/2021` (r2-misc) passes, and `dated 01.02.2021 0300 1234567` still counts.
+
+### R3-3 (blocking): a label's whole value
+
+**Ruling.** Phone, CNIC, NTN and licence minimums count every digit of the value after the label: all digit groups up to the next letter or line end. `Mobile: 0300 / 1234567` and `Cell No. 0300    1234567` count.
+
+**Refinement.** `email nura at qalvo dot pk`, with no separator after the label, counts as a spelled address (r2-smuggle).
+
+### R3-4 (blocking): kinship and role parsing
+
+**Ruling.** After a kinship cue, determiners and roles are walked past and the next word is judged.
+- After `a`/`an`, no word is a name ("son of a Government servant", "an Army officer", "a Member", "a Sessions Judge" pass).
+- After `one`, `said`, `late`, a title or a party role, the next word in any case is a name unless it is a function word or another role. "son of the said Kamran" and "son of one Kamran" count; "son of the deceased appeared" passes.
+- Urdu: role nouns (ملزم، مدعی، متوفی، مقتول، مدعا علیہ ...) and titles (مرحوم، مسماۃ، محترمہ ...) are walked past and the next word judged. زوجہ ملزم کامران، ولد متوفی کامران، دختر مدعی کامران count; دختر قانونی وارث ہے passes.
+- ہونا، ہونے، ہوں، ہوتا، ہوتی (and ہوتے) are stop words (ساکن ہونا passes).
+- نیک، عورت، خاتون، محترمہ: زوجہ محترمہ passes unless a name follows محترمہ.
+
+**Refinements.**
+- *Verbs, nouns and adverbs after a role* (`EN_NOT_A_NAME`). They let "son of the deceased appeared" pass while "son of deceased kamran" counts. A lower-case word ending in -ing or -ly is not a name either. No `-ed` rule: Ahmed, Javed and Saeed end in -ed.
+- *Possessives.* After a possessive role ("the deceased's friend") a capitalised word is needed.
+- *Naming words.* "namely", "named", "called" and "alias" announce a name.
+- *Family words and police and army ranks are roles.* "son of his father Kamran Qalvo" counts. "The widow of late Shaheed Constable was paid compensation" (fresh line 50) passes.
+- *English idioms.* "son of Adam" and "daughter of Eve" are not names (fresh line 66).
+- *اختر.* The ruling lists نیک and اختر as non-name followers (the idiom دختر نیک اختر). Only نیک is listed: it ends the walk, so the idiom passes. اختر (Akhtar) is a common name, and listing it would let "ولد اختر" through.
+- *Urdu non-names.* Added: شادی، شدہ (fresh line 114), عدالت (fresh line 84), نامعلوم, and the number words ایک to دس except نو (held-out line 121, added after the measurement).
+- *Sentence ends.* A walk stops at a sentence end, unless the full stop follows an abbreviation or an initial. The round-2 e2e guard "the son of Respondent No. 2. Draft the grounds." regressed without this and passes with it.
+- *Parentage labels.* `Father's name`, `Father name`, `Husband's name`, `Parentage` and `ولدیت` (R3-5) take any word but a function word, in any case. `S/o:` is the `s/o` cue.
+
+### R3-5 (blocking): cues and residence
+
+**Ruling.**
+- New cues: `ولدیت`, `Father's name`, `Father name`, `Husband's name`, `Parentage`, `S/o:`, and the Urdu plurals سکنائے and ساکنان.
+- Plural residence: `residents of`, سکنائے and ساکنان count before a locality word and then a named or numbered place.
+  - "Tariq and Haris, residents of village Kot Qalvo" and کامران و حارث سکنائے موضع قلوو count.
+  - "residents of Islamabad Capital Territory governed by" and ساکنان علاقہ pass.
+  - General-area heads pass: علاقہ، شہر، ملک، پاکستان، صوبہ، area, city, country, province, territory, district.
+- رہائشی before علاقہ، مکان، اسکیم، کالونی، پلاٹ، منصوبہ، سوسائٹی is the adjective "residential" and passes.
+- The `address` label counts anywhere when its value (after `:` or `-`) has a digit or an address word in its first 60 characters. "not known", "as given ...", "N/A", "same as above" and "as stated" pass.
+- Numbered places:
+  - single letters are not units ("House No. 12 M Block" counts);
+  - a bare house or street number before near, opposite, behind, adjacent or beside counts;
+  - a bare number before `of` and a capitalised word other than "the" counts ("Street 5 of Qalvo Town"; "The House 2 of the Senate" passes).
+
+**Refinements.**
+- *Plural cues need a place after the locality word* (a capital, a number, or `No.` and a number). "Residents of the village protested" passes.
+- *General areas and provinces for the singular too.* The heads above, ضلع, and Pakistan's provinces and territories: "The petitioner is a resident of Punjab" passes (fresh line 72, which the re-auditor marked debatable). A city stays an address, as R2-3c ruled.
+- *More residence forms.*
+  - "a resident of Pakistan and of Lahore" goes on to Lahore;
+  - "r/o in Lahore" reads past the preposition;
+  - "r/o the house of Kamran Qalvo" names a place;
+  - ساکن مدعی گاؤں قلوو reads past the role noun;
+  - `lives at`, `resides in` and the like count before a number, a proper noun or "the (said) village Kot ..." ("He lives at 12-B Qalvo Road"), not before "a distance" or "fear";
+  - a locality cue alone counts before a name ("محلہ قلوو پورہ", "Mohallah Qalvo Pura"), not before محلہ داروں (fresh line 90), nor right after a residence cue that has already counted the place.
+- *The address label.* At a field start with `:` or `-`, any value counts, as R2-3f ruled. Elsewhere `as` and `is` are separators too ("his address as 12-B ..."). With no separator, the value must start with a number or name an address word in its first three words ("permanent abode 14-B ..."). `residence` and `abode` are labels.
+- *Numbered places.*
+  - An explicit `No.` counts whatever unit follows ("House No. 12 ft wide lane", "Flat No. 4 floor 3").
+  - An explicit `No.` still needs an address-like follower, as a bare number does: units, punctuation, a place cue, a proper noun, a word of position, or "in" or "at" and a proper noun. "The complainant shifted to House No. 7 after the occurrence" passes (held-out fresh line 69, after the measurement).
+  - Ranges pass ("Flat No. 4 to Flat No. 9", fresh line 68), and so does "of the" and a common noun ("Street No. 3 of the housing scheme", fresh line 70).
+  - `plot` takes a bare number ("Plot 45, Sector G-9/1"); `chak` and چک need `No.`
+
+### R3-6 (blocking): honest false-positive measurement
+
+**Ruling.** Before any tuning:
+- write a new held-out corpus of at least 80 lines, committed on its own and not edited after the measurement;
+- split the re-auditor's fresh corpus, tuning on its even-numbered lines only;
+- report three rates, with a target of at most 5% on held-out prose;
+- only then add the held-out lines as regression rows.
+
+**Procedure.**
+1. `tests/f15-r3-heldout-corpus.ts` was written and committed first (d8d53cf), before any round-3 code change and before the fresh corpus was read: 134 lines (90 English, 44 Urdu) in FIR, plaint, judgment, bail and bond style.
+2. The fresh corpus (`r2-fresh-fp.json`, 120 lines) is numbered 1 to 120 in file order. Only the even lines were read while tuning.
+3. A line is a false positive if the mask changes it or `assertMinimised` refuses it.
+4. The rates were measured at 76902de, the round-3 implementation before any held-out line was looked at.
+
+| Corpus | Lines | Role | False positives at 76902de |
+| --- | --- | --- | --- |
+| Fresh, even lines | 60 | tuned on | 0 (0.0%) |
+| Fresh, odd lines | 60 | held out | 2 (3.3%): lines 37 and 69 |
+| New corpus | 134 | held out, written before the code | 1 (0.7%): line 121 |
+| Both held-out sets | 194 | held out | 3 (1.5%) |
+
+The target is met. The three lines were then fixed (c532fe4, recorded under R3-4 and R3-5), and all 254 lines are regression rows that pass.
+
+**Disclosures.**
+- While reading the header of the re-auditor's fresh-corpus test, the lines marked "debatable" were seen. One of them is odd line 71, "Both petitioners are residents of District Kasur", so it was seen before the measurement. No rule was added for it: it passes under the ruling's own general-area list ("district").
+- The new corpus was written by the builder, who therefore knew its lines while implementing. No rule was added for one of them before the measurement; the failure of line 121 shows it. Its number is still weaker evidence than the re-auditor's odd lines.
+
+### R3-7 (LOW, fixed): exemption limits, the detection view, form-box CNICs
+
+**Ruling.**
+- The amount, `Rs`, `/-`, `/=`, document-number, land-record and short-group exemptions never apply to a run of exactly 13 digits, or to ten or more single-digit groups. A 10- or 11-digit run starting 3 (a mobile without its prefix) keeps no amount, currency, document or land exemption; one starting 03, 92, 0092 or +92 already kept none (R2-4).
+- The detection view maps U+2800 and U+303F to a space and drops `\p{Co}`.
+- The form-box CNIC `3 5 2 0 2 - 1 2 3 4 5 6 7 - 1` counts, and is masked.
+
+**Implementation.**
+- A residual digit run may now join groups with a dash and a space on either side, so a form-box CNIC is one run.
+- The mask's grouped CNIC is digit groups split by one to three spaces or dashes, kept when they hold 13 digits. Lookarounds make each match a maximal run, so a 16-digit card number is never cut to 13. It runs last: run first, it cut IBAN, NTN and passport numbers (the differential test). It also masks 4-4-4-1 CNICs. Dates, citations, section lists and year lists stay clean (`tests/f15-r3-mask.test.ts`).
+- *Refinement:* an amount is one group of at most twelve digits, with two-digit paisa at most. "the sum of 1234 5678 9012 3456" and 14-digit account numbers next to "valued at" or "rupees" count (r2-smuggle).
+- *Not closed:* an amount of 3 billion rupees or more, written as one bare run of ten or eleven digits starting with 3, now counts (§5).
+
+### R3-8 (INFO)
+
+The email next to a name stays documented (§5). With the party name "Tariq Zarvani", "...@0.TTariq Zarvanix4-p" masks as `[EMAIL] Zarvanix4-p`: the email pattern takes the name's first letters, and the rest of the name no longer matches.
+
+### Mutants
+
+Each of these mutants of the round-3 code fails a round-3 test, run with a hard timeout (`r3_mutants.py`):
+
+| Mutant | Killed by |
+| --- | --- |
+| M1: the NTN and passport label gap as two unbounded runs around an optional `No` | the bound test, head `NTN`: 385 s for its 18 inputs, against 1.5 s per input |
+| M2: overlapping slash alternatives in the mobile separator | the bound test, head `0300`: not finished within the 600 s hard timeout |
+| M3 (the re-auditor's N41): dates not read off a digit run | two R3-2 rows ("01.02.2021 10.30 a.m.", "01.02.2021 1234/2021") |
+| M4: the wider CNIC separators bounded to three again | three R3-1 rows (four underscores, a comma with spaces, spaced slashes) |
+| M5: stage 1 (main's CNIC and mobile patterns) removed | the differential test, all three seeds |
+| M6: private-use characters kept in the detection view | four R3-7 rows |
+
+### Changed earlier test expectations
+
+None. Round 1's and round 2's tests pass unchanged.

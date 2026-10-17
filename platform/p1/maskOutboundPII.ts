@@ -6,13 +6,18 @@
  * Masking reduces risk; it is not anonymisation.
  *
  * What it masks:
- *   - CNICs; Pakistani mobiles (+92, 0092, 92 or 0 prefix, any grouping, up to three separator characters between
- *     groups, brackets allowed); landlines with their area code and UANs; emails (Unicode local parts and domains);
- *     PK IBANs; NTNs (NTN, N.T.N, with No.); passports (labelled, or two capitals and seven digits);
+ *   - everything main's patterns masked: they run first, in main's order (ruling R3-1);
+ *   - CNICs (5-7-1 with any run of spaces, line breaks, dots, dashes, commas, slashes or underscores between the
+ *     groups, and thirteen digits in form boxes or 4-4-4-1 groups); Pakistani mobiles (+92, 0092, 92 or 0 prefix,
+ *     any grouping, any run of whitespace, dots, commas, dashes, brackets, colons or underscores between groups, and a
+ *     slash only where it touches whitespace); landlines with their area code and UANs; emails (Unicode local parts
+ *     and domains); PK IBANs; NTNs (NTN, N.T.N, with No.) and labelled passports with any label gap; passports as two
+ *     capitals and seven digits;
  *   - in any digit script (full-width, Arabic-Indic, Urdu, Devanagari, mathematical, enclosed and dingbat digits);
  *   - with any dash, space, Arabic or ideographic separator;
  *   - through every invisible character: format characters, default-ignorable code points (variation selectors,
- *     the combining grapheme joiner, Hangul fillers, ...) and combining marks are dropped before detection;
+ *     the combining grapheme joiner, Hangul fillers, ...), private-use characters and combining marks are dropped
+ *     before detection, and the braille blank and the ideographic half fill space read as spaces;
  *   - the party names the caller supplies, through case, spacing, punctuation, diacritics, Arabic letter variants,
  *     Cyrillic and Greek look-alikes, and a leading honorific in the record.
  *
@@ -21,17 +26,19 @@
  *     destroy legal prose, so callers must pass partyNames), and a recorded name written only in part (a surname);
  *   - semantic identifying facts ("the only female sessions judge in the district", age, caste, date of birth);
  *   - addresses and parentage (`residualPII` detects the common forms; at rank 3 and above `assertMinimised` then
- *     blocks the call, below it they are counted, not masked), mobiles without a prefix, vehicle and other
- *     registration numbers;
+ *     blocks the call, below it they are counted, not masked), mobiles without a prefix and "0300/1234567" (a slash
+ *     without whitespace: counted, not masked), vehicle and other registration numbers;
  *   - identifiers written in words, obfuscated ("[at]", "[dot]") or with look-alike letters ("O3OO" for "0300");
+ *   - an email that runs into a recorded name ("...@0.TTariq Zarvani"): the email takes the name's first letters;
  *   - a zero-width character between a word and an identifier removes the word boundary a pattern needs
  *     ("CNIC\u200B3520212345671"); `residualPII` still counts the digits.
  *
- * How (spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1 to 3 and R2-1 to R2-5):
- * every pattern runs on the detection view (`detectionView`), the names on its folded name view (`nameView`), in one
- * pass; each match is mapped back to its span in the original text and only that span is replaced, so every unmatched
- * code unit of the original is sent exactly as written. Every quantifier that can repeat whitespace is either bounded or
- * separated from the next one by a required token, so the mask is linear in the text (ruling R2-2).
+ * How (spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1 to 3, R2-1 to R2-5 and
+ * R3-1, R3-2, R3-7): every pattern runs on the detection view (`detectionView`), the names on its folded name view
+ * (`nameView`), in one pass; each match is mapped back to its span in the original text and only that span is replaced,
+ * so every unmatched code unit of the original is sent exactly as written. Separator runs are unbounded, but each is a
+ * class disjoint from what follows it, and no two runs meet around an optional part, so the mask is linear in the text
+ * (rulings R2-2 and R3-1; tests/f15-r2-bounds.test.ts and tests/f15-r3-bounds.test.ts).
  */
 
 import { detectionView, foldName, nameView, type TextView } from "@/platform/p1/piiText"
@@ -73,7 +80,8 @@ export const MASK_TOKENS: readonly string[] = Object.values(TOKEN)
  */
 export const MASK_CUES: readonly string[] = [
   "passport", "ppt", "ppt.", "NTN", "N.T.N", "N.T.N.", "PK", "+92", "+ 92", "0092", "92", "0", "(0", "(+92)", "(042)",
-  "111", "@", "a@", "a@b.", "35202", "03", "0300", "AB",
+  "111", "@", "a@", "a@b.", "35202", "03", "0300", "AB", "NTN No", "Passport No.", "PK36", "PK36 SCBL", "35202 1234567",
+  "+92 (300)", "0300 /", "3 5 2 0 2 -", "3520 2123", "a@b.cc",
 ]
 
 // ---------------------------------------------------------------------------------------------------------------------

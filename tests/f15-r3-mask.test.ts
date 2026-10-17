@@ -34,6 +34,10 @@ describe("R3-1: every identifier main masked is masked again (the re-auditor's r
     ["CNIC, spaced dots", "CNIC 35202 . . 1234567 . . 1 on record", "CNIC [CNIC] on record"],
     ["CNIC in a table cell", "| CNIC | 35202      1234567      1 |", "| CNIC | [CNIC] |"],
     ["Urdu-digit CNIC, four spaces", "شناختی کارڈ ۳۵۲۰۲    ۱۲۳۴۵۶۷    ۱", "شناختی کارڈ [CNIC]"],
+    // The ruling's wider class, [.\-\s_,/], is unbounded too: runs main's class did not hold.
+    ["CNIC, four underscores", "CNIC 35202____1234567____1 on record", "CNIC [CNIC] on record"],
+    ["CNIC, comma and spaces", "CNIC 35202 ,  1234567 ,  1 on record", "CNIC [CNIC] on record"],
+    ["CNIC, spaced slashes", "CNIC 35202 / / 1234567 / / 1 on record", "CNIC [CNIC] on record"],
   ])("%s", (_label, text, expected) => {
     const masked = maskOutboundPII(text).masked
     expect(masked).toBe(expected)
