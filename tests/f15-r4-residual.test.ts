@@ -40,6 +40,8 @@ describe("R4-2: the walk after a kinship cue skips determiners, roles, occupatio
     ["son of a lower-case name with an alias", "Tariq son of kamran alias kami"],
     ["son of both, then a name", "Tariq, son of both the accused Kamran Qalvo, absconded."],
     ["son of a former tenant", "Tariq, son of a former tenant Kamran Qalvo, objected."],
+    ["son of our client, a lower-case name", "Tariq, son of our client kamran qalvo, attended."],
+    ["daughter of the owner, a lower-case name", "Nura, daughter of the owner kamran qalvo, objected."],
     // Urdu: given names that are also words, after the cue or a role (r3-smuggle)
     ["ولد and نیک as a name", "ملزم حارث ولد نیک قلوو کو گرفتار کیا گیا۔"],
     ["ولد and شادی as a name", "ملزم حارث ولد شادی قلوو کو گرفتار کیا گیا۔"],
