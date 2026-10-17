@@ -63,6 +63,10 @@ describe("R5-2: after a kinship cue the walk skips lower-case words, titles, ran
     ["an organisation, then an occupation", "She is the daughter of a Federal Government employee."],
     ["a participle after a role, then an auxiliary", "The widow of the deceased constable is entitled to the pension."],
     ["the window ends before a capitalised word", "The son of the deceased and his two young minor sons and the Investigating Officer appeared."],
+    // pins (mutants M13 and M14): an office is skipped like a role; a participle after a role is no name
+    ["an office alone", "The petitioner is the son of a former MNA."],
+    ["an office and a place word", "He is the son of a Lambardar of the village."],
+    ["a participle after a role", "The son of the deceased constable serving in the Police was examined."],
   ])("passes: %s", (_label, text) => expectClean(text))
 })
 
