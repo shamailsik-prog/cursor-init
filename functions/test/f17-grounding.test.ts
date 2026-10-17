@@ -70,16 +70,16 @@ afterEach(() => {
 describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () => {
   it("names its rules and budget, and passes the policy record through", async () => {
     const m = await load()
-    expect(m.GROUNDING_RULES_VERSION).toBe("f17.3")
+    expect(m.GROUNDING_RULES_VERSION).toBe("f17.4")
     expect(m.GROUNDING_BUDGET_MS).toBe(20_000)
     expect(m.MAX_GROUNDED_CITATIONS).toBe(100)
     const g = await ground(answer([claim("Bail is the rule.", auth("PLD 2099 SC 101"))]))
-    expect(g.rules).toBe("f17.3")
+    expect(g.rules).toBe("f17.4")
     expect(g.policy).toEqual(POLICY)
   })
 
   it("no text (a blocked or failed call): not_assessed, nothing resolved", async () => {
-    expect(await ground(undefined)).toEqual({ status: "not_assessed", rules: "f17.3", policy: POLICY, claims: { total: 0, supported: 0 }, citations: [], omitted: 0 })
+    expect(await ground(undefined)).toEqual({ status: "not_assessed", rules: "f17.4", policy: POLICY, claims: { total: 0, supported: 0 }, citations: [], omitted: 0 })
   })
 
   it("every claim supported by a verified authority: grounded, not advisory", async () => {
@@ -87,7 +87,7 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
     const g = await ground(answer([claim("Bail is the rule.", auth("PLD 2099 SC 101")), claim("Delay is a ground.", auth("2099 CLC 505"), auth("PLD 2099 Supreme Court 101"))]))
     expect(g).toEqual({
       status: "grounded",
-      rules: "f17.3",
+      rules: "f17.4",
       policy: POLICY,
       claims: { total: 2, supported: 2 },
       citations: [
@@ -286,7 +286,7 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
     const broken: AuthorityStore = { ...unavailable, findJudgment: async () => Promise.reject(Object.assign(new Error("Tariq Zarvani secret detail"), { code: "boom" })) }
     const g = await ground(answer([claim("a", auth("PLD 2099 SC 101"))]), broken, ["Tariq Zarvani"])
-    expect(g).toEqual({ status: "unverifiable", rules: "f17.3", policy: POLICY, claims: { total: 1, supported: 0 }, citations: [], omitted: 0 })
+    expect(g).toEqual({ status: "unverifiable", rules: "f17.4", policy: POLICY, claims: { total: 1, supported: 0 }, citations: [], omitted: 0 })
     expect(warn).toHaveBeenCalledWith("p1.grounding_failed", { code: "boom" })
     expect(JSON.stringify(warn.mock.calls)).not.toContain("Tariq")
   })

@@ -46,7 +46,7 @@ import { UNRECOGNISED_PREFIX, extractCitations, normaliseCitation } from "@/serv
 import type { AuthorityStore } from "../d4/authority"
 import { budgetedStore, lookUpCitation, verdictOfJudgment, type CitationLookup } from "../d4/gate"
 import { errorCode } from "../log"
-import { authorityMentions, unboundMentions, type VerifiedSpan } from "./proseAuthority"
+import { authorityMentions, normaliseProse, unboundMentions, type VerifiedSpan } from "./proseAuthority"
 
 /**
  * The status rules above. A change to them changes the evaluation's outcomes: the CI gate requires a new record.
@@ -54,7 +54,7 @@ import { authorityMentions, unboundMentions, type VerifiedSpan } from "./proseAu
  * f17.3 (re-audit round, ruling R7a): an authority-like mention in the prose that is not bound to a VERIFIED citation is
  * an UNRECOGNISED suspect.
  */
-export const GROUNDING_RULES_VERSION = "f17.3"
+export const GROUNDING_RULES_VERSION = "f17.4"
 
 /**
  * The authority time one grounding run may spend (ruling 6, refinement R6a). It runs while the call records its attempt
@@ -137,8 +137,17 @@ function proseOf(answer: CommitteeAnswer): ProseField[] {
 /** Lower case, blanks collapsed: how a mention is compared with the text of a D4 extractor suspect. */
 const comparable = (s: string): string => s.replace(/\s+/gu, " ").trim().toLowerCase()
 
-/** The first MAX_REF_CHARS code points (never half a surrogate pair). */
-const bounded = (s: string): string => [...s].slice(0, MAX_REF_CHARS).join("")
+/**
+ * At most MAX_REF_CHARS code points, cut at the last blank before the limit (re-audit round 2: never half a word, so
+ * never part of a name; never half a surrogate pair). A first word longer than the limit is cut at the limit.
+ */
+const bounded = (s: string): string => {
+  const points = [...s]
+  if (points.length <= MAX_REF_CHARS) return s
+  const cut = points.slice(0, MAX_REF_CHARS + 1).join("")
+  const blank = cut.search(/\s\S*$/u)
+  return blank > 0 ? cut.slice(0, blank).trimEnd() : points.slice(0, MAX_REF_CHARS).join("")
+}
 
 export async function groundAnswer(input: GroundInput, store: AuthorityStore, options: GroundOptions = {}): Promise<Grounding> {
   const base = { rules: GROUNDING_RULES_VERSION, policy: input.policy }
@@ -208,7 +217,7 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
     switch (lookup.kind) {
       case "unrecognised":
         status = "UNRECOGNISED"
-        ref = UNRECOGNISED_PREFIX + mask(lookup.ref.slice(UNRECOGNISED_PREFIX.length))
+        ref = UNRECOGNISED_PREFIX + bounded(mask(lookup.ref.slice(UNRECOGNISED_PREFIX.length).replace(/\s+/gu, " ").trim()))
         break
       case "not_normalised":
         // A judgment authority must be exactly one reported citation.
@@ -247,13 +256,15 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
    * masked with the party names and then bounded (so a name is never cut before it is masked). Counted against the cap.
    */
   const suspect = (raw: string): void => {
+    // Past the cap the suspect is counted, unmasked words as its key (never recorded), before any masking work: the
+    // re-auditor's 256 KB of distinct case numbers spent its time masking suspects nobody would see.
+    if (taken() >= MAX_GROUNDED_CITATIONS) {
+      omitted.add(`s:${comparable(raw)}`)
+      return
+    }
     const ref = UNRECOGNISED_PREFIX + bounded(mask(raw.replace(/\s+/gu, " ").trim()))
     const key = `r:${ref}`
     if (citations.has(key)) return
-    if (taken() >= MAX_GROUNDED_CITATIONS) {
-      omitted.add(key)
-      return
-    }
     suspectKeys.add(key)
     record(key, { ref, kind: "judgment", source: "text", status: "UNRECOGNISED", judgmentId: null })
   }
@@ -271,26 +282,31 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
    * citation (`unboundMentions`). A mention the extractor already flagged as its own suspect is not recorded twice.
    */
   const groundField = async (field: ProseField, verifiedPinpoint: boolean): Promise<void> => {
-    const extracted = extractCitations(field.text)
+    // R7b: the field is read normalised (NFKC, format characters removed, digits and dashes folded) and masked whole
+    // with the party names first, so no name is ever split by a mention's extent or cut, and every ref comes from
+    // masked text. On the route the text was masked already (callP1): masking again changes nothing there.
+    const view = mask(normaliseProse(field.text))
+    const extracted = extractCitations(view)
     for (const raw of extracted) await resolve(raw, "text")
     const flagged = extracted.filter((r) => r.startsWith(UNRECOGNISED_PREFIX)).map((r) => comparable(r.slice(UNRECOGNISED_PREFIX.length)))
     const alreadyFlagged = (raw: string): boolean => {
       const words = comparable(raw)
       return flagged.some((f) => f.length > 0 && (f.includes(words) || words.includes(f)))
     }
-    const mentions = authorityMentions(field.text)
+    /** A mention to record as a suspect: counted past the cap; not twice when the extractor flagged it already. */
+    const flag = (raw: string): void => {
+      if (taken() >= MAX_GROUNDED_CITATIONS || !alreadyFlagged(raw)) suspect(raw)
+    }
+    const mentions = authorityMentions(view)
     const verified: VerifiedSpan[] = []
     for (const m of mentions) {
       if (m.family !== "report") continue
       // The cap is spent by `resolve` (a new lookup) and `suspect` (a new suspect) only: a citation already resolved costs nothing.
       const canonical = canonicalOf(m.raw)
-      if (canonical === null) {
-        if (!alreadyFlagged(m.raw)) suspect(m.raw)
-      } else if ((await resolve(canonical, "text")) === "VERIFIED") verified.push({ start: m.start, end: m.end })
+      if (canonical === null) flag(m.raw)
+      else if ((await resolve(canonical, "text")) === "VERIFIED") verified.push({ start: m.start, end: m.end })
     }
-    for (const m of unboundMentions(field.text, mentions, verified, { pinpointOfVerified: verifiedPinpoint })) {
-      if (!alreadyFlagged(m.raw)) suspect(m.raw)
-    }
+    for (const m of unboundMentions(view, mentions, verified, { pinpointOfVerified: verifiedPinpoint })) flag(m.raw)
   }
 
   const claims = answer === null ? [] : answer.sections.flatMap((s) => s.claims)

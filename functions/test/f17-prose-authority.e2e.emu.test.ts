@@ -109,6 +109,32 @@ describe.skipIf(!EMULATORS)("audit F17 re-audit HIGH-1: a prose authority throug
     expect(row.grounding.citations).toEqual(r.grounding?.citations)
   })
 
+  // Re-audit round 2 (FAIL 7/10 at d729ff8, ruling R7b): the eight forms that still came out grounded through this route.
+  it.each([
+    ["a possessive case name", "As the Supreme Court held in Qalvo's case, bail follows.", "Qalvo's case"],
+    ["In re", "In re Qalvo, bail follows.", "In re Qalvo"],
+    ["an unbracketed supra", "The rule in Qalvo, supra, applies.", "Qalvo, supra"],
+    ["the Urdu بمقابلہ", "یہ اصول قلوو بمقابلہ نورا میں طے ہوا۔", "بمقابلہ"],
+    ["the Urdu مقدمہ with a name", "یہ اصول مقدمہ قلوو میں طے ہوا۔", "مقدمہ قلوو"],
+    ["a Crl.P.L.A. number", "This Court followed the rule in Crl.P.L.A. 77/2099.", "77/2099"],
+    ["a paragraph of an unnamed decision", "The 2099 decision of the Supreme Court at para 77 is to the same effect.", "para 77"],
+    ["an SCC report in Urdu digits", "The same view was taken in (۲۰۹۹) ۳ SCC ۷۷۷.", "(2099) 3 SCC 777"],
+  ])("round 2: %s in the prose: partially_grounded and advisory, returned and stored", async (_label, text, flagged) => {
+    const f = await newFirm()
+    capture(answer(text))
+    const r = await ask(f)
+    expect(r.blocked).toBe(false)
+    expect(r.grounding?.status, "grounding status").toBe("partially_grounded")
+    expect(r.advisory).toBe(true)
+    expect(r.grounding?.claims).toEqual({ total: 1, supported: 1 })
+    expect(
+      r.grounding?.citations.some((c) => c.source === "text" && c.status === "UNRECOGNISED" && c.ref.includes(flagged)),
+      JSON.stringify(r.grounding?.citations)
+    ).toBe(true)
+    const row = await outputOf(r.outputId)
+    expect([row.grounding.status, row.advisory]).toEqual(["partially_grounded", true])
+  })
+
   it("a case name bound to the verified citation in its parenthetical: grounded, not advisory, stored the same", async () => {
     const f = await newFirm()
     capture(answer("Qalvo v. Nura (PLD 2099 SC 101) settles the point."))

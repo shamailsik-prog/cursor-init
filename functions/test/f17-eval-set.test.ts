@@ -39,7 +39,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
     const m = await load()
     expect(m.EVAL_SET_RELATIVE_PATH).toBe("docs/evals/committee-brain-eval-set.json")
     const set = m.parseEvalSet(json)
-    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.3", "synthetic"])
+    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.4", "synthetic"])
   })
 
   it("has at least 40 items in English and Urdu, unique ids, and every required category", async () => {
@@ -95,6 +95,18 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       ["English case name", /\p{Lu}\p{L}+ v\. \p{Lu}\p{L}+/u, ["en", "mixed"]],
       ["Urdu case name", /بنام/u, ["ur"]],
       ["page-only reference", /at page \d+|صفحہ \d+/u, ["en", "ur"]],
+      // Re-audit round 2 (rules f17.4, ruling R7b).
+      ["possessive case name", /\p{Lu}\p{L}+'s case/u, ["en", "mixed"]],
+      ["In re", /In re \p{Lu}/u, ["en"]],
+      ["unbracketed supra", /\p{Lu}\p{L}+, supra/u, ["en"]],
+      ["capital-group case number", /Crl\.P\.L\.A\. \d+\/2099/u, ["en"]],
+      ["paragraph reference", /at para \d+|پیرا/u, ["en", "ur"]],
+      ["US or bracketed-volume report", /\d+ U\.S\. \d+|2099 \(\d\) SCALE/u, ["en"]],
+      ["Urdu بمقابلہ", /بمقابلہ/u, ["ur"]],
+      ["Urdu مقدمہ with a name", /مقدمہ قلوو/u, ["ur"]],
+      ["Urdu کیس", /قلوو کیس/u, ["ur"]],
+      ["Urdu digits", /[۰-۹]{4}/u, ["ur"]],
+      ["a statute with a year (stays grounded)", /Act, 1872|ایکٹ، 1872/u, ["en", "ur"]],
     ]
     for (const [family, re, languages] of families) {
       for (const language of languages) expect(prose.some((i) => i.language === language && re.test(i.response)), `${family} ${language}`).toBe(true)
@@ -181,7 +193,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       graded: { deterministic: { passed: number; failed: number } }
       result: string
     }
-    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.3", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
+    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.4", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
     expect(record.graded.deterministic).toEqual({ passed: report.passed, failed: report.failed })
     expect([report.failed, record.result]).toEqual([0, "pass"])
   })

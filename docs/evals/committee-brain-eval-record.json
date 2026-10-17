@@ -2,9 +2,9 @@
   "format": "committee-brain-eval-record/1",
   "evalSet": {
     "path": "docs/evals/committee-brain-eval-set.json",
-    "version": "f17.3",
-    "sha256": "338f65f5fe2a5eeb33117eb7431d97e370534599e4c0ad89e9865cda346018d4",
-    "items": 74
+    "version": "f17.4",
+    "sha256": "afa30c72e2a3391b68626f76eb9180e4f568e6273d94f1fd38c40894eb074509",
+    "items": 89
   },
   "routing": {
     "functions:committee": "anthropic/claude-opus-5.5",
@@ -15,11 +15,11 @@
     "policyId": "committee-brain",
     "version": "f17.1"
   },
-  "groundingRules": "f17.3",
+  "groundingRules": "f17.4",
   "date": "2026-10-17",
   "graded": {
     "deterministic": {
-      "passed": 74,
+      "passed": 89,
       "failed": 0
     }
   },
@@ -27,9 +27,9 @@
   "live": false,
   "liveNote": "NOT RUN: AI_GATEWAY_API_KEY is not set in the environment where this record was made, so no model was called. The result above is the deterministic grading of the set's synthetic recorded responses against its seeded corpus (functions/test/f17-eval-set.test.ts); it measures the grounding rules, not the model. Run `npm --prefix functions run eval:committee-live` with the key before relying on the model, and record its result here as live: true with liveRun.",
   "supersedes": {
-    "evalSet": "f17.2",
-    "groundingRules": "f17.2",
-    "reason": "Re-audit round (HIGH-1, FAIL 6/10 at 63b6fa2): an authority-like mention in the prose that the D4 extractor does not see (a foreign or other law report, a short case number, a case name, a page-only reference) and that is not bound to a VERIFIED citation is an UNRECOGNISED suspect (rules f17.3); fourteen prose_unverified_authority items added (set f17.3). f17.2 superseded f17.1 (review round, Codex P1 on PR #63: a statute, rule or other authority is never resolved as a judgment)."
+    "evalSet": "f17.3",
+    "groundingRules": "f17.3",
+    "reason": "Re-audit round 2 (HIGH-1 narrowed, FAIL 7/10 at d729ff8): the prose is normalised first (NFKC, format characters, Arabic-Indic and full-width digits, dashes) and read for possessive and prefixed case names, unbracketed supra and ibid, capital-group case numbers, paragraph references, reporters in any case, US and bracketed-volume reports and a guarded catch-all, the Urdu بمقابلہ, مقدمہ X and X کیس; statutes with a year stay grounded (rules f17.4); fifteen further prose_unverified_authority items (set f17.4). f17.3 superseded f17.2 (re-audit round, HIGH-1, FAIL 6/10 at 63b6fa2): an authority-like mention in the prose that the D4 extractor does not see (a foreign or other law report, a short case number, a case name, a page-only reference) and that is not bound to a VERIFIED citation is an UNRECOGNISED suspect (rules f17.3); fourteen prose_unverified_authority items added (set f17.3). f17.2 superseded f17.1 (review round, Codex P1 on PR #63: a statute, rule or other authority is never resolved as a judgment)."
   },
   "notes": "Model ids are the configured routing (functions/src/p1/costTable.ts TASK_MODEL, platform/p1/constants.ts COMMITTEE_BRAIN_GATEWAY_MODEL), not a verified model identity: the provider-reported model is recorded per call (modelReported). ci_gates/check_committee_eval_record.py fails any change of these values without a new record."
 }

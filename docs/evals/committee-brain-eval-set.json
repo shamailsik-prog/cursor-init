@@ -1,9 +1,9 @@
 {
   "format": "committee-brain-eval-set/1",
-  "version": "f17.3",
+  "version": "f17.4",
   "purpose": "committee-brain",
   "responseOrigin": "synthetic",
-  "notice": "Synthetic evaluation set for audit F17. Every response was written for this set to exhibit one failure mode or control; none was produced by a model. Every citation uses the year 2099 and names no real judgment, statute or party; every name is invented. Expected outcomes follow the grounding rules f17.3 against the seeded corpus below.",
+  "notice": "Synthetic evaluation set for audit F17. Every response was written for this set to exhibit one failure mode or control; none was produced by a model. Every citation uses the year 2099 and names no real judgment, statute or party; every name is invented. Expected outcomes follow the grounding rules f17.4 against the seeded corpus below.",
   "corpus": {
     "judgments": [
       {
@@ -2155,6 +2155,476 @@
           },
           {
             "ref": "UNRECOGNISED: Haris Qalbani v. Omer Daryani",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-09",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Which case first applied the further-inquiry rule?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"As the Supreme Court held in Qalvo's case, bail follows.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: Qalvo's case",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-10",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Is there an older authority on bail on further inquiry?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"In re Qalvo, bail follows.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: In re Qalvo",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-11",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Does the earlier authority still apply?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The rule in Qalvo, supra, applies.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: Qalvo, supra",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-12",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Has this Court applied the rule in a leave petition?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"This Court followed the rule in Crl.P.L.A. 77/2099.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: Crl.P.L.A. 77/2099",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-13",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Where in the Supreme Court's decision is the rule stated?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The 2099 decision of the Supreme Court at para 77 is to the same effect.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: decision of the Supreme Court at para 77",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-14",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Do United States courts take the same view?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The United States Supreme Court agreed in 550 U.S. 544 (2099).\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: 550 U.S. 544 (2099)",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-15",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Is there an Indian report on the point?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The question is whether bail may be granted where the case calls for further inquiry.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[\"Compare 2099 (3) SCALE 777.\"]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: 2099 (3) SCALE 777",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-pua-16",
+      "language": "en",
+      "category": "prose_unverified_authority",
+      "prompt": "Which statutes govern the agreement and the bail application?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The Contract Act, 1872 governs the agreement, and section 497 of the Code of Criminal Procedure, 1898 applies to bail.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "grounded",
+        "advisory": false,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-06",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "مزید انکوائری کا اصول کس مقدمے میں طے ہوا؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"یہ اصول قلوو بمقابلہ نورا میں طے ہوا۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: قلوو بمقابلہ نورا",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-07",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "یہ اصول کس مقدمے میں طے ہوا؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"یہ اصول مقدمہ قلوو میں طے ہوا۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: مقدمہ قلوو",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-08",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "اس اصول کا بنیادی کیس کون سا ہے؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"یہ اصول قلوو کیس میں طے ہوا۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: قلوو کیس",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-09",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "کیا بھارتی عدالت عظمیٰ نے بھی یہی رائے دی؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"بھارتی عدالت عظمیٰ نے (۲۰۹۹) ۳ SCC ۷۷۷ میں یہی رائے دی۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: (2099) 3 SCC 777",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-10",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "عدالت عظمیٰ کے فیصلے میں یہ اصول کس پیرا میں ہے؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"عدالت عظمیٰ کے 2099 کے فیصلے کے پیرا ۷۷ میں یہی ہے۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: فیصلے کے پیرا 77",
+            "status": "UNRECOGNISED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-pua-11",
+      "language": "ur",
+      "category": "prose_unverified_authority",
+      "prompt": "اس معاہدے پر کون سا قانون لاگو ہوتا ہے؟",
+      "response": "{\"sections\":[{\"heading\":\"ضمانت\",\"text\":\"معاہدہ ایکٹ، 1872 کے تحت یہ معاملہ طے ہوگا۔\",\"claims\":[{\"statement\":\"مزید انکوائری کی صورت میں ضمانت ملزم کا حق ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "grounded",
+        "advisory": false,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "mx-pua-02",
+      "language": "mixed",
+      "category": "prose_unverified_authority",
+      "prompt": "Bail on further inquiry: یہ اصول کس مقدمے میں طے ہوا؟",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"یہ اصول Qalvo's case میں طے ہوا۔\",\"claims\":[{\"statement\":\"Bail follows on further inquiry; یہی اصول ہے۔\",\"authorities\":[{\"kind\":\"judgment\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "partially_grounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 1
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "claim"
+          },
+          {
+            "ref": "UNRECOGNISED: Qalvo's case",
             "status": "UNRECOGNISED",
             "source": "text"
           }

@@ -252,6 +252,230 @@ describe("audit F17 re-audit HIGH-1: an authority in the prose that is not a ver
   })
 
   it("names the rules f17.3", async () => {
-    expect((await ground(answerText("t"))).rules).toBe("f17.3")
+    expect((await ground(answerText("t"))).rules).toBe("f17.4")
+  })
+})
+
+/**
+ * Re-audit round 2 (FAIL 7/10 at d729ff8; ruling R7b): the detector was a deny-list over raw text and leaked further
+ * forms. Every line the re-auditor marked as a leak in prose3/prose5 (bound forms, controls and the documented limits
+ * aside) is a must-catch case below, then the coordinator's list, then the builder's own adversarial matrix of further
+ * Pakistani, Indian, UK and US citation habits. Invisible and full-width characters are written as escapes.
+ */
+describe("audit F17 re-audit round 2: forms that still leaked at d729ff8 (ruling R7b)", () => {
+  const AUDITOR_PROSE = [
+    "in Qalvo's case the Supreme Court held so",
+    "in Nura's case (2099) the Court agreed",
+    "In re Qalvo the Court held so",
+    "Ex parte Qalvo settles it",
+    "In the matter of Qalvo, the Court held so",
+    "the case of Qalvo settles it",
+    "the Qalvo judgment settles it",
+    "the Qalvo matter settles it",
+    "Qalvo -v- Nura settles it",
+    "Qalvo vrs. Nura settles it",
+    "Qalvo, supra, settles it",
+    "Qalvo supra settles it",
+    "Qalvo (ibid) settles it",
+    "قلوو بمقابلہ نورا میں طے ہوا",
+    "مقدمہ قلوو میں طے ہوا",
+    "قلوو کیس میں طے ہوا",
+    "Qalvo banam Nura settles it",
+    "(2099) 3 scc 777 settles it",
+    "(２０９９) ３ SCC ７７７ settles it",
+    "(۲۰۹۹) ۳ SCC ۷۷۷ settles it",
+    "(٢٠٩٩) ٣ SCC ٧٧٧ settles it",
+    "(2099) 3 S​CC 777 settles it",
+    "(2099)​3 SCC 777 settles it",
+    "2099 (3) SCALE 777 settles it",
+    "JT 2099 (3) SC 777 settles it",
+    "550 U.S. 544 (2099) settles it",
+    "123 F.3d 456 (9th Cir. 2099) settles it",
+    "Case No. 2099/77 settles it",
+    "C.A. ۷۷۷/۲۰۹۹ settles it",
+    "C.A. 777–2099 settles it",
+    "C.A. No. 777 of '99 settles it",
+    "R.A. 7/2099 settles it",
+    "C.M. 7/2099 settles it",
+    "S.A. 7/2099 settles it",
+    "W.P.(C) 7/2099 settles it",
+    "Cr.P.L.A. 7/2099 settles it",
+    "the 2099 decision of the Court at para 77 says so",
+    "Benazir's case (supra) settles it",
+    "In Zafar Shah's case the Court held so",
+    "Al-Jehad Trust case settles it",
+    "as held in Qalvo (2099) the Court agreed",
+  ]
+  it.each(AUDITOR_PROSE)("the re-auditor's leak %j is not grounded", async (text) => {
+    expectFlagged(await ground(answerText(text)), text)
+  })
+
+  // The coordinator's list (R7b), beyond the re-auditor's lines.
+  const COORDINATOR = [
+    "Re: Qalvo settles it",
+    "Qalvo, ibid, settles it",
+    "Qalvo ibid. settles it",
+    "Qalvo v/s Nura settles it",
+    "قلوو کے مقدمے میں یہی طے ہوا",
+    "M/s Qalvo Ltd. v. Nura settles it",
+    "Messrs Qalvo v. Nura settles it",
+    "Crl.P.L.A. 77/2099 settles it",
+    "C.A. 2099/777 settles it",
+    "the judgment at paragraph 7 says so",
+    "the judgment at ¶ 7 says so",
+    "the ruling, para 7, says so",
+    "C.A. 777‒2099 settles it",
+    "(2099) 3 scc 777 and (2099) 4 Scc 778 agree",
+  ]
+  it.each(COORDINATOR)("the coordinator's form %j is not grounded", async (text) => {
+    expectFlagged(await ground(answerText(text)), text)
+  })
+
+  // The builder's own adversarial matrix (R7b item 9): further citation habits, each must flag.
+  const SELF_AUDIT = [
+    "PLJ 2099 SC 77 settles it",
+    "2099 NLR (Criminal) 77 settles it",
+    "2099 KLR 77 settles it",
+    "2099 MLD 777 [Lahore] settles it",
+    "2099 CLC (Kar) 777 settles it",
+    "2099 PTD (Trib) 7 settles it",
+    "Human Rights Case No. 7 of 2099 settles it",
+    "Reference No. 1 of 2099 settles it",
+    "Const. P. No. 7 of 2099 settles it",
+    "AIR 2099 SC 7 settles it",
+    "(2099) 7 SCC (Cri) 7 settles it",
+    "2099 SCC OnLine SC 7 settles it",
+    "[2099] EWHC 7 (Ch) settles it",
+    "Mst. Nura v. Qalvo settles it",
+    "Federation of Pakistan v. Qalvo settles it",
+    "Qalvo and others v. Nura settles it",
+    "The State v. Qalvo settles it",
+    "2099 YLR Note 77 settles it",
+    "2099 PCr.LJ 77 (Lahore) settles it",
+    "Crl. Org. 7/2099 settles it",
+    "Civil Petition No. 7-K of 2099 settles it",
+    "H.R.C. No. 7 of 2099 settles it",
+    "Crl. Rev. 7/2099 settles it",
+    "Jail Petition No. 7 of 2099 settles it",
+    "C.M.A. 7-K/2099 settles it",
+    "2099 Cri LJ 777 settles it",
+    "AIR 2099 Bom 77 settles it",
+    "ILR 2099 Del 77 settles it",
+    "2099 SCC OnLine Del 77 settles it",
+    "[2099] 1 AC 77 settles it",
+    "[2099] EWCA Crim 7 settles it",
+    "(2099) 77 Cr App R 7 settles it",
+    "R v Qalvo settles it",
+    "77 S. Ct. 777 (2099) settles it",
+    "777 F. Supp. 2d 77 (S.D.N.Y. 2099) settles it",
+    "Qalvo v. Nura, 550 U.S. 544 (2099), settles it",
+    "Id. at 77 says so",
+    "مقدمہ بعنوان قلوو بنام نورا میں طے ہوا",
+    "قلوو کیس (۲۰۹۹) میں طے ہوا",
+    "عدالت عظمیٰ کے فیصلے کے پیرا ۷۷ میں یہی ہے",
+  ]
+  it.each(SELF_AUDIT)("the builder's adversarial form %j is not grounded", async (text) => {
+    expectFlagged(await ground(answerText(text)), text)
+  })
+
+  it.each([
+    ["the possessive in the statement", "statement" as Field],
+    ["the possessive in the heading", "heading" as Field],
+    ["the possessive in a pinpoint", "pinpoint" as Field],
+    ["the possessive in a caveat", "caveat" as Field],
+  ])("%s is not grounded", async (_label, field) => {
+    expectFlagged(await ground(answerWith("Qalvo's case", field)), field)
+  })
+
+  // Statutes with a year, the matter's own record numbers and ordinary legal prose stay grounded (R7b item 4): flagging
+  // them would make sound answers advisory wholesale. A statute in the prose is not an authority the corpus resolves
+  // (residual risk 9).
+  it.each([
+    "The Contract Act, 1872 governs the agreement.",
+    "Section 497 of the Code of Criminal Procedure, 1898 applies.",
+    "Section 302 PPC, 1860 read with section 34 PPC applies.",
+    "The Ordinance, 2099 and the Rules of 2099 apply.",
+    "Order XXXIX Rule 1 of the Code of Civil Procedure, 1908 applies.",
+    "Under the Constitution of 2099, Article 10-A applies.",
+    "Act No. 7 of 2099 and Notification No. 7 of 2099 apply.",
+    "The FIR No. 77/2099 was registered at the police station.",
+    "This case turns on its facts, and the prosecution case is weak.",
+    "The Supreme Court has held so in a number of cases.",
+    "مقدمہ درج ہوا اور ضمانت کی درخواست دائر کی گئی۔",
+    "اس کیس میں ضمانت دی جا سکتی ہے۔",
+  ])("stays grounded: %j", async (text) => {
+    expectGrounded(await ground(answerText(text)), text)
+  })
+
+  it("documented limit: a bare name with no case marker cannot be detected (residual risk)", async () => {
+    // "grounded" means every claim's authorities are VERIFIED and the prose holds no unverified authority in a
+    // recognised form; "as observed in Qalvo" names an authority in no recognised form.
+    expectGrounded(await ground(answerText("As observed in Qalvo, bail follows.")), "bare name")
+  })
+
+  it("normalises before reading: a name split by a zero-width character is masked whole", async () => {
+    const g = await ground(answerText("The rule in Tariq Zar​vani v. The State applies."), ["Tariq Zarvani"])
+    expect(g.status).toBe("partially_grounded")
+    expect(suspects(g).map((c) => c.ref)).toContain("UNRECOGNISED: [PARTY] v. The State")
+    expect(JSON.stringify(g.citations)).not.toMatch(/Tariq|Zarvani|Zar|vani/u)
+  })
+
+  // Re-audit LOW P15: a mask placeholder counts as a name.
+  it("a placeholder inside a name lets the name bind to its verified citation", async () => {
+    expectGrounded(await ground(answerText("Qalvo v. [PARTY] Holdings (PLD 2099 SC 101) settles it.")), "placeholder in a bound name")
+  })
+  it("the [PARTY] case is not grounded", async () => {
+    expectFlagged(await ground(answerText("The [PARTY] case settles it.")), "the [PARTY] case")
+  })
+
+  // Re-audit LOW name cut: no partial party name in any ref, on unmasked input, however long the name.
+  it("a seven-word party name never appears in part in a ref", async () => {
+    const name = "Haris Qalbani Omer Daryani Nura Baz Quxo"
+    const g = await ground(
+      answerText(`${name} v. The State settles it, and so does the judgment in ${"y".repeat(60)} ${name} matter at page 7.`),
+      [name]
+    )
+    expect(g.status).toBe("partially_grounded")
+    const blob = JSON.stringify(g.citations)
+    for (const word of name.split(" ")) expect(blob, word).not.toContain(word)
+  })
+
+  it("cuts a long suspect at a word boundary", async () => {
+    // 81 characters: the 80-character cut falls inside the last word.
+    const name = "Qalvoabcdefghij Holdingsabcdefg Limitedabcdefgh Karachiabcdef v. Nuraabcdefghijkl"
+    const g = await ground(answerText(`The rule in ${name} applies.`))
+    const ref = suspects(g).map((c) => c.ref).find((r) => r.includes("Qalvoabcdefghij"))!
+    const words = name.split(" ")
+    for (const w of ref.slice("UNRECOGNISED: ".length).split(" ")) expect(words, `${ref}: ${w}`).toContain(w)
+  })
+})
+
+// Re-audit LOW P02 and P03: the 100-citation cap fails safe.
+describe("audit F17 re-audit round 2: the citation cap fails safe (LOW P02, P03)", () => {
+  const many = (): InMemoryAuthorityStore => {
+    const s = new InMemoryAuthorityStore()
+    for (let i = 1; i <= 100; i += 1) s.addJudgment(`j-${i}`, `PLD 2099 SC ${i}`, "division")
+    return s
+  }
+
+  it("100 verified authorities in the claims and a prose suspect past the cap: never grounded", async () => {
+    const claims = Array.from({ length: 10 }, (_, c) => ({
+      statement: `Claim ${c}.`,
+      authorities: Array.from({ length: 10 }, (_, a) => ({ kind: "judgment", citation: `PLD 2099 SC ${c * 10 + a + 1}` })),
+    }))
+    const text = JSON.stringify({ sections: [{ heading: "H", text: "The same view was taken in (2099) 3 SCC 777.", claims }], caveats: [] })
+    const g = await groundAnswer({ text, policy: POLICY, partyNames: [] }, many())
+    expect(g.claims).toEqual({ total: 10, supported: 10 })
+    expect(g.status).not.toBe("grounded")
+    expect(isAdvisory(g)).toBe(true)
+    expect(g.omitted).toBeGreaterThanOrEqual(1)
+  })
+
+  it("prose suspects count toward the cap: 150 of them record at most 100 citations, the rest omitted", async () => {
+    const prose = Array.from({ length: 150 }, (_, i) => `(2099) 3 SCC ${i + 1}`).join(", ")
+    const g = await ground(answerText(`The same view was taken in ${prose}.`))
+    expect(g.citations.length).toBeLessThanOrEqual(100)
+    expect(g.omitted).toBeGreaterThanOrEqual(50)
+    expect(g.status).not.toBe("grounded")
   })
 })
