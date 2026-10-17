@@ -326,3 +326,86 @@ At the head, the four ruled lines are count rows and every other line of both co
 The bound tests: the round-2 matrix, the round-3 shapes and the 21 round-4 shapes (350 tests) pass at 1.5 s per input.
 
 **Changed earlier expectation:** `tests/f15-r3-residual.test.ts`, round 3's held-out fresh line 69 ("The complainant shifted to House No. 7 after the occurrence.") is a count row by ruling R4-3.
+
+## Round 5: re-audit round 4 (FAIL 7/10)
+
+Spec §10, rulings R5-1 to R5-5 (R4-0 still governs). Same constraints: TDD (RED recorded against 810fa74), no #44 files, no `app/api/**`, escapes for invisible characters, no PR opened or edited by the builder. origin/main had not moved (d7f6a2c), so no merge was needed.
+
+### Task R5-A: held-out corpus, before any code (R5-5)
+
+- [x] Write `tests/f15-r5-heldout-corpus.ts` (92 lines: 50 English, 42 Urdu; tax, company, banking, consumer, labour, election, accountability, anti-terrorism, rent, family, succession, constitutional, service, police, revenue, cheques, defamation, cyber crime, procurement) and commit it alone (d65c895), before reading the re-auditor's round-4 adversarial lines.
+
+### Task R5-B: the re-auditor's inputs as RED tests
+
+**Files:** create `tests/f15-r5-mask.test.ts` (main's mask as the oracle; drift rows; the differential generator joins 3 to 8 emails and checks stage 0 against main), `tests/f15-r5-residual.test.ts` and `tests/f15-r5-bounds.test.ts` (joined-email runs with a heap limit). Modify `functions/test/f15-pii-mask.e2e.emu.test.ts`: add rows (k). Change the two U13 rows (R5-2).
+
+- [x] Commit them (d0ff97c) and run them against 810fa74's sources.
+
+### Task R5-C: the mask (R5-1)
+
+- [x] `matchesOf`: one exec loop per pattern, resuming at the chain's end; stage 0 and `take()` use it.
+- [x] `mainAlgorithmSpans`: stage 0 exported, overlaps merged before blanking; EMAIL_RAW starts where main's word boundary did.
+
+### Task R5-D: the residual detector (R5-2 to R5-4)
+
+- [x] The eight-word English walk; offices like roles; organisation, nationality and country words skipped; finite auxiliaries end it.
+- [x] Urdu residence words with a place on either side; origin cues; settled and residence; address of a role; C/o; table separators; the ten-word window.
+
+### Task R5-E: measure, then fix and add the held-out rows (R5-5)
+
+- [x] Measure both corpora at 86c42a2. Fix new-corpus line 67, test first (ce626f0). Add both corpora as regression rows, with the four ruled lines as count rows.
+
+### Task R5-F: mutants, docs and verification
+
+- [x] Round-5 mutants; pins for M13 and M14 (6c35c2d).
+- [x] Spec §10 and §5; mask header; README; this record; PR body `pr-body-r5.md` through `ci_gates/check_pr_phase_claims.py` with BASE origin/main.
+
+### Round-5 execution record
+
+**Order of work.**
+1. d65c895: the new held-out corpus, alone.
+2. d0ff97c: the RED tests, and the two U13 rows changed by ruling R5-2.
+3. 86c42a2: the implementation, the measured state.
+4. ce626f0: the held-out fix (new line 67, test first) and both corpora as regression rows.
+5. 6c35c2d: pins for mutants M13 and M14.
+6. c091844: docs (spec §10 and §5, README).
+7. This record.
+
+**RED, against 810fa74's sources:**
+- `tests/f15-r5-mask.test.ts`: 13 failed / 1 passed (14). The differential missed 227, 199, 196 and 202 inputs per seed; the underscore row is a guard.
+- `tests/f15-r5-residual.test.ts`: 35 failed / 27 passed (62).
+- The two rows changed by R5-2 (U13): 2 failed.
+- `tests/f15-r5-bounds.test.ts`: the first joined-email row ran the worker out of memory; `a@b.pk_` alone took 57.6 s; the 14 cue rows pass (guards).
+- `functions/test/f15-pii-mask.e2e.emu.test.ts`: 8 failed / 46 passed (54). The glued NTN reached the provider shifted; the 48,000-character run answered 503 `precall_deadline` after 28.9 s; six clauses were sent.
+- After the measurement, 2 failed at 86c42a2 and pass at ce626f0: new line 67 and the ساتھ row.
+
+**False-positive rates (R5-5), at 86c42a2:**
+- the new corpus (held out): 2 / 92 (English 0 / 50, Urdu 2 / 42: lines 67 and 74);
+- the re-auditor's round-4 corpus (held out): 3 / 128 (English 0 / 64, Urdu 0 / 59, "debatable" 3 / 5: lines 125, 126, 128);
+- both held-out sets: 5 / 220 (2.3%).
+
+At the head the four ruled lines (new 74, fresh 125, 126, 128) are count rows and every other line of both corpora is clean. The re-auditor's 43 adversarial clean probes, for information: 25 flagged at 810fa74, 22 at 86c42a2.
+
+**Differential (R5-1):** the generator joins 3 to 8 emails with ".", "-" or "_"; seeds 1017, 2026, 4242 and 99991 × 6,000. 0 inputs where the mask keeps a unit main replaced; 0 where stage 0's spans differ from main's.
+
+**Mutants** (spec §10): U21, U24, U25a, U25b, M10, M12, U06, U36 and M13 to M20 are all killed. M13 and M14 needed the pins of 6c35c2d. Removing the merge before stage 0's blanking is an equivalent mutant (a safety net).
+
+**GREEN, at 6c35c2d (code and tests):**
+- `npm run test:unit`: 182 files, 5201/5201, wall time 3 min 50 s.
+- The `test:rules` set: 13 files, 680/680.
+- The Functions F15 e2e, p1.api, p1.gateway, both f09 files and p1.units: 6 files, 355/355.
+- The full Functions emulator suite, under a hard timeout (3,600 s): 66 of 67 files, 1675/1679. The four failures are 15 s timeouts in `p2.jobs-scheduled`, late in the run: the same four the re-auditor reproduced on an exact main tree in the same file order (round 4). The file passes beside the F15 file (60/60).
+- `npm run typecheck`, `npm run typecheck:tests`, `npm --prefix functions run typecheck` and `build`: exit 0.
+- `npm run lint`: 0 errors (89 warnings, none in a touched file).
+- G-0: PASSED (at the head).
+
+**Timings** (rank-3 work at 100,000 characters, best of three; `profile5.ts`):
+- the 24 separator-run and repetition shapes of rounds 2 and 3: at most 330 ms with 50 names;
+- the 21 round-4 shapes: at most 1,142 ms with 50 names (the Urdu phrase کا باشندہ repeated; 958 ms with none);
+- the 20 round-5 shapes: at most 400 ms with 50 names (مقیم repeated); the joined-email runs 40 to 136 ms;
+- U+FDFA × 100,000: 1.9 s with no names, 3.3 s with 50;
+- the largest heap growth over a case: 54 MB.
+
+The bound tests (the round-2 matrix with the round-5 cues, the round-3, round-4 and round-5 shapes; 395 tests) pass at 1.5 s per input; the joined-email rows also stay under 256 MB of heap growth.
+
+**Changed earlier expectation:** "the wife of a Pakistani national residing abroad" counts by ruling R5-2 (mutant U13's rule removed), in `tests/f15-r4-residual.test.ts` and as round 3's fresh line 49 in `tests/f15-r3-residual.test.ts`.
