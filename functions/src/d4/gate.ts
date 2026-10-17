@@ -8,13 +8,14 @@
  */
 import { logger } from "firebase-functions"
 import { extractCitations, isUnrecognisedRef, normaliseCitation } from "@/services/d4-2/citations"
-import { verdictFromTreatments } from "@/services/d4-2/citationVerdict"
+import { verdictFromTreatments, type Bench } from "@/services/d4-2/citationVerdict"
 import { normaliseDraftBody } from "@/services/d4-2/draftCharset"
 import type { AuthorityStore } from "./authority"
 import { AuthorityUnavailableError } from "./authorityErrors"
 import {
   GATE_SEVERITY,
   type CitationFinding,
+  type CitationStatus,
   type GateEvaluation,
   type GateScope,
   type GateStatus,
@@ -37,9 +38,10 @@ export type GateRunOptions = { budgetMs?: number; now?: () => number }
  * which the gate reads as any unavailable store: every remaining citation is UNVERIFIED and every remaining temporal
  * check TEMPORAL_UNAVAILABLE. A call cut off this way is not awaited: it settles on its own, within the adapter's
  * connect and statement timeouts, and its answer is dropped. The run logs `d4.authority_unavailable {reason: budget}`
- * once. Any other error from the store passes through unchanged.
+ * once. Any other error from the store passes through unchanged. Exported (audit F17, spec ruling 2): committee-output
+ * grounding resolves its citations under the same budget mechanism.
  */
-function withBudget(store: AuthorityStore, budgetMs: number, now: () => number): AuthorityStore {
+export function budgetedStore(store: AuthorityStore, budgetMs: number, now: () => number): AuthorityStore {
   let used = 0
   let logged = false
   const spent = (): AuthorityUnavailableError => {
@@ -87,33 +89,63 @@ async function orUnavailable<T, F>(lookup: () => Promise<T>, fallback: F): Promi
   }
 }
 
+/** What `orUnavailable` falls back to in the citation steps below, when the store cannot answer. */
+const UNAVAILABLE: unique symbol = Symbol("authority unavailable")
+
+/**
+ * The first step of resolving one extracted ref (audit F17, spec ruling 2: shared with committee-output grounding):
+ * what it is, and the key the gate de-duplicates it by (`j:<judgmentId>` when found, else `r:<ref>`).
+ * - `unrecognised`: a suspect the extractor could not read exactly; never looked up, never resolvable (E-22).
+ * - `not_normalised`: a ref that is not exactly one reported citation. The store is asked for the canonical form
+ *   only, so it is never looked up.
+ * - `unavailable`: the store could not answer (AuthorityUnavailableError, F05).
+ * - `not_found` / `found`: the store's answer for the canonical form; `ref` is the canonical citation.
+ * Null for a blank ref. Any other store error is not caught: it is a bug and fails the request.
+ */
+export type CitationLookup =
+  | { kind: "unrecognised" | "not_normalised" | "unavailable" | "not_found"; ref: string; key: string }
+  | { kind: "found"; ref: string; key: string; judgmentId: string; benchType: Bench }
+
+export async function lookUpCitation(raw: string, store: AuthorityStore): Promise<CitationLookup | null> {
+  const ref = raw.trim()
+  if (!ref) return null
+  if (isUnrecognisedRef(ref)) return { kind: "unrecognised", ref, key: `r:${ref}` }
+  const canonical = normaliseCitation(ref)
+  if (!canonical) return { kind: "not_normalised", ref, key: `r:${ref}` }
+  const found = await orUnavailable(() => store.findJudgment(canonical), UNAVAILABLE)
+  if (found === UNAVAILABLE) return { kind: "unavailable", ref: canonical, key: `r:${canonical}` }
+  if (!found) return { kind: "not_found", ref: canonical, key: `r:${canonical}` }
+  return { kind: "found", ref: canonical, key: `j:${found.judgmentId}`, judgmentId: found.judgmentId, benchType: found.benchType }
+}
+
+/**
+ * The second step, for a found judgment (audit F17, spec ruling 2): the verdict rule (P4-2) over the store's
+ * treatments. Treatments it cannot list (unreachable, or an overruling still pending review) leave the judgment
+ * UNVERIFIED, never VERIFIED (F05); `treatmentsUnavailable` says that the store could not list them.
+ */
+export async function verdictOfJudgment(
+  found: { judgmentId: string; benchType: Bench },
+  store: AuthorityStore
+): Promise<{ status: CitationStatus; treatmentsUnavailable: boolean }> {
+  const treatments = await orUnavailable(() => store.listTreatments(found.judgmentId), UNAVAILABLE)
+  if (treatments === UNAVAILABLE) return { status: "UNVERIFIED", treatmentsUnavailable: true }
+  return { status: verdictFromTreatments(found.benchType, treatments), treatmentsUnavailable: false }
+}
+
 async function checkCitations(text: string, store: AuthorityStore): Promise<CitationFinding[]> {
   const findings: CitationFinding[] = []
   const seen = new Set<string>()
   for (const raw of extractCitations(text)) {
-    const ref = raw.trim()
-    if (!ref) continue
-    if (isUnrecognisedRef(ref)) {
-      // A suspected authority the extractor could not read exactly: never looked up, never resolvable (E-22).
-      if (seen.has(`r:${ref}`)) continue
-      seen.add(`r:${ref}`)
-      findings.push({ ref, judgmentId: null, status: "UNVERIFIED" })
+    const lookup = await lookUpCitation(raw, store)
+    if (lookup === null || seen.has(lookup.key)) continue
+    seen.add(lookup.key)
+    // A suspect, a ref that does not normalise, an unavailable store and an absent judgment are each UNVERIFIED with
+    // no judgment id (E-22, F05); a found judgment takes the verdict rule's status.
+    if (lookup.kind !== "found") {
+      findings.push({ ref: lookup.ref, judgmentId: null, status: "UNVERIFIED" })
       continue
     }
-    // The store is asked for the canonical form only. A ref that does not normalise cannot be resolved.
-    const canonical = normaliseCitation(ref)
-    const displayRef = canonical ?? ref
-    // An unavailable store finds nothing: UNVERIFIED with no judgment id (F05).
-    const found = canonical ? await orUnavailable(() => store.findJudgment(canonical), null) : null
-    const key = found ? `j:${found.judgmentId}` : `r:${displayRef}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    // Treatments it cannot list (unreachable, or an overruling still pending review) leave the found judgment
-    // UNVERIFIED, never VERIFIED (F05).
-    const status = found
-      ? await orUnavailable(async () => verdictFromTreatments(found.benchType, await store.listTreatments(found.judgmentId)), "UNVERIFIED" as const)
-      : "UNVERIFIED"
-    findings.push({ ref: displayRef, judgmentId: found?.judgmentId ?? null, status })
+    findings.push({ ref: lookup.ref, judgmentId: lookup.judgmentId, status: (await verdictOfJudgment(lookup, store)).status })
   }
   return findings
 }
@@ -185,7 +217,7 @@ export async function runGate(
   authority: AuthorityStore,
   options: GateRunOptions = {}
 ): Promise<GateEvaluation> {
-  const store = withBudget(authority, options.budgetMs ?? AUTHORITY_BUDGET_MS, options.now ?? Date.now)
+  const store = budgetedStore(authority, options.budgetMs ?? AUTHORITY_BUDGET_MS, options.now ?? Date.now)
   const citations = await checkCitations(`${input.title}\n${input.body}`, store)
   const temporal: TemporalFinding[] = []
   for (const check of input.temporalChecks) temporal.push(await checkTemporal(check, store))
