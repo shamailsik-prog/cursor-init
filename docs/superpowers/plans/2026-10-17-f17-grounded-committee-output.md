@@ -123,3 +123,18 @@ Spec section 2a (rulings R2a, R5a, R4a).
 | Spec and README | 6e3e396 | n/a | n/a |
 
 Verification for the review round: the P1/F06/F07-F08/F09/F15/F16/F17/D4 emulator files 22 files, 813 passed; the F05 suite with the F17 file 4 files, 90 passed; the Functions F17 unit files 115 passed; typecheck, typecheck:tests, functions typecheck and build exit 0; lint 0 errors (89 pre-existing warnings, none in changed files); functions eslint exit 0; G-0 PASSED with [17] PASS; the live harness without a key prints NOT RUN for the 60 items of f17.2 and exits 0. The root `npm run test:unit` runs alongside a parallel emulator workload (load average 4 to 5 on 4 cores) failed only wall-clock budget tests, in files this branch does not touch (`tests/citations.time-budget.test.ts`, `tests/f15-r4-bounds.test.ts`), different ones per run; both files pass alone (65 passed). The PR body records the final run.
+
+## Re-audit round (independent re-audit of 63b6fa2: FAIL 6/10)
+
+Spec section 2a (ruling R7a and the rulings on L1 to L5).
+
+| Finding | Commit | RED (each new test seen failing first, or the mutant it kills) | GREEN |
+| --- | --- | --- | --- |
+| HIGH-1: an authority in the prose the D4 extractor does not see left the answer `grounded`, `advisory: false` (R7a) | fe81f6c, 78a4f1f, 4ee9d05 | At 63b6fa2: `f17-prose-authority.test.ts` 89 failed, 32 passed (`status: expected 'grounded' to be 'partially_grounded'`); the route e2e `f17-prose-authority.e2e.emu.test.ts` 8 failed, 1 passed; the time-budget file failed at load (module missing); `f17-eval-set.test.ts` 4 failed (set f17.2, no `prose_unverified_authority`). Mutants: name gap, page gap, reported gap loosened, pinpoint year check dropped, suspect not masked, bounded before masked: each fails the unit file | unit 123 passed; time budget 54 passed (64 KB per shape, slowest 351 ms of 2,000); route e2e 9 passed; eval set f17.3 (74 items) graded as authored; the gate refused the old record, then PASS |
+| L1: the eval comparator was untested (mutant M16 survived) | d7b85c8 | M16 (`return []`) 5 failed; the status check removed 1; the advisory check removed 1 | `f17-eval-set.test.ts` 87 passed |
+| L2: the re-mask of canonical refs was untested (R1e, R1f survived) | 7fe0cc6 | R1e 1 failed; R1f 2 failed | `f17-grounding.test.ts` 31 passed |
+| L3: the gate passed a NOT RUN live record, a future date and a commented-out shadow declaration | 2237964 | `tests/f17-eval-record-gate.test.ts` 13 failed, 40 passed | 53 passed; G-0 [17] PASS |
+| L4: modelMatch prefix abuse untested | 760c635 | mutants `endsWith` 4 failed, `startsWith` 1, `includes` 5 | `f17-model-match.test.ts` 16 passed |
+| L5: a fabricated statute in the prose beside a verified judgment grades `grounded` | 738896e | n/a (residual risk 9, unchanged by ruling) | n/a |
+
+Verification at the head: `npm run test:unit` 195 files, 5,611 passed, 54 skipped; the P1/F06/F07-F08/F09/F15/F16/F17/D4 emulator files 26 files, 1,040 passed; the F05 suite with the F17 file 4 files, 90 passed (local PG16 + pgvector); `npm run typecheck`, `typecheck:tests`, functions typecheck and build exit 0 (route check 52 routes); `npm run lint` 0 errors (89 pre-existing warnings, none in changed files); `npx eslint --max-warnings 0 functions` exit 0; `BASE=origin/main bash ci_gates/gate_g0.sh` PASSED with [17] PASS; the live harness without a key prints NOT RUN for the 74 items of f17.3 and exits 0.
