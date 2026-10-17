@@ -1920,7 +1920,12 @@ export type CommitteeBrainOutput = {
   reason?: string
   text?: string
   outbound: {
+    /** The masked content of the final user message. */
     body: string
+    /** Audit F16: the system message's registry policy and the masked text sent (absent on rows written before F16). */
+    system?: { policyId: string; version: string; text: string }
+    /** Audit F16: the masked, role-separated request as sent, the system message first (absent before F16). */
+    messages?: { role: "system" | "user" | "assistant"; content: string }[]
     metadata: {
       classification: Classification
       provider: string

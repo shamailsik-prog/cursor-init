@@ -2,6 +2,9 @@
  * Optional live transport. Uses Vercel AI Gateway model strings only.
  * Does not import provider SDKs. Does not invent API keys.
  * Fires only when AI_GATEWAY_API_KEY or VERCEL_AI_GATEWAY_API_KEY is already set.
+ *
+ * Audit F16 (spec ruling 1): it sends the request's role-separated `messages` as given, the platform's system message
+ * first; it never sends a flattened prompt, which the AI SDK would turn into a single user message.
  */
 
 import { createGateway, generateText } from "ai"
@@ -9,9 +12,10 @@ import {
   COMMITTEE_BRAIN_GATEWAY_MODEL,
   PHASE0_NO_CREDENTIALS,
 } from "@/platform/p1/constants"
+import type { OutboundMessage } from "@/platform/p1/outboundPrompt"
 
 type GatewaySend = {
-  send: (request: { body: string }) => Promise<{ text: string }>
+  send: (request: { messages: readonly OutboundMessage[] }) => Promise<{ text: string }>
 }
 
 export function readGatewayApiKey(): string | undefined {
@@ -33,7 +37,7 @@ export function createGatewayTransport(
       const gateway = createGateway({ apiKey })
       const result = await generateText({
         model: gateway.languageModel(modelId),
-        prompt: request.body,
+        messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
       })
       return { text: result.text }
     },

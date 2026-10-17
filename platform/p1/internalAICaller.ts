@@ -1,12 +1,15 @@
 /**
  * P1 Committee Brain — the only outbound path to AI / OCR / STT / TTS / translation.
- * The masked body is the ONLY text sent. Classification travels in metadata, never in the prompt.
+ * Only the masked, role-separated messages are sent (audit F16): one system message from the platform registry
+ * (platform/p1/systemPolicy.ts), then the user and assistant turns, untrusted content in envelopes. Classification
+ * travels in metadata, never in a message.
  */
 
 import { recordExternalEffect } from "@/platform/http/idempotency"
 import { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 import { gatewayTransport, readGatewayApiKey } from "@/platform/p1/gatewayTransport"
 import { maskOutboundPII, type MaskOptions } from "@/platform/p1/maskOutboundPII"
+import { buildOutbound, type OutboundMessage, type PromptTurn, type SystemRecord } from "@/platform/p1/outboundPrompt"
 import { assertMinimised, providerAllowedFor, type ProviderId } from "@/platform/p1/providerPolicy"
 import { isClassification, type Classification } from "@/platform/p1/types"
 
@@ -16,8 +19,15 @@ export { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
 export const TRANSPORT_ERROR_REASON = "transport_error"
 
 export type OutboundRequest = {
-  /** Masked prompt/transcript/document text. Never includes classification. */
+  /**
+   * The masked content of the final user message, kept for readers of the pre-F16 shape (stored committee outputs).
+   * What is sent is `messages`. Never includes classification.
+   */
   body: string
+  /** Audit F16: the system message's registry policy and the masked text that was sent. */
+  system: SystemRecord
+  /** Audit F16: the masked, role-separated request as sent, the system message first. */
+  messages: OutboundMessage[]
   metadata: {
     classification: Classification
     provider: ProviderId
@@ -63,13 +73,21 @@ export function setTransportForTests(next: Transport | null): void {
   testTransport = next
 }
 
-export type CallCommitteeBrainInput = {
-  body: string
+type CallCommitteeBrainCommon = {
   classification: Classification
   provider: ProviderId
+  /** Selects the system policy (systemPolicy.ts); free text falls back to the default policy. Never sent as text. */
   purpose: string
   partyNames?: MaskOptions["partyNames"]
 }
+
+/**
+ * Audit F16: the caller's own text as one user turn (`body`: the HTTP route, translation), or the turns of a
+ * conversation (`turns`: the eve bridge, with the eve agent's compiled system instructions in `agentInstructions`,
+ * spec refinement R1b). No caller supplies system text otherwise: it comes from the registry by purpose.
+ */
+export type CallCommitteeBrainInput = CallCommitteeBrainCommon &
+  ({ body: string; turns?: never; agentInstructions?: never } | { turns: readonly PromptTurn[]; agentInstructions?: readonly string[]; body?: never })
 
 export async function callCommitteeBrain(
   input: CallCommitteeBrainInput
@@ -78,19 +96,27 @@ export async function callCommitteeBrain(
     throw new Error("P1 call omitted classification")
   }
 
-  const mask = maskOutboundPII(input.body, { partyNames: input.partyNames })
+  const turns: readonly PromptTurn[] =
+    input.turns !== undefined ? input.turns : [{ role: "user", segments: [{ kind: "text", text: input.body }] }]
+  const built = buildOutbound({
+    purpose: input.purpose,
+    turns,
+    agentInstructions: input.turns !== undefined ? input.agentInstructions : undefined,
+    partyNames: input.partyNames,
+  })
   const purpose = maskOutboundPII(input.purpose, {
     partyNames: input.partyNames,
   }).masked
+  const lastUser = [...built.messages].reverse().find((m) => m.role === "user")
   const outbound: OutboundRequest = {
-    body: mask.masked,
+    body: lastUser?.content ?? "",
+    system: built.system,
+    messages: built.messages,
     metadata: {
       classification: input.classification,
       provider: input.provider,
       purpose,
-      redactionCounts: Object.fromEntries(
-        mask.redactions.map((r) => [r.kind, r.count])
-      ),
+      redactionCounts: built.redactionCounts,
     },
   }
 
