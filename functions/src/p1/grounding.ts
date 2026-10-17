@@ -287,24 +287,39 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
     // masked text. On the route the text was masked already (callP1): masking again changes nothing there.
     const view = mask(normaliseProse(field.text))
     const extracted = extractCitations(view)
-    for (const raw of extracted) await resolve(raw, "text")
+    // Past the cap a citation not yet looked up is counted without an await per citation (256 KB worst case).
+    const pastCap = (raw: string): boolean => !lookups.has(raw) && taken() >= MAX_GROUNDED_CITATIONS && (omitted.add(raw), true)
+    for (const raw of extracted) if (!pastCap(raw)) await resolve(raw, "text")
     const flagged = extracted.filter((r) => r.startsWith(UNRECOGNISED_PREFIX)).map((r) => comparable(r.slice(UNRECOGNISED_PREFIX.length)))
     const alreadyFlagged = (raw: string): boolean => {
       const words = comparable(raw)
       return flagged.some((f) => f.length > 0 && (f.includes(words) || words.includes(f)))
     }
-    /** A mention to record as a suspect: counted past the cap; not twice when the extractor flagged it already. */
+    const flaggedExactly = new Set(flagged)
+    /**
+     * A mention to record as a suspect, not twice when the extractor flagged it already. Past the cap only an exact
+     * match is checked (a set lookup), so a field full of suspects stays linear; the count of omitted mentions can then
+     * include an extractor suspect read twice in other words, which changes no status (omitted is never grounded).
+     */
     const flag = (raw: string): void => {
-      if (taken() >= MAX_GROUNDED_CITATIONS || !alreadyFlagged(raw)) suspect(raw)
+      if (taken() >= MAX_GROUNDED_CITATIONS ? !flaggedExactly.has(comparable(raw)) : !alreadyFlagged(raw)) suspect(raw)
     }
     const mentions = authorityMentions(view)
     const verified: VerifiedSpan[] = []
     for (const m of mentions) {
       if (m.family !== "report") continue
       // The cap is spent by `resolve` (a new lookup) and `suspect` (a new suspect) only: a citation already resolved costs nothing.
+      // A catch-all report is never normalised: it is always a suspect, never a VERIFIED citation that binds a name.
+      if (m.loose === true) {
+        flag(m.raw)
+        continue
+      }
+      // Past the cap a report shape not seen before is counted, under the key the extractor's own hit of it would have,
+      // without the cost of normalising it (256 KB worst case).
+      if (!canonicals.has(m.raw) && pastCap(m.raw)) continue
       const canonical = canonicalOf(m.raw)
       if (canonical === null) flag(m.raw)
-      else if ((await resolve(canonical, "text")) === "VERIFIED") verified.push({ start: m.start, end: m.end })
+      else if (!pastCap(canonical) && (await resolve(canonical, "text")) === "VERIFIED") verified.push({ start: m.start, end: m.end })
     }
     for (const m of unboundMentions(view, mentions, verified, { pinpointOfVerified: verifiedPinpoint })) flag(m.raw)
   }

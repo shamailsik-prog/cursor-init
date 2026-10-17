@@ -23,8 +23,11 @@
 
 export type MentionFamily = "report" | "case_number" | "case_name" | "page" | "reported_phrase"
 
-/** One mention: its span in the field (UTF-16 offsets), its text, and for a page reference where its page phrase starts. */
-export type AuthorityMention = { family: MentionFamily; start: number; end: number; focus: number; raw: string }
+/**
+ * One mention: its span in the field (UTF-16 offsets), its text, and for a page reference where its page phrase starts.
+ * `loose` marks a report read only by the catch-all: never a citation to resolve, always a suspect.
+ */
+export type AuthorityMention = { family: MentionFamily; start: number; end: number; focus: number; raw: string; loose?: true }
 
 /** A VERIFIED citation's span in the same field (a `report` mention whose canonical citation resolved VERIFIED). */
 export type VerifiedSpan = { start: number; end: number }
@@ -61,7 +64,7 @@ const anyCase = (abbr: string): string =>
     .join("")
 /** Reporters long enough to read in any case (R7b: "(2099) 3 scc 777"); the longest first. */
 const KNOWN_REPORTERS = [
-  "SCC OnLine", "Cr App R", "EWCA Crim", "EWCA Civ", "All ER", "Cri LJ", "Cr LJ", "SCALE", "PCrLJ", "PTCL", "SCMR", "GBLR", "UKSC", "UKHL", "UKPC",
+  "SCC OnLine", "LiveLaw", "Cr App R", "INSC", "EWCA Crim", "EWCA Civ", "All ER", "Cri LJ", "Cr LJ", "SCALE", "PCrLJ", "PTCL", "SCMR", "GBLR", "UKSC", "UKHL", "UKPC",
   "EWHC", "CrLJ", "SCC", "SCR", "WLR", "DLR", "BLD", "BLC", "MLD", "MLR", "PLD", "PLJ", "PLC", "PTD", "CLD", "CLC", "YLR", "NLR", "KLR", "SCJ", "PSC", "CLR", "ILR",
 ]
   .map(anyCase)
@@ -84,19 +87,24 @@ const REPORT_SHAPES: readonly RegExp[] = [
   new RegExp(`(?<![\\p{L}\\p{N}])[(\\[]?${YEAR}[)\\]]?\\s{0,3}${VOLUME}(?:\\d{1,4}\\s{1,3})?${REPORTER}\\s{0,3}(?:\\([^()\\n]{1,12}\\)\\s{0,3})?(?:[A-Za-z]{2,8}\\s{1,3})?${PAGE_NUMBER}`, "gu"),
   // A known reporter before the year: "JT 2099 (3) SC 777", "ILR 2099 Del 77", "AIR 2099 Bom 77"
   new RegExp(`(?<![\\p{L}\\p{N}])${REPORTER}\\s{0,3}[(\\[]?${YEAR}[)\\]]?\\s{0,3}${VOLUME}(?:[A-Za-z.]{1,10}\\s{1,3}){0,2}(?:\\([^()\\n]{1,12}\\)\\s{0,3})?${PAGE_NUMBER}`, "gu"),
-  // United States reports: "550 U.S. 544 (2099)", "77 S. Ct. 777", "123 F.3d 456 (9th Cir. 2099)", "777 F. Supp. 2d 77"
+  // United States reports: "550 U.S. 544 (2099)", "77 S. Ct. 777", "123 F.3d 456 (9th Cir. 2099)", "777 F. Supp. 2d 77",
+  // and the short form "550 U.S. at 550"
   new RegExp(
-    `(?<![\\p{L}\\p{N}])\\d{1,4}\\s{1,3}(?:U\\.?\\s?S\\.?|S\\.?\\s?Ct\\.?|L\\.?\\s?Ed\\.?(?:\\s?2d)?|F\\.?\\s?(?:2d|3d|4th)|F\\.?\\s?Supp\\.?(?:\\s?[23]d)?|F\\.?\\s?App['’]?x)\\s{1,3}\\d{1,6}(?:\\s{0,3}\\([^()\\n]{0,40}\\))?`,
+    `(?<![\\p{L}\\p{N}])\\d{1,4}\\s{1,3}(?:U\\.?\\s?S\\.?|S\\.?\\s?Ct\\.?|L\\.?\\s?Ed\\.?(?:\\s?2d)?|F\\.?\\s?(?:2d|3d|4th)|F\\.?\\s?Supp\\.?(?:\\s?[23]d)?|F\\.?\\s?App['’]?x)\\s{1,3}(?:at\\s{1,3})?\\d{1,6}(?:\\s{0,3}\\([^()\\n]{0,40}\\))?`,
     "gu"
   ),
+  // A known reporter after its volume, with no year: "77 DLR (AD) 77", "7 SCC 7"
+  new RegExp(`(?<![\\p{L}\\p{N}])\\d{1,4}\\s{1,3}${REPORTER}\\s{0,3}(?:\\([^()\\n]{1,12}\\)\\s{0,3})?${PAGE_NUMBER}`, "gu"),
+  // Neutral and database citations: "MANU/SC/0001/2099"
+  /(?<![\p{L}\p{N}])\p{Lu}{2,8}\/\p{Lu}{1,8}\/\d{1,6}\/\d{4}(?!\p{N})/gu,
 ]
 
 /**
  * The fail-safe catch-all for reporters no shape names (R7b): a 4-digit year and a capital-letter reporter token within
- * two tokens of each other, and a page within two tokens after, either way round. Kept only where no precise shape
- * matched, and never for a statute (`STATUTE_WORDS`).
+ * three tokens of each other, and a page within three tokens after, either way round ("(2099) 77 P & CR 7"). Kept only
+ * where no precise shape matched, and never for a statute (`STATUTE_WORDS`).
  */
-const GAP_TOKENS = "(?:[\\s,]{1,3}[^\\s,]{1,12}){0,2}?[\\s,]{1,3}"
+const GAP_TOKENS = "(?:[\\s,]{1,3}[^\\s,]{1,12}){0,3}?[\\s,]{1,3}"
 const REPORT_CATCH_ALL: readonly RegExp[] = [
   new RegExp(`(?<![\\p{L}\\p{N}])[(\\[]?${YEAR}[)\\]]?${GAP_TOKENS}${CAPS}${GAP_TOKENS}${PAGE_NUMBER}`, "gu"),
   new RegExp(`(?<![\\p{L}\\p{N}])${CAPS}${GAP_TOKENS}[(\\[]?${YEAR}[)\\]]?${GAP_TOKENS}${PAGE_NUMBER}`, "gu"),
@@ -192,7 +200,7 @@ const RE_LATIN_CAPITAL = /^(?=\p{Lu})\p{Script=Latin}/u
 const RE_OTHER_LETTER = /^(?=\p{L})\P{Script=Latin}/u
 const RE_WORD = /^[\p{L}\p{M}]/u
 const RE_YEAR_TOKEN = new RegExp(`^${YEAR}$`, "u")
-const EN_CONNECTORS = new Set(["v", "v.", "vs", "vs.", "v/s", "v/s.", "v.s.", "versus", "-v-", "vrs", "vrs.", "banam", "bnam"])
+const EN_CONNECTORS = new Set(["v", "v.", "vs", "vs.", "v/s", "v/s.", "v.s.", "versus", "-v-", "vrs", "vrs.", "banam", "banaam", "bnam"])
 const UR_CONNECTORS = new Set(["بنام", "بمقابلہ"])
 const JOINERS = new Set(["of", "and", "the", "&", "through"])
 /** "and others", "& Anr.": a party word after a joiner. */
@@ -220,6 +228,9 @@ const NAME_STOP = new Set([
   "earlier", "later", "recent", "previous", "prior", "subsequent", "landmark", "leading", "relevant", "cited", "original", "final", "interim", "majority",
   "minority", "dissenting", "concurring", "unanimous", "reported", "unreported", "binding", "persuasive", "foreign", "local", "domestic", "old", "new",
   "latest", "important", "key", "similar", "different", "contrary", "conflicting", "seminal", "famous", "known", "well-known", "celebrated", "test",
+  // Months ("the decision in July 2099") and days.
+  "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "monday", "tuesday",
+  "wednesday", "thursday", "friday", "saturday", "sunday",
 ])
 /** A name whose last word is one of these is a statute's ("the Contract Act (1872)"), not a case's. */
 const STATUTE_HEADS = new Set(["act", "ordinance", "order", "rule", "rules", "code", "constitution", "regulation", "regulations", "law", "laws", "amendment", "article", "section", "schedule"])
@@ -240,7 +251,11 @@ const UR_STOP_WORDS = new Set([
 ])
 const UR_CASE_WORDS = new Set(["مقدمہ", "مقدمے"])
 const UR_HEADS = new Set(["مقدمہ", "مقدمے", "کیس", "فیصلہ", "فیصلے"])
-const UR_POSSESSIVES = new Set(["کے", "کا", "کی"])
+const UR_POSSESSIVES = new Set(["کے", "کا", "کی", "والے", "والا", "والی"])
+/** "مقدمہ بعنوان قلوو": a case titled with a name. */
+const UR_TITLED = "بعنوان"
+/** The most tokens a bracketed group inside a name spans ("R (on the application of Qalvo) v ...", "(Pvt.) Ltd."). */
+const NAME_BRACKET_TOKENS = 12
 
 const lower = (t: Token | undefined): string => (t === undefined ? "" : t.text.toLowerCase())
 /** A word without a possessive "'s" and without dots, in lower case. */
@@ -273,10 +288,20 @@ function nameEnd(t: Token): number {
  */
 function englishName(toks: Token[], i: number, reportStarts: ReadonlySet<number>): [number, number] | null {
   let first = i
-  for (let j = i - 1, n = 0; j >= 0 && n < NAME_TOKENS; j -= 1, n += 1) {
+  for (let j = i - 1, n = 0; j >= 0 && n < NAME_TOKENS; n += 1) {
     const t = toks[j]!
+    // A bracketed group inside the name ("R (on the application of Qalvo) v ...", "Qalvo (Pvt.) Ltd. v ..."): skipped whole.
+    if (t.text === ")" || t.text === "]") {
+      let k = j - 1
+      while (k >= 0 && j - k <= NAME_BRACKET_TOKENS && toks[k]!.text !== "(" && toks[k]!.text !== "[") k -= 1
+      if (k < 0 || j - k > NAME_BRACKET_TOKENS) break
+      first = k
+      j = k - 1
+      continue
+    }
     if (isPartyWord(t) || (JOINERS.has(lower(t)) && isName(toks[j - 1]) && first < i)) first = j
     else break
+    j -= 1
   }
   if (first === i) {
     if (!isWord(toks[i - 1])) return null
@@ -345,10 +370,15 @@ function nameMentions(prose: string, toks: Token[], reportStarts: ReadonlySet<nu
       if (span) push(span[0], span[1])
       continue
     }
-    // "Qalvo case", "Qalvo's case", "the Al-Jehad Trust judgment", "Zafar Shah's case" (a sentence's full stop aside).
+    // "Qalvo case", "Qalvo's case", "the Al-Jehad Trust judgment", "Zafar Shah's case" (a sentence's full stop aside),
+    // and "the judgment in Qalvo", "the decision in Qalvo".
     if (CASE_HEADS.has(word.endsWith(".") ? word.slice(0, -1) : word)) {
       const first = nameBefore(toks, i, 4)
       if (first >= 0) push(first > 0 && at(first - 1) === "the" ? first - 1 : first, i)
+      if (at(i + 1) === "in") {
+        const last = nameAfter(toks, i + 2, reportStarts)
+        if (last >= 0) push(i, last)
+      }
       continue
     }
     // "In re Qalvo", "Re: Qalvo", "Ex parte Qalvo", "In the matter of Qalvo", "the case of Qalvo".
@@ -385,7 +415,11 @@ function nameMentions(prose: string, toks: Token[], reportStarts: ReadonlySet<nu
       if (first >= 0 && !STATUTE_HEADS.has(base(toks[i - 1]!))) push(first, i + 2)
       continue
     }
-    // Urdu: "مقدمہ قلوو", "قلوو کیس", "قلوو کے مقدمے".
+    // Urdu: "مقدمہ بعنوان قلوو", "مقدمہ قلوو", "قلوو کیس", "قلوو کے مقدمے", "قلوو والے مقدمے".
+    if (text === UR_TITLED && isUrduName(toks[i + 1])) {
+      push(UR_CASE_WORDS.has(toks[i - 1]?.text ?? "") ? i - 1 : i, isUrduName(toks[i + 2]) ? i + 2 : i + 1)
+      continue
+    }
     if (UR_CASE_WORDS.has(text) && isUrduName(toks[i + 1])) {
       push(i, isUrduName(toks[i + 2]) ? i + 2 : i + 1)
       continue
@@ -422,12 +456,23 @@ function wordsOf(text: string): string[] {
   return run ? [...words, run[1]!.replace(/[.\s]/gu, "").toLowerCase()] : words
 }
 
-/** Precise report shapes first; then the catch-all where none matched, never for a statute. */
-function reportMentions(prose: string): AuthorityMention[] {
+/**
+ * Precise report shapes first; then the catch-all where none matched, never for a statute. Both lists are in order of
+ * start and free of overlaps, so one sweep finds the catch-all matches that overlap a precise one (linear: the
+ * re-auditor's 256 KB of distinct reports made a pairwise check quadratic).
+ */
+function reportMentions(prose: string, caseNumbers: readonly AuthorityMention[]): AuthorityMention[] {
   const precise = nonOverlapping(REPORT_SHAPES.flatMap((re) => regexMentions(prose, re, "report")))
-  const loose = nonOverlapping(REPORT_CATCH_ALL.flatMap((re) => regexMentions(prose, re, "report"))).filter(
-    (m) => !wordsOf(m.raw).some((w) => STATUTE_WORDS.has(w)) && !precise.some((p) => m.start < p.end && p.start < m.end)
-  )
+  const loose: AuthorityMention[] = []
+  let p = 0
+  let c = 0
+  for (const m of nonOverlapping(REPORT_CATCH_ALL.flatMap((re) => regexMentions(prose, re, "report")))) {
+    while (p < precise.length && precise[p]!.end <= m.start) p += 1
+    while (c < caseNumbers.length && caseNumbers[c]!.end <= m.start) c += 1
+    // A run of case numbers ("C.P. No. 7 of 2099 C.P. No. 8 ...") is not a report: the case numbers are read already.
+    const overlaps = (p < precise.length && precise[p]!.start < m.end) || (c < caseNumbers.length && caseNumbers[c]!.start < m.end)
+    if (!overlaps && !wordsOf(m.raw).some((w) => STATUTE_WORDS.has(w))) loose.push({ ...m, loose: true })
+  }
   return nonOverlapping([...precise, ...loose])
 }
 
@@ -469,10 +514,11 @@ function reportedMentions(prose: string): AuthorityMention[] {
 
 /** Every authority-like mention in one prose field (already normalised: `normaliseProse`), in order of start. */
 export function authorityMentions(prose: string): AuthorityMention[] {
-  const reports = reportMentions(prose)
+  const caseNumbers = caseNumberMentions(prose)
+  const reports = reportMentions(prose, caseNumbers)
   return [
     ...reports,
-    ...caseNumberMentions(prose),
+    ...caseNumbers,
     ...nameMentions(prose, tokens(prose), new Set(reports.map((r) => r.start))),
     ...pageMentions(prose),
     ...reportedMentions(prose),

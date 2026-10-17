@@ -373,6 +373,25 @@ describe("audit F17 re-audit round 2: forms that still leaked at d729ff8 (ruling
     "مقدمہ بعنوان قلوو بنام نورا میں طے ہوا",
     "قلوو کیس (۲۰۹۹) میں طے ہوا",
     "عدالت عظمیٰ کے فیصلے کے پیرا ۷۷ میں یہی ہے",
+    // A second pass of the builder's self-audit, after R7b: forms the first pass still leaked.
+    "R (on the application of Qalvo) v Secretary of State settles it",
+    "Qalvo (Pvt.) Ltd. v. Nura settles it",
+    "the judgment in Qalvo settles it",
+    "the Full Bench decision in Qalvo settles it",
+    "Qalvo, 550 U.S. at 550, settles it",
+    "77 DLR (AD) 77 settles it",
+    "MANU/SC/0001/2099 settles it",
+    "2099 LiveLaw (SC) 77 settles it",
+    "(2099) 77 P & CR 7 settles it",
+    "قلوو والے مقدمے میں یہی طے ہوا",
+    "مقدمہ بعنوان قلوو میں یہی طے ہوا",
+    "Qalvo banaam Nura settles it",
+    "(2099) 2 MLJ 7 settles it",
+    "2099 P Cr. L J 77 settles it",
+    "Qalvo & Sons v. Nura settles it",
+    "Province of Punjab v. Qalvo settles it",
+    "the judgment (at p. 7) says so",
+    "paras 7 to 9 of the decision say so",
   ]
   it.each(SELF_AUDIT)("the builder's adversarial form %j is not grounded", async (text) => {
     expectFlagged(await ground(answerText(text)), text)
@@ -458,12 +477,16 @@ describe("audit F17 re-audit round 2: the citation cap fails safe (LOW P02, P03)
     return s
   }
 
-  it("100 verified authorities in the claims and a prose suspect past the cap: never grounded", async () => {
+  it.each([
+    ["a report", "The same view was taken in (2099) 3 SCC 777."],
+    ["a case name", "The same view was taken in Haris Qalbani v. Omer Daryani."],
+    ["a case number", "The same view was taken in C.A. 777/2099."],
+  ])("100 verified authorities in the claims and a prose suspect past the cap (%s): never grounded", async (_label, prose) => {
     const claims = Array.from({ length: 10 }, (_, c) => ({
       statement: `Claim ${c}.`,
       authorities: Array.from({ length: 10 }, (_, a) => ({ kind: "judgment", citation: `PLD 2099 SC ${c * 10 + a + 1}` })),
     }))
-    const text = JSON.stringify({ sections: [{ heading: "H", text: "The same view was taken in (2099) 3 SCC 777.", claims }], caveats: [] })
+    const text = JSON.stringify({ sections: [{ heading: "H", text: prose, claims }], caveats: [] })
     const g = await groundAnswer({ text, policy: POLICY, partyNames: [] }, many())
     expect(g.claims).toEqual({ total: 10, supported: 10 })
     expect(g.status).not.toBe("grounded")

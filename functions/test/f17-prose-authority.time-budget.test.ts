@@ -76,6 +76,13 @@ const ADVERSARIAL: ReadonlyArray<readonly [string, string]> = [
   ["zero-width characters", "​"],
   ["dashes", "C.A. 7–"],
   ["prefixes", "M/s Messrs Mst. "],
+  ["brackets before connectors", "(a b) v "],
+  ["unclosed brackets before connectors", "a b) v "],
+  ["judgment in", "judgment in "],
+  ["US short forms", "550 U.S. at "],
+  ["volume-first reporters", "77 DLR "],
+  ["neutral citations", "MANU/SC/"],
+  ["Urdu titled cases", "مقدمہ بعنوان "],
 ]
 
 /** The re-auditor's worst cases (prose4-head3.json), four times over: 256 KB. */
