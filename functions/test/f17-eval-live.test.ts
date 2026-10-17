@@ -39,7 +39,7 @@ describe("audit F17: the live evaluation harness (spec ruling 5)", () => {
     const code = await (await load()).runCommitteeEval({ env: { AI_GATEWAY_API_KEY: "  " }, out: (l) => lines.push(l), readSet: () => SET, transportFor })
     expect(code).toBe(0)
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatch(new RegExp(`^NOT RUN: AI_GATEWAY_API_KEY is not set; the live evaluation of the ${SET.items.length} items of eval set f17\\.1 did not run`))
+    expect(lines[0]).toMatch(new RegExp(`^NOT RUN: AI_GATEWAY_API_KEY is not set; the live evaluation of the ${SET.items.length} items of eval set f17\\.2 did not run`))
     expect(transportFor).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
@@ -63,7 +63,7 @@ describe("audit F17: the live evaluation harness (spec ruling 5)", () => {
       expect(r.messages[1]!.role).toBe("user")
     }
     expect(sent[0]!.messages[1]!.content).toBe(SET.items[0]!.prompt)
-    expect(lines[0]).toMatch(/^LIVE: \d+ items of eval set f17\.1 against /)
+    expect(lines[0]).toMatch(/^LIVE: \d+ items of eval set f17\.2 against /)
     expect(lines[0]).toMatch(/worst case \d+ micro-USD/)
     expect(lines.at(-1)).toBe(`PASS: ${SET.items.length} passed, 0 failed`)
     const report = JSON.parse(lines[1]!) as { items: Array<{ modelReported: string | null }> }

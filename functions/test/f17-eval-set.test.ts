@@ -39,7 +39,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
     const m = await load()
     expect(m.EVAL_SET_RELATIVE_PATH).toBe("docs/evals/committee-brain-eval-set.json")
     const set = m.parseEvalSet(json)
-    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.1", "synthetic"])
+    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.2", "synthetic"])
   })
 
   it("has at least 40 items in English and Urdu, unique ids, and every required category", async () => {
@@ -63,6 +63,8 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       "partially_supported",
       "no_citation",
       "limitation_relevance",
+      // Review round (Codex P1 on PR #63, rules f17.2): a judgment's citation declared statute, rule or other.
+      "mislabelled_authority",
     ]) {
       expect(m.EVAL_CATEGORIES, category).toContain(category)
       expect(set.items.some((i) => i.category === category), category).toBe(true)
@@ -107,7 +109,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       graded: { deterministic: { passed: number; failed: number } }
       result: string
     }
-    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.1", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
+    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.2", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
     expect(record.graded.deterministic).toEqual({ passed: report.passed, failed: report.failed })
     expect([report.failed, record.result]).toEqual([0, "pass"])
   })

@@ -12,7 +12,9 @@ Reads, from the repository (or --root):
 
 and fails unless docs/evals/committee-brain-eval-record.json names exactly those, with a passing deterministic grading
 and result, a date, and `live` as a boolean: a live run that did not happen is `live: false` with a note starting
-"NOT RUN"; one that did is `live: true` with `liveRun.failed == 0`. State-based, not diff-based: any change without a
+"NOT RUN"; one that did is `live: true` with `liveRun.passed` equal to the set's item count, `liveRun.failed == 0`
+(integers only: never a bool, a float or a string; review round, Codex P2 on PR #63) and a `liveRun.date`. The
+deterministic counts are held to the same rule. State-based, not diff-based: any change without a
 matching record fails, whatever the diff. It fails closed when it cannot read any of the values.
 
 Usage: python3 ci_gates/check_committee_eval_record.py [--root DIR]
@@ -83,6 +85,16 @@ def task_routing(root: Path) -> dict[str, str]:
     return routing
 
 
+def is_count(value: object) -> bool:
+    """A non-negative integer: never a bool (Python counts True as 1), a float or a string (review round, Codex P2)."""
+    return type(value) is int and value >= 0
+
+
+def is_full_run(run: object, items: int) -> bool:
+    """A run of every item of the set with none failed: `passed == items` and `failed == 0`, both integers."""
+    return isinstance(run, dict) and is_count(run.get("passed")) and is_count(run.get("failed")) and run.get("passed") == items and run.get("failed") == 0
+
+
 def is_date(value: object) -> bool:
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         return False
@@ -148,8 +160,8 @@ def check(root: Path) -> list[str]:
 
     graded = record.get("graded")
     deterministic = graded.get("deterministic") if isinstance(graded, dict) else None
-    if not (isinstance(deterministic, dict) and deterministic.get("passed") == set_items and deterministic.get("failed") == 0):
-        problems.append(f"deterministic grading must pass every one of the {set_items} items (record: {deterministic!r})")
+    if not is_full_run(deterministic, set_items):
+        problems.append(f"deterministic grading must pass every one of the {set_items} items, in integers (record: {deterministic!r})")
 
     if record.get("result") != "pass":
         problems.append(f"record result is {record.get('result')!r}, expected 'pass'")
@@ -163,8 +175,11 @@ def check(root: Path) -> list[str]:
             problems.append("record live is false but its liveNote does not start with 'NOT RUN': a live run that did not happen must say so")
     else:
         run = record.get("liveRun")
-        if not (isinstance(run, dict) and isinstance(run.get("passed"), int) and run.get("failed") == 0 and is_date(run.get("date"))):
-            problems.append(f"record live is true but liveRun is not a passing run with a date (liveRun: {run!r})")
+        if not (is_full_run(run, set_items) and is_date(run.get("date"))):
+            problems.append(
+                f"record live is true but liveRun is not a passing run of every one of the {set_items} items with a date "
+                f"(passed == {set_items}, failed == 0, integers; liveRun: {run!r})"
+            )
     return problems
 
 

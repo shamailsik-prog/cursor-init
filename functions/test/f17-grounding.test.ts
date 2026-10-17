@@ -68,16 +68,16 @@ afterEach(() => {
 describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () => {
   it("names its rules and budget, and passes the policy record through", async () => {
     const m = await load()
-    expect(m.GROUNDING_RULES_VERSION).toBe("f17.1")
+    expect(m.GROUNDING_RULES_VERSION).toBe("f17.2")
     expect(m.GROUNDING_BUDGET_MS).toBe(20_000)
     expect(m.MAX_GROUNDED_CITATIONS).toBe(100)
     const g = await ground(answer([claim("Bail is the rule.", auth("PLD 2099 SC 101"))]))
-    expect(g.rules).toBe("f17.1")
+    expect(g.rules).toBe("f17.2")
     expect(g.policy).toEqual(POLICY)
   })
 
   it("no text (a blocked or failed call): not_assessed, nothing resolved", async () => {
-    expect(await ground(undefined)).toEqual({ status: "not_assessed", rules: "f17.1", policy: POLICY, claims: { total: 0, supported: 0 }, citations: [], omitted: 0 })
+    expect(await ground(undefined)).toEqual({ status: "not_assessed", rules: "f17.2", policy: POLICY, claims: { total: 0, supported: 0 }, citations: [], omitted: 0 })
   })
 
   it("every claim supported by a verified authority: grounded, not advisory", async () => {
@@ -85,7 +85,7 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
     const g = await ground(answer([claim("Bail is the rule.", auth("PLD 2099 SC 101")), claim("Delay is a ground.", auth("2099 CLC 505"), auth("PLD 2099 Supreme Court 101"))]))
     expect(g).toEqual({
       status: "grounded",
-      rules: "f17.1",
+      rules: "f17.2",
       policy: POLICY,
       claims: { total: 2, supported: 2 },
       citations: [
@@ -171,6 +171,45 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
     expect(g.citations).toEqual([{ ref: "Section 5, Test Act 2099", kind: "statute", source: "claim", status: "UNVERIFIED", judgmentId: null }])
   })
 
+  // Review round (Codex P1 on PR #63, spec ruling R2a): only an authority declared `judgment` is resolved through the
+  // judgment path. A report-style citation declared statute, rule or other is never looked up: UNVERIFIED, marked
+  // `kindMismatch`, so its claim is never supported and the answer never grounded.
+  it.each(["statute", "rule", "other"])("a report-style citation declared %s is never resolved as a judgment: UNVERIFIED, kindMismatch", async (kind) => {
+    const lookups: string[] = []
+    const base = corpus()
+    const spy: AuthorityStore = {
+      findJudgment: async (c) => (lookups.push(c), base.findJudgment(c)),
+      listTreatments: (id) => base.listTreatments(id),
+      getSectionAsAt: async () => "no_history",
+    }
+    const m = await load()
+    const g = await ground(answer([claim("Bail is the rule.", auth("PLD 2099 Supreme Court 101", kind))]), spy)
+    expect(g.status).toBe("ungrounded")
+    expect(m.isAdvisory(g)).toBe(true)
+    expect(g.claims).toEqual({ total: 1, supported: 0 })
+    expect(g.citations).toEqual([{ ref: "PLD 2099 SC 101", kind, source: "claim", status: "UNVERIFIED", judgmentId: null, kindMismatch: true }])
+    expect(lookups).toEqual([])
+  })
+
+  it("a free-text hit of a mislabelled citation verifies only itself: the claim stays unsupported", async () => {
+    const g = await ground(answer([claim("As PLD 2099 SC 101 holds, bail is the rule.", auth("PLD 2099 SC 101", "statute"))]))
+    expect(g.claims).toEqual({ total: 1, supported: 0 })
+    expect(g.citations).toEqual([
+      { ref: "PLD 2099 SC 101", kind: "statute", source: "claim", status: "UNVERIFIED", judgmentId: null, kindMismatch: true },
+      { ref: "PLD 2099 SC 101", kind: "judgment", source: "text", status: "VERIFIED", judgmentId: "j-good" },
+    ])
+    expect(g.status).toBe("ungrounded")
+  })
+
+  it("the same judgment declared judgment in one claim and statute in another: only the first claim is supported", async () => {
+    const g = await ground(answer([claim("a", auth("PLD 2099 SC 101")), claim("b", auth("PLD 2099 SC 101", "rule"))]))
+    expect([g.status, g.claims]).toEqual(["partially_grounded", { total: 2, supported: 1 }])
+    expect(g.citations).toEqual([
+      { ref: "PLD 2099 SC 101", kind: "judgment", source: "claim", status: "VERIFIED", judgmentId: "j-good" },
+      { ref: "PLD 2099 SC 101", kind: "rule", source: "claim", status: "UNVERIFIED", judgmentId: null, kindMismatch: true },
+    ])
+  })
+
   it("a judgment authority that is not exactly one reported citation is UNRECOGNISED, masked with the party names", async () => {
     const g = await ground(answer([claim("s", auth("Tariq Zarvani v. The State, 2099")), claim("t", auth("PLD 2099 SC 101, para 12"))]), corpus(), ["Tariq Zarvani"])
     expect(g.citations).toEqual([
@@ -245,7 +284,7 @@ describe("audit F17: grounding a committee answer (spec rulings 2 and 3)", () =>
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
     const broken: AuthorityStore = { ...unavailable, findJudgment: async () => Promise.reject(Object.assign(new Error("Tariq Zarvani secret detail"), { code: "boom" })) }
     const g = await ground(answer([claim("a", auth("PLD 2099 SC 101"))]), broken, ["Tariq Zarvani"])
-    expect(g).toEqual({ status: "unverifiable", rules: "f17.1", policy: POLICY, claims: { total: 1, supported: 0 }, citations: [], omitted: 0 })
+    expect(g).toEqual({ status: "unverifiable", rules: "f17.2", policy: POLICY, claims: { total: 1, supported: 0 }, citations: [], omitted: 0 })
     expect(warn).toHaveBeenCalledWith("p1.grounding_failed", { code: "boom" })
     expect(JSON.stringify(warn.mock.calls)).not.toContain("Tariq")
   })

@@ -191,6 +191,25 @@ describe.skipIf(!EMULATORS)("audit F17: grounded committee output through commit
       expect((await outputOf(r.outputId)).advisory).toBe(false)
     })
 
+    // Review round (Codex P1 on PR #63): the Codex example, a present judgment's citation declared as a statute.
+    it("a claim whose only authority is a judgment's citation declared `statute` is not grounded, and advisory", async () => {
+      setAuthorityStoreForTests(corpus())
+      const f = await newFirm()
+      const text = JSON.stringify({
+        sections: [{ heading: "Bail", text: "", claims: [{ statement: "Bail follows on further inquiry.", authorities: [{ kind: "statute", citation: "PLD 2099 SC 101" }] }] }],
+        caveats: [],
+      })
+      capture(text)
+      const r = await ask(f)
+      expect(r.blocked).toBe(false)
+      expect(r.grounding?.status, "grounding status").toBe("ungrounded")
+      expect(r.advisory).toBe(true)
+      expect(r.grounding?.claims).toEqual({ total: 1, supported: 0 })
+      expect(r.grounding?.citations).toEqual([{ ref: "PLD 2099 SC 101", kind: "statute", source: "claim", status: "UNVERIFIED", judgmentId: null, kindMismatch: true }])
+      const row = await outputOf(r.outputId)
+      expect([row.grounding.status, row.advisory]).toEqual(["ungrounded", true])
+    })
+
     it("a claim citing a judgment overruled by a larger bench is not grounded", async () => {
       setAuthorityStoreForTests(corpus())
       const f = await newFirm()

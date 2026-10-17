@@ -42,12 +42,20 @@ export const EVAL_CATEGORIES = [
   "partially_supported",
   "no_citation",
   "limitation_relevance",
+  // Rules f17.2 (review round, Codex P1 on PR #63): a judgment's citation declared statute, rule or other.
+  "mislabelled_authority",
 ] as const
 
 const Bench = z.enum(["single", "division", "full", "larger"])
+const citationExpectation = {
+  status: z.enum(CITATION_GROUNDING_STATUSES),
+  source: z.enum(["claim", "text", "both"]),
+  /** Expected `kindMismatch: true` (rules f17.2); absent means the citation must carry none. */
+  kindMismatch: z.literal(true).optional(),
+}
 const ExpectedCitation = z.union([
-  z.object({ ref: z.string().min(1), status: z.enum(CITATION_GROUNDING_STATUSES), source: z.enum(["claim", "text", "both"]) }).strict(),
-  z.object({ refPrefix: z.string().min(1), status: z.enum(CITATION_GROUNDING_STATUSES), source: z.enum(["claim", "text", "both"]) }).strict(),
+  z.object({ ref: z.string().min(1), ...citationExpectation }).strict(),
+  z.object({ refPrefix: z.string().min(1), ...citationExpectation }).strict(),
 ])
 
 const EvalItemSchema = z
@@ -134,12 +142,18 @@ export function groundingProblems(expected: EvalItem["expected"], got: Grounding
   const left = [...got.citations]
   for (const want of expected.citations) {
     const i = left.findIndex(
-      (c) => c.status === want.status && c.source === want.source && ("ref" in want ? c.ref === want.ref : c.ref.startsWith(want.refPrefix))
+      (c) =>
+        c.status === want.status &&
+        c.source === want.source &&
+        (c.kindMismatch === true) === (want.kindMismatch === true) &&
+        ("ref" in want ? c.ref === want.ref : c.ref.startsWith(want.refPrefix))
     )
     if (i < 0) problems.push(`missing citation ${JSON.stringify(want)}`)
     else left.splice(i, 1)
   }
-  for (const extra of left) problems.push(`unexpected citation ${JSON.stringify({ ref: extra.ref, status: extra.status, source: extra.source })}`)
+  for (const extra of left) {
+    problems.push(`unexpected citation ${JSON.stringify({ ref: extra.ref, status: extra.status, source: extra.source, ...(extra.kindMismatch ? { kindMismatch: true } : {}) })}`)
+  }
   return problems
 }
 

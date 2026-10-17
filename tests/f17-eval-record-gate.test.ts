@@ -109,7 +109,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails on an unrecorded change of the grounding rules", () => {
     const root = tree()
-    edit(root, "functions/src/p1/grounding.ts", 'GROUNDING_RULES_VERSION = "f17.1"', 'GROUNDING_RULES_VERSION = "f17.2"')
+    edit(root, "functions/src/p1/grounding.ts", 'GROUNDING_RULES_VERSION = "f17.2"', 'GROUNDING_RULES_VERSION = "f17.3"')
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("grounding rules")
@@ -117,7 +117,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails when the evaluation set changes without a new record (its SHA-256)", () => {
     const root = tree()
-    edit(root, "docs/evals/committee-brain-eval-set.json", '"version": "f17.1"', '"version": "f17.1" ')
+    edit(root, "docs/evals/committee-brain-eval-set.json", '"version": "f17.2"', '"version": "f17.2" ')
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("sha256")
@@ -136,6 +136,53 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain(word)
+  })
+
+  // Review round (Codex P2 on PR #63): a live record must name a run of every item with none failed, in integers.
+  const ITEMS = record(REPO).evalSet.items
+  it.each([
+    ["a live run of no item", { passed: 0, failed: 0, date: "2026-10-18" }],
+    ["a live run of fewer items than the set", { passed: ITEMS - 1, failed: 0, date: "2026-10-18" }],
+    ["a live run of more items than the set", { passed: ITEMS + 1, failed: 0, date: "2026-10-18" }],
+    ["a boolean failed count", { passed: ITEMS, failed: false, date: "2026-10-18" }],
+    ["a boolean passed count", { passed: true, failed: 0, date: "2026-10-18" }],
+    ["a negative failed count", { passed: ITEMS, failed: -1, date: "2026-10-18" }],
+    ["a string count", { passed: String(ITEMS), failed: 0, date: "2026-10-18" }],
+    ["no passed count", { failed: 0, date: "2026-10-18" }],
+    ["no failed count", { passed: ITEMS, date: "2026-10-18" }],
+    ["no date", { passed: ITEMS, failed: 0 }],
+    ["a date that does not exist", { passed: ITEMS, failed: 0, date: "2026-02-30" }],
+    ["a date in another format", { passed: ITEMS, failed: 0, date: "18/10/2026" }],
+  ])("fails a live record with %s", (_label, liveRun) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), live: true, liveNote: undefined, liveRun })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("live")
+  })
+
+  it.each([
+    ["a fractional count written as 57.0", '"passed": 57.0'],
+    ["an exponent count written as 5.7e1", '"passed": 5.7e1'],
+  ])("fails a live record with %s (integers only)", (_label, written) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), live: true, liveNote: undefined, liveRun: { passed: ITEMS, failed: 0, date: "2026-10-18" } })
+    edit(root, RECORD, `"passed": ${ITEMS},\n    "failed": 0,\n    "date"`, `${written},\n    "failed": 0,\n    "date"`)
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("live")
+  })
+
+  it.each([
+    ["a boolean failed count", { passed: ITEMS, failed: false }],
+    ["a boolean passed count", { passed: true, failed: 0 }],
+    ["a fractional passed count", { passed: ITEMS + 0.5, failed: 0 }],
+  ])("fails a deterministic result with %s", (_label, deterministic) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), graded: { deterministic } })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("deterministic")
   })
 
   it("passes with a recorded live run that passed", () => {

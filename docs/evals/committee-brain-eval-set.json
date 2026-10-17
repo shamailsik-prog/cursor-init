@@ -1,9 +1,9 @@
 {
   "format": "committee-brain-eval-set/1",
-  "version": "f17.1",
+  "version": "f17.2",
   "purpose": "committee-brain",
   "responseOrigin": "synthetic",
-  "notice": "Synthetic evaluation set for audit F17. Every response was written for this set to exhibit one failure mode or control; none was produced by a model. Every citation uses the year 2099 and names no real judgment, statute or party; every name is invented. Expected outcomes follow the grounding rules f17.1 against the seeded corpus below.",
+  "notice": "Synthetic evaluation set for audit F17. Every response was written for this set to exhibit one failure mode or control; none was produced by a model. Every citation uses the year 2099 and names no real judgment, statute or party; every name is invented. Expected outcomes follow the grounding rules f17.2 against the seeded corpus below.",
   "corpus": {
     "judgments": [
       {
@@ -1632,6 +1632,95 @@
           "supported": 0
         },
         "citations": []
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-lbl-01",
+      "language": "en",
+      "category": "mislabelled_authority",
+      "prompt": "Which authority supports bail on further inquiry?",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The question is whether bail may be granted where the case calls for further inquiry.\",\"claims\":[{\"statement\":\"Bail is the rule and refusal the exception where further inquiry is needed.\",\"authorities\":[{\"kind\":\"statute\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "ungrounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 0
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "UNVERIFIED",
+            "source": "claim",
+            "kindMismatch": true
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "en-lbl-02",
+      "language": "en",
+      "category": "mislabelled_authority",
+      "prompt": "Cite the leading case on bail on further inquiry.",
+      "response": "{\"sections\":[{\"heading\":\"Bail on further inquiry\",\"text\":\"The question is whether bail may be granted where the case calls for further inquiry.\",\"claims\":[{\"statement\":\"As PLD 2099 SC 101 holds, bail is the rule where further inquiry is needed.\",\"authorities\":[{\"kind\":\"other\",\"citation\":\"PLD 2099 SC 101\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "ungrounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 0
+        },
+        "citations": [
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "UNVERIFIED",
+            "source": "claim",
+            "kindMismatch": true
+          },
+          {
+            "ref": "PLD 2099 SC 101",
+            "status": "VERIFIED",
+            "source": "text"
+          }
+        ]
+      },
+      "live": {
+        "structured": true,
+        "forbidClaimCitations": [],
+        "forbidVerificationClaim": false
+      }
+    },
+    {
+      "id": "ur-lbl-01",
+      "language": "ur",
+      "category": "mislabelled_authority",
+      "prompt": "عدم تعمیل پر مقدمہ خارج کرنے کے بارے میں کون سا حوالہ ہے؟",
+      "response": "{\"sections\":[{\"heading\":\"عدم تعمیل\",\"text\":\"عدالت نے فریق کو موقع دینے پر زور دیا۔\",\"claims\":[{\"statement\":\"عدم تعمیل پر مقدمہ خارج نہیں کیا جا سکتا جب تک موقع نہ دیا جائے۔\",\"authorities\":[{\"kind\":\"rule\",\"citation\":\"2099 CLC 505\"}]}]}],\"caveats\":[]}",
+      "expected": {
+        "status": "ungrounded",
+        "advisory": true,
+        "claims": {
+          "total": 1,
+          "supported": 0
+        },
+        "citations": [
+          {
+            "ref": "2099 CLC 505",
+            "status": "UNVERIFIED",
+            "source": "claim",
+            "kindMismatch": true
+          }
+        ]
       },
       "live": {
         "structured": true,
