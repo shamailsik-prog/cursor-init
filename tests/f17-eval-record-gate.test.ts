@@ -49,7 +49,8 @@ const edit = (root: string, file: string, from: string | RegExp, to: string) => 
   expect(after, `${file}: ${String(from)}`).not.toBe(before)
   writeFileSync(p, after)
 }
-const record = (root: string) => JSON.parse(readFileSync(join(root, RECORD), "utf8")) as Record<string, any>
+type EvalRecord = Record<string, unknown> & { evalSet: { items: number; sha256: string }; routing: Record<string, string>; live: unknown; liveNote?: string }
+const record = (root: string) => JSON.parse(readFileSync(join(root, RECORD), "utf8")) as EvalRecord
 const writeRecord = (root: string, r: Record<string, unknown>) => writeFileSync(join(root, RECORD), `${JSON.stringify(r, null, 2)}\n`)
 
 afterEach(() => {
