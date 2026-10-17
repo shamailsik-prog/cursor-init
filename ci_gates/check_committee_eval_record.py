@@ -61,12 +61,17 @@ def read(root: Path, rel: str) -> str:
         raise Unreadable(f"cannot read {rel}: {err.strerror}") from err
 
 
-def without_comments(source: str, rel: str) -> str:
-    """The TypeScript source with every // and /* */ comment blanked (its newlines kept), so a commented-out declaration
-    is never read in place of the real one (re-audit L3). String literals ('...', "...", `...`) are kept whole, so a //
-    or /* inside one is not a comment. A regex literal is not recognised: a // or /* in one blanks the rest, which can
-    only hide a declaration and so fails closed. An unterminated block comment fails closed."""
-    out: list[str] = []
+def views(source: str, rel: str) -> tuple[str, str]:
+    """Two views of the TypeScript source, each the same length as it, offset for offset:
+    - without comments: every // and /* */ comment blanked (its newlines kept), so a commented-out declaration is never
+      read in place of the real one (re-audit L3);
+    - code only: the same, with every string and template literal's contents blanked too (its quotes kept), so a
+      declaration written inside a literal is never read either (re-audit round 2: the template-literal shadow).
+    A declaration is found in the code-only view and its value read from the view without comments. A // or /* inside a
+    literal is not a comment. A regex literal is not recognised: a // or /* in one blanks the rest, which can only hide a
+    declaration and so fails closed. An unterminated block comment fails closed."""
+    plain: list[str] = []
+    code: list[str] = []
     i, n = 0, len(source)
     while i < n:
         ch = source[i]
@@ -75,40 +80,54 @@ def without_comments(source: str, rel: str) -> str:
             j = i + 1
             while j < n and source[j] != ch and (ch == "`" or source[j] != "\n"):
                 j += 2 if source[j] == "\\" else 1
-            out.append(source[i : j + 1])
+            j = min(j, n)
+            closing = source[j] if j < n else ""
+            plain.append(source[i:j] + closing)
+            code.append(ch + re.sub(r"[^\n]", " ", source[i + 1 : j]) + closing)
             i = j + 1
         elif ch == "/" and nxt == "/":
             j = source.find("\n", i)
             j = n if j < 0 else j
-            out.append(" " * (j - i))
+            blank = " " * (j - i)
+            plain.append(blank)
+            code.append(blank)
             i = j
         elif ch == "/" and nxt == "*":
             j = source.find("*/", i + 2)
             if j < 0:
                 raise Unreadable(f"cannot read {rel}: an unterminated block comment")
-            out.append(re.sub(r"[^\n]", " ", source[i : j + 2]))
+            blank = re.sub(r"[^\n]", " ", source[i : j + 2])
+            plain.append(blank)
+            code.append(blank)
             i = j + 2
         else:
-            out.append(ch)
+            plain.append(ch)
+            code.append(ch)
             i += 1
-    return "".join(out)
+    return "".join(plain), "".join(code)
 
 
-def only_match(root: Path, rel: str, pattern: re.Pattern[str] | str, name: str, what: str) -> re.Match[str]:
-    """The one declaration of `name` in `rel` outside comments; none, or more than one, fails closed."""
-    matches = list(re.finditer(pattern, without_comments(read(root, rel), rel)))
+def only_match(root: Path, rel: str, pattern: re.Pattern[str] | str, group: str, name: str, what: str) -> str:
+    """The `group` of the one declaration of `name` in `rel` that is code (outside comments and literals), read from the
+    source without comments; none, or more than one, fails closed."""
+    plain, code = views(read(root, rel), rel)
+    matches = list(re.finditer(pattern, code))
     if len(matches) != 1:
         found = "no" if not matches else str(len(matches))
-        raise Unreadable(f"cannot read {name} in {rel} as {what} ({found} declarations outside comments); the gate must be updated with it")
-    return matches[0]
+        raise Unreadable(f"cannot read {name} in {rel} as {what} ({found} declarations in code, outside comments and literals); the gate must be updated with it")
+    m = matches[0]
+    return plain[m.start(group) : m.end(group)]
 
 
 def string_const(root: Path, rel: str, name: str) -> str:
-    return only_match(root, rel, STRING_CONST.format(name=re.escape(name)), name, "a string literal").group("value")
+    value = only_match(root, rel, STRING_CONST.format(name=re.escape(name)), "value", name, "a plain string literal")
+    if not re.fullmatch(r'[^"\\\n]+', value):
+        raise Unreadable(f"cannot read {name} in {rel} as a plain string literal; the gate must be updated with it")
+    return value
 
 
 def task_routing(root: Path) -> dict[str, str]:
-    body = only_match(root, COST_TABLE, TASK_MODEL_RE, "TASK_MODEL", "a frozen object literal").group("body")
+    body = only_match(root, COST_TABLE, TASK_MODEL_RE, "body", "TASK_MODEL", "a frozen object literal")
     routing: dict[str, str] = {}
     pos = 0
     while pos < len(body):
@@ -233,7 +252,7 @@ def check(root: Path) -> list[str]:
             )
         elif is_future(run["date"]):
             problems.append(f"record live is true but liveRun date {run['date']!r} is in the future (more than one day ahead of today, UTC)")
-        if isinstance(note, str) and "NOT RUN" in note:
+        if isinstance(note, str) and "not run" in note.lower():
             problems.append("record live is true but its liveNote says NOT RUN: a record cannot say both that the live run happened and that it did not")
     return problems
 

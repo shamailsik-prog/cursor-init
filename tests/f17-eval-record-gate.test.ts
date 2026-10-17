@@ -25,6 +25,10 @@ const FILES = [
 ]
 const RECORD = "docs/evals/committee-brain-eval-record.json"
 const roots: string[] = []
+/** The grounding rules and the set version as the repository has them, so the cases below follow a version bump. */
+const RULES = /export const GROUNDING_RULES_VERSION = "([^"]+)"/u.exec(readFileSync(join(REPO, "functions/src/p1/grounding.ts"), "utf8"))![1]!
+const RULES_DECL = `export const GROUNDING_RULES_VERSION = "${RULES}"`
+const SET_VERSION = (JSON.parse(readFileSync(join(REPO, "docs/evals/committee-brain-eval-set.json"), "utf8")) as { version: string }).version
 
 function gate(root: string): { code: number; out: string } {
   const r = spawnSync("python3", ["-I", GATE, "--root", root], { encoding: "utf8" })
@@ -109,7 +113,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails on an unrecorded change of the grounding rules", () => {
     const root = tree()
-    edit(root, "functions/src/p1/grounding.ts", 'GROUNDING_RULES_VERSION = "f17.3"', 'GROUNDING_RULES_VERSION = "f17.4"')
+    edit(root, "functions/src/p1/grounding.ts", RULES_DECL, 'export const GROUNDING_RULES_VERSION = "f17.99"')
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("grounding rules")
@@ -117,7 +121,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails when the evaluation set changes without a new record (its SHA-256)", () => {
     const root = tree()
-    edit(root, "docs/evals/committee-brain-eval-set.json", '"version": "f17.3"', '"version": "f17.3" ')
+    edit(root, "docs/evals/committee-brain-eval-set.json", `"version": "${SET_VERSION}"`, `"version": "${SET_VERSION}" `)
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("sha256")
@@ -287,8 +291,8 @@ describe("audit F17 re-audit L3: the evaluation record gate's remaining holes", 
   const ROUTING = 'export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "anthropic/claude-opus-5.5" })'
   const CHANGED_ROUTING = 'export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "vendor/other-model-2" })'
   it.each([
-    ["the grounding rules, a line comment", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '// export const GROUNDING_RULES_VERSION = "f17.3"\nexport const GROUNDING_RULES_VERSION = "f17.4"'],
-    ["the grounding rules, a block comment", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '/*\nexport const GROUNDING_RULES_VERSION = "f17.3"\n*/\nexport const GROUNDING_RULES_VERSION = "f17.4"'],
+    ["the grounding rules, a line comment", GR, RULES_DECL, `// ${RULES_DECL}\nexport const GROUNDING_RULES_VERSION = "f17.99"`],
+    ["the grounding rules, a block comment", GR, RULES_DECL, `/*\n${RULES_DECL}\n*/\nexport const GROUNDING_RULES_VERSION = "f17.99"`],
     ["the registry version, a line comment", SP, 'export const SYSTEM_POLICY_VERSION = "f17.1"', '// export const SYSTEM_POLICY_VERSION = "f17.1"\nexport const SYSTEM_POLICY_VERSION = "f17.9"'],
     ["the routing, a line comment", CT, ROUTING, `// ${ROUTING}\n${CHANGED_ROUTING}`],
     ["the routing, a block comment", CT, ROUTING, `/* ${ROUTING} */\n${CHANGED_ROUTING}`],
@@ -300,7 +304,7 @@ describe("audit F17 re-audit L3: the evaluation record gate's remaining holes", 
   })
 
   it.each([
-    ["the grounding rules", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '// export const GROUNDING_RULES_VERSION = "f17.0"\nexport const GROUNDING_RULES_VERSION = "f17.3"'],
+    ["the grounding rules", GR, RULES_DECL, `// export const GROUNDING_RULES_VERSION = "f17.0"\n${RULES_DECL}`],
     ["the routing", CT, "export const TASK_MODEL:", '/* export const TASK_MODEL = Object.freeze({ committee: "vendor/old" }) */\nexport const TASK_MODEL:'],
   ])("reads the real declaration under a stale comment: %s", (_label, file, from, to) => {
     const root = tree()
@@ -312,16 +316,48 @@ describe("audit F17 re-audit L3: the evaluation record gate's remaining holes", 
 
   it("does not read a // or /* inside a string as a comment", () => {
     const root = tree()
-    edit(root, GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', 'const NOTE = "see https://example.invalid/a // b /* c"\nexport const GROUNDING_RULES_VERSION = "f17.3"')
+    edit(root, GR, RULES_DECL, `const NOTE = "see https://example.invalid/a // b /* c"\n${RULES_DECL}`)
     const r = gate(root)
     expect(r.out).toMatch(/^PASS/m)
   })
 
   it("fails closed on two real declarations", () => {
     const root = tree()
-    edit(root, GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', 'export const GROUNDING_RULES_VERSION = "f17.3"\nexport const GROUNDING_RULES_VERSION = "f17.4"')
+    edit(root, GR, RULES_DECL, `${RULES_DECL}\nexport const GROUNDING_RULES_VERSION = "f17.99"`)
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toMatch(/cannot read/)
+  })
+
+  // Re-audit round 2: a declaration written inside a string or template literal is not a declaration. With the real
+  // value computed, the gate must fail closed, not read the literal (the re-auditor's template-literal shadow).
+  it.each([
+    [
+      "the routing, a template literal",
+      CT,
+      ROUTING,
+      'const ROUTES = { committee: "vendor/other-model-2" }\nexport const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze(ROUTES)\nconst NOTE = `' +
+        ROUTING +
+        "`",
+    ],
+    ["the grounding rules, a template literal", GR, RULES_DECL, "const NOTE = `\n" + RULES_DECL + "\n`\nexport const GROUNDING_RULES_VERSION = currentRules()"],
+    ["the grounding rules, a single-quoted string", GR, RULES_DECL, "const NOTE = '" + RULES_DECL + "'\nexport const GROUNDING_RULES_VERSION = currentRules()"],
+  ])("fails closed on a declaration that exists only inside a literal: %s", (_label, file, from, to) => {
+    const root = tree()
+    edit(root, file, from, to)
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/cannot read/)
+  })
+
+  it.each([
+    ["in lower case", "not run: no key"],
+    ["inside a sentence", "Ran fine; an earlier attempt was not run."],
+  ])("fails a live record whose note says the run did not happen (%s)", (_label, liveNote) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), live: true, liveNote, liveRun: fullRun(isoDay(-1)) })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("NOT RUN")
   })
 })
