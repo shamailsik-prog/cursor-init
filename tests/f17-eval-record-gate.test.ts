@@ -109,7 +109,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails on an unrecorded change of the grounding rules", () => {
     const root = tree()
-    edit(root, "functions/src/p1/grounding.ts", 'GROUNDING_RULES_VERSION = "f17.2"', 'GROUNDING_RULES_VERSION = "f17.3"')
+    edit(root, "functions/src/p1/grounding.ts", 'GROUNDING_RULES_VERSION = "f17.3"', 'GROUNDING_RULES_VERSION = "f17.4"')
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("grounding rules")
@@ -117,7 +117,7 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
 
   it("fails when the evaluation set changes without a new record (its SHA-256)", () => {
     const root = tree()
-    edit(root, "docs/evals/committee-brain-eval-set.json", '"version": "f17.2"', '"version": "f17.2" ')
+    edit(root, "docs/evals/committee-brain-eval-set.json", '"version": "f17.3"', '"version": "f17.3" ')
     const r = gate(root)
     expect(r.code).toBe(1)
     expect(r.out).toContain("sha256")

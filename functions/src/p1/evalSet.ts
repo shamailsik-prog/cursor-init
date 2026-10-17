@@ -44,6 +44,8 @@ export const EVAL_CATEGORIES = [
   "limitation_relevance",
   // Rules f17.2 (review round, Codex P1 on PR #63): a judgment's citation declared statute, rule or other.
   "mislabelled_authority",
+  // Rules f17.3 (re-audit round, HIGH-1): an authority in the prose that the D4 extractor does not see.
+  "prose_unverified_authority",
 ] as const
 
 const Bench = z.enum(["single", "division", "full", "larger"])

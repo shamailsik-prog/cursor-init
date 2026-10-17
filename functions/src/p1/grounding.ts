@@ -41,12 +41,15 @@ import { UNRECOGNISED_PREFIX, extractCitations, normaliseCitation } from "@/serv
 import type { AuthorityStore } from "../d4/authority"
 import { budgetedStore, lookUpCitation, verdictOfJudgment, type CitationLookup } from "../d4/gate"
 import { errorCode } from "../log"
+import { authorityMentions, unboundMentions, type VerifiedSpan } from "./proseAuthority"
 
 /**
  * The status rules above. A change to them changes the evaluation's outcomes: the CI gate requires a new record.
- * f17.1 (PR #63 round 1); f17.2 (review round): a statute, rule or other authority is never resolved as a judgment.
+ * f17.1 (PR #63 round 1); f17.2 (review round): a statute, rule or other authority is never resolved as a judgment;
+ * f17.3 (re-audit round, ruling R7a): an authority-like mention in the prose that is not bound to a VERIFIED citation is
+ * an UNRECOGNISED suspect.
  */
-export const GROUNDING_RULES_VERSION = "f17.2"
+export const GROUNDING_RULES_VERSION = "f17.3"
 
 /**
  * The authority time one grounding run may spend (ruling 6, refinement R6a). It runs while the call records its attempt
@@ -108,19 +111,26 @@ export function unverifiableGrounding(policy: GroundingPolicy | null, claimsTota
 
 const DEFINITE_FAILURES: ReadonlySet<CitationGroundingStatus> = new Set(["OVERRULED", "PENDING_OVERRULING", "UNVERIFIED", "UNRECOGNISED"])
 
+type Authority = CommitteeAnswer["sections"][number]["claims"][number]["authorities"][number]
+/** One prose field; a pinpoint carries the authority it is the pinpoint of. */
+type ProseField = { text: string; pinpointOf?: Authority }
+
 /** The prose of a structured answer, field by field (each read on its own, so no citation spans two fields). */
-function proseOf(answer: CommitteeAnswer): string[] {
-  const out: string[] = []
+function proseOf(answer: CommitteeAnswer): ProseField[] {
+  const out: ProseField[] = []
   for (const s of answer.sections) {
-    out.push(s.heading, s.text)
+    out.push({ text: s.heading }, { text: s.text })
     for (const c of s.claims) {
-      out.push(c.statement)
-      for (const a of c.authorities) if (a.pinpoint !== undefined) out.push(a.pinpoint)
+      out.push({ text: c.statement })
+      for (const a of c.authorities) if (a.pinpoint !== undefined) out.push({ text: a.pinpoint, pinpointOf: a })
     }
   }
-  out.push(...answer.caveats)
+  for (const caveat of answer.caveats) out.push({ text: caveat })
   return out
 }
+
+/** Lower case, blanks collapsed: how a mention is compared with the text of a D4 extractor suspect. */
+const comparable = (s: string): string => s.replace(/\s+/gu, " ").trim().toLowerCase()
 
 /** The first MAX_REF_CHARS code points (never half a surrogate pair). */
 const bounded = (s: string): string => [...s].slice(0, MAX_REF_CHARS).join("")
@@ -148,6 +158,9 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
   const verdicts = new Map<string, Awaited<ReturnType<typeof verdictOfJudgment>>>()
   const omitted = new Set<string>()
   const citations = new Map<string, GroundedCitation>()
+  /** The prose suspects recorded (ruling R7a); with the lookups, they share the MAX_GROUNDED_CITATIONS cap. */
+  const suspectKeys = new Set<string>()
+  const taken = (): number => lookups.size + suspectKeys.size
 
   const record = (key: string, entry: GroundedCitation): void => {
     const seen = citations.get(key)
@@ -175,7 +188,7 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
     const kind: AuthorityKind = "judgment"
     let lookup = lookups.get(raw)
     if (lookup === undefined && !lookups.has(raw)) {
-      if (lookups.size >= MAX_GROUNDED_CITATIONS) {
+      if (taken() >= MAX_GROUNDED_CITATIONS) {
         omitted.add(raw)
         return "OMITTED"
       }
@@ -224,16 +237,74 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
     return status
   }
 
+  /**
+   * A prose mention that is not a citation the corpus can answer (ruling R7a): UNRECOGNISED, from the text, its words
+   * masked with the party names and then bounded (so a name is never cut before it is masked). Counted against the cap.
+   */
+  const suspect = (raw: string): void => {
+    const ref = UNRECOGNISED_PREFIX + bounded(mask(raw.replace(/\s+/gu, " ").trim()))
+    const key = `r:${ref}`
+    if (citations.has(key)) return
+    if (taken() >= MAX_GROUNDED_CITATIONS) {
+      omitted.add(key)
+      return
+    }
+    suspectKeys.add(key)
+    record(key, { ref, kind: "judgment", source: "text", status: "UNRECOGNISED", judgmentId: null })
+  }
+  const canonicals = new Map<string, string | null>()
+  const canonicalOf = (raw: string): string | null => {
+    if (!canonicals.has(raw)) canonicals.set(raw, normaliseCitation(raw))
+    return canonicals.get(raw) ?? null
+  }
+
+  /**
+   * One prose field (ruling R7a): every citation the D4 extractor finds, resolved as a judgment; then every
+   * authority-like mention it does not see (`authorityMentions`). A report-shaped mention that reads as one reported
+   * citation is resolved the same way and, VERIFIED, can bind the case name, number or page next to it; any other is a
+   * suspect, as is every case name, case number, page-only reference or "reported at/in/as" not bound to a VERIFIED
+   * citation (`unboundMentions`). A mention the extractor already flagged as its own suspect is not recorded twice.
+   */
+  const groundField = async (field: ProseField, verifiedPinpoint: boolean): Promise<void> => {
+    const extracted = extractCitations(field.text)
+    for (const raw of extracted) await resolve(raw, "text")
+    const flagged = extracted.filter((r) => r.startsWith(UNRECOGNISED_PREFIX)).map((r) => comparable(r.slice(UNRECOGNISED_PREFIX.length)))
+    const alreadyFlagged = (raw: string): boolean => {
+      const words = comparable(raw)
+      return flagged.some((f) => f.length > 0 && (f.includes(words) || words.includes(f)))
+    }
+    const mentions = authorityMentions(field.text)
+    const verified: VerifiedSpan[] = []
+    for (const m of mentions) {
+      if (m.family !== "report") continue
+      // The cap is spent by `resolve` (a new lookup) and `suspect` (a new suspect) only: a citation already resolved costs nothing.
+      const canonical = canonicalOf(m.raw)
+      if (canonical === null) {
+        if (!alreadyFlagged(m.raw)) suspect(m.raw)
+      } else if ((await resolve(canonical, "text")) === "VERIFIED") verified.push({ start: m.start, end: m.end })
+    }
+    for (const m of unboundMentions(field.text, mentions, verified, { pinpointOfVerified: verifiedPinpoint })) {
+      if (!alreadyFlagged(m.raw)) suspect(m.raw)
+    }
+  }
+
   const claims = answer === null ? [] : answer.sections.flatMap((s) => s.claims)
+  const authorityStatus = new Map<Authority, CitationGroundingStatus | "OMITTED" | null>()
   let supported = 0
   for (const claim of claims) {
     // A claim's support is its own declared authorities' statuses only, never a prose hit of the same citation.
     const statuses: Array<CitationGroundingStatus | "OMITTED" | null> = []
-    for (const a of claim.authorities) statuses.push(a.kind === "judgment" ? await resolve(a.citation, "claim") : declared(a.citation, a.kind))
+    for (const a of claim.authorities) {
+      const status = a.kind === "judgment" ? await resolve(a.citation, "claim") : declared(a.citation, a.kind)
+      authorityStatus.set(a, status)
+      statuses.push(status)
+    }
     if (statuses.length > 0 && statuses.every((s) => s === "VERIFIED")) supported += 1
   }
-  for (const prose of answer === null ? [input.text ?? ""] : proseOf(answer)) {
-    for (const raw of extractCitations(prose)) await resolve(raw, "text")
+  const fields: ProseField[] = answer === null ? [{ text: input.text ?? "" }] : proseOf(answer)
+  for (const field of fields) {
+    const of = field.pinpointOf
+    await groundField(field, of !== undefined && of.kind === "judgment" && authorityStatus.get(of) === "VERIFIED")
   }
 
   const list = [...citations.values()]

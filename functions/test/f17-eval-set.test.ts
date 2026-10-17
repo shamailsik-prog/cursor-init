@@ -39,7 +39,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
     const m = await load()
     expect(m.EVAL_SET_RELATIVE_PATH).toBe("docs/evals/committee-brain-eval-set.json")
     const set = m.parseEvalSet(json)
-    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.2", "synthetic"])
+    expect([set.format, set.version, set.responseOrigin]).toEqual(["committee-brain-eval-set/1", "f17.3", "synthetic"])
   })
 
   it("has at least 40 items in English and Urdu, unique ids, and every required category", async () => {
@@ -65,6 +65,8 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       "limitation_relevance",
       // Review round (Codex P1 on PR #63, rules f17.2): a judgment's citation declared statute, rule or other.
       "mislabelled_authority",
+      // Re-audit round (HIGH-1, rules f17.3): an authority in the prose the D4 extractor does not see.
+      "prose_unverified_authority",
     ]) {
       expect(m.EVAL_CATEGORIES, category).toContain(category)
       expect(set.items.some((i) => i.category === category), category).toBe(true)
@@ -82,6 +84,24 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
   it("seeds a synthetic corpus only: every citation is of the year 2099", async () => {
     const set = (await load()).parseEvalSet(json)
     for (const j of set.corpus.judgments) expect(j.citation, j.id).toMatch(/\b2099\b/)
+  })
+
+  it("covers each leaking prose format family of the re-audit (HIGH-1) in English and Urdu, with a bound and a bypass item", () => {
+    const items = (JSON.parse(raw) as { items: Array<{ category: string; language: string; response: string; expected: { status: string } }> }).items
+    const prose = items.filter((i) => i.category === "prose_unverified_authority")
+    const families: Array<[string, RegExp, string[]]> = [
+      ["foreign law report", /\(2099\) \d+ SCC \d+|\[2099\] \d+ WLR \d+|\[2099\] EWCA Civ \d+/u, ["en", "ur"]],
+      ["short case number", /C\.A\. \d+\/2099|Crl\. P\. \d+\/2099/u, ["en", "ur"]],
+      ["English case name", /\p{Lu}\p{L}+ v\. \p{Lu}\p{L}+/u, ["en", "mixed"]],
+      ["Urdu case name", /بنام/u, ["ur"]],
+      ["page-only reference", /at page \d+|صفحہ \d+/u, ["en", "ur"]],
+    ]
+    for (const [family, re, languages] of families) {
+      for (const language of languages) expect(prose.some((i) => i.language === language && re.test(i.response)), `${family} ${language}`).toBe(true)
+    }
+    const statuses = prose.map((i) => `${i.language}:${i.expected.status}`)
+    expect(statuses, "a name bound to its verified citation, English and Urdu").toEqual(expect.arrayContaining(["en:grounded", "ur:grounded"]))
+    expect(prose.some((i) => /Baz v\. Qux/u.test(i.response)), "the bypass").toBe(true)
   })
 
   it("refuses a malformed set: an unknown key, a duplicate id, an unknown category", async () => {
@@ -109,7 +129,7 @@ describe("audit F17: the committee-brain evaluation set (spec ruling 5)", () => 
       graded: { deterministic: { passed: number; failed: number } }
       result: string
     }
-    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.2", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
+    expect(record.evalSet).toEqual({ path: "docs/evals/committee-brain-eval-set.json", version: "f17.3", sha256: createHash("sha256").update(raw, "utf8").digest("hex"), items: json.items.length })
     expect(record.graded.deterministic).toEqual({ passed: report.passed, failed: report.failed })
     expect([report.failed, record.result]).toEqual([0, "pass"])
   })
