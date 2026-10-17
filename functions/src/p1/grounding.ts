@@ -80,6 +80,11 @@ export function isAdvisory(grounding: Pick<Grounding, "status">): boolean {
   return grounding.status !== "grounded"
 }
 
+/** The record of a grounding run that failed before it could resolve anything (ruling 6): unverifiable, nothing resolved. */
+export function unverifiableGrounding(policy: GroundingPolicy | null, claimsTotal = 0): Grounding {
+  return { status: "unverifiable", rules: GROUNDING_RULES_VERSION, policy, claims: { total: claimsTotal, supported: 0 }, citations: [], omitted: 0 }
+}
+
 const DEFINITE_FAILURES: ReadonlySet<CitationGroundingStatus> = new Set(["OVERRULED", "PENDING_OVERRULING", "UNVERIFIED", "UNRECOGNISED"])
 
 /** The prose of a structured answer, field by field (each read on its own, so no citation spans two fields). */
@@ -110,7 +115,7 @@ export async function groundAnswer(input: GroundInput, store: AuthorityStore, op
     // A bug-class failure (anything but AuthorityUnavailableError, which the steps read as UNAVAILABLE): the answer is
     // still published, as unverifiable; the log carries the error's code only, never its text.
     logger.warn("p1.grounding_failed", { code: errorCode(err) })
-    return { status: "unverifiable", ...base, claims: { total: claims.length, supported: 0 }, citations: [], omitted: 0 }
+    return unverifiableGrounding(input.policy, claims.length)
   }
 }
 
