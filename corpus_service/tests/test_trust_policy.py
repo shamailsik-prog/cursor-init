@@ -269,8 +269,10 @@ MASTER_UPDATER_ALLOWLIST = {
 }
 MASTER_READ_ONLY_ALLOWLIST = {
     "scraper.main": "/health counts case_law_master rows",
-    "scraper.routers.search": "read-only search",
-    "scraper.routers.export": "read-only export",
+    # Audit F24: the public routes (scraper.routers.search) and the export (scraper.routers.export)
+    # read the master tables only through this published-only helper, so neither router is listed
+    # here: a direct CaseLawMaster / StatutesMaster reference in either fails this scan.
+    "scraper.public_corpus": "published-only public reads and export (F24)",
 }
 
 MASTER_CLASSES = {"scraper.models.CaseLawMaster", "scraper.models.StatutesMaster"}
