@@ -161,16 +161,31 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
     expect(r.out).toContain("live")
   })
 
+  // JSON.stringify never writes 60.0 or 0.0, and Python reads them as floats EQUAL to the integers (60.0 == 60, 0.0 == 0),
+  // so a comparison alone accepts them: the counts are written into the record text as a hand edit would write them.
   it.each([
-    ["a fractional count written as 57.0", '"passed": 57.0'],
-    ["an exponent count written as 5.7e1", '"passed": 5.7e1'],
-  ])("fails a live record with %s (integers only)", (_label, written) => {
+    ["a passed count written as a float (N.0)", `${ITEMS}.0`, "0"],
+    ["a passed count written with an exponent (Ne0)", `${ITEMS}e0`, "0"],
+    ["a failed count written as a float (0.0)", `${ITEMS}`, "0.0"],
+  ])("fails a live record with %s (integers only)", (_label, passed, failed) => {
     const root = tree()
     writeRecord(root, { ...record(root), live: true, liveNote: undefined, liveRun: { passed: ITEMS, failed: 0, date: "2026-10-18" } })
-    edit(root, RECORD, `"passed": ${ITEMS},\n    "failed": 0,\n    "date"`, `${written},\n    "failed": 0,\n    "date"`)
+    edit(root, RECORD, `"passed": ${ITEMS},\n    "failed": 0,\n    "date"`, `"passed": ${passed},\n    "failed": ${failed},\n    "date"`)
     const r = gate(root)
     expect(r.code, r.out).toBe(1)
     expect(r.out).toContain("live")
+  })
+
+  it.each([
+    ["a passed count written as a float (N.0)", `${ITEMS}.0`, "0"],
+    ["a failed count written as a float (0.0)", `${ITEMS}`, "0.0"],
+  ])("fails a deterministic result with %s (integers only)", (_label, passed, failed) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), graded: { deterministic: { passed: ITEMS, failed: 0 } } })
+    edit(root, RECORD, `"passed": ${ITEMS},\n      "failed": 0\n`, `"passed": ${passed},\n      "failed": ${failed}\n`)
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("deterministic")
   })
 
   it.each([
