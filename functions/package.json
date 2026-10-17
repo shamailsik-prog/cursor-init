@@ -13,7 +13,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "test:emu": "cd .. && npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test\"",
-    "test:f05-authority": "cd .. && F05_AUTHORITY_SUITE=1 npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test -- test/f05-authority-corpus.e2e.emu.test.ts test/d4.corpus-authority.pg.test.ts test/d4.authority-parity.pg.test.ts\"",
+    "test:f05-authority": "cd .. && F05_AUTHORITY_SUITE=1 npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test -- test/f05-authority-corpus.e2e.emu.test.ts test/d4.corpus-authority.pg.test.ts test/d4.authority-parity.pg.test.ts test/f17-grounding-corpus.pg.test.ts\"",
     "mutation": "bash scripts/mutation.sh"
   },
   "dependencies": {
