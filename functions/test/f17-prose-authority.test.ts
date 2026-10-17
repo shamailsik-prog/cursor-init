@@ -208,6 +208,7 @@ describe("audit F17 re-audit HIGH-1: an authority in the prose that is not a ver
       ["a name bound to a citation the corpus does not hold", "Baz v. Qux (PLD 2099 SC 7777) agrees.", "Baz v. Qux"],
       ["a page of another judgment after a verified one", "PLD 2099 SC 101 at page 105 and the 2099 judgment at page 7777 agree.", "judgment at page 7777"],
       ["a case number after the citation without a parenthesis", "PLD 2099 SC 101 and C.A. 777/2099 agree.", "C.A. 777/2099"],
+      ["reported in a year, apart from the citation", "The rule was reported in 2099, and PLD 2099 SC 101 agrees.", "reported in"],
     ])("%s: not grounded, the unbound one flagged", async (_label, text, flagged) => {
       const g = await ground(answerText(text))
       expect(g.status, text).toBe("partially_grounded")

@@ -267,12 +267,11 @@ export type BindingOptions = {
 /**
  * The non-report mentions of a field that are not bound to a VERIFIED citation (ruling R7a), each kept once (a mention
  * overlapping one already kept is the same reference). A case name or number binds to the VERIFIED citation right after
- * it, and each citation binds at most one; a page phrase binds to the VERIFIED citation right before it, or, in the
- * pinpoint of a VERIFIED authority that names no year, to that authority; "reported at/in/as" binds to the VERIFIED
- * citation right after it. `verified` is in order of start.
+ * it (NAME_GAP), so two distinct mentions can never share one; a page phrase binds to the VERIFIED citation right before
+ * it, or, in the pinpoint of a VERIFIED authority that names no year, to that authority; "reported at/in/as" binds to the
+ * VERIFIED citation right after it. `verified` is in order of start.
  */
 export function unboundMentions(prose: string, mentions: readonly AuthorityMention[], verified: readonly VerifiedSpan[], options: BindingOptions = {}): AuthorityMention[] {
-  const used = new Set<number>()
   /** The first VERIFIED span starting at or after `at` (binary search). */
   const nextFrom = (at: number): number => {
     let lo = 0
@@ -290,12 +289,8 @@ export function unboundMentions(prose: string, mentions: readonly AuthorityMenti
     if (m.family === "report") continue
     let bound = false
     if (m.family === "case_name" || m.family === "case_number") {
-      const k = nextFrom(m.end)
-      const span = verified[k]
-      if (span !== undefined && !used.has(k) && NAME_GAP.test(prose.slice(m.end, span.start))) {
-        used.add(k)
-        bound = true
-      }
+      const span = verified[nextFrom(m.end)]
+      bound = span !== undefined && NAME_GAP.test(prose.slice(m.end, span.start))
     } else if (m.family === "reported_phrase") {
       const span = verified[nextFrom(m.end)]
       bound = span !== undefined && REPORTED_GAP.test(prose.slice(m.end, span.start))
