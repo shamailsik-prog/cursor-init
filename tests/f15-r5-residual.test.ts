@@ -154,6 +154,8 @@ const RULED_R5_FRESH: ReadonlyMap<number, [ResidualKind, string]> = new Map([
   [125, ["address", "R3-5: Mauza and a name is a locality (flagged at 810fa74 too)"]],
   [126, ["address", "R5-3: belongs to and a named Tehsil"]],
   [128, ["address", "R3-5: موضع and a name is a locality (flagged at 810fa74 too)"]],
+  // R6-1: a district and its name before کا رہائشی counts, as "r/o District Kasur" does (R4-3); the line was debatable
+  [127, ["address", "R6-1: ضلع and a name before کا رہائشی is a place"]],
 ])
 
 describe("R5-5: the held-out lines (regression rows, added after the measurement)", () => {

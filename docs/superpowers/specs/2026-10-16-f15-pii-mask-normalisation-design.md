@@ -794,3 +794,17 @@ M13 and M14 survived the first round-5 tests; three pin rows were added for them
 ### Changed earlier test expectations
 
 - `tests/f15-r4-residual.test.ts`, and round 3's fresh line 49 in `tests/f15-r3-residual.test.ts`: "the wife of a Pakistani national residing abroad" counts by ruling R5-2 (mutant U13's rule removed).
+
+## 11. Re-audit round 5 (FAIL 9/10): ruling R6-1
+
+The independent re-audit at 6f5f969 confirmed every round-4 finding fixed (the mask equals main's on 230,000 generated inputs; 25 of 28 mutants killed; held-out false positives 1 of 118). One MEDIUM blocked:
+
+### R6-1 (MEDIUM, blocking): Urdu "X کا / کی / کے رہائشی"
+
+"ملزم قلوو ٹاؤن کا رہائشی ہے" (the accused is a resident of Qalvo Town) is the everyday phrasing of Urdu statements and pleadings, and it went to the provider on a privileged call. "کا رہنے والا" and "کا باشندہ" were counted (R4-3) and the English "resident of X" is counted, so the gap was an omission, not a ruling. `کا رہائشی`, `کی رہائشی` and `کے رہائشی` join `UR_RESIDENT_PHRASES` and take the same place check and guards: `اسی` / `اپنے` before the place, and a whole-country place, still pass; the adjective "رہائشی علاقہ" (R3-5) is unchanged.
+
+Tests: `tests/f15-r6-residual.test.ts` (4 count rows, 4 guard rows; the count rows failed at 6f5f969) and e2e rows (l) (two privileged calls blocked `not_minimised` with no provider call; both failed at 6f5f969).
+
+Changed expectation: the re-auditor's round-4 "debatable" line 127, "ملزم ضلع قصور کا رہائشی ہے" (resident of District Kasur), now counts, as "r/o District Kasur" does under R4-3. It is listed in `RULED_R5_FRESH`.
+
+The re-audit's LOW items (the settled / belongs to / مقیم false positives after law-report, party and institution words, the clause-crossing English walk, and the untested Urdu-window and word-reader mutants V22 and V23) are left as recorded residual risk and follow-ups; none leaks at privileged rank beyond what §5 states.

@@ -78,8 +78,11 @@ const UR_PLACE_ADVERBS = new Set(["یہاں", "وہاں", "جہاں", "کہاں"
  * house; the re-auditor's round-2 line 102). "مکان نمبر ۱۲" is counted by the numbered-place check.
  */
 const UR_DWELLING = new Set(["گھر", "مکان", "کوٹھی", "حویلی", "رہائش", "رہائشگاہ"])
-/** Urdu phrases of residence that follow the place: "قلوو پورہ کا رہنے والا" (ruling R4-3). */
-const UR_RESIDENT_PHRASES = ["کا رہنے والا", "کی رہنے والی", "کے رہنے والے", "کا باشندہ", "کی باشندہ", "کے باشندے"]
+/**
+ * Urdu phrases of residence that follow the place: "قلوو پورہ کا رہنے والا" (ruling R4-3), and "قلوو ٹاؤن کا رہائشی",
+ * the everyday phrasing of statements and pleadings (ruling R6-1, re-audit round 5 MEDIUM-1).
+ */
+const UR_RESIDENT_PHRASES = ["کا رہنے والا", "کی رہنے والی", "کے رہنے والے", "کا باشندہ", "کی باشندہ", "کے باشندے", "کا رہائشی", "کی رہائشی", "کے رہائشی"]
 /** Before an Urdu residence phrase, these make the place indefinite: "اسی شہر کا رہنے والا" (of the same city). */
 const UR_INDEFINITE = new Set(["اسی", "اس", "ایک", "کسی", "ہی", "اپنے", "اپنی"])
 /** The words a plural residence cue needs before the place (ruling R3-5). */

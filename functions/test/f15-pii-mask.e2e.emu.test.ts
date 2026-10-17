@@ -462,6 +462,23 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     })
   })
 
+  // Re-audit round 5 (FAIL 9/10), MEDIUM-1: the Urdu "X کا رہائشی" (resident of X) phrasing, spec ruling R6-1.
+  describe("(l) round 6: Urdu کا رہائشی with the place before it at rank 3", () => {
+    it.each([
+      ["the accused is a resident of a named town", "ملزم قلوو ٹاؤن کا رہائشی ہے۔ جواب تیار کریں۔"],
+      ["a witness statement", "گواہ نے بیان دیا کہ میں قلوو ٹاؤن لاہور کا رہائشی ہوں۔ جواب تیار کریں۔"],
+    ])("%s: blocked not_minimised, and the provider is never called", async (_label, body) => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      const sent = capture()
+      const r = await ask(f, body)
+      expect([r.blocked, r.reason]).toEqual([true, "not_minimised"])
+      expect(sent).toHaveLength(0)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts.address).toBeGreaterThan(0)
+    })
+  })
+
   it("(h) round 2: a 100,000-character body that was quadratic (house + spaces) is answered well inside the pre-call allowance", async () => {
     const f = await newFirm()
     const sent = capture()
