@@ -6,7 +6,8 @@
  * Masking reduces risk; it is not anonymisation.
  *
  * What it masks:
- *   - everything main's patterns masked: they run first, in main's order (ruling R3-1);
+ *   - everything main masked: main's algorithm runs on the raw text as written (stage 0, ruling R4-1) and its patterns
+ *     run first on the detection view (stage 1, R3-1); the mask writes the union of all spans;
  *   - CNICs (5-7-1 with any run of spaces, line breaks, dots, dashes, commas, slashes or underscores between the
  *     groups, and thirteen digits in form boxes or 4-4-4-1 groups); Pakistani mobiles (+92, 0092, 92 or 0 prefix,
  *     any grouping, any run of whitespace, dots, commas, dashes, brackets, colons or underscores between groups, and a
@@ -29,14 +30,13 @@
  *     blocks the call, below it they are counted, not masked), mobiles without a prefix and "0300/1234567" (a slash
  *     without whitespace: counted, not masked), vehicle and other registration numbers;
  *   - identifiers written in words, obfuscated ("[at]", "[dot]") or with look-alike letters ("O3OO" for "0300");
- *   - an email that runs into a recorded name ("...@0.TTariq Zarvani"): the email takes the name's first letters;
- *   - a zero-width character between a word and an identifier removes the word boundary a pattern needs
- *     ("CNIC\u200B3520212345671"); `residualPII` still counts the digits.
+ *   - an email that runs into a recorded name ("...@0.TTariq Zarvani"): the email takes the name's first letters.
  *
- * How (spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1 to 3, R2-1 to R2-5 and
- * R3-1, R3-2, R3-7): every pattern runs on the detection view (`detectionView`), the names on its folded name view
- * (`nameView`), in one pass; each match is mapped back to its span in the original text and only that span is replaced,
- * so every unmatched code unit of the original is sent exactly as written. Separator runs are unbounded, but each is a
+ * How (spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1 to 3, R2-1 to R2-5,
+ * R3-1, R3-2, R3-7 and R4-1): main's algorithm runs on the raw text; every pattern runs on the detection view
+ * (`detectionView`), the names on its folded name view (`nameView`), in one pass; each match is mapped back to its span
+ * in the original text, the spans are merged (`outboundPIISpans`), and only those spans are replaced, so every unmatched
+ * code unit of the original is sent exactly as written. Separator runs are unbounded, but each is a
  * class disjoint from what follows it, and no two runs meet around an optional part, so the mask is linear in the text
  * (rulings R2-2 and R3-1; tests/f15-r2-bounds.test.ts and tests/f15-r3-bounds.test.ts).
  */

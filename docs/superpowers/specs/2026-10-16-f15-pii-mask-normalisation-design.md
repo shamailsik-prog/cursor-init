@@ -126,13 +126,14 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
 
 - **Not anonymisation.** Names the firm never recorded in `matter_parties`, the client record or the request; semantic identifying facts; free-text addresses and relationships without a cue; identifiers written in words or with look-alike letters; separators the patterns do not list. At ranks 0 to 2 the residual findings are counted, not masked or blocked.
 - **Human review is not built.** L18 §4.6 / L17.13a/h's partner-authorised exception (with a recorded reason) and the deterministic-only path remain `TODO(firm)` (`providerPolicy.ts`). A residual finding at rank 3 or 4 is a hard block with no override; there is no high-risk review queue.
-- **False positives block privileged calls.** Measured on held-out prose (R3-6): 2 of the re-auditor's 60 held-out fresh lines and 1 of 134 new lines written before the round-3 code were flagged, 3 of 194 (1.5%); all four corpora now pass as regression rows. The cue rules still rest on word lists (stop words, role nouns, verbs after a role, adjectival collocations), and prose outside them can block a rank 3 or 4 call `not_minimised`. That fails closed. Known: an amount of 3 billion rupees or more written as one bare run of ten or eleven digits starting with 3 counts as a mobile without its prefix (R3-7).
+- **False positives block privileged calls.** Round 4 counts where a rule trades a leak for a false positive (R4-0). Measured on held-out prose at 57fd1c2 (R4-6): 4 of the re-auditor's 102 round-3 lines (3 of its 100 English and Urdu lines; 1 of its 2 "debatable" lines) and 3 of 99 new lines written before the round-4 code, 7 of 201 (3.5%). Four of the seven stay flagged by ruling (§9); the regression corpora pass otherwise. The cue rules still rest on word lists (stop words, role nouns, verbs after a role, adjectival collocations), and prose outside them can block a rank 3 or 4 call `not_minimised`. That fails closed. Known: an amount of 3 billion rupees or more written as one bare run of ten or eleven digits starting with 3 counts as a mobile without its prefix (R3-7).
 - **Known false negatives (R2-5, R3, recorded).** The following still pass:
   - obfuscated emails without a label (`nura [at] qalvo [dot] pk`);
   - identifiers in words (`zero three zero zero one two three ...`, `CNIC three five two zero two`, `house number twelve`);
   - a CNIC or licence label with four digits (`CNIC No. 3520`, `Licence No. 1234`): below the label minimums (R2-3e);
   - `ولد کا کامران` (a stop word between the cue and the name: `ولد کا نام` is ordinary prose) and `بن کامران` (R2-3a);
   - an email that runs into a recorded name (`...@0.TTariq Zarvanix4-p`): the email pattern takes the name's first letters, and the rest of the name no longer matches (R3-8);
+  - an amount of 12 digits next to `Rs`, written as one bare run, now counts (R4-0), and so does a 14- to 19-digit run in one group or in fours after a document or land-record cue;
   - mobiles without a prefix (`300-1234567`) and `0300/1234567` (a slash without whitespace, R3-2): the residual check counts them, so rank 3 and 4 block, but below rank 3 they leave;
   - vehicle registration and chassis numbers;
   - dates of birth, age, caste and other semantic facts;
@@ -141,7 +142,7 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
   - `resident of the village` followed by a lower-case or no name.
 - **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost 1.8 s of rank-3 work with no names and 3.0 s with 50 names (measured at the round-3 head), under the 8 s pre-call allowance. More names cost more.
 - **Homoglyphs.** Cyrillic and Greek Latin look-alikes are folded (R2-5); look-alikes from other scripts (Armenian, Cherokee, mathematical letters outside NFKC) are not.
-- **A dropped invisible character can remove a word boundary.** `CNIC\u200B3520212345671` becomes `CNIC3520212345671` in the detection view, and the CNIC pattern's leading `\b` no longer holds, so the mask misses it (as main did for the ASCII form `CNIC3520212345671`). The residual detector still counts the 13-digit run, so a rank 3 or 4 call is blocked; below rank 3 it is counted, not masked. A grouped form glued to a label (`CNIC\u200B35202-1234567-1`) is masked since round 3, by the grouped CNIC pattern (R3-7).
+- **A dropped invisible character no longer removes a word boundary** (R4-1). Main's algorithm also runs on the raw text, where `CNIC\u200B3520212345671` keeps its boundary, so it is masked. The ASCII form `CNIC3520212345671`, which main did not mask either, is counted by the residual detector, not masked.
 - **Client identifiers as literals.** The client record's CNIC, mobile, email and address are not used as literal masks (ruling 4).
 - **Next legacy path** records no residual counts (ruling 8).
 - **Classification is still the gate.** A privileged text mislabelled `internal` is masked and counted, not blocked: the audit's mislabelling scenario is reduced (the counterexample's identifiers are now masked) but not eliminated.
@@ -453,3 +454,148 @@ Each of these mutants of the round-3 code fails a round-3 test, run with a hard 
 ### Changed earlier test expectations
 
 None. Round 1's and round 2's tests pass unchanged.
+
+## 9. Re-audit round 3 (FAIL 8/10): rulings R4-0 to R4-6
+
+The independent re-audit of PR #61 at adc5aa0 failed the finding at 8/10. All round-1 and round-2 findings were verified fixed. The false-positive rate on a never-seen corpus was 5% (English 0/55, Urdu 5/45). Two MEDIUM defects blocked:
+- a differential with Unicode glue found the mask masking less than main;
+- the kinship walk ended at words that sit before a name.
+
+The coordinator's rulings are recorded below as R4-0 to R4-6, each with its reason; refinements a test showed are recorded with theirs. The branch first merged origin/main (d7f6a2c, #60) with a merge commit, 354a4d3; the merge touches no F15 file. The re-auditor's inputs (`r3-diff`, `r3-smuggle`, `r3-gaps`, `r3-e2e-attack`) are regression rows:
+- `tests/f15-r4-mask.test.ts`: R4-1 and R4-5, with the re-auditor's differential generator;
+- `tests/f15-r4-residual.test.ts`: R4-0 and R4-2 to R4-5, and every line of both new false-positive corpora;
+- `tests/f15-r4-bounds.test.ts`;
+- `tests/f15-r4-heldout-corpus.ts` (99 new lines) and `tests/f15-r4-fresh-corpus.ts` (the re-auditor's 102 round-3 lines);
+- the e2e rows (j).
+
+### R4-0: at rank 3 and above, a leak is worse than a false positive
+
+**Ruling.** A blocked privileged call fails closed; a leak does not. Where a rule trades one for the other, it counts. The walk after a cue skips words; exemptions that end it early are not added. The held-out false-positive target is at most 8% overall.
+
+**Applied beyond the named rulings.**
+- *Card numbers.* A card or account number keeps no exemption: 14 to 19 digits, in one group or in groups of four, and not a list of years. "case No. 1234 5678 9012 3456" and "khasra 1234567890123456" (r3-smuggle) count. "Khasra Nos. 1234/1 1235/2 1236/3" still passes.
+- *Amounts.* An amount is at most eleven digits, down from twelve, so "Rs. 123456789012 were credited to account" counts. The eleven-digit amount row of round 2 still passes.
+
+### R4-1 (MEDIUM-1, blocking): never masks less than main, Unicode glue included
+
+**Finding.** The detection view drops format characters, marks and private-use characters, and expands ligatures. That can join an identifier to a word and lose the word boundary main's patterns need. Main ran on the raw text, where those characters are boundaries. So main masked `(371) 6656495\uFB01le`, `CNIC\u200B3520212345671`, `\uFF41ppt AB1234567` and `Ref\u200BPK36SCBL...`, and the branch did not. The re-auditor's differential found 5,611 such inputs in 24,000.
+
+**Ruling.** Main's patterns run on the raw text as well, and the mask takes the union of the spans.
+
+**Implementation.**
+- Stage 0, `mainSpans`, runs main's algorithm on the raw text:
+  - main's regexes, in main's order, each over the text with the earlier matches blanked to the same length (a blank is, like main's token brackets, no word character and no separator);
+  - then main's name pass.
+- Main's quadratic email is replaced by its linear equivalent on the raw text: ASCII classes and ASCII word boundaries, as main's non-Unicode regex had, plus a sticky continuation.
+- `outboundPIISpans` returns the merged union, and `maskOutboundPII` writes it. Counts are those of the tokens written.
+
+**Refinement: an exact differential.** The re-auditor's measure aligns the two outputs greedily. When a literal segment between two tokens also occurs inside the first token's span, it attributes a unit to the wrong token. Example: an email, a combining mark, then `@` and a second email, where our span covers the mark. The committed test instead compares spans exactly:
+- main's spans come from an offset-keeping emulation in the test, using main's verbatim regexes, quadratic email included. Each input checks that writing these spans as tokens gives main's own output, so the emulation is main.
+- the mask's spans come from `outboundPIISpans`, checked the same way against the mask's output.
+
+The greedy measure stays as the fallback for a mask without the export (round 3's head, where it recorded the RED).
+
+**Evidence.**
+- With the re-auditor's generator (4 seeds × 6,000), the exact comparison finds 0 inputs where the mask leaves a unit main replaced.
+- The greedy measure on the same 24,000 inputs reports 118 differences, 6 of them an `@`. All are alignment artifacts.
+- The e2e row `Call (371) 6656495\uFB01le.` sends no seven-digit run.
+
+### R4-2 (MEDIUM-2, blocking): the walk after a kinship cue
+
+**Ruling.**
+- Determiners (a, an, the, one, said, our, his, her, their, both), roles, occupations and participles (absconding, late, deceased, accused, alleged, present, former) are skipped. Verbs, prepositions, conjunctions and sentence ends end the walk.
+- English: the first capitalised word reached that is not a common noun, title or organisation word is a name. "son of a Government servant" passes; "wife of an absconding accused Kamran Qalvo", "son of the deceased driver Kamran Qalvo", "son of the late landlord Kamran", "daughter of the owner Kamran" and "son of our client Kamran" count; "son of the deceased appeared" passes.
+- Urdu: the first word that is not a stop word, a role, an occupation or an ordinal is a name.
+- نیک، شادی، عدالت are given names, so they come off the not-a-name list; only the idiom دختر نیک اختر is exempt, as a whole phrase.
+- Ordinals are not names: زوجہ اول اور زوجہ دوم passes.
+
+**Refinements.**
+- *Modes.* In capital mode (after the cue, "the", "a", "his" ...) an unlisted lower-case word is skipped. After "one", "said", a title, a role or an occupation (any-case mode) the first unlisted word in any case is a name. So "son of a retired school teacher, has ..." passes, and "son of our client kamran qalvo" counts (mutant M8).
+- *Organisation, nationality and office words are skipped*: Government, Army, Member, Sessions, Judge, Federal, Minister, Pakistani, Advocate ... ("the wife of a Federal Minister", "the wife of a Pakistani national residing abroad").
+- *Two more Urdu phrases are exempt, besides دختر نیک اختر.*
+  - شادی شدہ (married): "مدعی کی دختر شادی شدہ ہے" (round-2 fresh line 114).
+  - عدالت میں or سے (in or from court): "دختر عدالت میں پیش ہوئی" (round-2 fresh line 84).
+  - A name followed by شدہ, or directly by میں or سے, is unnatural.
+- *Descriptors.* عورت and خاتون are walked past like occupations: "بیوہ عورت کی" passes, "دختر خاتون قلوو" counts. Number words are names again ("ولد دو قلوو" counts).
+- *A comma straight after an Urdu cue begins a list*: "بیوہ، دو بیٹے" passes (round-3 held-out line 121).
+- *After the measurement* (R4-6):
+  - Urdu prepositions (زیر، بطور، بابت، برائے ...) end the walk, as the ruling says prepositions do;
+  - five nouns that are never given names (وقوعہ، مقدمہ، جائیداد، جائداد، وراثت) are walked past.
+  - These fix new-corpus lines 77, 96 and 99.
+
+### R4-3 (blocking): residence
+
+**Ruling.**
+- A province, the country or a general-area word ends the check only when it is the whole place. Followed by a locality noun or a further proper noun, it counts: "r/o Punjab Colony, Karachi", "Pakistan Town", "Sindh Colony", "r/o District Kasur", "r/o city Lahore", "resident of the area of Qalvo Pura", ساکن شہر قلوو. "residents of Islamabad Capital Territory governed by" still passes.
+- Kot, Pind, Tehsil, Dera, Basti, Chak, Goth and Dhok are locality words for plural cues.
+- New cues: کا رہنے والا، کی رہنے والی، کے رہنے والے، کا باشندہ، کی باشندہ, with the place before them.
+- lives, living, resides, residing, stays, staying and abode count when, within six words, at, in, near or opposite comes before a digit or a capitalised word.
+- An explicit `House No.`, `H. No.` or `مکان نمبر` with a number always counts. A bare "House N of the X" stays exempt.
+
+**Refinements.**
+- *Of-phrases.* "the Province of Punjab" passes: a general area followed by "of" and another general area or province is the whole place. "Pakistan and of Lahore" goes on to Lahore, as R3-5 ruled.
+- *Urdu residence phrases* do not count when the word before the place is اسی، اس، ایک، کسی، ہی، اپنے، اپنی: "اسی شہر کا رہنے والا" is "of the same city".
+- *A prepositional place cue* ("resides at Plot No. 123") is left to the numbered-place check, so it counts once.
+- *A bare number with an address word within two words* counts: "Street 5 qalvo town" (r3-smuggle).
+- *Changed expectation.* Round 3's held-out fresh line 69, "The complainant shifted to House No. 7 after the occurrence.", is now a true positive by this ruling. Its regression row says so.
+
+### R4-4 (LOW, fixed): Urdu false positives
+
+- اہل محلہ / اہلِ محلہ (the people of the neighbourhood) is no address.
+- Urdu "as per the title" address values pass: درخواست کے عنوان کے مطابق، حسب عنوان، نامعلوم، درج شدہ.
+- پسر اکبر stays counted, fail-closed, because Akbar is a name; an e2e row pins it.
+- No exemption is added for بینک after دختر, because no narrow rule is obviously safe.
+
+### R4-5 (LOW, fixed): pins for the surviving mutants
+
+- T03: IBANs with mixed dash-and-space runs (`PK36 - - SCBL - - 0000 ...`).
+- T05: `NTN No.`, `N.T.N #` and `passport no.` with six spaces.
+- T24: ساکن علاقہ ہذا, which passes only because علاقہ is a general area; ہذا ("this") is now a stop word.
+
+Each kills its mutant (below).
+
+### R4-6: honest false-positive measurement
+
+**Procedure.**
+1. `tests/f15-r4-heldout-corpus.ts` was written and committed alone (b48fc83), before any round-4 change and before the re-auditor's round-3 fresh corpus was read. It has 99 lines: 50 English, 49 Urdu. Its genres are affidavits, powers of attorney, deeds, notices, family-court orders, revenue entries, police diaries, medical reports, service and banking matters, order sheets and judgments.
+2. The re-auditor's corpus (`r3-fresh-fp.json`) was used only as held-out prose. Its structure was read; no line was read before the measurement.
+3. A line counts if the mask changes it or `assertMinimised` refuses it.
+4. Both were measured at 57fd1c2, the round-4 implementation.
+
+| Corpus | Lines | Flagged at 57fd1c2 |
+| --- | --- | --- |
+| Re-auditor's round-3 corpus, English | 55 | 1 (1.8%): line 49 |
+| Re-auditor's round-3 corpus, Urdu | 45 | 2 (4.4%): lines 84, 88 |
+| Re-auditor's round-3 corpus, "debatable" | 2 | 1: line 101 |
+| Re-auditor's round-3 corpus, all | 102 | 4 (3.9%) |
+| New corpus, English | 50 | 0 |
+| New corpus, Urdu | 49 | 3 (6.1%): lines 77, 96, 99 |
+| New corpus, all | 99 | 3 (3.0%) |
+| Both held-out sets | 201 | 7 (3.5%), under the 8% target |
+
+**Triggers.**
+- Line 49, "House No. 3 of the scheme was never constructed", and line 101, "a resident of District Kasur": R4-3 counts both by ruling.
+- Line 84, a word after دختر read as a name before "bank account": R4-4, fail-closed.
+- Line 88, پسر اکبر: R4-4, fail-closed.
+- New lines 77 (دختر زیر تعلیم), 96 (پسر وقوعہ کے وقت) and 99 (ولد بطور گواہ): fixed after the measurement (c306407, R4-2).
+
+Both corpora are now regression rows; the four ruled lines are count rows that name their ruling.
+
+**Disclosure.** R4-4's rulings came from the re-auditor's report on this same corpus (پسر اکبر, بینک, اہل محلہ, the "as per title" values). So its rate is not wholly independent of the rulings implemented before the measurement.
+
+### Mutants
+
+Each mutant below was applied alone, and the named round-4 tests were run with a hard timeout (`r4_mutants.py`):
+
+| Mutant | Killed by |
+| --- | --- |
+| T03: the stage-2 IBAN gap without dashes | two R4-5 IBAN rows |
+| T05: the label gap bounded to three | three R4-5 label rows |
+| T24: علاقہ removed from the general areas | the R4-5 T24 row |
+| M7: stage 0 (main on the raw text) removed | five R4-1 glue rows and the differential test |
+| M8: an occupation no longer makes the next word a name in any case | two R4-2 rows with lower-case names |
+| M9: an explicit House No. no longer always counts | four R4-3 rows and the R4-6 count row for line 49 |
+
+### Changed earlier test expectations
+
+- `tests/f15-r3-residual.test.ts`: round 3's held-out fresh line 69 is a count row by ruling R4-3.
