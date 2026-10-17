@@ -71,7 +71,15 @@ const fields = (e: unknown) => {
   const t = e as P1TransportError
   return { name: t.name, code: t.code, billable: t.billable, inputTokens: t.inputTokens, outputTokens: t.outputTokens }
 }
-const request = { model: "anthropic/claude-opus-5.5", body: "hello ک", maxTokens: MAX_OUTPUT_TOKENS }
+// Audit F16: a request is role-separated messages (the system message first), posted as given.
+const request = {
+  model: "anthropic/claude-opus-5.5",
+  messages: [
+    { role: "system" as const, content: "Platform policy." },
+    { role: "user" as const, content: "hello ک" },
+  ],
+  maxTokens: MAX_OUTPUT_TOKENS,
+}
 
 describe("P1 Gateway transport (P3-68)", () => {
   it("pins the Gateway endpoint and a 60 second timeout", () => {
@@ -90,7 +98,10 @@ describe("P1 Gateway transport (P3-68)", () => {
     expect(seen[0]?.headers["content-type"]).toMatch(/^application\/json/)
     expect(JSON.parse(seen[0]?.body ?? "")).toEqual({
       model: "anthropic/claude-opus-5.5",
-      messages: [{ role: "user", content: "hello ک" }],
+      messages: [
+        { role: "system", content: "Platform policy." },
+        { role: "user", content: "hello ک" },
+      ],
       max_tokens: 4096,
     })
   })

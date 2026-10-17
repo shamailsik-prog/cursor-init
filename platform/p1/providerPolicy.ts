@@ -131,12 +131,16 @@ export function providerAllowedFor(
  * persisted (purpose) carry no PII the mask would still redact, AND the independent residual detector (`residualPII`:
  * identifier-length digit runs, labelled identifiers, addresses, parentage) finds nothing in them. Passing is a
  * minimisation check, not proof of anonymity (see maskOutboundPII.ts).
+ *
+ * Audit F16 (spec ruling 3): when the request carries role-separated `messages`, every message's content is checked
+ * the same way, the system message included, so no part of what is sent escapes the obligation.
  */
 export function assertMinimised(
-  request: { body: string; metadata: { purpose: string } },
+  request: { body?: string; messages?: readonly { content: string }[]; metadata: { purpose: string } },
   partyNames: string[] | undefined
 ): boolean {
-  for (const text of [request.body, request.metadata.purpose]) {
+  const texts = [...(request.body === undefined ? [] : [request.body]), ...(request.messages ?? []).map((m) => m.content), request.metadata.purpose]
+  for (const text of texts) {
     const again = maskOutboundPII(text, { partyNames })
     if (again.redactions.some((r) => r.count > 0)) return false
     if (residualTotal(residualPII(text)) > 0) return false

@@ -14,6 +14,7 @@ import { p1OpsTestSeam } from "../src/p1/ops"
 import { setP1TransportForTests } from "../src/p1/transport"
 import type { Operation } from "../src/p5/common"
 import { apiErrorOf, viaApi } from "./api"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
 
 /**
@@ -169,13 +170,13 @@ function firmPartner(): Promise<{ firmId: string } & Member> {
 // committeeBrain fixtures (the real route through ROUTES, a stub Gateway at the transport boundary)
 // ---------------------------------------------------------------------------
 
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 
 function stubTransport(hold?: Promise<void>, text = "REPLY"): Sent[] {
   const sent: Sent[] = []
   setP1TransportForTests({
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       if (hold) await hold
       return { text, inputTokens: 1000, outputTokens: 500 }
     },

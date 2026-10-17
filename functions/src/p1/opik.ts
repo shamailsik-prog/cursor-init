@@ -73,13 +73,20 @@ export type TraceRecord = {
   firmId: string
   matterId: string | null
   usageLogId: string
+  /** The masked user message as sent. */
   maskedBody: string | null
+  /**
+   * The masked system message as sent (audit F16, spec ruling 4): the trace records the request as the system message
+   * plus the body. Absent or null for a record without one.
+   */
+  maskedSystem?: string | null
   maskedResponse: string | null
 }
 
 /**
- * One Opik trace. The masked body and response ride along only at ranks 0 to 3 and never on a blocked call;
- * rank 4 and blocked calls are metadata only. An unknown classification label throws (fails closed).
+ * One Opik trace. The masked request (`{ system, prompt }`, or `{ prompt }` without a system message) and the masked
+ * response ride along only at ranks 0 to 3 and never on a blocked call; rank 4 and blocked calls are metadata only. An
+ * unknown classification label throws (fails closed).
  */
 export function buildTrace(r: TraceRecord, project: string): Record<string, unknown> {
   const trace: Record<string, unknown> = {
@@ -105,7 +112,7 @@ export function buildTrace(r: TraceRecord, project: string): Record<string, unkn
     tags: [r.classification, r.outcome],
   }
   if (classificationRank(r.classification) <= 3 && r.outcome !== "blocked") {
-    if (typeof r.maskedBody === "string") trace.input = { prompt: r.maskedBody }
+    if (typeof r.maskedBody === "string") trace.input = typeof r.maskedSystem === "string" ? { system: r.maskedSystem, prompt: r.maskedBody } : { prompt: r.maskedBody }
     if (typeof r.maskedResponse === "string") trace.output = { text: r.maskedResponse }
   }
   if (r.outcome === "failed") trace.error_info = { exception_type: TRANSPORT_ERROR, traceback: "" }

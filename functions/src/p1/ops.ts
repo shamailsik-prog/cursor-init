@@ -1,5 +1,7 @@
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
+import { isSystemPolicyId } from "@/platform/p1/systemPolicy"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
@@ -322,6 +324,9 @@ function outputRow(o: {
     ...(o.text === undefined ? {} : { text: o.text }),
     outbound: {
       body: o.outbound.body,
+      // Audit F16: the system message that was sent with the body (absent only when the row is published from an attempt
+      // receipt recorded before F16, which resumes as a single user turn).
+      ...(o.outbound.system === undefined ? {} : { system: o.outbound.system }),
       metadata: {
         classification: o.classification,
         provider: PROVIDER_ID,
@@ -361,6 +366,25 @@ function residualCountsOf(value: unknown): Record<string, number> | null {
   return out
 }
 
+/** The longest system text a receipt may carry (audit F16): a registry policy plus its masking, with room to spare. */
+const MAX_SYSTEM_TEXT_CHARS = 8000
+const SYSTEM_RECORD_KEYS = ["policyId", "text", "version"]
+
+/**
+ * A system record (audit F16, spec ruling 4), when it is exactly `{ policyId, version, text }`: a registry policy id (own
+ * keys only), a version of 1 to 32 characters of `[a-z0-9.]`, and a non-empty text of at most MAX_SYSTEM_TEXT_CHARS;
+ * null otherwise. The receipt records what was sent, so a version the registry has since replaced is still accepted.
+ */
+function systemRecordOf(value: unknown): SystemRecord | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  if (Object.keys(r).sort().join() !== SYSTEM_RECORD_KEYS.join()) return null
+  if (!isSystemPolicyId(r.policyId)) return null
+  if (typeof r.version !== "string" || !/^[a-z0-9.]{1,32}$/.test(r.version)) return null
+  if (typeof r.text !== "string" || r.text === "" || r.text.length > MAX_SYSTEM_TEXT_CHARS) return null
+  return { policyId: r.policyId, version: r.version, text: r.text }
+}
+
 /** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */
 function receiptOf(value: unknown): P1Receipt | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null
@@ -380,6 +404,10 @@ function receiptOf(value: unknown): P1Receipt | null {
   // Audit F15: when present, exactly the four kinds, each a count; a receipt recorded before F15 has none.
   const residual = outbound.residualCounts === undefined ? undefined : residualCountsOf(outbound.residualCounts)
   if (residual === null) return null
+  // Audit F16: when present, exactly a system record; a receipt recorded before F16 has none and resumes as a single user
+  // turn. A malformed one makes the receipt unreadable (fail closed: 409, never a row that misstates what was sent).
+  const system = outbound.system === undefined ? undefined : systemRecordOf(outbound.system)
+  if (system === null) return null
   return {
     outcome: r.outcome,
     ...(r.outcome === "ok" ? { text: r.text as string } : {}),
@@ -389,7 +417,13 @@ function receiptOf(value: unknown): P1Receipt | null {
     costMicroUsd,
     model: r.model,
     classification: r.classification,
-    outbound: { body: outbound.body, purpose: outbound.purpose, redactionCounts: counts, ...(residual === undefined ? {} : { residualCounts: residual }) },
+    outbound: {
+      body: outbound.body,
+      purpose: outbound.purpose,
+      redactionCounts: counts,
+      ...(residual === undefined ? {} : { residualCounts: residual }),
+      ...(system === undefined ? {} : { system }),
+    },
   }
 }
 

@@ -3,16 +3,18 @@ import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firesto
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
+import { SYSTEM_POLICIES } from "@/platform/p1/systemPolicy"
 import { adminDb } from "../src/admin"
 import { firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import * as costTable from "../src/p1/costTable"
-import { MAX_OUTPUT_TOKENS, costMicroUsd } from "../src/p1/costTable"
+import { MAX_OUTPUT_TOKENS, MESSAGE_OVERHEAD_TOKENS, costMicroUsd } from "../src/p1/costTable"
 import * as gateway from "../src/p1/gateway"
 import { callP1, ledgerQueue, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { p1OpsTestSeam } from "../src/p1/ops"
 import { P1TransportError, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { ApiError, viaApi } from "./api"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -47,8 +49,16 @@ const BIG_BUDGET = 1_000_000_000
  * as the fallback, so this file also runs against the code before re-audit R1-D1 (where it does not exist).
  */
 const OVERHEAD = (costTable as unknown as { REQUEST_OVERHEAD_TOKENS?: number }).REQUEST_OVERHEAD_TOKENS ?? 64
-/** The input ceiling of a body: one token per UTF-8 byte (a byte-level BPE token covers at least one byte) plus overhead. */
-const inputCeiling = (body: string) => Buffer.byteLength(body, "utf8") + OVERHEAD
+/**
+ * Audit F16: every request is role-separated, the registry's system message for the purpose ("committee-brain" here)
+ * and then the body as the user's turn, and the reservation holds the content ceiling of both: each message's bytes
+ * (one token per UTF-8 byte of its largest normal form) plus MESSAGE_OVERHEAD_TOKENS. `contentOf(n)` is that ceiling for
+ * a body whose own ceiling is `n`; the committee policy text is ASCII, so its ceiling is its byte length.
+ */
+const SYSTEM_BYTES = Buffer.byteLength(SYSTEM_POLICIES["committee-brain"].text, "utf8")
+const contentOf = (bodyCeiling: number) => SYSTEM_BYTES + bodyCeiling + 2 * MESSAGE_OVERHEAD_TOKENS
+/** The input ceiling of a body: its request's content ceiling (a byte-level BPE token covers at least one byte) plus overhead. */
+const inputCeiling = (body: string) => contentOf(Buffer.byteLength(body, "utf8")) + OVERHEAD
 /** The worst case the gateway must reserve for BODY: its input ceiling plus the 4,096-token output ceiling. */
 const WORST = costMicroUsd(OPUS, inputCeiling(BODY), MAX_OUTPUT_TOKENS)!
 /** What the default stub reply costs: 1,000 tokens in, 500 out. */
@@ -56,7 +66,7 @@ const REPLY_COST = costMicroUsd(OPUS, 1000, 500)!
 /** One second past the reservation lease of a call made at T (read lazily: the constant is part of the fix). */
 const afterLease = () => T + (gateway as unknown as { RESERVATION_LEASE_MS: number }).RESERVATION_LEASE_MS + 1_000
 
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 type Reply = { text: string; inputTokens: number | null; outputTokens: number | null; responseId?: string; requestId?: string }
 const DEFAULT_REPLY: Reply = { text: "REPLY", inputTokens: 1000, outputTokens: 500 }
 
@@ -65,7 +75,7 @@ function stubTransport(reply: Reply = DEFAULT_REPLY): Sent[] {
   const sent: Sent[] = []
   const t: P1Transport = {
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       return { ...reply }
     },
   }
@@ -80,7 +90,7 @@ function heldTransport(reply: Reply = DEFAULT_REPLY): { sent: Sent[]; release: (
   const gate = new Promise<void>((resolve) => (release = resolve))
   setP1TransportForTests({
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       await gate
       return { ...reply }
     },
@@ -453,7 +463,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(spentOf(month) + reservedOf(month)).toBeLessThanOrEqual(1_000_000)
       expect([refused.outcome, refused.blockReason, sent.length]).toEqual(["blocked", "budget_exhausted", 0])
       // A budget of exactly the normalised ceiling admits it, and the charge stays inside the reservation: no excess.
-      const ceiling = costMicroUsd(OPUS, normalisedBytes + OVERHEAD, MAX_OUTPUT_TOKENS)!
+      const ceiling = costMicroUsd(OPUS, contentOf(normalisedBytes) + OVERHEAD, MAX_OUTPUT_TOKENS)!
       const exact = await seedFirm({ monthlyBudgetMicroUsd: ceiling })
       const allowed = await callP1(req(exact, { body: NFKC_HEAVY }), at(T))
       expect([allowed.outcome, allowed.costMicroUsd]).toEqual(["ok", charge])
@@ -469,15 +479,15 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       stubTransport()
       p1TestSeam.failCommit = true // keep the reservation as it was made
       const r = await callP1(req(firmId), at(T))
-      const bytes = Buffer.byteLength(BODY, "utf8")
-      expect(await reservationOf(r.usageLogId)).toMatchObject({ reservedInputTokens: bytes + 1024, reservedMicroUsd: costMicroUsd(OPUS, bytes + 1024, MAX_OUTPUT_TOKENS) })
+      const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
+      expect(await reservationOf(r.usageLogId)).toMatchObject({ reservedInputTokens: content + 1024, reservedMicroUsd: costMicroUsd(OPUS, content + 1024, MAX_OUTPUT_TOKENS) })
     })
 
     it("a provider that bills template tokens beyond the overhead teaches the model's overhead: later reservations hold it and stay within the budget (Copilot finding on PR #40)", async () => {
-      // The provider adds 2,000 template tokens to the body's bytes: 976 more than the 1,024 reserved.
-      const bytes = Buffer.byteLength(BODY, "utf8")
-      const charge = costMicroUsd(OPUS, bytes + 2_000, MAX_OUTPUT_TOKENS)!
-      stubTransport({ text: "REPLY", inputTokens: bytes + 2_000, outputTokens: MAX_OUTPUT_TOKENS })
+      // The provider adds 2,000 template tokens to the request's content: 976 more than the 1,024 reserved.
+      const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
+      const charge = costMicroUsd(OPUS, content + 2_000, MAX_OUTPUT_TOKENS)!
+      stubTransport({ text: "REPLY", inputTokens: content + 2_000, outputTokens: MAX_OUTPUT_TOKENS })
       const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
       const first = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       const breach = await callP1(req(first), at(T))
@@ -492,11 +502,11 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly")).toEqual([])
       expect((await byFirm("events", first)).filter((e) => e.data.name === "ai.usage.anomaly")).toEqual([])
       // A later call for the model reserves the learned overhead, so its charge fits: a budget of exactly that ceiling holds.
-      const learnedCeiling = costMicroUsd(OPUS, bytes + 2_000, MAX_OUTPUT_TOKENS)!
+      const learnedCeiling = costMicroUsd(OPUS, content + 2_000, MAX_OUTPUT_TOKENS)!
       const later = await seedFirm({ monthlyBudgetMicroUsd: learnedCeiling })
       const ok = await callP1(req(later), at(T))
       expect(ok.outcome).toBe("ok")
-      expect(await reservationOf(ok.usageLogId)).toMatchObject({ reservedInputTokens: bytes + 2_000, reservedMicroUsd: learnedCeiling, actualMicroUsd: charge })
+      expect(await reservationOf(ok.usageLogId)).toMatchObject({ reservedInputTokens: content + 2_000, reservedMicroUsd: learnedCeiling, actualMicroUsd: charge })
       expect((await reservationOf(ok.usageLogId))!).not.toHaveProperty("exceededMicroUsd")
       const refused = await callP1(req(later), at(T))
       expect(refused.blockReason).toBe("budget_exhausted")
@@ -510,7 +520,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
     const learnedOf = async (): Promise<unknown> => (await db().collection("platform").doc("p1Overhead").get()).data()?.models?.["anthropic_claude-opus-5_5"]?.inputTokens
 
     it("a provider reporting 25,000,000 prompt tokens for a 28-byte body teaches at most the clamp: an uninvolved $50 firm is still admitted, and the anomaly is recorded (re-audit R3-D1)", async () => {
-      const bytes = Buffer.byteLength(BODY, "utf8")
+      const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
       const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
       stubTransport({ text: "REPLY", inputTokens: 25_000_000, outputTokens: MAX_OUTPUT_TOKENS })
       const a = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
@@ -524,7 +534,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       const b = await seedFirm({ monthlyBudgetMicroUsd: 50_000_000 })
       const admitted = await callP1(req(b), at(T))
       expect([admitted.outcome, admitted.blockReason]).toEqual(["ok", null])
-      expect(await reservationOf(admitted.usageLogId)).toMatchObject({ reservedInputTokens: bytes + CLAMP, reservedMicroUsd: costMicroUsd(OPUS, bytes + CLAMP, MAX_OUTPUT_TOKENS) })
+      expect(await reservationOf(admitted.usageLogId)).toMatchObject({ reservedInputTokens: content + CLAMP, reservedMicroUsd: costMicroUsd(OPUS, content + CLAMP, MAX_OUTPUT_TOKENS) })
       const nextMonth = await callP1(req(b), at(Date.parse("2026-11-11T10:00:00.000Z")))
       expect([nextMonth.outcome, nextMonth.blockReason]).toEqual(["ok", null])
       // Learned only up to the clamp.
@@ -536,7 +546,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(events.filter((e) => e.data.name === "ai.usage.anomaly").map((e) => [e.id, e.data.payload])).toEqual([
         [
           `${breach.usageLogId}_usage_anomaly`,
-          { monthKey: MONTH, model: OPUS, inputTokens: 25_000_000, bodyTokens: bytes, overheadTokens: 25_000_000 - bytes, learnedTokens: CLAMP, clampTokens: CLAMP },
+          { monthKey: MONTH, model: OPUS, inputTokens: 25_000_000, bodyTokens: content, overheadTokens: 25_000_000 - content, learnedTokens: CLAMP, clampTokens: CLAMP },
         ],
       ])
       expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly").map((c) => (c[1] as { usageLogId: string }).usageLogId)).toEqual([breach.usageLogId])
@@ -562,10 +572,10 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
 
     it("four concurrent breaches end at the largest overhead they show, and never above the clamp (re-audit R3-D1)", { timeout: 120_000 }, async () => {
       vi.spyOn(logger, "error").mockImplementation(() => undefined)
-      const bytes = Buffer.byteLength(BODY, "utf8")
+      const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
       // Each round holds its four calls at the transport until all four are in flight (or 15 s have passed, so a call
       // that is slow to dispatch never holds the others for good), then lets their commits race on the learned-overhead
-      // doc. Each call bills the body's bytes plus the overhead given for it, and is retried like a client's when its
+      // doc. Each call bills the request's content plus the overhead given for it, and is retried like a client's when its
       // reservation runs out of time under load (callP1Retrying).
       const round = async (overheads: number[]): Promise<P1Result[]> => {
         const queue = [...overheads]
@@ -575,11 +585,11 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
         const fallback = setTimeout(() => release(), 15_000)
         setP1TransportForTests({
           async send(r) {
-            sent.push({ ...r })
+            sent.push(recordSent(r))
             const overhead = queue.shift()!
             if (sent.length >= overheads.length) release()
             await gate
-            return { text: "REPLY", inputTokens: bytes + overhead, outputTokens: MAX_OUTPUT_TOKENS }
+            return { text: "REPLY", inputTokens: content + overhead, outputTokens: MAX_OUTPUT_TOKENS }
           },
         })
         const firms = await Promise.all(overheads.map(() => seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })))
