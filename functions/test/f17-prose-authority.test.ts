@@ -237,6 +237,14 @@ describe("audit F17 re-audit HIGH-1: an authority in the prose that is not a ver
     }
   })
 
+  it("masks a suspect before bounding it, so a party name across the 80-character cut never leaks", async () => {
+    // 68 characters of name before " v. ", so "Tariq Zarvani" starts at 72 and the cut falls inside it.
+    const g = await ground(answerText("Held in Qalvoabcdefghij Holdingsabcdefg Limitedabcdefgh Karachiabcdef Lahore v. Tariq Zarvani Peshawar Quetta."), ["Tariq Zarvani"])
+    const refs = suspects(g).map((c) => c.ref)
+    expect(refs.some((r) => r.includes("[PARTY]")), JSON.stringify(refs)).toBe(true)
+    for (const ref of refs) expect(ref).not.toMatch(/Tariq|Zarvani/u)
+  })
+
   it("an unstructured answer records the suspects of its whole text, and stays unstructured", async () => {
     const g = await ground("Bail follows, as held in (2099) 3 SCC 777 and Haris Qalbani v. Omer Daryani.")
     expect(g.status).toBe("unstructured")
