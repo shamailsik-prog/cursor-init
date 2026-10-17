@@ -1,6 +1,6 @@
 /**
  * Residual PII detector (audit F15; spec docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md,
- * rulings 5, R2-2 to R2-4, R3-2 to R3-7 and R4-0 to R4-5). It runs on text the mask has already processed and returns
+ * rulings 5, R2-2 to R2-4, R3-2 to R3-7, R4-0 to R4-5, R5-2 and R5-3). It runs on text the mask has already processed and returns
  * counts by kind, never text. Where a rule trades a missed identifier for a false positive, it counts (ruling R4-0: at
  * rank 3 and above a blocked privileged call fails closed, a leak does not).
  *
@@ -52,12 +52,32 @@ const RESIDENT_OF = ["resident of"]
 /** Plural cues: a residence only before a locality word and a named or numbered place (ruling R3-5). */
 const RESIDENTS_OF = ["residents of", "سکنائے", "ساکنان"]
 /**
- * Words of residence: an address when, within six words, "at", "in", "near" or "opposite" comes before a number, a
- * proper noun or "the (said) village Kot ..." ("lives with his parents at 12-B ...", "having his abode in Kot ...";
- * rulings R3-5, R4-3).
+ * Words of residence: an address when, within ten words, "at", "in", "near" or "opposite" comes before a number (not a
+ * year), a proper noun or "the (said) village Kot ..." ("lives with his widowed mother and two sisters at 12-B ...",
+ * "having his abode in Kot ...", "permanently settled at Qalvo Town", "his residence at Kot Qalvo"; rulings R3-5, R4-3,
+ * R5-3).
  */
-const LIVES_AT = ["lives", "living", "resides", "residing", "stays", "staying", "abode"]
+const LIVES_AT = ["lives", "living", "resides", "residing", "stays", "staying", "abode", "settled", "residence"]
 const LIVES_PREPOSITIONS = new Set(["at", "in", "near", "opposite"])
+/** How many words after a word of residence the preposition may be (ruling R5-3: ten, up from six). */
+const LIVES_WINDOW = 10
+/** Origin cues: an address before a named or numbered place ("hails from Kot Qalvo", "belongs to village ..."; R5-3). */
+const FROM_CUES = ["hails from", "hail from", "hailing from", "originally from", "belongs to", "belong to", "belonging to"]
+/** "C/o" (care of) before a name or an address (ruling R5-3). */
+const CARE_OF = ["c/o"]
+/**
+ * Urdu residence words: "قلوو ٹاؤن میں رہائش پذیر", "بمقام قلوو پورہ سکونت پذیر", "مقیم قلوو پورہ" (ruling R5-3). The place is
+ * the word next to them on either side, read past "میں", "پر" or "بمقام".
+ */
+const UR_DWELL = ["رہائش پذیر", "رہائش پزیر", "سکونت پذیر", "سکونت پزیر", "مقیم"]
+const UR_DWELL_PAST = new Set(["میں", "پر", "بمقام"])
+/** Urdu adverbs of place: "یہاں مقیم" (resides here) names no place. */
+const UR_PLACE_ADVERBS = new Set(["یہاں", "وہاں", "جہاں", "کہاں", "ادھر", "یہیں", "وہیں"])
+/**
+ * Urdu words for a dwelling, which name no place without a number or a name: "والد کے گھر میں رہائش پذیر" (in her father's
+ * house; the re-auditor's round-2 line 102). "مکان نمبر ۱۲" is counted by the numbered-place check.
+ */
+const UR_DWELLING = new Set(["گھر", "مکان", "کوٹھی", "حویلی", "رہائش", "رہائشگاہ"])
 /** Urdu phrases of residence that follow the place: "قلوو پورہ کا رہنے والا" (ruling R4-3). */
 const UR_RESIDENT_PHRASES = ["کا رہنے والا", "کی رہنے والی", "کے رہنے والے", "کا باشندہ", "کی باشندہ", "کے باشندے"]
 /** Before an Urdu residence phrase, these make the place indefinite: "اسی شہر کا رہنے والا" (of the same city). */
@@ -143,9 +163,9 @@ const EN_FUNCTION = new Set([
   "upon", "per", "via", "will", "would", "shall", "should", "can", "could", "may", "might", "must", "do", "does", "did", "done", "own",
 ])
 /**
- * Words that end the walk after a kinship cue (rulings R3-4, R4-2: "the son of the deceased appeared"): the verbs and
- * adverbs that follow a role in legal prose. A lower-case word ending in -ing or -ly ends it too (`endsTheWalk`), except
- * the participles of EN_SKIP ("absconding").
+ * Words that end the walk after a kinship cue, in lower case (rulings R3-4, R4-2, R5-2: "the son of the deceased
+ * appeared", "the son of the then SHO was transferred"): the finite verbs, auxiliaries and the few adverbs that follow a
+ * role in legal prose. Every other lower-case word is skipped (R5-2); an -ing or -ly word no longer ends the walk.
  */
 const EN_ENDERS = new Set([
   "appeared", "appears", "deposed", "deposes", "stated", "states", "testified", "testifies", "filed", "files", "died", "dies", "admitted",
@@ -163,6 +183,9 @@ const EN_ENDERS = new Set([
   "himself", "herself", "themselves", "itself", "however", "therefore", "thus", "hence", "moreover", "further", "furthermore",
   "accordingly", "admittedly", "apparently", "allegedly", "alone", "too", "again", "already", "still", "yet", "now", "later", "earlier",
   "first", "last", "never", "ever", "together", "jointly", "respectively", "alongwith", "cannot", "can't", "won't", "isn't", "wasn't",
+  // finite auxiliaries and modals (R5-2: every other lower-case word is skipped, so these must end the walk)
+  "is", "was", "are", "were", "has", "had", "have", "will", "would", "shall", "should", "can", "could", "may", "might", "must", "do",
+  "does", "did", "aren't", "weren't", "hasn't", "hadn't", "haven't", "doesn't", "didn't", "shouldn't", "wouldn't", "couldn't",
 ])
 /** Determiners: walked past (ruling R4-2). After "one" or "said" any word is a name; after the others a capitalised one. */
 const EN_DETERMINERS = new Set(["a", "an", "the", "one", "said", "our", "his", "her", "their", "both", "its", "my", "your", "this", "that", "these", "those"])
@@ -194,6 +217,29 @@ const EN_SKIP = new Set([
   "limited", "bench", "tribunal", "magistrate", "justice", "honourable", "learned", "state", "federation", "province", "executive",
   "absconding", "alleged", "present", "former", "retired", "elder", "eldest", "younger", "youngest", "real", "step", "proclaimed",
   "convicted", "injured", "missing", "aforesaid", "poor", "rich", "old", "young", "only",
+  // organisation words, capitalised in names of institutions ("the President of the Bar Association": R5-2)
+  "bar", "association", "league", "chamber", "commerce", "institute", "agency", "office", "division", "directorate", "wing", "branch",
+  "station", "unit", "society", "trust", "foundation", "academy", "centre", "center", "group", "organisation", "organization",
+  "commission", "bureau", "service", "services", "inland", "accountability", "investigation", "intelligence", "secretariat",
+  "parliament", "cabinet", "capital", "territory", "development", "water", "power", "electric", "electricity", "supply", "gas",
+  "telecommunication", "transport", "police", "jail", "prison", "headquarters", "regiment", "battalion", "rangers", "frontier",
+  "constabulary", "levies", "airline", "airlines", "mills", "industries", "enterprises", "traders", "sons", "brothers",
+  // the country, its provinces and territories (NOT_AN_ADDRESS): a qualifier, not a personal name ("a Pakistan Army officer")
+  "pakistan", "punjab", "sindh", "balochistan", "baluchistan", "khyber", "pakhtunkhwa", "kpk", "gilgit", "gilgit-baltistan", "azad",
+  "kashmir", "ajk", "fata", "ict",
+])
+/**
+ * Titles, ranks and offices, skipped after a kinship cue like a role: the next unlisted word in any case is a name ("the
+ * then SHO Kamran", "a sitting MNA Kamran", "the outgoing Chairman Kamran": ruling R5-2).
+ */
+const EN_OFFICES = new Set([
+  "mna", "mpa", "mnas", "mpas", "senator", "councillor", "councilor", "nazim", "naib", "numberdar", "nambardar", "lambardar", "zaildar",
+  "tehsildar", "patwari", "girdawar", "qanungo", "dsp", "sp", "ssp", "asp", "dig", "ig", "igp", "dpo", "cpo", "ccpo", "dc", "ac", "dco",
+  "collector", "mayor", "speaker", "governor", "minister", "chairman", "chairperson", "judge", "deputy", "commissioner", "secretary",
+  "director", "superintendent", "registrar", "principal", "headmaster", "headmistress", "professor", "imam", "khateeb", "khatib",
+  "maulana", "maulvi", "mufti", "qari", "president", "chief", "justice", "magistrate", "ambassador", "consul", "general", "brigadier",
+  "lieutenant", "admiral", "commodore", "commander", "havildar", "risaldar", "lance", "ombudsman", "mohtasib", "auditor",
+  "controller", "accountant", "chancellor", "vice-chancellor", "dean", "warden", "mukhtiarkar",
 ])
 /** Words that announce a name: skipped, and the next word judged in any case ("son of the deceased namely Kamran"). */
 const EN_NAMING = new Set(["namely", "named", "called", "alias"])
@@ -279,6 +325,9 @@ export const RESIDUAL_CUES: readonly string[] = [
   ...LAND_RECORD_CUES, ...UNIT_WORDS.slice(0, 4), ...PLACE_NOUNS.map((p) => `resident of the ${p}`),
   ...LOCALITY_WORDS.map((l) => `residents of ${l}`), "son of the said", "son of respondent no. 2", "son of the deceased driver",
   "wife of an absconding accused", "r/o punjab", "r/o district", "resident of the area of", "house no. 12",
+  // round 5 (R5-2, R5-3)
+  ...FROM_CUES, ...CARE_OF, ...UR_DWELL, ...UR_DWELL.map((d) => `بمقام ${d}`), "son of the then sho", "son of none other than",
+  "| s/o |", "address of accused:", "address of the respondent no. 2:",
 ]
 
 // ---------------------------------------------------------------------------
@@ -326,8 +375,11 @@ const lower = (word: string) => word.toLowerCase()
 const capitalised = (word: string) => /^\p{Lu}/u.test(word)
 
 const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'\u2019-]*/u
-/** Between words: spaces, combining marks and light punctuation. */
-const BETWEEN_WORDS = /^[\s\p{M}.,:;()-]*/u
+/**
+ * Between words: spaces, combining marks, light punctuation and table separators ("| Tariq | s/o | Kamran Qalvo |":
+ * ruling R5-3; the broken bar and the box-drawing verticals too).
+ */
+const BETWEEN_WORDS = /^[\s\p{M}.,:;()|\u00A6\u2502\u2503\u2551-]*/u
 
 /** A sentence end between two words: a full stop, semicolon, question or exclamation mark, then a space. */
 const SENTENCE_END = /[.;!?]\s/u
@@ -335,12 +387,12 @@ const SENTENCE_END = /[.;!?]\s/u
 const ABBREVIATIONS = new Set(["mr", "mrs", "ms", "mst", "dr", "ch", "sh", "no", "nos", "st", "jr", "sr", "exh", "ex", "s", "d", "w", "r", "h"])
 
 /**
- * Up to `max` words after `from` (within the window), each mask token kept whole as one word. The words stop at a
- * sentence end, unless the full stop follows an abbreviation or an initial (the round-2 guard "the son of Respondent
- * No. 2. Draft the grounds." must not read "Draft" as a name).
+ * Up to `max` words after `from` (within the window: 80 characters, or 16 a word for longer reads), each mask token
+ * kept whole as one word. The words stop at a sentence end, unless the full stop follows an abbreviation or an initial
+ * (the round-2 guard "the son of Respondent No. 2. Draft the grounds." must not read "Draft" as a name).
  */
 function wordsAfter(text: string, from: number, max: number): string[] {
-  let rest = text.slice(from, from + WINDOW)
+  let rest = text.slice(from, from + Math.max(WINDOW, max * 16))
   const words: string[] = []
   while (words.length < max) {
     const gap = BETWEEN_WORDS.exec(rest)![0]
@@ -481,6 +533,9 @@ const RESIDENT_OF_RE = cueRegex(RESIDENT_OF)
 const RESIDENTS_OF_RE = cueRegex(RESIDENTS_OF)
 const LIVES_AT_RE = cueRegex(LIVES_AT)
 const UR_RESIDENT_RE = cueRegex(UR_RESIDENT_PHRASES)
+const FROM_RE = cueRegex(FROM_CUES)
+const CARE_OF_RE = cueRegex(CARE_OF)
+const UR_DWELL_RE = cueRegex(UR_DWELL)
 /** The two words before an index, the nearer last (within the window). */
 const TWO_WORDS_BEFORE = /(?:([\p{L}\p{N}][\p{L}\p{M}\p{N}]*)[\s\p{M}]+)?([\p{L}\p{N}][\p{L}\p{M}\p{N}]*)[\s\p{M}]*$/u
 const LOCALITY = cueRegex(LOCALITY_CUES)
@@ -492,6 +547,14 @@ const RESIDENCE_JUST_BEFORE = new RegExp(
   "iu"
 )
 const ADDRESS_LABEL = cueRegex(ADDRESS_LABELS)
+/**
+ * After an address label, "of", an optional "the" or "said", a party role or occupation and its number, then ":" or "-"
+ * ("Address of accused: ...", "Address of the respondent No. 2: ..."; ruling R5-3).
+ */
+const ADDRESS_OF_ROLE = new RegExp(
+  `^\\s+of\\s+(?:the\\s+)?(?:said\\s+)?${alternation([...ROLE_WORDS, ...EN_OCCUPATIONS])}${AFTER}(?:(?:\\s+(?:nos?\\.?|number))?\\s*\\d+)?(?=\\s*[:-])`,
+  "iu"
+)
 /** After an address label: ":" or "-" (group 1), or "as" or "is" (group 2). */
 const ADDRESS_SEPARATOR = /^\s*(?:([:-])|(as|is)(?![\p{L}\p{N}]))/iu
 const NO_ADDRESS = new RegExp(`^\\s*${alternation(NO_ADDRESS_VALUES)}${AFTER}`, "iu")
@@ -609,9 +672,10 @@ function pluralTarget(words: string[]): boolean {
 }
 
 /**
- * After "lives", "residing", "abode" ...: within six words, "at", "in", "near" or "opposite", then a number, a proper
- * noun or "the (said) village Kot ..." (rulings R3-5, R4-3). A place cue there is left to the numbered-place check, so
- * "resides at Plot No. 123" counts once; "lives in fear", "resides at a distance" do not count.
+ * After "lives", "residing", "abode", "settled", "residence" ...: within ten words, "at", "in", "near" or "opposite",
+ * then a number (not a year: "settled in 2019"), a proper noun or "the (said) village Kot ..." (rulings R3-5, R4-3,
+ * R5-3). A place cue there is left to the numbered-place check, so "resides at Plot No. 123" counts once; "lives in
+ * fear", "resides at a distance" do not count.
  */
 function livesAtTarget(words: string[]): boolean {
   for (let i = 0; i < words.length - 1; i++) {
@@ -619,7 +683,10 @@ function livesAtTarget(words: string[]): boolean {
     const w = words[i + 1]!
     const lw = lower(w)
     if (isToken(w) || PLACE_CUE_SET.has(lw)) continue
-    if (/\d/.test(w)) return true
+    if (/\d/.test(w)) {
+      if (YEAR.test(w)) continue
+      return true
+    }
     if (lw === "the" || lw === "said") {
       if (placeAt(words, i + 1, "")) return true
       continue
@@ -640,6 +707,70 @@ function urduResidentBefore(text: string, index: number): boolean {
   const [, before, place] = m
   if (place === undefined || isToken(place) || UR_STOP.has(place) || UR_ROLE_NOUNS.has(place) || isGeneralArea(place)) return false
   return before === undefined || !UR_INDEFINITE.has(before)
+}
+
+/**
+ * After an origin cue ("hails from", "originally from", "belongs to": ruling R5-3): a number, a proper noun that is not
+ * a role or an organisation word, a locality word and a name ("village Qalvo Pura"), or "the (said) village Kot ...". A
+ * province or the country counts only as part of a longer place, as after a residence cue. "hails from a family",
+ * "belongs to the same caste", "belongs to Respondent No. 1" do not count.
+ */
+function fromTarget(words: string[]): boolean {
+  const w = words[0]
+  if (w === undefined || isToken(w)) return false
+  const lw = lower(w)
+  if (/^\p{N}/u.test(w)) return !YEAR.test(w)
+  if (lw === "the" || lw === "said") return placeAt(words, 0, "") || pluralTarget(words)
+  if (LOCALITY_SET.has(lw)) return pluralTarget(words)
+  if (!capitalised(w) || EN_FUNCTION.has(lw) || ROLE_WORDS.has(lw) || EN_OFFICES.has(lw) || EN_OCCUPATIONS.has(lw)) return false
+  if (isGeneralArea(w)) return generalAreaAt(words, 0, "")
+  return !EN_SKIP.has(lw)
+}
+
+/** After "C/o": past mask tokens and "the", a number, a proper noun or an Urdu word that is not a stop word (R5-3). */
+function careOfTarget(words: string[]): boolean {
+  for (const w of words) {
+    const lw = lower(w)
+    if (isToken(w) || lw === "the" || lw === "said") continue
+    if (/\p{N}/u.test(w)) return true
+    if (ARABIC.test(w)) return !UR_STOP.has(w)
+    return capitalised(w) && !EN_FUNCTION.has(lw)
+  }
+  return false
+}
+
+/** Up to three words before `index`, the nearest last, within the window and after the last sentence end or line break. */
+function wordsBefore(text: string, index: number): string[] {
+  const slice = text.slice(Math.max(0, index - WINDOW), index)
+  const sentence = slice.slice(Math.max(...[...".!?;\n۔؟|"].map((c) => slice.lastIndexOf(c))) + 1)
+  return (sentence.match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu) ?? []).slice(-3)
+}
+
+/**
+ * An Urdu word that may be the place next to a residence word: not a stop word, a role, an occupation, a general area or
+ * province, an adverb of place, or a word after "اسی", "اپنے" and the like ("اپنے گاؤں میں مقیم", in his own village).
+ */
+function urduPlaceWord(w: string | undefined, before: string | undefined): boolean {
+  if (w === undefined || isToken(w) || !ARABIC.test(w)) return false
+  if (UR_STOP.has(w) || UR_ROLE_NOUNS.has(w) || UR_OCCUPATIONS.has(w) || isGeneralArea(w) || UR_PLACE_ADVERBS.has(w) || UR_INDEFINITE.has(w) || UR_DWELLING.has(w)) {
+    return false
+  }
+  return before === undefined || !UR_INDEFINITE.has(before)
+}
+
+/**
+ * An Urdu residence word ("رہائش پذیر", "سکونت پذیر", "مقیم": ruling R5-3) counts when the word next to it on either
+ * side, read past "میں", "پر" or "بمقام", is a place: "قلوو ٹاؤن میں رہائش پذیر", "بمقام قلوو پورہ سکونت پذیر", "مقیم بمقام
+ * قلوو پورہ". "یہاں مقیم ہے", "بیرون ملک مقیم ہے" and "اپنے گاؤں میں مقیم ہے" do not count.
+ */
+function urduDwell(text: string, index: number, end: number): boolean {
+  const before = wordsBefore(text, index)
+  let k = before.length - 1
+  if (k >= 0 && UR_DWELL_PAST.has(before[k]!)) k -= 1
+  if (k >= 0 && urduPlaceWord(before[k], before[k - 1])) return true
+  const after = wordsAfter(text, end, 3)
+  const next = UR_DWELL_PAST.has(after[0] ?? "") ? after[1] : after[0]
+  return urduPlaceWord(next, undefined)
 }
 
 /** "اہل محلہ" (the people of the neighbourhood) is no address (ruling R4-4). */
@@ -668,17 +799,20 @@ function atFieldStart(text: string, index: number): boolean {
  * that says there is none ("not known", "same as above", "as stated") never counts.
  */
 function addressLabel(text: string, index: number, end: number): boolean {
-  const after = text.slice(end, end + WINDOW)
+  // "Address of accused:", "Address of the respondent No. 2 -": a label for a party's address (ruling R5-3).
+  const ofRole = ADDRESS_OF_ROLE.exec(text.slice(end, end + WINDOW))
+  const labelEnd = end + (ofRole?.[0].length ?? 0)
+  const after = text.slice(labelEnd, labelEnd + WINDOW)
   const sep = ADDRESS_SEPARATOR.exec(after)
   const value = sep === null ? after : after.slice(sep[0].length)
   const trimmed = value.trimStart()
   if (trimmed === "" || startsWithToken(trimmed) || NO_ADDRESS.test(value)) return false
-  if (sep?.[1] !== undefined && atFieldStart(text, index)) {
-    const [next] = wordsAfter(text, end + sep[0].length, 1)
+  if (sep?.[1] !== undefined && (ofRole !== null || atFieldStart(text, index))) {
+    const [next] = wordsAfter(text, labelEnd + sep[0].length, 1)
     return next !== undefined && !isToken(next)
   }
   if (sep === null) {
-    const words = wordsAfter(text, end, 3)
+    const words = wordsAfter(text, labelEnd, 3)
     return words.length > 0 && (/\d/.test(words[0]!) || words.some((w) => ADDRESS_WORD_SET.has(lower(w))))
   }
   const head = value.slice(0, VALUE_WINDOW)
@@ -690,8 +824,11 @@ function addresses(text: string): number {
   for (const m of text.matchAll(RESIDENCE)) if (residenceTarget(wordsAfter(text, m.index + m[0].length, 6), m[1]!)) count += 1
   for (const m of text.matchAll(RESIDENT_OF_RE)) if (residenceTarget(wordsAfter(text, m.index + m[0].length, 6), "")) count += 1
   for (const m of text.matchAll(RESIDENTS_OF_RE)) if (pluralTarget(wordsAfter(text, m.index + m[0].length, 5))) count += 1
-  for (const m of text.matchAll(LIVES_AT_RE)) if (livesAtTarget(wordsAfter(text, m.index + m[0].length, 7))) count += 1
+  for (const m of text.matchAll(LIVES_AT_RE)) if (livesAtTarget(wordsAfter(text, m.index + m[0].length, LIVES_WINDOW + 1))) count += 1
   for (const m of text.matchAll(UR_RESIDENT_RE)) if (urduResidentBefore(text, m.index)) count += 1
+  for (const m of text.matchAll(FROM_RE)) if (fromTarget(wordsAfter(text, m.index + m[0].length, 5))) count += 1
+  for (const m of text.matchAll(CARE_OF_RE)) if (careOfTarget(wordsAfter(text, m.index + m[0].length, 4))) count += 1
+  for (const m of text.matchAll(UR_DWELL_RE)) if (urduDwell(text, m.index, m.index + m[0].length)) count += 1
   for (const m of text.matchAll(LOCALITY)) {
     const before = text.slice(Math.max(0, m.index - WINDOW), m.index)
     if (RESIDENCE_JUST_BEFORE.test(before) || AHL_BEFORE.test(before)) continue
@@ -732,38 +869,42 @@ const KINSHIP = new RegExp(
   "giu"
 )
 
-/** The number of words a party-role reference takes at `words[i]` ("Opposite Party" is two), or 0. */
+/** The number of words a party-role, title or office reference takes at `words[i]` ("Opposite Party" is two), or 0. */
 function roleLength(words: string[], i: number): number {
-  const w = lower(words[i]!).replace(/['\u2019]s$/, "").split(/[-.]/)[0]!
-  if (!ROLE_WORDS.has(w) && !ROLE_WORDS.has(lower(words[i]!))) return 0
+  const whole = lower(words[i]!).replace(/['\u2019]s$/, "")
+  const w = whole.split(/[-.]/)[0]!
+  if (!ROLE_WORDS.has(w) && !ROLE_WORDS.has(lower(words[i]!)) && !EN_OFFICES.has(w) && !EN_OFFICES.has(whole)) return 0
   return w === "opposite" && lower(words[i + 1] ?? "") === "party" ? 2 : 1
 }
 
 const nameLike = (w: string | undefined): boolean =>
   w !== undefined && !isToken(w) && /^\p{L}/u.test(w) && !EN_FUNCTION.has(lower(w)) && !UR_STOP.has(w)
 
-/** A word that ends the walk: a listed verb or adverb, or a lower-case -ing or -ly word that is not a listed participle. */
-const endsTheWalk = (w: string): boolean =>
-  EN_ENDERS.has(lower(w)) || (/^\p{Ll}\p{L}*(?:ing|ly)$/u.test(w) && !EN_SKIP.has(lower(w)))
+/** How many words after an English kinship cue the walk reads (ruling R5-2); after an Urdu one, ten. */
+const KIN_WINDOW_EN = 8
+const KIN_WINDOW_UR = 10
 
 type KinCue = "any" | "urdu" | "label" | "capital"
 
 /**
- * Whether a kinship cue is followed by a name (rulings R2-3b, R3-4, R4-2). The walk skips, and does not end at,
- * determiners, roles, titles, occupations, organisation words and participles ("wife of an absconding accused Kamran",
- * "son of the deceased driver Kamran", "son of our client Kamran"); verbs, prepositions, conjunctions, other function
- * words, mask tokens and sentence ends end it ("son of the deceased appeared").
- *   - English: in capital mode (after the cue, "the", "a", "his" ...) the first capitalised word that is not a listed
- *     word is a name, and an unlisted lower-case word is skipped; after "one", "said", a title, a role or an occupation
- *     (any-case mode) the first unlisted word in any case is a name ("son of deceased kamran"). An organisation word
- *     is skipped, so "son of a Government servant" passes.
+ * Whether a kinship cue is followed by a name (rulings R2-3b, R3-4, R4-2, R5-2).
+ *   - English, within eight words: a lower-case finite verb or auxiliary (EN_ENDERS), a mask token or a sentence end
+ *     ends the walk ("son of the deceased appeared", "son of the then SHO was transferred"). Every other lower-case word
+ *     is skipped: determiners, "then", participles and adverbs ("a sitting MNA", "a recently retired Judge"),
+ *     prepositions and conjunctions ("none other than Kamran"). Titles, ranks, offices and roles are skipped too ("the
+ *     then SHO", "the outgoing Chairman"), and so are organisation words, nationality words and the country and its
+ *     provinces ("a Government servant", "a Pakistani national"). The first capitalised word that is none of these is
+ *     a name ("son of a Lahore High Court judge" counts: R4-0 accepts it). After "one", "said", a title, a role or an
+ *     occupation (any-case mode) the first unlisted lower-case word that is not a participle or an adverb is a name too
+ *     ("son of our client kamran"); a preposition or a conjunction starts a new phrase and ends that mode.
  *   - "Respondent No. 2 Kamran": a role's number is read past.
  *   - Urdu: the first word that is not a stop word, a role noun, an ordinal, an occupation or a title is a name.
  *     "دختر نیک اختر", "شادی شدہ" and "عدالت میں" are phrases, not names; a comma straight after the cue begins a list
  *     ("بیوہ، دو بیٹے").
  */
 function kinshipName(cue: KinCue, cueWord: string, words: string[], commaAfterCue: boolean): boolean {
-  let anyCase = cue === "any" || cue === "label"
+  const anyCue = cue === "any" || cue === "label"
+  let anyCase = anyCue
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!
     const lw = lower(w)
@@ -777,8 +918,9 @@ function kinshipName(cue: KinCue, cueWord: string, words: string[], commaAfterCu
       if (i === 0 && UR_IDIOM.get(cueWord) === w) continue
       return true
     }
+    if (/^\p{Ll}/u.test(w) && EN_ENDERS.has(lw)) return false
     if (EN_DETERMINERS.has(lw)) {
-      anyCase = lw === "one" || lw === "said" || cue === "any" || cue === "label"
+      anyCase = lw === "one" || lw === "said" || anyCue
       continue
     }
     if (TITLE_WORDS.has(lw) || EN_NAMING.has(lw)) {
@@ -801,10 +943,19 @@ function kinshipName(cue: KinCue, cueWord: string, words: string[], commaAfterCu
       anyCase = bare === lw
       continue
     }
-    if (EN_SKIP.has(lw)) continue
-    if (!/^\p{L}/u.test(w) || EN_FUNCTION.has(lw) || endsTheWalk(w)) return false
+    if (EN_SKIP.has(lw) || !/^\p{L}/u.test(w)) continue
+    // A preposition or a conjunction starts a new phrase: skipped, and the walk is back in capital mode. After a
+    // parentage label the first word is the value, so a function word there means none ("Father's name: not mentioned").
+    if (EN_FUNCTION.has(lw)) {
+      if (cue === "label") return false
+      anyCase = anyCue
+      continue
+    }
     if (i === 0 && cue === "capital" && EN_IDIOM.get(lower(cueWord).replace(/\s+/g, " ")) === lw) return false
-    if (anyCase || cue === "urdu" || capitalised(w)) return true
+    if (capitalised(w)) return true
+    // A participle or an adverb is never the name ("a sitting MNA", "a highly placed officer").
+    if (/^\p{Ll}\p{L}*(?:ing|ly)$/u.test(w)) continue
+    if (anyCase || cue === "urdu") return true
   }
   return false
 }
@@ -819,7 +970,7 @@ function kinshipNames(text: string): number {
     const cue: KinCue = g.any !== undefined ? "any" : g.urdu !== undefined ? "urdu" : g.label !== undefined ? "label" : "capital"
     const end = m.index + m[0].length
     const comma = cue === "urdu" && COMMA_AFTER.test(text.slice(end, end + 8))
-    if (kinshipName(cue, m[0], wordsAfter(text, end, 10), comma)) count += 1
+    if (kinshipName(cue, m[0], wordsAfter(text, end, cue === "urdu" ? KIN_WINDOW_UR : KIN_WINDOW_EN), comma)) count += 1
   }
   return count
 }

@@ -38,7 +38,9 @@
  * in the original text, the spans are merged (`outboundPIISpans`), and only those spans are replaced, so every unmatched
  * code unit of the original is sent exactly as written. Separator runs are unbounded, but each is a
  * class disjoint from what follows it, and no two runs meet around an optional part, so the mask is linear in the text
- * (rulings R2-2 and R3-1; tests/f15-r2-bounds.test.ts and tests/f15-r3-bounds.test.ts).
+ * (rulings R2-2 and R3-1; tests/f15-r2-bounds.test.ts and tests/f15-r3-bounds.test.ts). Every scan resumes where its
+ * last match, chain included, ended (`matchesOf`, ruling R5-1), so joined emails ("a@b.pk.a@b.pk.a@b.pk") are read once,
+ * and stage 0's blanking keeps every position an original offset (tests/f15-r5-mask.test.ts, f15-r5-bounds.test.ts).
  */
 
 import { detectionView, foldName, nameView, type TextView } from "@/platform/p1/piiText"
@@ -178,10 +180,17 @@ const PASSPORT_UNLABELLED = /\b[A-Z]{2}\d{7}\b/g
 // than main" hold by construction. Main's patterns run in main's order, each over the text with the earlier matches
 // blanked (main replaced them with a token; a blank is, like the token's brackets, no word character and no
 // separator), then main's party-name pass. Main's email regex backtracked quadratically; EMAIL_RAW is its linear
-// equivalent on the raw text (ASCII classes and ASCII word boundaries, as main's non-Unicode regex had).
+// equivalent on the raw text (ASCII classes and ASCII word boundaries, as main's non-Unicode regex had). Stage 0's
+// spans equal main's exactly: tests/f15-r5-mask.test.ts writes them as tokens and compares with main's own output on
+// 24,000 generated inputs (ruling R5-1).
 // ---------------------------------------------------------------------------------------------------------------------
 
-const EMAIL_RAW = /(?<![A-Za-z0-9._%+-])[.%+-]*[A-Za-z0-9_][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9_])/g
+/**
+ * Main's email starts at its `\b`: the first word character of a run of local-part characters, after any dots, percent,
+ * plus or minus signs that open the run ("\n-q@b.Org" masks "q@b.Org"). The lookahead comes first, so the lookbehind
+ * only runs at a word character and reads back over one run of those signs: the scan stays linear.
+ */
+const EMAIL_RAW = /(?=[A-Za-z0-9_])(?<=(?:^|[^A-Za-z0-9._%+-])[.%+-]*)[A-Za-z0-9_][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9_])/g
 const EMAIL_RAW_AT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9_])/y
 /** Main's patterns in main's order, for the raw text (the mobiles without stage 1's prefix widening). */
 const RAW_PATTERNS: readonly Pattern[] = [
@@ -195,29 +204,56 @@ const RAW_PATTERNS: readonly Pattern[] = [
   { kind: "passport", re: /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi },
 ]
 
-/** The spans main's algorithm replaces in the raw text, in original offsets. */
-function mainSpans(text: string, partyNames: readonly string[]): Span[] {
+/**
+ * Every match of `pattern` in `text`, in order, as [start, end) pairs: a global regex's matches, each followed by its
+ * chain's (a sticky regex tried where the previous match ended). The scan resumes where the chain ended, never inside
+ * it (ruling R5-1): resuming after the first match let "a@b.pk.a@b.pk.a@b.pk" start a new chain at every "@", which
+ * overlapped the last one and was quadratic. An empty match moves the scan on by one unit.
+ */
+function matchesOf(text: string, pattern: Pattern): Array<[number, number]> {
+  const found: Array<[number, number]> = []
+  const re = new RegExp(pattern.re.source, pattern.re.flags)
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    if (m[0].length === 0) {
+      re.lastIndex = m.index + 1
+      continue
+    }
+    if (pattern.accept !== undefined && !pattern.accept(m[0])) continue
+    found.push([m.index, m.index + m[0].length])
+    let next = m.index + m[0].length
+    while (pattern.chain !== undefined) {
+      pattern.chain.lastIndex = next
+      const c = pattern.chain.exec(text)
+      if (c === null || c[0].length === 0) break
+      found.push([c.index, c.index + c[0].length])
+      next = c.index + c[0].length
+    }
+    re.lastIndex = Math.max(next, m.index + 1)
+  }
+  return found
+}
+
+/**
+ * Stage 0 alone: the spans main's algorithm replaces in the raw text, in original offsets, sorted and disjoint (ruling
+ * R4-1). Each pattern's matches are merged where they overlap before they are blanked, so blanking never changes the
+ * working text's length and every later position is an original offset (ruling R5-1). Exported for the differential
+ * test, which checks that writing these spans as tokens gives main's own output.
+ */
+export function mainAlgorithmSpans(text: string, partyNames: readonly string[]): MaskSpan[] {
   const spans: Span[] = []
   let work = text
   const run = (pattern: Pattern) => {
-    const found: Array<[number, number]> = []
-    for (const m of work.matchAll(pattern.re)) {
-      found.push([m.index, m.index + m[0].length])
-      let next = m.index + m[0].length
-      while (pattern.chain !== undefined) {
-        pattern.chain.lastIndex = next
-        const c = pattern.chain.exec(work)
-        if (c === null) break
-        found.push([c.index, c.index + c[0].length])
-        next = c.index + c[0].length
-      }
-    }
+    const found = matchesOf(work, pattern)
     if (found.length === 0) return
+    found.sort((a, b) => a[0] - b[0] || b[1] - a[1])
     let blanked = ""
     let at = 0
     for (const [start, end] of found) {
-      spans.push({ start, end, kind: pattern.kind })
-      blanked += work.slice(at, start) + BLANK.repeat(end - start)
+      if (end <= at) continue
+      const from = Math.max(start, at)
+      if (from === start) spans.push({ start, end, kind: pattern.kind })
+      else spans.at(-1)!.end = end
+      blanked += work.slice(at, from) + BLANK.repeat(end - from)
       at = end
     }
     work = blanked + work.slice(at)
@@ -227,7 +263,7 @@ function mainSpans(text: string, partyNames: readonly string[]): Span[] {
     const trimmed = name.trim()
     if (trimmed !== "") run({ kind: "party", re: new RegExp(escapeRegExp(trimmed), "gi") })
   }
-  return spans
+  return spans.sort((a, b) => a.start - b.start)
 }
 
 /**
@@ -318,16 +354,14 @@ function pastMarks(original: string, end: number): number {
 
 /**
  * Accepts every match of the pattern in `units` that its `accept` keeps (all of them by default), and every match of its
- * `chain` that starts exactly where an accepted match ends: records its original span (moved past any trailing
- * combining marks) and blanks every unit whose original span overlaps it (so the units an NFKC expansion shares with it
- * go too).
+ * `chain` that starts exactly where an accepted match ends (`matchesOf`: the scan resumes after the chain, ruling R5-1):
+ * records its original span (moved past any trailing combining marks) and blanks every unit whose original span overlaps
+ * it (so the units an NFKC expansion shares with it go too).
  */
 function take(original: string, units: Units, pattern: Pattern, spans: Span[]): void {
-  const { kind, re, accept, chain } = pattern
   const view = units.view
-  const text = units.text()
-  const accepted = (first: number, length: number): number => {
-    const last = first + length - 1
+  for (const [first, after] of matchesOf(units.text(), pattern)) {
+    const last = after - 1
     const start = view.start[first]!
     const end = pastMarks(original, view.end[last]!)
     let from = first
@@ -335,18 +369,7 @@ function take(original: string, units: Units, pattern: Pattern, spans: Span[]): 
     let to = last
     while (to + 1 < units.length && view.start[to + 1]! < end) to += 1
     units.blank(from, to)
-    spans.push({ start, end, kind })
-    return last + 1
-  }
-  for (const m of text.matchAll(re)) {
-    if (accept !== undefined && !accept(m[0])) continue
-    let next = accepted(m.index, m[0].length)
-    while (chain !== undefined) {
-      chain.lastIndex = next
-      const c = chain.exec(text)
-      if (c === null) break
-      next = accepted(c.index, c[0].length)
-    }
+    spans.push({ start, end, kind: pattern.kind })
   }
 }
 
@@ -380,7 +403,7 @@ export type MaskSpan = { readonly start: number; readonly end: number; readonly 
  */
 export function outboundPIISpans(text: string, options: MaskOptions = {}): MaskSpan[] {
   // 0. Main's algorithm on the raw text (ruling R4-1).
-  const spans: Span[] = mainSpans(text, options.partyNames ?? [])
+  const spans: Span[] = mainAlgorithmSpans(text, options.partyNames ?? []).map((span) => ({ ...span }))
 
   // 1. The identifier patterns, on the detection view.
   const detection = new Units(detectionView(text))
