@@ -39,8 +39,14 @@ type Out = {
   classification: string
   usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
   traceId: string
+  /** Audit F17 (rulings 3 and 4). */
+  grounding?: { status: string; citations: unknown[] }
+  advisory?: boolean
+  model?: string
+  modelReported?: string | null
+  modelMatch?: boolean
 }
-type KillView = { disableAll: boolean; disabledModels: string[]; reason: string; setBy: string; setAt: string }
+type KillView ={ disableAll: boolean; disabledModels: string[]; reason: string; setBy: string; setAt: string }
 type Usage = {
   month: string
   budgetMicroUsd: number | null
@@ -454,8 +460,13 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const sent = fakeTransport({ text: "Reply for Ali Raza" })
       const r = await send(brainAt, f.P, base(f, { body: "Draft for Ali Raza, 0300-1234567.", purpose: "summarise" })) as Out
 
-      expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "text", "traceId", "usage"])
+      // Audit F17 (rulings 3 and 4): the answer's grounding, the advisory flag and the model identity ride beside it.
+      expect(Object.keys(r).sort()).toEqual(
+        ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "text", "traceId", "usage"].sort()
+      )
       expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+      // A prose answer is not the committee answer contract: unstructured, advisory; the stub reports no model.
+      expect(r).toMatchObject({ grounding: { status: "unstructured", citations: [] }, advisory: true, model: OPUS, modelReported: null, modelMatch: false })
       expect(r.traceId).toMatch(UUID_V7)
       // Audit F16: the registry's system message for the purpose ("summarise"), then the masked body as the user's turn.
       expect(sent).toEqual([
@@ -475,8 +486,30 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       expect(outputs[0]!.id).toBe(r.outputId)
       const row = outputs[0]!.data
       expect(Object.keys(row).sort()).toEqual(
-        ["accounting", "actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "id", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
+        [
+          "accounting",
+          "actorId",
+          "blocked",
+          "classification",
+          "createdAt",
+          "documentIds",
+          "firmId",
+          "id",
+          "matterId",
+          "outbound",
+          "purpose",
+          "text",
+          "traceId",
+          "usageLogId",
+          // Audit F17 (rulings 3 and 4).
+          "grounding",
+          "advisory",
+          "model",
+          "modelReported",
+          "modelMatch",
+        ].sort()
       )
+      expect(row).toMatchObject({ grounding: r.grounding, advisory: true, model: OPUS, modelReported: null, modelMatch: false })
       expect(row).toMatchObject({
         id: r.outputId,
         firmId: f.firmId,
@@ -522,8 +555,12 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const f = await newFirm({ budget: null })
       const sent = fakeTransport()
       const r = await send(brainAt, f.P, base(f)) as Out
-      expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "reason", "traceId", "usage"])
+      // Audit F17: a blocked call has nothing to ground (not_assessed, advisory) and no reported model.
+      expect(Object.keys(r).sort()).toEqual(
+        ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "reason", "traceId", "usage"].sort()
+      )
       expect(r).toMatchObject({ blocked: true, accounting: "settled", reason: "budget_not_set", usage: { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 } })
+      expect(r).toMatchObject({ grounding: { status: "not_assessed", citations: [] }, advisory: true, modelReported: null, modelMatch: false })
       expect(sent).toHaveLength(0)
       const row = (await outputsOf(f.firmId))[0]!.data
       expect(row).toMatchObject({ blocked: true, reason: "budget_not_set", outbound: { body: "Draft a reply to the notice." } })
@@ -632,7 +669,10 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         // A retryable gRPC code (DEADLINE_EXCEEDED) thrown after the first attempt's transaction has committed.
         p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("deadline exceeded"), { code: 4 })]
         const r = (await ask(f)) as Out
-        expect(Object.keys(r).sort()).toEqual(["accounting", "blocked", "classification", "outputId", "text", "traceId", "usage"])
+        // Audit F17 (rulings 3 and 4): grounding, the advisory flag and the model identity ride beside the answer.
+        expect(Object.keys(r).sort()).toEqual(
+          ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "text", "traceId", "usage"].sort()
+        )
         expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
         expect(waits).toEqual([100])
         expect(p1OpsTestSeam.lostCommitAnswers).toEqual([])

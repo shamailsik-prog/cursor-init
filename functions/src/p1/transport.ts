@@ -10,7 +10,18 @@
  * `requestId` the request-id header the Gateway answered with; each is present only when it is a plain id (audit F08,
  * re-audit R1-D5), so a later per-request reconciliation against the provider's records can find the call (O-57).
  */
-export type P1TransportReply = { text: string; inputTokens: number | null; outputTokens: number | null; responseId?: string; requestId?: string }
+export type P1TransportReply = {
+  text: string
+  inputTokens: number | null
+  outputTokens: number | null
+  responseId?: string
+  requestId?: string
+  /**
+   * The model the provider reports having used (the OpenAI-compatible body's `model`), present only when it is a model
+   * id (`modelId`). Audit F17, spec ruling 4: recorded beside the configured model, never assumed equal to it.
+   */
+  model?: string
+}
 
 /** A message as P1 sends it: the system message first, then the user and assistant turns (audit F16). */
 export type P1Message = { role: "system" | "user" | "assistant"; content: string }
@@ -32,6 +43,14 @@ export const REQUEST_ID_HEADERS = ["x-request-id", "x-vercel-id"] as const
 /** A provider or Gateway id when it is a plain id (letters, digits, `.`, `_`, `:`, `-`, at most 200 characters); else undefined. Never provider text. */
 export function plainId(value: unknown): string | undefined {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) ? value : undefined
+}
+
+/**
+ * A model id when it is one (letters, digits, `.`, `_`, `:`, `/`, `@`, `+`, `-`, at most 200 characters, starting with a
+ * letter or digit), else undefined; never other provider text (audit F17, spec ruling 4).
+ */
+export function modelId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/.test(value) ? value : undefined
 }
 
 export const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
@@ -91,6 +110,7 @@ export class P1TransportError extends Error {
 
 type GatewayBody = {
   id?: unknown
+  model?: unknown
   choices?: { message?: { content?: unknown } }[]
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
 } | null
@@ -144,7 +164,16 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
       const outputTokens = tokenCount(json?.usage?.completion_tokens)
       const responseId = plainId(json?.id)
       if (typeof text !== "string") throw new P1TransportError("gateway_no_text", { billable: true, inputTokens, outputTokens, responseId, requestId })
-      return { text, inputTokens, outputTokens, ...(responseId === undefined ? {} : { responseId }), ...(requestId === undefined ? {} : { requestId }) }
+      // Audit F17 (ruling 4): the model the provider reports, when it is a model id.
+      const model = modelId(json?.model)
+      return {
+        text,
+        inputTokens,
+        outputTokens,
+        ...(responseId === undefined ? {} : { responseId }),
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(model === undefined ? {} : { model }),
+      }
     },
   }
 }

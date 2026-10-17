@@ -1,20 +1,34 @@
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
 import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
 import { isKnownSystemPolicy } from "@/platform/p1/systemPolicy"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
+import { activeAuthorityStore } from "../d4/authority"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { HttpError } from "../http/errors"
 import { CLAIM_LOST, EFFECT_COMMITTED, idempotencyDocId, isUuidV4, type IdempotentOperation } from "../http/idempotency"
+import { errorCode } from "../log"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import { isSafeDocId, type CallAudit, type Data, type FirmOperation, type FirmlessOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, reservationRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { CALL_WORST_CASE_MS, P1PreCallDeadlineError, assertOperationTimeBudget, callP1, isAlreadyExists, type P1Receipt, type P1Result } from "./gateway"
+import {
+  CALL_PHASES_AFTER_ANSWER_MS,
+  CALL_WORST_CASE_MS,
+  P1PreCallDeadlineError,
+  assertOperationTimeBudget,
+  callP1,
+  isAlreadyExists,
+  type P1Receipt,
+  type P1Result,
+} from "./gateway"
+import { GROUNDING_BUDGET_MS, groundAnswer, isAdvisory, unverifiableGrounding, type Grounding, type GroundingPolicy } from "./grounding"
 import { isMonthKey, monthKeyPkt } from "./month"
+import { modelId } from "./transport"
 import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
 /**
@@ -86,6 +100,15 @@ assertOperationTimeBudget({
 })
 
 /**
+ * Audit F17 (spec ruling 6, refinement R6a): grounding starts from `callP1`'s `onAnswer`, the moment the masked answer
+ * exists, and runs beside the call's attempt outcome, trace and commit (CALL_PHASES_AFTER_ANSWER_MS, 29 s). Its budget
+ * must fit inside them, so it adds nothing to the worst case above; checked at import like the budget itself.
+ */
+if (!(GROUNDING_BUDGET_MS <= CALL_PHASES_AFTER_ANSWER_MS)) {
+  throw new Error(`the grounding budget (${GROUNDING_BUDGET_MS} ms) must fit in the call's phases after the answer (${CALL_PHASES_AFTER_ANSWER_MS} ms)`)
+}
+
+/**
  * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
  * `outputWriteFailures` is a queue: each attempt at the `committee_outputs` write takes the next error from it
  * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
@@ -93,7 +116,8 @@ assertOperationTimeBudget({
  * commit). `sleep` replaces the back-off wait. `wallClock` replaces `Date.now` as the output write's deadline clock.
  * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2). `beforePublish`
  * runs after the call and before the publication transaction (audit F09): a test holds it to stand for an instance
- * that died between the provider call and output persistence.
+ * that died between the provider call and output persistence. `groundingBudgetMs` replaces GROUNDING_BUDGET_MS (audit
+ * F17), so a test can show a store that hangs past the budget without waiting 20 s.
  */
 export const p1OpsTestSeam: {
   outputWriteFailures?: Error[]
@@ -102,6 +126,7 @@ export const p1OpsTestSeam: {
   wallClock?: () => number
   preCallClock?: () => number
   beforePublish?: () => Promise<void>
+  groundingBudgetMs?: number
 } = {}
 
 function seam(): typeof p1OpsTestSeam {
@@ -247,6 +272,47 @@ export type CommitteeBrainResponse = {
   traceId: string
   /** Whether the call's books are complete, apart from whether its text is available (audit F08; see P1Accounting). */
   accounting: P1Accounting
+  /**
+   * Audit F17 (spec ruling 3): whether the answer's authorities are independently verified against the firm's corpus
+   * (functions/src/p1/grounding.ts). `blocked: false` says the provider call succeeded; this says whether its content can
+   * be relied on. `advisory` is true unless `grounding.status` is `grounded`.
+   */
+  grounding: Grounding
+  advisory: boolean
+  /** Audit F17 (ruling 4): the configured model, the model the provider reported (null when none) and whether they match. */
+  model: string
+  modelReported: string | null
+  modelMatch: boolean
+}
+
+/**
+ * Whether the provider's reported model is the configured one (audit F17, ruling 4): the same id, or the same id without
+ * its `provider/` prefix (the Gateway may report `claude-...` for `anthropic/claude-...`). False when none was reported.
+ * Recorded, never a block.
+ */
+export function modelMatches(configured: string, reported: string | null): boolean {
+  if (reported === null) return false
+  if (reported === configured) return true
+  const slash = configured.indexOf("/")
+  return slash > 0 && configured.slice(slash + 1) === reported
+}
+
+/** The system record's policy reference for the grounding record (F16: id and version only). */
+function policyOf(system: SystemRecord | undefined): GroundingPolicy | null {
+  return system === undefined ? null : { policyId: system.policyId, version: system.version }
+}
+
+/**
+ * The grounding of a masked answer against the store the D4 gate uses (audit F17, rulings 2 and 6): never rejects, so a
+ * resolution failure never loses the answer. `text` undefined (a blocked or failed call) is `not_assessed`.
+ */
+async function groundingOf(text: string | undefined, policy: GroundingPolicy | null, partyNames: string[]): Promise<Grounding> {
+  try {
+    return await groundAnswer({ text, policy, partyNames }, activeAuthorityStore(), { budgetMs: seam().groundingBudgetMs ?? GROUNDING_BUDGET_MS })
+  } catch (err) {
+    logger.warn("p1.grounding_failed", { code: errorCode(err) })
+    return unverifiableGrounding(policy)
+  }
 }
 
 type CommitteeOutputRow = Record<string, unknown>
@@ -310,6 +376,9 @@ function outputRow(o: {
   traceId: string
   accounting: P1Accounting
   createdAt: number
+  grounding: Grounding
+  model: string
+  modelReported: string | null
 }): CommitteeOutputRow {
   return {
     id: o.outputRef.id,
@@ -344,6 +413,12 @@ function outputRow(o: {
     // releases the call's reservation (Codex P2 on PR #40), and the usage row (usageLogId) is the authority.
     accounting: o.accounting,
     createdAt: o.createdAt,
+    // Audit F17 (rulings 3 and 4): whether the content is grounded, and which model the provider said answered.
+    grounding: o.grounding,
+    advisory: isAdvisory(o.grounding),
+    model: o.model,
+    modelReported: o.modelReported,
+    modelMatch: modelMatches(o.model, o.modelReported),
   }
 }
 
@@ -407,6 +482,13 @@ function receiptOf(value: unknown): P1Receipt | null {
   // turn. A malformed one makes the receipt unreadable (fail closed: 409, never a row that misstates what was sent).
   const system = outbound.system === undefined ? undefined : systemRecordOf(outbound.system)
   if (system === null) return null
+  // Audit F17 (spec ruling 3, refinement R3a): grounding is computed when the answer is published, never recorded on a
+  // receipt. A receipt that carries one was not written by callP1; it is refused (fail closed: 409), so a forged
+  // verification claim is never published. A reported model, when present, must be a model id; a receipt recorded before
+  // F17 has none and still resumes.
+  if (Object.hasOwn(r, "grounding")) return null
+  const modelReported = r.modelReported === undefined ? undefined : modelId(r.modelReported)
+  if (r.modelReported !== undefined && modelReported === undefined) return null
   return {
     outcome: r.outcome,
     ...(r.outcome === "ok" ? { text: r.text as string } : {}),
@@ -415,6 +497,7 @@ function receiptOf(value: unknown): P1Receipt | null {
     tokensEstimated: r.tokensEstimated,
     costMicroUsd,
     model: r.model,
+    ...(modelReported === undefined ? {} : { modelReported }),
     classification: r.classification,
     outbound: {
       body: outbound.body,
@@ -433,6 +516,9 @@ function receiptOf(value: unknown): P1Receipt | null {
  * the row takes the stricter of that and the current one. `accounting` is `settled` once the call's reservation is
  * closed, else `pending` (the lease reconciler later settles it and refreshes the row and the stored answer by
  * `usageLogId` and trace id). With no receipt the answer is gone: 409 idempotency_effect_committed, stored for the key.
+ *
+ * Audit F17 (spec ruling 3, R3a): the receipt's masked text is grounded here, against the corpus as it stands now, with
+ * the matter's party names (`partyNames`, read only when there is text to ground); the receipt never carries grounding.
  */
 async function resumeCommittee(a: {
   operation: IdempotentOperation
@@ -443,6 +529,7 @@ async function resumeCommittee(a: {
   purpose: string
   classification: Classification
   createdAt: number
+  partyNames: () => Promise<string[]>
 }): Promise<CommitteeBrainResponse> {
   if (a.prior.kind !== "p1_dispatch") throw new HttpError(409, EFFECT_COMMITTED)
   // The freshest marker: its receipt may have landed after the claim read it.
@@ -464,6 +551,9 @@ async function resumeCommittee(a: {
   const accounting: P1Accounting = state === "settled" || state === "released" ? "settled" : "pending"
   const blocked = receipt.outcome !== "ok"
   const reason = blocked ? TRANSPORT_ERROR : undefined
+  const policy = policyOf(receipt.outbound.system)
+  const grounding = await groundingOf(receipt.text, policy, receipt.text === undefined ? [] : await a.partyNames())
+  const modelReported = receipt.modelReported ?? null
   const outputRef = adminDb().collection("committee_outputs").doc()
   const response: CommitteeBrainResponse = {
     outputId: outputRef.id,
@@ -474,6 +564,11 @@ async function resumeCommittee(a: {
     usage: { inputTokens: receipt.inputTokens, outputTokens: receipt.outputTokens, costMicroUsd: receipt.costMicroUsd },
     traceId,
     accounting,
+    grounding,
+    advisory: isAdvisory(grounding),
+    model: receipt.model,
+    modelReported,
+    modelMatch: modelMatches(receipt.model, modelReported),
   }
   const row = outputRow({
     outputRef,
@@ -489,6 +584,9 @@ async function resumeCommittee(a: {
     traceId,
     accounting,
     createdAt: a.createdAt,
+    grounding,
+    model: receipt.model,
+    modelReported,
   })
   await publish({ operation: a.operation, audit: a.audit, outputRef, row, response, usageLogId, traceId })
   return response
@@ -544,10 +642,14 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
         purpose: input.purpose,
         classification,
         createdAt: Math.floor(routerNow ?? Date.now()),
+        partyNames: () => partyNamesFor(caller.firmId, matterId, matter.clientId, input.partyNames),
       })
     }
 
     const partyNames = await partyNamesFor(caller.firmId, matterId, matter.clientId, input.partyNames)
+    // Audit F17 (ruling 6, R6a): grounding starts the moment the masked answer exists and runs beside the call's own
+    // remaining phases; it never rejects (groundingOf), and the policy reference is filled in from the call's record.
+    let grounding: Promise<Grounding> | undefined
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
     const t0 = Date.now()
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)
@@ -570,6 +672,9 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
           // Audit F09: the operation's marker is created with the provider attempt, and the receipt recorded on it.
           // Its matter too (re-audit MEDIUM-1): resumeCommittee publishes the receipt only on that matter.
           ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: { ...operation.markerFields(), matterId } } }),
+          onAnswer: (masked) => {
+            grounding = groundingOf(masked, null, partyNames)
+          },
         },
         { now: clock, preCallDeadline }
       )
@@ -583,6 +688,8 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)
     const outputRef = adminDb().collection("committee_outputs").doc()
     const text = result.outcome === "ok" ? result.text : undefined
+    // An ok answer was handed over by onAnswer; anything else (no text) is not_assessed at once.
+    const graded: Grounding = { ...(await (grounding ?? groundingOf(text, null, partyNames))), policy: policyOf(result.outbound.system) }
     const response: CommitteeBrainResponse = {
       outputId: outputRef.id,
       blocked,
@@ -592,6 +699,11 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, costMicroUsd: result.costMicroUsd },
       traceId: result.traceId,
       accounting: result.accounting,
+      grounding: graded,
+      advisory: isAdvisory(graded),
+      model: result.model,
+      modelReported: result.modelReported,
+      modelMatch: modelMatches(result.model, result.modelReported),
     }
     const row = outputRow({
       outputRef,
@@ -607,6 +719,9 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       traceId: result.traceId,
       accounting: result.accounting,
       createdAt: Math.floor(clock()),
+      grounding: graded,
+      model: result.model,
+      modelReported: result.modelReported,
     })
     await publish({ operation, audit, outputRef, row, response, usageLogId: result.usageLogId, traceId: result.traceId })
     return response

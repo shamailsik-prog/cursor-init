@@ -69,6 +69,9 @@ bash ci_gates/check_no_product_phase_audit_docs.sh || fail=1
 echo "[16] focused lattice ops vitest bundle parity guard"
 python3 ci_gates/check_focused_lattice_ops_bundle.py || fail=1
 
+echo "[17] committee-brain eval record guard (audit F17: no model, routing, policy, grounding-rules or eval-set change without a matching evaluation record)"
+python3 ci_gates/check_committee_eval_record.py || fail=1
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

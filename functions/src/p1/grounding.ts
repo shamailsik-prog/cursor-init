@@ -1,0 +1,256 @@
+/**
+ * Grounding a committee answer (audit F17; spec docs/superpowers/specs/2026-10-17-f17-grounded-committee-output-design.md,
+ * rulings 2 and 3). A provider call that succeeded says nothing about whether its content is true; this says whether
+ * each authority the answer relies on exists in the firm's corpus and is still good law there.
+ *
+ * The answer is read against the committee answer contract (platform/p1/committeeAnswer.ts). Every authority a claim
+ * cites, and every citation the D4 extractor finds in the answer's prose (headings, texts, statements, pinpoints and
+ * caveats; the whole text when the answer is unstructured), is resolved through the D4 gate's own steps
+ * (`lookUpCitation`, `verdictOfJudgment`, under `budgetedStore`): the same extractor, normaliser, verdict rule and
+ * authority store, never a fork. The store is the one the gate uses (`activeAuthorityStore`): with no corpus configured
+ * it is EMPTY (F05) and nothing is ever grounded.
+ *
+ * Per citation: VERIFIED and OVERRULED are the verdict rule's; PENDING_OVERRULING is a found judgment the rule leaves
+ * UNVERIFIED (an overruling whose effect cannot be established); UNVERIFIED is a citation not found in the corpus, or
+ * any authority a claim declares as a statute, rule or other (the port has no statute lookup by citation);
+ * UNRECOGNISED is an extractor suspect, or a judgment authority that is not exactly one reported citation; UNAVAILABLE
+ * is a lookup the store could not answer (F05), the budget included.
+ *
+ * Only an authority a claim declares `judgment` is resolved through the judgment path (rules f17.2, review round:
+ * Codex P1 on PR #63). A statute, rule or other authority is never looked up, whatever its citation reads as: it is
+ * UNVERIFIED, and when its citation is a reported judgment citation it is marked `kindMismatch: true`. It is recorded
+ * under its own key (kind and ref), so the same citation found in the prose (resolved as a judgment, source `text`)
+ * stays a separate entry: a claim is supported only by its own declared judgment authorities, never by a prose hit.
+ *
+ * Status rules `f17.2`, in order: no text, `not_assessed`; the contract not met, `unstructured`; no citation at all,
+ * `not_assessed` (F06: never OK); any OVERRULED, PENDING_OVERRULING, UNVERIFIED or UNRECOGNISED citation,
+ * `partially_grounded` when some claim is supported (it cites at least one authority and every one is VERIFIED), else
+ * `ungrounded`; any UNAVAILABLE citation or any omitted, `unverifiable`; otherwise `grounded` when every claim (at least
+ * one) is supported, else `partially_grounded`. Everything but `grounded` is advisory.
+ *
+ * No answer text is recorded: a ref is a canonical citation, or at most 80 characters of a citation the extractor or
+ * the contract could not read; every ref is masked again with the call's party names (a canonical citation can carry a
+ * bracketed sub-series read from the text). A failure never loses the answer: an
+ * unavailable store gives UNAVAILABLE citations, and any other error is logged by its code only (`p1.grounding_failed`)
+ * and gives `unverifiable`.
+ */
+import { logger } from "firebase-functions"
+import { parseCommitteeAnswer, type AuthorityKind, type CommitteeAnswer } from "@/platform/p1/committeeAnswer"
+import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { UNRECOGNISED_PREFIX, extractCitations, normaliseCitation } from "@/services/d4-2/citations"
+import type { AuthorityStore } from "../d4/authority"
+import { budgetedStore, lookUpCitation, verdictOfJudgment, type CitationLookup } from "../d4/gate"
+import { errorCode } from "../log"
+
+/**
+ * The status rules above. A change to them changes the evaluation's outcomes: the CI gate requires a new record.
+ * f17.1 (PR #63 round 1); f17.2 (review round): a statute, rule or other authority is never resolved as a judgment.
+ */
+export const GROUNDING_RULES_VERSION = "f17.2"
+
+/**
+ * The authority time one grounding run may spend (ruling 6, refinement R6a). It runs while the call records its attempt
+ * outcome, exports its trace and commits, so ops.ts holds it within those phases at import: it adds nothing to the
+ * request's worst case.
+ */
+export const GROUNDING_BUDGET_MS = 20_000
+
+/** Distinct citations looked up per answer; any beyond are counted in `omitted`, never looked up. */
+export const MAX_GROUNDED_CITATIONS = 100
+
+/** The most of an unreadable citation a ref keeps (code points), as the extractor keeps of a suspect. */
+const MAX_REF_CHARS = 80
+
+export const GROUNDING_STATUSES = ["grounded", "partially_grounded", "ungrounded", "unverifiable", "unstructured", "not_assessed"] as const
+export type GroundingStatus = (typeof GROUNDING_STATUSES)[number]
+
+export const CITATION_GROUNDING_STATUSES = ["VERIFIED", "OVERRULED", "PENDING_OVERRULING", "UNVERIFIED", "UNRECOGNISED", "UNAVAILABLE"] as const
+export type CitationGroundingStatus = (typeof CITATION_GROUNDING_STATUSES)[number]
+
+export type CitationSource = "claim" | "text" | "both"
+/**
+ * One cited authority. `kindMismatch: true` (present only then) marks a statute, rule or other authority whose citation
+ * reads as a reported judgment citation: it was not looked up (rules f17.2).
+ */
+export type GroundedCitation = {
+  ref: string
+  kind: AuthorityKind
+  source: CitationSource
+  status: CitationGroundingStatus
+  judgmentId: string | null
+  kindMismatch?: true
+}
+
+/** The system policy the answer was asked under, by reference (F16); null for an answer recorded before F16. */
+export type GroundingPolicy = { policyId: string; version: string }
+
+export type Grounding = {
+  status: GroundingStatus
+  rules: string
+  policy: GroundingPolicy | null
+  claims: { total: number; supported: number }
+  citations: GroundedCitation[]
+  omitted: number
+}
+
+export type GroundInput = { text: string | undefined; policy: GroundingPolicy | null; partyNames: readonly string[] }
+export type GroundOptions = { budgetMs?: number; now?: () => number }
+
+/** True unless the answer is grounded (ruling 3): advisory content needs a lawyer's check before it is relied on. */
+export function isAdvisory(grounding: Pick<Grounding, "status">): boolean {
+  return grounding.status !== "grounded"
+}
+
+/** The record of a grounding run that failed before it could resolve anything (ruling 6): unverifiable, nothing resolved. */
+export function unverifiableGrounding(policy: GroundingPolicy | null, claimsTotal = 0): Grounding {
+  return { status: "unverifiable", rules: GROUNDING_RULES_VERSION, policy, claims: { total: claimsTotal, supported: 0 }, citations: [], omitted: 0 }
+}
+
+const DEFINITE_FAILURES: ReadonlySet<CitationGroundingStatus> = new Set(["OVERRULED", "PENDING_OVERRULING", "UNVERIFIED", "UNRECOGNISED"])
+
+/** The prose of a structured answer, field by field (each read on its own, so no citation spans two fields). */
+function proseOf(answer: CommitteeAnswer): string[] {
+  const out: string[] = []
+  for (const s of answer.sections) {
+    out.push(s.heading, s.text)
+    for (const c of s.claims) {
+      out.push(c.statement)
+      for (const a of c.authorities) if (a.pinpoint !== undefined) out.push(a.pinpoint)
+    }
+  }
+  out.push(...answer.caveats)
+  return out
+}
+
+/** The first MAX_REF_CHARS code points (never half a surrogate pair). */
+const bounded = (s: string): string => [...s].slice(0, MAX_REF_CHARS).join("")
+
+export async function groundAnswer(input: GroundInput, store: AuthorityStore, options: GroundOptions = {}): Promise<Grounding> {
+  const base = { rules: GROUNDING_RULES_VERSION, policy: input.policy }
+  if (input.text === undefined) return { status: "not_assessed", ...base, claims: { total: 0, supported: 0 }, citations: [], omitted: 0 }
+  const parsed = parseCommitteeAnswer(input.text)
+  const claims = parsed.ok ? parsed.answer.sections.flatMap((s) => s.claims) : []
+  try {
+    return await ground(input, parsed.ok ? parsed.answer : null, store, options)
+  } catch (err) {
+    // A bug-class failure (anything but AuthorityUnavailableError, which the steps read as UNAVAILABLE): the answer is
+    // still published, as unverifiable; the log carries the error's code only, never its text.
+    logger.warn("p1.grounding_failed", { code: errorCode(err) })
+    return unverifiableGrounding(input.policy, claims.length)
+  }
+}
+
+async function ground(input: GroundInput, answer: CommitteeAnswer | null, authority: AuthorityStore, options: GroundOptions): Promise<Grounding> {
+  const store = budgetedStore(authority, options.budgetMs ?? GROUNDING_BUDGET_MS, options.now ?? Date.now)
+  const partyNames = [...input.partyNames]
+  const mask = (s: string): string => maskOutboundPII(s, { partyNames }).masked
+  const lookups = new Map<string, CitationLookup | null>()
+  const verdicts = new Map<string, Awaited<ReturnType<typeof verdictOfJudgment>>>()
+  const omitted = new Set<string>()
+  const citations = new Map<string, GroundedCitation>()
+
+  const record = (key: string, entry: GroundedCitation): void => {
+    const seen = citations.get(key)
+    if (seen === undefined) citations.set(key, entry)
+    else if (seen.source !== entry.source) seen.source = "both"
+  }
+
+  /**
+   * A claim authority declared statute, rule or other (rules f17.2): never looked up, whatever its citation reads as, and
+   * UNVERIFIED. A citation that reads as a reported judgment citation is shown in its canonical form and marked
+   * `kindMismatch`. Its key carries the kind, so it never merges with a judgment entry of the same citation.
+   */
+  const declared = (raw: string, kind: Exclude<AuthorityKind, "judgment">): CitationGroundingStatus => {
+    const canonical = normaliseCitation(raw)
+    const ref = canonical === null ? bounded(mask(raw.replace(/\s+/gu, " ").trim())) : mask(canonical)
+    record(`k:${kind}:${ref}`, { ref, kind, source: "claim", status: "UNVERIFIED", judgmentId: null, ...(canonical === null ? {} : { kindMismatch: true as const }) })
+    return "UNVERIFIED"
+  }
+
+  /**
+   * One cited string resolved as a judgment (a claim authority declared `judgment`, or a prose hit): looked up once,
+   * recorded once per de-duplication key; its status, or null for a blank one.
+   */
+  const resolve = async (raw: string, source: "claim" | "text"): Promise<CitationGroundingStatus | "OMITTED" | null> => {
+    const kind: AuthorityKind = "judgment"
+    let lookup = lookups.get(raw)
+    if (lookup === undefined && !lookups.has(raw)) {
+      if (lookups.size >= MAX_GROUNDED_CITATIONS) {
+        omitted.add(raw)
+        return "OMITTED"
+      }
+      lookup = await lookUpCitation(raw, store)
+      lookups.set(raw, lookup)
+    }
+    if (!lookup) return null
+    let status: CitationGroundingStatus
+    // A canonical citation can carry a bracketed sub-series read from the text: masked like every other ref.
+    let ref = mask(lookup.ref)
+    let judgmentId: string | null = null
+    switch (lookup.kind) {
+      case "unrecognised":
+        status = "UNRECOGNISED"
+        ref = UNRECOGNISED_PREFIX + mask(lookup.ref.slice(UNRECOGNISED_PREFIX.length))
+        break
+      case "not_normalised":
+        // A judgment authority must be exactly one reported citation.
+        status = "UNRECOGNISED"
+        ref = UNRECOGNISED_PREFIX + bounded(mask(lookup.ref.replace(/\s+/gu, " ").trim()))
+        break
+      case "unavailable":
+        status = "UNAVAILABLE"
+        break
+      case "not_found":
+        status = "UNVERIFIED"
+        break
+      case "found": {
+        judgmentId = lookup.judgmentId
+        let verdict = verdicts.get(lookup.judgmentId)
+        if (verdict === undefined) {
+          verdict = await verdictOfJudgment(lookup, store)
+          verdicts.set(lookup.judgmentId, verdict)
+        }
+        status = verdict.treatmentsUnavailable
+          ? "UNAVAILABLE"
+          : verdict.status === "VERIFIED"
+            ? "VERIFIED"
+            : verdict.status === "OVERRULED"
+              ? "OVERRULED"
+              : "PENDING_OVERRULING"
+        break
+      }
+    }
+    record(lookup.kind === "found" ? lookup.key : `r:${ref}`, { ref, kind, source, status, judgmentId })
+    return status
+  }
+
+  const claims = answer === null ? [] : answer.sections.flatMap((s) => s.claims)
+  let supported = 0
+  for (const claim of claims) {
+    // A claim's support is its own declared authorities' statuses only, never a prose hit of the same citation.
+    const statuses: Array<CitationGroundingStatus | "OMITTED" | null> = []
+    for (const a of claim.authorities) statuses.push(a.kind === "judgment" ? await resolve(a.citation, "claim") : declared(a.citation, a.kind))
+    if (statuses.length > 0 && statuses.every((s) => s === "VERIFIED")) supported += 1
+  }
+  for (const prose of answer === null ? [input.text ?? ""] : proseOf(answer)) {
+    for (const raw of extractCitations(prose)) await resolve(raw, "text")
+  }
+
+  const list = [...citations.values()]
+  const statuses = new Set(list.map((c) => c.status))
+  let status: GroundingStatus
+  if (answer === null) status = "unstructured"
+  else if (list.length === 0 && omitted.size === 0) status = "not_assessed"
+  else if ([...statuses].some((s) => DEFINITE_FAILURES.has(s))) status = supported > 0 ? "partially_grounded" : "ungrounded"
+  else if (statuses.has("UNAVAILABLE") || omitted.size > 0) status = "unverifiable"
+  else status = claims.length > 0 && supported === claims.length ? "grounded" : "partially_grounded"
+
+  return {
+    status,
+    rules: GROUNDING_RULES_VERSION,
+    policy: input.policy,
+    claims: { total: claims.length, supported },
+    citations: list,
+    omitted: omitted.size,
+  }
+}

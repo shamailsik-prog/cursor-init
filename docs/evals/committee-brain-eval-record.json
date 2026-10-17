@@ -1,0 +1,35 @@
+{
+  "format": "committee-brain-eval-record/1",
+  "evalSet": {
+    "path": "docs/evals/committee-brain-eval-set.json",
+    "version": "f17.2",
+    "sha256": "5003d187ead5fe8d9b2d96f18516801f541031064065b7c85a3ec080886dfe5d",
+    "items": 60
+  },
+  "routing": {
+    "functions:committee": "anthropic/claude-opus-5.5",
+    "next:committee-brain": "anthropic/claude-sonnet-4.6"
+  },
+  "modelId": "anthropic/claude-opus-5.5",
+  "policy": {
+    "policyId": "committee-brain",
+    "version": "f17.1"
+  },
+  "groundingRules": "f17.2",
+  "date": "2026-10-17",
+  "graded": {
+    "deterministic": {
+      "passed": 60,
+      "failed": 0
+    }
+  },
+  "result": "pass",
+  "live": false,
+  "liveNote": "NOT RUN: AI_GATEWAY_API_KEY is not set in the environment where this record was made, so no model was called. The result above is the deterministic grading of the set's synthetic recorded responses against its seeded corpus (functions/test/f17-eval-set.test.ts); it measures the grounding rules, not the model. Run `npm --prefix functions run eval:committee-live` with the key before relying on the model, and record its result here as live: true with liveRun.",
+  "supersedes": {
+    "evalSet": "f17.1",
+    "groundingRules": "f17.1",
+    "reason": "Review round (Codex P1 on PR #63): a statute, rule or other authority is never resolved as a judgment (rules f17.2); three mislabelled-authority items added (set f17.2)."
+  },
+  "notes": "Model ids are the configured routing (functions/src/p1/costTable.ts TASK_MODEL, platform/p1/constants.ts COMMITTEE_BRAIN_GATEWAY_MODEL), not a verified model identity: the provider-reported model is recorded per call (modelReported). ci_gates/check_committee_eval_record.py fails any change of these values without a new record."
+}
