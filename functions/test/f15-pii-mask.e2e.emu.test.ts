@@ -23,7 +23,8 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  * On main 0844ed8, (a) to (d), (e)'s first and malformed-receipt rows, and the round-2 attack rows (f) fail. The rest
  * are guards that pass on main too and must keep passing: (d') another firm's client record, (e)'s pre-F15 receipt,
  * the round-2 false-positive rows (g) and the timing row (h). On round 2's head 15a5385 every row of (i) fails: its
- * identifiers reached the provider, and its two clean rows were blocked.
+ * identifiers reached the provider, and its two clean rows were blocked. On round 3's head adc5aa0 the rows of (j) fail,
+ * except the Urdu پسر اکبر row, which pins a fail-closed decision (R4-4).
  *
  * Every name is invented; every number is synthetic.
  */
@@ -364,6 +365,48 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
       expect(r.blocked).toBe(false)
       expect(sent).toHaveLength(1)
       expect(sent[0]!.body).toBe(body)
+    })
+  })
+
+  // Re-audit round 3 (FAIL 8/10): the re-auditor's privileged probes (r3-e2e-attack), spec rulings R4-0 to R4-4.
+  describe("(j) round 4: Unicode glue, the kinship walk and residence at rank 3", () => {
+    const privileged = async () => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      return f
+    }
+    /** Seven digits, with up to three non-digit, non-letter characters between them. */
+    const SEVEN_DIGITS = /\p{Nd}(?:[^\p{L}\p{Nd}]{0,3}\p{Nd}){6}/u
+
+    it.each([
+      ["a bracketed 3xx phone before a ligature (R4-1)", "Call (371) 6656495\uFB01le. Draft the reply.", "Call [PHONE]\uFB01le. Draft the reply."],
+      ["a passport label after a full-width letter (R4-1)", "Ref \uFF41ppt AB1234567 on file. Draft the reply.", "Ref \uFF41[PASSPORT] on file. Draft the reply."],
+    ])("%s: the provider receives no seven-digit run", async (_label, body, expected) => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, body)
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe(expected)
+      expect(SEVEN_DIGITS.test(sent[0]!.body)).toBe(false)
+    })
+
+    it.each([
+      ["Urdu: ولد and a given name that is also a word (R4-2)", "ملزم حارث ولد نیک قلوو کی ضمانت کی درخواست تیار کریں۔", "kinship_name"],
+      ["wife of an absconding accused and a name (R4-2)", "Nura, wife of an absconding accused Kamran Qalvo, was summoned. Draft the reply.", "kinship_name"],
+      ["son of the deceased driver and a name (R4-2)", "Tariq, son of the deceased driver Kamran Qalvo, deposed. Draft the cross.", "kinship_name"],
+      ["Urdu: پسر اکبر stays blocked (R4-4, fail closed)", "پسر اکبر نے جائیداد پر قبضہ کر لیا۔", "kinship_name"],
+      ["r/o a colony named after a province (R4-3)", "Tariq r/o Punjab Colony, Karachi was arrested. Draft the bail grounds.", "address"],
+      ["plural residents of Kot and a name (R4-3)", "Tariq and Haris, both residents of Kot Qalvo, were arrested. Draft the bail grounds.", "address"],
+      ["House No. of a named society (R4-3)", "The occurrence took place at House No. 12 of the Qalvo Housing Society, Lahore. Draft the grounds.", "address"],
+    ])("%s: blocked not_minimised, and the provider is never called", async (_label, body, kind) => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, body)
+      expect([r.blocked, r.reason]).toEqual([true, "not_minimised"])
+      expect(sent).toHaveLength(0)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts[kind]).toBeGreaterThan(0)
     })
   })
 
