@@ -234,3 +234,94 @@ describe("audit F17: the committee-brain evaluation record gate (spec ruling 5)"
     expect(r.liveNote).toMatch(/^NOT RUN/)
   })
 })
+
+// Re-audit L3 (FAIL 6/10 at 63b6fa2): three ways the gate passed a record it should not.
+describe("audit F17 re-audit L3: the evaluation record gate's remaining holes", () => {
+  /** A UTC day `offset` days from today, as YYYY-MM-DD. */
+  const isoDay = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10)
+  const ITEMS_NOW = record(REPO).evalSet.items
+  const fullRun = (date: string) => ({ passed: ITEMS_NOW, failed: 0, date })
+
+  it.each([
+    ["starting NOT RUN", "NOT RUN: AI_GATEWAY_API_KEY is not set."],
+    ["saying NOT RUN later on", "The live evaluation: NOT RUN."],
+  ])("fails a live record whose note says the run did not happen (%s)", (_label, liveNote) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), live: true, liveNote, liveRun: fullRun(isoDay(-1)) })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("NOT RUN")
+  })
+
+  it.each([
+    ["two days ahead", 2],
+    ["years ahead", 3650],
+  ])("fails a live run dated in the future (%s)", (_label, days) => {
+    const root = tree()
+    writeRecord(root, { ...record(root), live: true, liveNote: undefined, liveRun: fullRun(isoDay(days)) })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("future")
+  })
+
+  it("fails a record dated in the future", () => {
+    const root = tree()
+    writeRecord(root, { ...record(root), date: isoDay(2) })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toContain("future")
+  })
+
+  it("allows one day of clock skew, for the live run and the record", () => {
+    const root = tree()
+    writeRecord(root, { ...record(root), date: isoDay(1), live: true, liveNote: undefined, liveRun: fullRun(isoDay(1)) })
+    const r = gate(root)
+    expect(r.code, r.out).toBe(0)
+  })
+
+  // A commented-out declaration above the real one: the gate must read the real export, so a changed value with the
+  // recorded value left in a comment above it fails, and a stale comment above an unchanged value passes.
+  const GR = "functions/src/p1/grounding.ts"
+  const CT = "functions/src/p1/costTable.ts"
+  const SP = "platform/p1/systemPolicy.ts"
+  const ROUTING = 'export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "anthropic/claude-opus-5.5" })'
+  const CHANGED_ROUTING = 'export const TASK_MODEL: Readonly<Record<TaskType, string>> = Object.freeze({ committee: "vendor/other-model-2" })'
+  it.each([
+    ["the grounding rules, a line comment", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '// export const GROUNDING_RULES_VERSION = "f17.3"\nexport const GROUNDING_RULES_VERSION = "f17.4"'],
+    ["the grounding rules, a block comment", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '/*\nexport const GROUNDING_RULES_VERSION = "f17.3"\n*/\nexport const GROUNDING_RULES_VERSION = "f17.4"'],
+    ["the registry version, a line comment", SP, 'export const SYSTEM_POLICY_VERSION = "f17.1"', '// export const SYSTEM_POLICY_VERSION = "f17.1"\nexport const SYSTEM_POLICY_VERSION = "f17.9"'],
+    ["the routing, a line comment", CT, ROUTING, `// ${ROUTING}\n${CHANGED_ROUTING}`],
+    ["the routing, a block comment", CT, ROUTING, `/* ${ROUTING} */\n${CHANGED_ROUTING}`],
+  ])("fails a changed value hidden behind a commented-out declaration: %s", (_label, file, from, to) => {
+    const root = tree()
+    edit(root, file, from, to)
+    const r = gate(root)
+    expect(r.code, r.out).toBe(1)
+  })
+
+  it.each([
+    ["the grounding rules", GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', '// export const GROUNDING_RULES_VERSION = "f17.0"\nexport const GROUNDING_RULES_VERSION = "f17.3"'],
+    ["the routing", CT, "export const TASK_MODEL:", '/* export const TASK_MODEL = Object.freeze({ committee: "vendor/old" }) */\nexport const TASK_MODEL:'],
+  ])("reads the real declaration under a stale comment: %s", (_label, file, from, to) => {
+    const root = tree()
+    edit(root, file, from, to)
+    const r = gate(root)
+    expect(r.out).toMatch(/^PASS/m)
+    expect(r.code).toBe(0)
+  })
+
+  it("does not read a // or /* inside a string as a comment", () => {
+    const root = tree()
+    edit(root, GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', 'const NOTE = "see https://example.invalid/a // b /* c"\nexport const GROUNDING_RULES_VERSION = "f17.3"')
+    const r = gate(root)
+    expect(r.out).toMatch(/^PASS/m)
+  })
+
+  it("fails closed on two real declarations", () => {
+    const root = tree()
+    edit(root, GR, 'export const GROUNDING_RULES_VERSION = "f17.3"', 'export const GROUNDING_RULES_VERSION = "f17.3"\nexport const GROUNDING_RULES_VERSION = "f17.4"')
+    const r = gate(root)
+    expect(r.code).toBe(1)
+    expect(r.out).toMatch(/cannot read/)
+  })
+})

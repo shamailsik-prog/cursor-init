@@ -14,8 +14,11 @@ and fails unless docs/evals/committee-brain-eval-record.json names exactly those
 and result, a date, and `live` as a boolean: a live run that did not happen is `live: false` with a note starting
 "NOT RUN"; one that did is `live: true` with `liveRun.passed` equal to the set's item count, `liveRun.failed == 0`
 (integers only: never a bool, a float or a string; review round, Codex P2 on PR #63) and a `liveRun.date`. The
-deterministic counts are held to the same rule. State-based, not diff-based: any change without a
-matching record fails, whatever the diff. It fails closed when it cannot read any of the values.
+deterministic counts are held to the same rule. Re-audit L3: a live record whose note says NOT RUN fails; a record
+date or a live run date more than one day ahead of today (UTC) fails; each value is read from its one declaration
+outside comments (a commented-out declaration above the real one is never read; none, or two, fail closed).
+State-based, not diff-based: any change without a matching record fails, whatever the diff. It fails closed when it
+cannot read any of the values.
 
 Usage: python3 ci_gates/check_committee_eval_record.py [--root DIR]
 """
@@ -58,18 +61,54 @@ def read(root: Path, rel: str) -> str:
         raise Unreadable(f"cannot read {rel}: {err.strerror}") from err
 
 
+def without_comments(source: str, rel: str) -> str:
+    """The TypeScript source with every // and /* */ comment blanked (its newlines kept), so a commented-out declaration
+    is never read in place of the real one (re-audit L3). String literals ('...', "...", `...`) are kept whole, so a //
+    or /* inside one is not a comment. A regex literal is not recognised: a // or /* in one blanks the rest, which can
+    only hide a declaration and so fails closed. An unterminated block comment fails closed."""
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if ch in "\"'`":
+            j = i + 1
+            while j < n and source[j] != ch and (ch == "`" or source[j] != "\n"):
+                j += 2 if source[j] == "\\" else 1
+            out.append(source[i : j + 1])
+            i = j + 1
+        elif ch == "/" and nxt == "/":
+            j = source.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif ch == "/" and nxt == "*":
+            j = source.find("*/", i + 2)
+            if j < 0:
+                raise Unreadable(f"cannot read {rel}: an unterminated block comment")
+            out.append(re.sub(r"[^\n]", " ", source[i : j + 2]))
+            i = j + 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def only_match(root: Path, rel: str, pattern: re.Pattern[str] | str, name: str, what: str) -> re.Match[str]:
+    """The one declaration of `name` in `rel` outside comments; none, or more than one, fails closed."""
+    matches = list(re.finditer(pattern, without_comments(read(root, rel), rel)))
+    if len(matches) != 1:
+        found = "no" if not matches else str(len(matches))
+        raise Unreadable(f"cannot read {name} in {rel} as {what} ({found} declarations outside comments); the gate must be updated with it")
+    return matches[0]
+
+
 def string_const(root: Path, rel: str, name: str) -> str:
-    m = re.search(STRING_CONST.format(name=re.escape(name)), read(root, rel))
-    if m is None:
-        raise Unreadable(f"cannot read {name} in {rel} as a string literal; the gate must be updated with it")
-    return m.group("value")
+    return only_match(root, rel, STRING_CONST.format(name=re.escape(name)), name, "a string literal").group("value")
 
 
 def task_routing(root: Path) -> dict[str, str]:
-    m = TASK_MODEL_RE.search(read(root, COST_TABLE))
-    if m is None:
-        raise Unreadable(f"cannot read TASK_MODEL in {COST_TABLE} as a frozen object literal; the gate must be updated with it")
-    body = m.group("body")
+    body = only_match(root, COST_TABLE, TASK_MODEL_RE, "TASK_MODEL", "a frozen object literal").group("body")
     routing: dict[str, str] = {}
     pos = 0
     while pos < len(body):
@@ -103,6 +142,15 @@ def is_date(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+#: A date may run ahead of the gate's UTC day by this much (a record made where it is already tomorrow), never more.
+CLOCK_SKEW = datetime.timedelta(days=1)
+
+
+def is_future(value: str) -> bool:
+    """A YYYY-MM-DD date after today (UTC) by more than CLOCK_SKEW (re-audit L3): a run or record cannot be dated ahead."""
+    return datetime.date.fromisoformat(value) > datetime.datetime.now(datetime.timezone.utc).date() + CLOCK_SKEW
 
 
 def check(root: Path) -> list[str]:
@@ -157,6 +205,8 @@ def check(root: Path) -> list[str]:
 
     if not is_date(record.get("date")):
         problems.append(f"record date {record.get('date')!r} is not a YYYY-MM-DD date")
+    elif is_future(record["date"]):
+        problems.append(f"record date {record['date']!r} is in the future (more than one day ahead of today, UTC)")
 
     graded = record.get("graded")
     deterministic = graded.get("deterministic") if isinstance(graded, dict) else None
@@ -175,11 +225,16 @@ def check(root: Path) -> list[str]:
             problems.append("record live is false but its liveNote does not start with 'NOT RUN': a live run that did not happen must say so")
     else:
         run = record.get("liveRun")
+        note = record.get("liveNote")
         if not (is_full_run(run, set_items) and is_date(run.get("date"))):
             problems.append(
                 f"record live is true but liveRun is not a passing run of every one of the {set_items} items with a date "
                 f"(passed == {set_items}, failed == 0, integers; liveRun: {run!r})"
             )
+        elif is_future(run["date"]):
+            problems.append(f"record live is true but liveRun date {run['date']!r} is in the future (more than one day ahead of today, UTC)")
+        if isinstance(note, str) and "NOT RUN" in note:
+            problems.append("record live is true but its liveNote says NOT RUN: a record cannot say both that the live run happened and that it did not")
     return problems
 
 
