@@ -272,6 +272,9 @@ const UR_STOP = new Set([
   "رہا", "رہی", "رہے", "تک", "لیے", "ہونا", "ہونے", "ہوں", "ہوتا", "ہوتی", "ہوتے", "دونوں", "ہذا",
   // prepositions end the walk (R4-2): "دختر زیر تعلیم ہے", "ولد بطور گواہ" (held-out lines 77 and 99, after the measurement)
   "زیر", "بطور", "بابت", "برائے", "بغیر", "بذریعہ", "بمطابق", "مطابق", "خلاف", "بجائے", "بمع", "بشمول",
+  // postpositions of company: "والدین کے ہمراہ مقیم" names the people one lives with (R5-5, new corpus line 67, after the
+  // measurement)
+  "ہمراہ", "ساتھ",
 ])
 /** Urdu legal role and heir nouns: skipped after a kinship cue; the word after them is judged (rulings R2-3a, R3-4). */
 const UR_ROLE_NOUNS = new Set([

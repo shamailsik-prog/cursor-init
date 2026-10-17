@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { assertMinimised } from "@/platform/p1/providerPolicy"
 import { residualPII, type ResidualKind } from "@/platform/p1/residualPII"
+import { FRESH_R4 } from "./f15-r5-fresh-corpus"
+import { HELDOUT_CORPUS_R5 } from "./f15-r5-heldout-corpus"
 
 /**
  * Audit F15, re-audit round 4 (FAIL 7/10): the residual detector. Spec rulings R5-2 (the English kinship walk skips
@@ -113,6 +115,8 @@ describe("R5-3: residence cues", () => {
     ["c/o and a lower-case word", "Copies were sent c/o the office of the counsel."],
     ["Urdu مقیم after a role", "ملزم عارضی طور پر یہاں مقیم ہے۔"],
     ["Urdu مقیم in one's own village", "گواہ اپنے گاؤں میں مقیم ہے۔"],
+    // after the R5-5 measurement: a postposition of company before مقیم names a person, not a place (new corpus line 67)
+    ["Urdu مقیم with a relative", "ملزم اپنے بھائی کے ساتھ مقیم ہے۔"],
   ])("passes: %s", (_label, text) => expectClean(text))
 })
 
@@ -133,4 +137,39 @@ describe("R5-4: pins for the re-auditor's surviving mutants", () => {
   it("U25: lives, with the preposition the eleventh word after it, is past the window", () => {
     expectClean("He lives with his widowed mother and his two young unmarried sisters at 12-B Qalvo Road.")
   })
+})
+
+// R5-5: added only after the measurement at 86c42a2 (the new corpus: 2 of 92 flagged, Urdu lines 67 and 74; the
+// re-auditor's round-4 corpus: 3 of 128, its "debatable" lines 125, 126 and 128), so the rates reported in the spec are
+// held-out rates. Line 67 of the new corpus is fixed (a postposition before مقیم: "والدین کے ہمراہ مقیم"); the other four
+// count by ruling, each named below.
+const RULED_R5_NEW: ReadonlyMap<number, [ResidualKind, string]> = new Map([
+  [74, ["address", "R5-3: a named city before سکونت پذیر is a place"]],
+])
+const RULED_R5_FRESH: ReadonlyMap<number, [ResidualKind, string]> = new Map([
+  [125, ["address", "R3-5: Mauza and a name is a locality (flagged at 810fa74 too)"]],
+  [126, ["address", "R5-3: belongs to and a named Tehsil"]],
+  [128, ["address", "R3-5: موضع and a name is a locality (flagged at 810fa74 too)"]],
+])
+
+describe("R5-5: the held-out lines (regression rows, added after the measurement)", () => {
+  it("has the 92 lines of the new corpus and the re-auditor's 128 lines", () => {
+    expect(HELDOUT_CORPUS_R5).toHaveLength(92)
+    expect(FRESH_R4).toHaveLength(128)
+  })
+
+  it.each([...RULED_R5_NEW].map(([line, [kind, reason]]) => [line, kind, reason]))("new corpus line %i counts %s (%s)", (line, kind) => {
+    const text = HELDOUT_CORPUS_R5[(line as number) - 1]![1]
+    expect(residualPII(maskOutboundPII(text).masked)[kind as ResidualKind]).toBeGreaterThan(0)
+  })
+
+  it.each([...RULED_R5_FRESH].map(([line, [kind, reason]]) => [line, kind, reason]))("fresh line %i counts %s (%s)", (line, kind) => {
+    const text = FRESH_R4.find(([n]) => n === line)![2]
+    expect(residualPII(maskOutboundPII(text).masked)[kind as ResidualKind]).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ...HELDOUT_CORPUS_R5.filter((_row, i) => !RULED_R5_NEW.has(i + 1)).map(([genre, text]) => [`new corpus line ${HELDOUT_CORPUS_R5.findIndex(([, t]) => t === text) + 1}`, genre, text]),
+    ...FRESH_R4.filter(([line]) => !RULED_R5_FRESH.has(line)).map(([line, lang, text]) => [`fresh line ${line}`, lang, text]),
+  ])("%s [%s] %s", (_line, _lang, text) => expectClean(text))
 })
