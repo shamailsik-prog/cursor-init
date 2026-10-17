@@ -9,6 +9,7 @@ import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
+import { modelId } from "./transport"
 import type { P1Outcome, TaskType } from "./types"
 
 /**
@@ -158,6 +159,15 @@ function recordedCharge(attempt: Record<string, unknown>): { result: P1Outcome; 
   return { result, inputTokens, outputTokens, tokensEstimated: attempt.tokensEstimated, costMicroUsd }
 }
 
+/**
+ * The model the provider reported, as the attempt recorded it (audit F17 review round, Codex P2 on PR #63): a model id
+ * (`modelId`, as the transport and the receipt check it), else null. Fail-safe: an attempt recorded before F17 has no
+ * field, and a malformed value (not a model id) is recorded as null; neither stops the settlement, which owes the charge.
+ */
+function reportedModel(attempt: Record<string, unknown>): string | null {
+  return modelId(attempt.modelReported) ?? null
+}
+
 type Done = { state: ClosedState; staged: StageResult; firmId: string; monthKey: string }
 
 /** Settles or releases one lapsed reservation; null when it is no longer reserved or its lease has not passed. */
@@ -213,6 +223,8 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       taskType: p.taskType,
       provider: PROVIDER_ID,
       model: p.model,
+      // Audit F17 review round (Codex P2 on PR #63): beside the configured model, as the call's own row would have it.
+      modelReported: reportedModel(p.attempt),
       classification: p.classification,
       outcome: "reconciled",
       blockReason: null,

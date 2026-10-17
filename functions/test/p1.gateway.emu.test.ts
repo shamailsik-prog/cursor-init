@@ -38,7 +38,7 @@ const reservedInputOf = (r: P1Result) =>
     { role: "user", content: r.outbound.body },
   ]) + REQUEST_OVERHEAD_TOKENS
 
-/** The P3-63 usage row fields, exactly. */
+/** The P3-63 usage row fields, exactly (audit F17, ruling 4: plus the provider-reported model beside the configured one). */
 const ROW_FIELDS = [
   "firmId",
   "actorId",
@@ -47,6 +47,7 @@ const ROW_FIELDS = [
   "taskType",
   "provider",
   "model",
+  "modelReported",
   "classification",
   "outcome",
   "blockReason",
