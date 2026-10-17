@@ -126,7 +126,7 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
 
 - **Not anonymisation.** Names the firm never recorded in `matter_parties`, the client record or the request; semantic identifying facts; free-text addresses and relationships without a cue; identifiers written in words or with look-alike letters; separators the patterns do not list. At ranks 0 to 2 the residual findings are counted, not masked or blocked.
 - **Human review is not built.** L18 §4.6 / L17.13a/h's partner-authorised exception (with a recorded reason) and the deterministic-only path remain `TODO(firm)` (`providerPolicy.ts`). A residual finding at rank 3 or 4 is a hard block with no override; there is no high-risk review queue.
-- **False positives block privileged calls.** Round 4 counts where a rule trades a leak for a false positive (R4-0). Measured on held-out prose at 57fd1c2 (R4-6): 4 of the re-auditor's 102 round-3 lines (3 of its 100 English and Urdu lines; 1 of its 2 "debatable" lines) and 3 of 99 new lines written before the round-4 code, 7 of 201 (3.5%). Four of the seven stay flagged by ruling (§9); the regression corpora pass otherwise. The cue rules still rest on word lists (stop words, role nouns, verbs after a role, adjectival collocations), and prose outside them can block a rank 3 or 4 call `not_minimised`. That fails closed. Known: an amount of 3 billion rupees or more written as one bare run of ten or eleven digits starting with 3 counts as a mobile without its prefix (R3-7).
+- **False positives block privileged calls.** Round 4 counts where a rule trades a leak for a false positive (R4-0). Measured on held-out prose at 57fd1c2 (R4-6): 4 of the re-auditor's 102 round-3 lines (3 of its 100 English and Urdu lines; 1 of its 2 "debatable" lines) and 3 of 99 new lines written before the round-4 code, 7 of 201 (3.5%). Four of the seven stay flagged by ruling (§9); the regression corpora pass otherwise. Round 5 measured again at 86c42a2 (R5-5): 2 of 92 new lines and 3 of the re-auditor's 128 round-4 lines (all 3 among its 5 "debatable" lines), 5 of 220 (2.3%); four stay flagged by ruling (§10). Since R5-2 the English kinship walk counts the first unlisted capitalised word after a cue, so "son of a Lahore High Court judge" and similar lines block a rank 3 call; that is accepted under R4-0. The cue rules still rest on word lists (stop words, role nouns, verbs after a role, adjectival collocations), and prose outside them can block a rank 3 or 4 call `not_minimised`. That fails closed. Known: an amount of 3 billion rupees or more written as one bare run of ten or eleven digits starting with 3 counts as a mobile without its prefix (R3-7).
 - **Known false negatives (R2-5, R3, recorded).** The following still pass:
   - obfuscated emails without a label (`nura [at] qalvo [dot] pk`);
   - identifiers in words (`zero three zero zero one two three ...`, `CNIC three five two zero two`, `house number twelve`);
@@ -140,6 +140,10 @@ Fixtures use only invented names (Qalvo, Nura, Tariq Zarvani, Haris Qalbani, Ome
   - a recorded name written only in part (a surname) or reversed (`Zarvani, Tariq`), or broken by a hyphenated line break;
   - `the deceased's widow Nura` (a kinship word without `of`);
   - `resident of the village` followed by a lower-case or no name.
+  - an English name written in lower case straight after `son of`, `wife of` and the like, with no role, title or occupation before it (`son of kamran qalvo`): R5-2 skips lower-case words (after `s/o`, `d/o` and a role any word still counts);
+  - a comma straight after an Urdu cue before a name (`حارث ولد، کامران قلوو`), which begins a list of heirs in prose, and an Urdu preposition between the cue and a name (`ولد بمع کامران`): the re-auditor's round-4 probes, not ruled;
+  - a name after a role's number and a full stop (`son of respondent No. 2. Kamran Qalvo is his uncle.`), and after `i.e.` or `etc.`: the full stop is read as a sentence end, which the round-2 guard needs;
+  - a residence verb whose preposition comes more than ten words after it (R5-3).
 - **Cost of long NFKC expansions (R2-2).** 100,000 copies of U+FDFA (18 characters each in NFKC) cost 1.8 s of rank-3 work with no names and 3.0 s with 50 names (measured at the round-3 head), under the 8 s pre-call allowance. More names cost more.
 - **Homoglyphs.** Cyrillic and Greek Latin look-alikes are folded (R2-5); look-alikes from other scripts (Armenian, Cherokee, mathematical letters outside NFKC) are not.
 - **A dropped invisible character no longer removes a word boundary** (R4-1). Main's algorithm also runs on the raw text, where `CNIC\u200B3520212345671` keeps its boundary, so it is masked. The ASCII form `CNIC3520212345671`, which main did not mask either, is counted by the residual detector, not masked.
@@ -483,7 +487,7 @@ The coordinator's rulings are recorded below as R4-0 to R4-6, each with its reas
 **Ruling.** Main's patterns run on the raw text as well, and the mask takes the union of the spans.
 
 **Implementation.**
-- Stage 0, `mainSpans`, runs main's algorithm on the raw text:
+- Stage 0, `mainSpans` (exported as `mainAlgorithmSpans` since round 5, §10), runs main's algorithm on the raw text:
   - main's regexes, in main's order, each over the text with the earlier matches blanked to the same length (a blank is, like main's token brackets, no word character and no separator);
   - then main's name pass.
 - Main's quadratic email is replaced by its linear equivalent on the raw text: ASCII classes and ASCII word boundaries, as main's non-Unicode regex had, plus a sticky continuation.
@@ -599,3 +603,194 @@ Each mutant below was applied alone, and the named round-4 tests were run with a
 ### Changed earlier test expectations
 
 - `tests/f15-r3-residual.test.ts`: round 3's held-out fresh line 69 is a count row by ruling R4-3.
+
+## 10. Re-audit round 4 (FAIL 7/10): rulings R5-1 to R5-5
+
+The independent re-audit at 810fa74 failed the finding at 7/10. It verified:
+- every round-1 to round-3 finding fixed;
+- a false-positive rate of 0/64 English and 0/59 Urdu on a never-seen corpus;
+- 31 of 36 mutants killed;
+- the 118 greedy-alignment differences as artifacts;
+- the `p2.jobs-scheduled` timeouts as environmental (the same four on an exact main tree, in the same file order).
+
+One HIGH and two MEDIUM defects blocked: joined emails shifted stage 0's positions; the English kinship walk still ended at words before a name; residence cues were missing. R4-0 still governs. The rulings are recorded below as R5-1 to R5-5, each with its reason; refinements a test showed are recorded with theirs. The re-auditor's inputs (`r4-drift`, `r4-drift2`, `r4-oom2`, `r4-e2e-dos48k`, `r4-attack`, `r4-walk2`) are regression rows:
+- `tests/f15-r5-mask.test.ts`: R5-1, with the differential generator taught to join emails;
+- `tests/f15-r5-residual.test.ts`: R5-2 to R5-5, and every line of both new held-out corpora;
+- `tests/f15-r5-bounds.test.ts`;
+- `tests/f15-r5-heldout-corpus.ts` (92 new lines) and `tests/f15-r5-fresh-corpus.ts` (the re-auditor's 128 round-4 lines);
+- the e2e rows (k).
+
+### R5-1 (HIGH, blocking): joined emails
+
+**Finding.** Three or more emails joined by ".", "-" or "_" (`tariq1990@qalvo.pk.nura22@qalvo.pk.haris7@qalvo.pk`, `a@b.pk.a@b.pk.a@b.pk`) made the outer `matchAll` in stage 0 and in `take()` resume after the first email of a chain, not after the chain. A new chain started after every "@" and overlapped the last one. The effects:
+- stage 0 recorded O(n²) spans and blanked overlapping ones, so its working text grew longer than the input;
+- later raw patterns then reported shifted positions: NTN and passport digits leaked, a stray `[PASSPORT]` was written past the end, and "and Tariq Zarvani end" was dropped;
+- the scan was quadratic in time and memory: 48,000 characters took 37.9 s and 4.2 GB, and end to end 29.5 s, then 503 `precall_deadline`.
+
+**Ruling.**
+- Each scan resumes at its chain's end.
+- Blanking never changes the working text's length: overlapping spans are merged before blanking.
+- The drift rows must equal main's output exactly, and an e2e row proves the fix.
+- Bound tests run joined-email runs at 100,000 characters, with a memory guard.
+- The differential generator joins 3 to 8 emails.
+
+**Implementation.**
+- `matchesOf` runs one exec loop per pattern and sets the outer `lastIndex` to the chain's end (`Math.max(next, m.index + 1)`). Stage 0 and `take()` both use it.
+- Stage 0, now exported as `mainAlgorithmSpans`, sorts each pattern's matches and merges any overlap before blanking. Its working text keeps its length, every position is an original offset, and it returns sorted, disjoint spans.
+
+**Refinement: stage 0 is main, exactly.** A new invariant on every generated input writes stage 0's spans as tokens and compares them with main's own output. It showed one more difference:
+- main's email starts at its `\b`, the first word character of a run of local-part characters;
+- EMAIL_RAW also took the dots, dashes, percent or plus signs that open the run. After a newline, main masks `q@b.Org` in `-q@b.Org`; EMAIL_RAW masked `-q@b.Org`.
+
+That masked more than main, never less, but it was not main. EMAIL_RAW now starts where main's `\b` did. A lookahead for a word character comes first, so the lookbehind runs only there and reads back over one run of signs, and the scan stays linear.
+
+**Evidence.**
+- *Drift rows.* The mask's output equals main's exactly, and stage 0's spans equal main's.
+- *Differential* (4 seeds × 6,000 inputs; over 500 inputs per seed hold three or more "@"):
+  - 0 inputs where the mask keeps a unit main replaced;
+  - 0 inputs where stage 0 differs from main;
+  - at 810fa74 the mask kept a unit main replaced in 227, 199, 196 and 202 inputs per seed.
+- *Bound rows at 100,000 characters.* `a@b.pk.`, `a.b@c.de.`, `a@b.pk-`, `a@b.pk_` and `tariq1990@qalvo.pk.` repeated each finish within 1.5 s, with heap growth under 256 MB. At 810fa74 the first ran the test worker out of memory, and `a@b.pk_` alone took 57.6 s.
+- *e2e (k).* A privileged body with an accented `ntn: 1739403-5` after three joined emails reaches the provider exactly as main masks it, with no digit. A 48,000-character run is answered inside the pre-call allowance; at 810fa74 it answered 503 `precall_deadline` after 28.9 s.
+
+### R5-2 (MEDIUM, blocking): the English kinship walk
+
+**Ruling.**
+- Stop enumerating skip words. After a kinship cue, within eight words, skip every lower-case word except a finite verb in EN_ENDERS. A sentence end always ends the walk.
+- "then" after a determiner is skipped.
+- Capitalised titles, ranks and offices (SHO, MNA, MPA, Major, Chairman, Judge, Deputy, Commissioner, Inspector, Lambardar, Hafiz ...) are skipped like roles.
+- The first capitalised word that is not in the common-noun, organisation or title lists is a name.
+- Accept the false positives that follow ("son of a Lahore High Court judge") under R4-0, and record them.
+- Update the two tests that pinned the old behaviour (mutant U13).
+
+**Implementation.**
+- The walk reads eight words after an English cue (ten after an Urdu one, unchanged).
+- A lower-case word in EN_ENDERS ends the walk. Prepositions, conjunctions and other function words are now skipped, so the finite auxiliaries and modals (is, was, are, were, has, had, have, will, shall, can, may, must, do ..., and their negatives) join EN_ENDERS: "the son of the then SHO was transferred" passes.
+- Every other lower-case word is skipped. The -ing/-ly ender (mutant U13's rule) is gone.
+- EN_OFFICES (titles, ranks, offices) are read like roles: skipped, and the walk enters any-case mode.
+- These are skipped in any case:
+  - organisation words: bar, association, league, agency, division, wing, station, commission, bureau, service ...;
+  - nationality words;
+  - the country and its provinces.
+- The first other capitalised word is a name.
+
+**Refinements.**
+- *Any-case mode stays* (R4-2, R4-0). After "one", "said", a title, a role, an office or an occupation, an unlisted lower-case word that is not a participle or an adverb is a name: "son of our client kamran qalvo" counts (mutant M8). A preposition or a conjunction is skipped and returns the walk to capital mode: "the son of the accused in custody was produced" passes (mutant M19).
+- *Parentage labels.* After "Father's name" and the like, the first word is the value, so a function word there still means no name: "Father's name: not mentioned in the record." passes. This is the re-auditor's round-3 line 55; it failed under the first round-5 code.
+- *Changed expectations (mutant U13).* With no -ing ender, "The respondent is the wife of a Pakistani national residing abroad." counts:
+  - after the occupation "national" the walk is in any-case mode;
+  - "residing" is skipped;
+  - "abroad" is read as a name.
+
+  It is a false positive, accepted under R4-0. Its row in `tests/f15-r4-residual.test.ts`, and round 3's fresh line 49 in `tests/f15-r3-residual.test.ts`, are now count rows that say so.
+- *Accepted false positives, recorded.* These count, because a capitalised word that is not listed is a name:
+  - "son of a Lahore High Court judge";
+  - "son of a PTI worker", "son of a Punjabi landlord";
+  - "daughter of a WAPDA employee", "son of a NADRA official", "son of an FIA inspector";
+  - "son of a Hafiz-e-Quran".
+
+### R5-3 (MEDIUM, blocking): residence cues
+
+**Ruling.**
+- Urdu رہائش پذیر، مقیم، سکونت پذیر count, with or without a preceding بمقام. The place may precede or follow: they count when an adjacent word on either side is not a stop word.
+- English "hails from", "originally from", "belong(s) to", "settled at/in", "residence at/in", "address of <role>:", and "C/o" with a name or an address.
+- "|" and other table separators separate words.
+- The lives/resides window is ten words.
+
+**Implementation.**
+- *Urdu.* رہائش پذیر، رہائش پزیر (the common spelling)، سکونت پذیر، سکونت پزیر and مقیم count when the word next to them on either side, read past میں, پر or بمقام, is a place: "قلوو ٹاؤن میں رہائش پذیر", "بمقام قلوو پورہ سکونت پذیر", "مقیم بمقام قلوو پورہ".
+- *English origin cues.* "hails from", "hail from", "hailing from", "originally from", "belongs to", "belong to" and "belonging to" count before:
+  - a number, not a year;
+  - a proper noun that is not a role, office, occupation or organisation word;
+  - a locality word and a name ("village Qalvo Pura");
+  - "the (said) village Kot ...".
+
+  A province or the country counts only as part of a longer place.
+- *settled, residence.* Both join the words of residence: within ten words, at, in, near or opposite before a number (not a year), a proper noun or "the village Kot ...".
+- *Address of a role.* An address label, "of", a role or occupation and its number, then ":" or "-" ("Address of accused:", "Address of the respondent No. 2 -") is a field label. Any value counts unless it says there is none.
+- *C/o.* After "C/o", past mask tokens and "the", a number, a proper noun or an Urdu word that is not a stop word counts: "C/o Kamran Qalvo", "C/o [PARTY], 12-B Qalvo Road".
+- *Table separators.* "|", the broken bar and the box-drawing verticals separate words, so "| Tariq | s/o | Kamran Qalvo |" counts.
+- *Window.* The words of residence read ten words (mutant U25). The word reader's window grows with the number of words it reads: 16 characters a word, at least 80.
+
+**Refinements.**
+- *An adjacent Urdu word that is no place.* These do not count:
+  - a stop word, a role or an occupation;
+  - a general area or a province: "بیرون ملک مقیم" (abroad);
+  - an adverb of place: یہاں، وہاں ...;
+  - a dwelling word: گھر، مکان، کوٹھی، حویلی. The re-auditor's round-2 line 102, "والد کے گھر میں رہائش پذیر", is a tuning line;
+  - a word after اسی، اپنے and the like: "اپنے گاؤں میں مقیم".
+- *After the measurement* (R5-5): the postpositions of company ہمراہ and ساتھ are stop words, so "والدین کے ہمراہ مقیم" (with her parents) passes. This fixes new-corpus line 67.
+- *A year is no place*: "settled in 2019" passes.
+- *A role is no place after an origin cue*: "The disputed land belongs to Respondent No. 1." passes.
+
+### R5-4 (LOW, fixed): pins for the surviving mutants
+
+- U21 (PLACE_NAME_NOUNS emptied): "Tariq r/o punjab colony was arrested." counts, a lower-case place-name noun after a province.
+- U24 (UR_INDEFINITE emptied): "گواہ اسی گاؤں کا رہنے والا ہے۔" passes, and "اسی شہر کا رہنے والا" still passes.
+- U25 (the lives-at window): with the preposition as the tenth word after "lives", the line counts; as the eleventh, it passes.
+- U06 (stage 0 blanking off) and U36 (the stage 1/2 email chains removed) were near-equivalent at 810fa74. Round 5's exactness checks now kill both:
+  - U06: the stage-0 invariant on the differential;
+  - U36: the drift rows, which require main's output exactly, token for token.
+
+### R5-5: honest false-positive measurement
+
+**Procedure.**
+1. `tests/f15-r5-heldout-corpus.ts` was written and committed alone (d65c895), before any round-5 change and before the re-auditor's round-4 adversarial lines were read. It has 92 lines: 50 English, 42 Urdu.
+   - Its genres are ones the earlier corpora covered little: tax and customs, company and banking, consumer, labour and election, accountability and anti-terrorism, rent, family and succession, constitutional and service, police diaries, revenue, cheques, defamation, cyber crime and procurement.
+   - Some lines use the words round 5 keys on, the way legal prose uses them.
+2. The re-auditor's round-4 corpus (`r4-fresh-fp.json`, 128 lines) was used only as held-out prose. Its structure was read; no line was read before the measurement.
+3. A line counts if the mask changes it or `assertMinimised` refuses it.
+4. Both were measured at 86c42a2, the round-5 implementation.
+
+| Corpus | Lines | Flagged at 86c42a2 |
+| --- | --- | --- |
+| New corpus, English | 50 | 0 |
+| New corpus, Urdu | 42 | 2 (4.8%): lines 67, 74 |
+| New corpus, all | 92 | 2 (2.2%) |
+| Re-auditor's round-4 corpus, English | 64 | 0 |
+| Re-auditor's round-4 corpus, Urdu | 59 | 0 |
+| Re-auditor's round-4 corpus, "debatable" | 5 | 3: lines 125, 126, 128 |
+| Re-auditor's round-4 corpus, all | 128 | 3 (2.3%) |
+| Both held-out sets | 220 | 5 (2.3%), under the 8% target |
+
+**Triggers.**
+- New line 67, "مدعیہ اپنے والدین کے ہمراہ مقیم ہے۔" (resides with her parents): fixed after the measurement (ce626f0, R5-3).
+- New line 74, "... کراچی میں سکونت پذیر ہے۔": a named city before سکونت پذیر is a place by R5-3, as "resides in Lahore" is in English. It counts by ruling.
+- Fresh lines 125 ("situated in Mauza Kot Qalvo, Tehsil and District Kasur") and 128 (موضع کوٹ قلوو ...): a locality cue and a name (R3-5). Both were flagged at 810fa74 too.
+- Fresh line 126, "The accused belongs to Tehsil Kasur and was arrested there.": R5-3 counts it.
+
+Both corpora are now regression rows; the four ruled lines are count rows that name their ruling.
+
+**Adversarial lines, for information.** The re-auditor's clean probes (r4-attack "clean", 19 lines; r4-walk2 "clean", 24 lines) probe for false positives on purpose; they are not a sample of prose.
+- At 810fa74, 25 of the 43 were flagged; at 86c42a2, 22 of 43.
+- Three changed: "son of a Muslim League leader", "son of a former MNA" and "son of a Lambardar of the village" now pass.
+- Disclosure: the organisation-word list was written after these probes had been read.
+
+### Mutants
+
+Each mutant below was applied alone, and the F15 unit tests of its module were run with a hard timeout (`r5_mutants.py`):
+
+| Mutant | Killed by |
+| --- | --- |
+| U21: PLACE_NAME_NOUNS emptied | the R5-4 U21 row |
+| U24: UR_INDEFINITE emptied | the R5-4 U24 row, an R5-3 row and fresh line 114 |
+| U25a: the lives window back to six words | three R5-3 and R5-4 rows |
+| U25b: the lives window widened to eleven words | the R5-4 eleven-word row |
+| M10: the outer scan resumes after the first match, not the chain | the R5-1 drift rows |
+| M12: EMAIL_RAW starts at the leading signs again | the differential's stage-0 check (4 seeds) |
+| U06: stage 0 blanking off | the differential's stage-0 check (4 seeds) |
+| U36: the stage 1/2 email chains removed | the R5-1 drift rows (main's output exactly) |
+| M13: offices not skipped like roles | two R5-2 pin rows |
+| M14: a participle after a role read as a name | an R5-2 pin row |
+| M15: auxiliaries and modals no longer end the walk | four rows of rounds 2 to 4 |
+| M16: "\|" no longer separates words | the table row |
+| M17: the Urdu residence words no longer read past میں, پر, بمقام | three R5-3 rows and new line 74 |
+| M18: an origin cue takes a role as a place | the "Respondent No. 1" row |
+| M19: a preposition no longer ends any-case mode | the "in custody" row |
+| M20: a year after "in" is a place | the "settled in 2019" row |
+
+M13 and M14 survived the first round-5 tests; three pin rows were added for them (6c35c2d). Merging overlapping matches before stage 0's blanking (R5-1) is a safety net: `matchesOf` never yields overlapping matches, so removing the merge is an equivalent mutant.
+
+### Changed earlier test expectations
+
+- `tests/f15-r4-residual.test.ts`, and round 3's fresh line 49 in `tests/f15-r3-residual.test.ts`: "the wife of a Pakistani national residing abroad" counts by ruling R5-2 (mutant U13's rule removed).
