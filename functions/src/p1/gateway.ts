@@ -1,7 +1,7 @@
 import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
-import { buildOutbound, residualCountsOfMessages, type SystemRecord } from "@/platform/p1/outboundPrompt"
+import { buildOutbound, residualCountsOfMessages, verifySystemMessage, type OutboundMessage, type SystemRecord } from "@/platform/p1/outboundPrompt"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
@@ -36,7 +36,8 @@ import { uuidv7 } from "./uuidv7"
 /**
  * `callP1`, the single chokepoint for every AI call (spec P3-61). It decides in this order, and the first
  * refusal wins: classification guard, kill switch (platform, then firm), route, outbound request (audit F16: the
- * registry's system message and the user's body as a separate user message, every part masked), provider
+ * registry's system message and the user's body as a separate user message, the body masked; review round R3a: the
+ * system message is immutable platform text, verified before anything else is decided about it), provider
  * policy, price, budget, credentials; then the reservation and the provider-attempt record (audit F07, F08);
  * then the transport call and the response mask; then the trace; then one transaction writing the usage row,
  * the month total, any threshold alerts, the audit row and the event, and settling the reservation.
@@ -58,7 +59,8 @@ import { uuidv7 } from "./uuidv7"
  *
  * No raw body, purpose or response text reaches the transport, the trace, a row, an event, an audit row or a
  * log line, and no provider error text is returned, stored or logged. The transport receives the role-separated
- * messages only (audit F16): no caller can supply system text, which comes from platform/p1/systemPolicy.ts by purpose.
+ * messages only (audit F16): no caller can supply or change system text, which comes from platform/p1/systemPolicy.ts by
+ * purpose and is recorded by reference, never by its text (review round R4a).
  */
 
 export type P1Request = {
@@ -121,11 +123,12 @@ export type P1Result = {
   outputTokens: number
   costMicroUsd: number
   /**
-   * What was (or would have been) sent, recorded as the system message plus the body (audit F16, spec ruling 4): the
-   * request is exactly `[{ role: "system", content: system.text }, { role: "user", content: body }]`. `body` is the masked
-   * user message as sent (tag look-alikes neutralised), `system` the registry policy it came from and its masked text;
-   * the masked purpose (metadata, never sent to the model); the redaction counts summed over both messages; and the
-   * residual detector's counts over both (audit F15). `callP1` always sets `residualCounts` and `system`; an attempt
+   * What was (or would have been) sent, recorded as the system message's reference plus the body (audit F16, spec ruling
+   * 4, review round R4a): the request is exactly `[{ role: "system", content: <registry text of system> }, { role:
+   * "user", content: body }]`. `body` is the masked user message as sent (tag look-alikes neutralised); `system` names the
+   * registry policy by id and version, never its text (`systemPolicyText` re-derives it); the masked purpose (metadata,
+   * never sent to the model); the redaction counts and the residual detector's counts (audit F15) over the body, the user
+   * data (the system message is platform text, R3a). `callP1` always sets `residualCounts` and `system`; an attempt
    * receipt recorded before F15 has no `residualCounts`, and one recorded before F16 has no `system`.
    */
   outbound: { body: string; purpose: string; redactionCounts: Record<string, number>; residualCounts?: Record<string, number>; system?: SystemRecord }
@@ -161,6 +164,8 @@ export const p1TestSeam: {
   attemptMarkFailures?: Error[]
   crashAt?: "reserved" | "dispatched" | "recorded"
   unqueued?: "all" | "commit"
+  /** Audit F16 review round (R3a): replaces the built system message's text, so a test can show the send-time check. */
+  systemOverride?: string
 } = {}
 
 function seam(): typeof p1TestSeam {
@@ -471,13 +476,14 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const config = configSnap.data()
 
   // 3. Route (P3-62). 4. The role-separated request (audit F16, spec rulings 1 to 3): the registry's system message for
-  // the purpose, then the body as the user's own turn, every part masked with the party names and the body's envelope
-  // tag look-alikes neutralised; no caller can supply system text. The purpose is masked too (it is metadata, never
-  // sent). The independent residual detector's counts over both messages (audit F15): counts by kind only, recorded on
-  // every call, blocked or not.
+  // the purpose, then the body as the user's own turn, masked with the party names and its envelope tag look-alikes
+  // neutralised. The system message is immutable platform text (review round R3a): never masked, so no party name can
+  // change it, and verified at step 4a. The purpose is masked too (it is metadata, never sent). The independent residual
+  // detector's counts over the body (audit F15): counts by kind only, recorded on every call, blocked or not.
   const model = t.modelOverride ?? (Object.hasOwn(TASK_MODEL, taskType) ? TASK_MODEL[taskType] : "")
   const built = buildOutbound({ purpose: req.purpose, turns: [{ role: "user", segments: [{ kind: "text", text: req.body }] }], partyNames })
-  const messages = built.messages
+  const messages: OutboundMessage[] =
+    t.systemOverride === undefined ? built.messages : [{ role: "system", content: t.systemOverride }, ...built.messages.slice(1)]
   const outbound: P1Result["outbound"] = {
     body: messages[1]!.content,
     purpose: maskOutboundPII(req.purpose, { partyNames }).masked,
@@ -499,9 +505,11 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const refusal = (): BlockReason | null => {
     if (killSwitchBlocks(platformSnap.get("killSwitch"), model)) return "kill_switch_platform"
     if (killSwitchBlocks(config?.killSwitch, model)) return "kill_switch_firm"
+    // 4a. Review round (R3a): the system message is exactly the registry text its record names, or nothing is sent.
+    if (!verifySystemMessage(messages, built.system)) return "system_unverified"
     const policy = providerAllowedFor(PROVIDER_ID, classification)
     if (!policy.allowed) return "policy_denied"
-    // Every message that would be sent, the system message included (audit F16), and the purpose.
+    // Every user message that would be sent (audit F16) and the purpose; the verified system message is platform text.
     if (policy.requirements && !assertMinimised({ messages, metadata: { purpose: outbound.purpose } }, partyNames)) return "not_minimised"
     if (worstCase === null) return "model_unpriced"
     const budget = budgetOf(config)
@@ -696,7 +704,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     matterId: req.matterId ?? null,
     usageLogId: usageRef.id,
     maskedBody: outcome === "blocked" ? null : outbound.body,
-    maskedSystem: outcome === "blocked" ? null : built.system.text,
+    system: outcome === "blocked" ? null : built.system,
     maskedResponse: text ?? null,
   })
   if (status === "failed") logger.warn("p1.trace_export_failed", { firmId, usageLogId: usageRef.id, traceId })

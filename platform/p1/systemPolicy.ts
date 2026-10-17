@@ -10,7 +10,10 @@
  * a prompt. tests/f16-system-policy.test.ts holds every text to that, and to zero mask redactions and zero residual
  * findings, so the platform's own text never blocks a privileged call.
  *
- * Bump SYSTEM_POLICY_VERSION whenever a text changes; stored outbound records carry the id and version of what was sent.
+ * Bump SYSTEM_POLICY_VERSION whenever a text changes; stored outbound records carry the id and version of what was sent
+ * (review round, ruling R4a: never the text). The texts are immutable platform text (R3a): no mask, party name or caller
+ * input ever changes them, and the request's system message is verified against them before dispatch. When a version is
+ * replaced, its texts stay in SYSTEM_POLICY_HISTORY so that every stored record still resolves to what was sent.
  */
 
 export const SYSTEM_POLICY_VERSION = "f16.1"
@@ -66,4 +69,23 @@ export function isSystemPolicyId(value: unknown): value is SystemPolicyId {
 /** The policy whose id is `purpose`, else the default policy (R1a). */
 export function systemPolicyFor(purpose: string): SystemPolicy {
   return SYSTEM_POLICIES[isSystemPolicyId(purpose) ? purpose : DEFAULT_SYSTEM_POLICY_ID]
+}
+
+/**
+ * Every registry version a stored record may name, with its texts (review round, R4a). Only the current version exists
+ * so far; a later version adds its entry and keeps this one.
+ */
+const SYSTEM_POLICY_HISTORY: Readonly<Record<string, Readonly<Record<SystemPolicyId, SystemPolicy>>>> = Object.freeze({
+  [SYSTEM_POLICY_VERSION]: SYSTEM_POLICIES,
+})
+
+/** The registry text a record names (`policyId` at `version`, own keys only), or null when the registry has no such policy. */
+export function systemPolicyText(policyId: unknown, version: unknown): string | null {
+  if (!isSystemPolicyId(policyId) || typeof version !== "string" || !Object.hasOwn(SYSTEM_POLICY_HISTORY, version)) return null
+  return SYSTEM_POLICY_HISTORY[version]![policyId].text
+}
+
+/** Whether the registry knows `policyId` at `version` (own keys only), so a stored record of it resolves to its text. */
+export function isKnownSystemPolicy(policyId: unknown, version: unknown): policyId is SystemPolicyId {
+  return systemPolicyText(policyId, version) !== null
 }

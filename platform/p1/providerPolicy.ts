@@ -132,14 +132,18 @@ export function providerAllowedFor(
  * identifier-length digit runs, labelled identifiers, addresses, parentage) finds nothing in them. Passing is a
  * minimisation check, not proof of anonymity (see maskOutboundPII.ts).
  *
- * Audit F16 (spec ruling 3): when the request carries role-separated `messages`, every message's content is checked
- * the same way, the system message included, so no part of what is sent escapes the obligation.
+ * Audit F16 (spec ruling 3): when the request carries role-separated `messages`, every user and assistant message's
+ * content is checked the same way. The leading system message is not (review round, R3a): it is immutable platform text,
+ * not user data, and the caller verifies it against the registry before dispatch (`verifySystemMessage`); checking it
+ * would let a party name equal to one of its words block every privileged call. Any other system message is checked
+ * like a turn (the send-time check refuses one anyway).
  */
 export function assertMinimised(
-  request: { body?: string; messages?: readonly { content: string }[]; metadata: { purpose: string } },
+  request: { body?: string; messages?: readonly { role?: string; content: string }[]; metadata: { purpose: string } },
   partyNames: string[] | undefined
 ): boolean {
-  const texts = [...(request.body === undefined ? [] : [request.body]), ...(request.messages ?? []).map((m) => m.content), request.metadata.purpose]
+  const turns = (request.messages ?? []).filter((m, i) => !(i === 0 && m.role === "system"))
+  const texts = [...(request.body === undefined ? [] : [request.body]), ...turns.map((m) => m.content), request.metadata.purpose]
   for (const text of texts) {
     const again = maskOutboundPII(text, { partyNames })
     if (again.redactions.some((r) => r.count > 0)) return false

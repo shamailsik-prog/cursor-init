@@ -1,7 +1,7 @@
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
-import { isSystemPolicyId } from "@/platform/p1/systemPolicy"
+import { isKnownSystemPolicy } from "@/platform/p1/systemPolicy"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
@@ -324,8 +324,9 @@ function outputRow(o: {
     ...(o.text === undefined ? {} : { text: o.text }),
     outbound: {
       body: o.outbound.body,
-      // Audit F16: the system message that was sent with the body (absent only when the row is published from an attempt
-      // receipt recorded before F16, which resumes as a single user turn).
+      // Audit F16: which registry policy the system message sent with the body was, by id and version, never its text
+      // (review round R4a; absent only when the row is published from an attempt receipt recorded before F16, which
+      // resumes as a single user turn).
       ...(o.outbound.system === undefined ? {} : { system: o.outbound.system }),
       metadata: {
         classification: o.classification,
@@ -366,23 +367,21 @@ function residualCountsOf(value: unknown): Record<string, number> | null {
   return out
 }
 
-/** The longest system text a receipt may carry (audit F16): a registry policy plus its masking, with room to spare. */
-const MAX_SYSTEM_TEXT_CHARS = 8000
-const SYSTEM_RECORD_KEYS = ["policyId", "text", "version"]
+const SYSTEM_RECORD_KEYS = ["policyId", "version"]
 
 /**
- * A system record (audit F16, spec ruling 4), when it is exactly `{ policyId, version, text }`: a registry policy id (own
- * keys only), a version of 1 to 32 characters of `[a-z0-9.]`, and a non-empty text of at most MAX_SYSTEM_TEXT_CHARS;
- * null otherwise. The receipt records what was sent, so a version the registry has since replaced is still accepted.
+ * A system record (audit F16, spec ruling 4, review round R4a), when it is exactly `{ policyId, version }` and the
+ * registry knows that policy at that version (own keys only), so the text that was sent can be re-derived
+ * (`systemPolicyText`); null otherwise. The Functions request never carries the eve agent's instructions, so a record
+ * with their hash, or with a `text`, is malformed here. The registry keeps every version's texts
+ * (platform/p1/systemPolicy.ts), so a version it has since replaced still resolves.
  */
 function systemRecordOf(value: unknown): SystemRecord | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null
   const r = value as Record<string, unknown>
   if (Object.keys(r).sort().join() !== SYSTEM_RECORD_KEYS.join()) return null
-  if (!isSystemPolicyId(r.policyId)) return null
-  if (typeof r.version !== "string" || !/^[a-z0-9.]{1,32}$/.test(r.version)) return null
-  if (typeof r.text !== "string" || r.text === "" || r.text.length > MAX_SYSTEM_TEXT_CHARS) return null
-  return { policyId: r.policyId, version: r.version, text: r.text }
+  if (!isKnownSystemPolicy(r.policyId, r.version)) return null
+  return { policyId: r.policyId, version: r.version as string }
 }
 
 /** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */

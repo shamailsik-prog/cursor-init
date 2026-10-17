@@ -9,6 +9,11 @@ export type BlockReason =
   | "kill_switch_firm"
   | "policy_denied"
   | "not_minimised"
+  /**
+   * Audit F16 review round (R3a): the request's system message is not exactly the registry text its record names, so
+   * nothing was sent. Never expected: the builder produces that text; the check guards the premise at send time.
+   */
+  | "system_unverified"
   | "model_unpriced"
   | "budget_not_set"
   | "budget_exhausted"
