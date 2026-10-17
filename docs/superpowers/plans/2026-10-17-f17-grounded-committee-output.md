@@ -107,4 +107,6 @@
 | 10 | 7218c32 | `f17-grounding-corpus.pg.test.ts` on main's sources: 3 failed, 1 passed (the precondition) | the F05 suite with it: 4 files, 90 passed |
 | 11 | 3857df4 and the ledger commit | n/a | see the PR body's verification table |
 
+Verification at the branch head (code as of f65c2d8): `npm run test:unit` 195 files, 5,576 passed, 54 skipped (pre-existing live-only); `npm run test:rules` 14 files, 682 passed; the F05 suite with the F17 file 90 passed; the full Functions emulator run 75 files passed and 1 failed (4 tests in `p2.jobs-scheduled.emu.test.ts`, 15 s timeouts), which fail the same way on origin/main b48f79d in the same environment (the tick is O(firms) over the shared emulator, order-dependent) and pass 6 of 6 alone on the branch; `npm run typecheck`, `typecheck:tests`, functions typecheck and build exit 0; `npm run lint` 0 errors (89 pre-existing warnings, none in changed files); `npx eslint --max-warnings 0 functions` exit 0; `BASE=origin/main bash ci_gates/gate_g0.sh` PASSED.
+
 RED against main: origin/main b48f79d exported by `git archive` into a scratch directory, the new F17 test files copied in, private-port emulators: functions 5 files, 58 failed and 8 passed (the guards named above); root 48 failed and 1 passed; the F05-suite file 3 failed and 1 passed.
