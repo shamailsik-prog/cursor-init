@@ -2,6 +2,8 @@
 
 Date: 2026-10-17. Base: `origin/main` @ b48f79d (F16 merged as #62). Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design rulings are kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
 
+Review round (Codex P1, P2 and P2 on PR #63, round-1 head 6ac73a6): rulings R2a, R5a and R4a in section 2a amend rulings 2, 5 and 4. Where a round-1 sentence below is superseded, it says so and points to them.
+
 Audit sources:
 - `docs/audit/2026-10-13-forensic-audit.md` F17 (:431, HIGH, "LLM outputs lack grounding and semantic evaluation evidence"), the threat row F16/F17 (:986) and the evaluation rows (:1103, :1114); `docs/audit/2026-10-14-forensic-audit-v2.md` line 90 (F17 OPEN: `functions/src/p1/transport.ts`, no output schema or grounding).
 - `docs/audit/REMEDIATION.md`: rule 2 (closed = merged PR with an end-to-end test of a real user flow, RED before and GREEN after), rule 3 (ticked only after an independent re-audit). This document claims neither closure nor a tick.
@@ -44,7 +46,7 @@ The failure scenario reproduces on main through the real `committeeBrain` route:
 - **Per-citation status** (the gate's verdicts, with the reason the gate folds into UNVERIFIED kept apart):
   - `VERIFIED`, `OVERRULED`: the verdict rule's.
   - `PENDING_OVERRULING`: found, and the verdict rule answers UNVERIFIED (an overruling is recorded whose effect cannot be established: held for review, hidden, or of a bench that does not outrank).
-  - `UNVERIFIED`: normalises and is not found in the corpus (fabricated, absent, wrong reporter or year), or a non-judgment authority (statute, rule, other) whose citation does not read as a reported judgment: the authority port has no statute lookup by citation, so such a citation cannot be verified (residual risk 4).
+  - `UNVERIFIED`: normalises and is not found in the corpus (fabricated, absent, wrong reporter or year), or a non-judgment authority (statute, rule, other) whose citation does not read as a reported judgment: the authority port has no statute lookup by citation, so such a citation cannot be verified (residual risk 4). **Superseded by R2a:** any authority declared statute, rule or other is UNVERIFIED and never looked up, whatever its citation reads as.
   - `UNRECOGNISED`: an extractor suspect, or a claim authority of kind `judgment` whose citation is not exactly one reported citation.
   - `UNAVAILABLE`: the store could not answer (F05 `AuthorityUnavailableError`, including the run's budget).
 - **No corpus.** With no reader configured the store is `EMPTY_AUTHORITY_STORE` (F05): every citation is not found (`UNVERIFIED`), so nothing is ever `grounded`.
@@ -57,7 +59,7 @@ The failure scenario reproduces on main through the real `committeeBrain` route:
   `grounding: { status, rules: "f17.1", policy: { policyId, version } | null, claims: { total, supported }, citations: [ { ref, kind, source, status, judgmentId } ], omitted }`
   and `advisory: boolean`, true unless `status` is `grounded`. `policy` is the system record that was sent (null for an answer recorded before F16).
 - **Claim support.** A claim is supported when it lists at least one authority and every one of them is `VERIFIED`.
-- **Status rules** (`rules: "f17.1"`), in order:
+- **Status rules** (`rules: "f17.1"`; `f17.2` since R2a, which changes per-citation resolution only, not these steps), in order:
   1. no text (a blocked or failed call): `not_assessed`;
   2. the contract is not met: `unstructured`;
   3. no citation anywhere (no claim authority, nothing the extractor finds, nothing omitted): `not_assessed` (F06: an empty check is never OK);
@@ -79,7 +81,7 @@ The failure scenario reproduces on main through the real `committeeBrain` route:
 
 ### Ruling 5: a versioned Urdu/English evaluation set and a change gate
 
-- **Set** (`docs/evals/committee-brain-eval-set.json`, version `f17.1`): 57 items, 35 English, 20 Urdu, 2 mixed, in twelve categories: fabricated cases (9, one a case name instead of a citation, masked); real-format citations absent from the corpus (5); wrong reporter or year (5); overruled authorities, seeded as overruled by a bench that outranks them (5); an overruling pending review or by a bench that does not outrank (3); misapplied statutes (5); unstructured or rambling answers (8: prose, a code fence, rambling, truncated JSON, a duplicate key, a `\u` escape, Urdu prose, an Urdu-script reporter); injection that asks the model to claim verification (5); grounded controls (5); partly supported answers (3); no citation (2); and two items that record a known limitation (a verified judgment cited for a proposition it may not support is still `grounded`: relevance is not assessed). Each item has the user prompt, a recorded model response and the expected grounding (status, advisory, and every citation's ref and status). The recorded responses are synthetic, written for this set to exhibit each failure mode; none was produced by a model (`responseOrigin: "synthetic"`). The seeded corpus is part of the set: synthetic 2099 judgments and treatments, no real authority, invented names only.
+- **Set** (`docs/evals/committee-brain-eval-set.json`, version `f17.1`; `f17.2` since R2a adds three `mislabelled_authority` items, 60 in all, 37 English, 21 Urdu, 2 mixed): 57 items, 35 English, 20 Urdu, 2 mixed, in twelve categories: fabricated cases (9, one a case name instead of a citation, masked); real-format citations absent from the corpus (5); wrong reporter or year (5); overruled authorities, seeded as overruled by a bench that outranks them (5); an overruling pending review or by a bench that does not outrank (3); misapplied statutes (5); unstructured or rambling answers (8: prose, a code fence, rambling, truncated JSON, a duplicate key, a `\u` escape, Urdu prose, an Urdu-script reporter); injection that asks the model to claim verification (5); grounded controls (5); partly supported answers (3); no citation (2); and two items that record a known limitation (a verified judgment cited for a proposition it may not support is still `grounded`: relevance is not assessed). Each item has the user prompt, a recorded model response and the expected grounding (status, advisory, and every citation's ref and status). The recorded responses are synthetic, written for this set to exhibit each failure mode; none was produced by a model (`responseOrigin: "synthetic"`). The seeded corpus is part of the set: synthetic 2099 judgments and treatments, no real authority, invented names only.
 - **Deterministic grading** (`functions/test/f17-eval-set.test.ts`): every item's recorded response is graded by `groundAnswer` against an `InMemoryAuthorityStore` seeded from the set, and must match its expected grounding exactly; the test also checks the record's counts against this run.
 - **Live harness** (`functions/src/cli/committeeEval.ts`, `npm --prefix functions run eval:committee-live`): only when `AI_GATEWAY_API_KEY` is set, sends every item's prompt through `buildOutbound` (the registry's committee-brain system message) and the Gateway transport to `TASK_MODEL.committee`, masks the answer, grades it against the same seeded store, and checks each item's live expectations (the contract is met; no forbidden citation is relied on; no claim states verification). Without the key it prints `NOT RUN: AI_GATEWAY_API_KEY is not set ...` and exits 0, making no network call. It sends only the set's synthetic prompts, prints the worst-case cost first, and is operator-run (it does not pass through a firm's budget: there is no firm). It did not run here.
 - **Record** (`docs/evals/committee-brain-eval-record.json`): the eval-set version and SHA-256, the routing (`functions:committee` and the Next legacy `next:committee-brain` model ids), the committee policy id and version, the grounding rules version, the date, the deterministic result (`passed`, `failed`), the overall `result`, and `live` with a note. This change records `live: false` with `liveNote` starting `NOT RUN`.
@@ -102,6 +104,27 @@ The failure scenario reproduces on main through the real `committeeBrain` route:
   - (e) model identity: the reported model is recorded with `modelMatch`; a different one is recorded as a mismatch; an absent one as null.
 - **Recorded decision: the in-memory seam for the main e2e, and real Postgres as well.** The F05 seam (`setAuthorityStoreForTests`) is the store the route reads, so the main e2e exercises the real resolution path in the ordinary Functions job (every PR) without a database. A second file, `functions/test/f17-grounding-corpus.pg.test.ts`, runs in the F05 suite (`npm run test:f05-authority`, CI job "Authority corpus e2e (F05)") against real Postgres seeded through the publication CLI with the F05 curated batch (`2099 SCMR 101` verified, `2099 SCMR 202` overruled, `2099 SCMR 505` under a pending overruling, `2099 SCMR 999` absent), through the same route, so the real corpus adapter is proven too.
 
+## 2a. Review round (Codex P1, P2 and P2 on PR #63)
+
+### Ruling R2a: only a declared judgment is resolved as a judgment (grounding rules f17.2)
+
+- **What Codex found (P1, `functions/src/p1/grounding.ts:169` at 6ac73a6).** A claim authority `{ "kind": "statute", "citation": "PLD 2099 SC 101" }` went through `lookUpCitation`, was found, and took the judgment verdict without its kind being checked: the claim counted as supported, and the answer could be `grounded`, `advisory: false`, on an authority the model itself did not present as a judgment. Reproduced: the new unit cases and the e2e case answered `grounded` (RED).
+- **Ruling.** Only an authority a claim declares `judgment` is resolved through the judgment path. Any other kind is never looked up (no store call), is UNVERIFIED whatever its text normalises to, and, when its citation reads as a reported judgment citation, is shown in its canonical form with `kindMismatch: true`. It is recorded under its own key (kind and ref), so it never merges with a judgment entry of the same citation.
+- **A prose hit does not rescue the claim (recorded decision).** A citation the extractor finds in the prose has no declared kind and keeps the judgment resolution, as before, but as its own entry (source `text`). A claim is supported only by its own declared authorities, all VERIFIED; the prose hit verifies only itself. So "As PLD 2099 SC 101 holds ..." with the authority declared `statute` is two entries (UNVERIFIED with `kindMismatch`, and VERIFIED from the text), the claim is unsupported and the answer `ungrounded`.
+- **Every ref is masked.** Hardening while here: a canonical citation can carry a bracketed sub-series read from the text (`PLD 2099 SC 101 (Tariq Zarvani)` reads as `PLD 2099 SC(TARIQZARVANI) 101`), so every recorded ref, canonical ones included, is masked with the party names (the mask catches that form: `SC([PARTY])`).
+- **Rules and evaluation.** The grading outcome changed for a class of answers, so the rules are `f17.2` (`GROUNDING_RULES_VERSION`), and stored records name them. The evaluation set is `f17.2`: three `mislabelled_authority` items (two English, one Urdu; one with the prose duplicate), and an expected citation may require `kindMismatch`. The change gate refused the old record (rules, set version, SHA-256 and item count), and the record was re-made from the deterministic grading (60 of 60), still `live: false`.
+- **Mutant.** With the kind check removed (every claim authority resolved as a judgment), 6 unit cases and the e2e case fail.
+
+### Ruling R5a: a live evaluation record must cover the whole set, in integers
+
+- **What Codex found (P2, `ci_gates/check_committee_eval_record.py:167`).** With `live: true`, `liveRun: { "passed": 0, "failed": 0, "date": ... }` passed: `passed` was only checked to be an `int`. Python also counts `true` and `false` as integers, so `failed: false` passed both the live and the deterministic checks.
+- **Ruling.** A live record needs `liveRun.passed` equal to the set's item count and `liveRun.failed` equal to 0, both integers (`type(v) is int`: never a bool, a float such as `57.0`, or a string), and a `liveRun.date` that parses as a real date. Missing fields fail. The deterministic counts are held to the same rule. Each rejection has a test, and a full live run passes.
+
+### Ruling R4a: the reported model survives reconciliation
+
+- **What Codex found (P2, `functions/src/p1/gateway.ts:699`).** `modelReported` went on the HTTP receipt only. When the usage commit failed for good and the lease reconciler rebuilt the `ai_usage_logs` row from the reservation's `providerAttempt` (F08), the row lost the reported model; a call that is not an HTTP operation has no receipt at all.
+- **Ruling.** Step 9b records the sanitised `modelReported` (a model id, `modelId`) on `providerAttempt` beside the charge and the provider ids. The reconciler carries it into the reconciled usage row through the same `modelId` check. Fail-safe: a malformed value (not a model id: markup, a number, an object) is recorded as null, and an attempt recorded before F17 (no field) reconciles with null; neither stops the settlement, which owes the charge. Usage rows carry no `modelMatch` (only the output row and the answer do), so the reconciler adds none. Reservation, settlement and charge are unchanged (F07/F08).
+
 ## 3. Changed test expectations
 
 No test is skipped, renamed or weakened, and no name the G-4 gates select is changed. Each change below adds the F17 fields to an exact-shape assertion and asserts their values.
@@ -111,6 +134,14 @@ No test is skipped, renamed or weakened, and no name the G-4 gates select is cha
 | `functions/test/p1.gateway.emu.test.ts` | `ROW_FIELDS` (the usage row's exact keys) gains `modelReported`. | Ruling 4: the reported model is recorded on the usage row beside `model`. |
 | `functions/test/p1.api.emu.test.ts` | The exact response keys of an ok call, a blocked call and the ambiguous-commit call, and the output row's exact keys, gain `grounding`, `advisory`, `model`, `modelReported`, `modelMatch`; the values are asserted (`unstructured` and advisory for the stub's prose answer, `not_assessed` for the blocked call, the configured model, `modelReported: null`, `modelMatch: false`). Its `Out` type gains the fields. | Rulings 3 and 4. |
 | `tests/g0-gate-e2e.test.ts` | The minimal tree the G-0 end-to-end test builds also copies the files check [17] reads (`costTable.ts`, `constants.ts`, `systemPolicy.ts`, `grounding.ts`, `docs/evals`). | Ruling 5: the new check fails closed on a tree without them, so the control run needs them, as it needs the files check [16] reads. |
+
+Review round (R2a, R5a, R4a), each change in F17's own tests:
+
+| File | Expectation | Why |
+| --- | --- | --- |
+| `functions/test/f17-grounding.test.ts` | The rules version is `f17.2` in five assertions. | R2a: the rules changed. |
+| `functions/test/f17-eval-set.test.ts`, `f17-eval-live.test.ts` | The set version is `f17.2`; `mislabelled_authority` is a required category. | R2a: the set gained three items. |
+| `tests/f17-eval-record-gate.test.ts` | The rules-change and set-change cases edit `f17.2` (the current values) instead of `f17.1`. | R2a. |
 
 Indirect effects, with no test change: the committee-brain system message is longer (1,945 characters, from 851), so the reservation's worst case for a committee call grows by the extra bytes (F07 tests derive it from the registry text); the F16 tests that hold the committee text (party names equal to every sentence, 37 of at most 50; zero mask and residual findings; no classification label) pass unchanged.
 
