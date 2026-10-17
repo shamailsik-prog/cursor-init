@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { assertMinimised } from "@/platform/p1/providerPolicy"
 import { residualPII, type ResidualKind } from "@/platform/p1/residualPII"
-import { FRESH_TUNING } from "./f15-r3-fresh-corpus"
+import { FRESH_HELDOUT, FRESH_TUNING } from "./f15-r3-fresh-corpus"
+import { HELDOUT_CORPUS_R3 } from "./f15-r3-heldout-corpus"
 
 /**
  * Audit F15, re-audit round 2 (FAIL 7/10): the residual detector. Spec rulings R3-2 (the date pin), R3-3 (a label's
@@ -93,6 +94,7 @@ describe("R3-4: kinship cues, determiners and party roles", () => {
     ["son of the deceased and a verb", "The son of the deceased appeared and deposed."],
     ["son of one of the accused", "He is the son of one of the accused."],
     ["son of the said deceased", "The son of the said deceased was cited as a witness."],
+    ["a role's number at a sentence end", "The petitioner is the son of Respondent No. 2. Draft the grounds."],
     ["Urdu: daughter, then legal heir", "مرحوم کی دختر قانونی وارث ہے۔"],
     ["Urdu: wife, then the honorific alone", "زوجہ محترمہ نے بیان دیا۔"],
     ["Urdu: the idiom alone", "مدعیہ بنت حوا کی طرح مظلوم ہے۔"],
@@ -125,6 +127,8 @@ describe("R3-5: residence cues, address labels and numbered places", () => {
     ["abode after a qualifier", "permanent abode 14-B Qalvo Town Lahore"],
     ["Urdu mohalla and a name", "محلہ قلوو پورہ لاہور"],
     ["an address label at a field start, a place only", "Address: Qalvo, Kasur"],
+    ["a numbered house in a named town", "The complainant shifted to House No. 5 in Qalvo Town."],
+    ["a numbered house at a sentence end", "He lives in House No. 7."],
   ])("counts: %s", (_label, text) => expectCounts(text, "address"))
 
   it.each([
@@ -186,6 +190,26 @@ describe("R3-6: the even-numbered lines of the re-auditor's fresh false-positive
   })
 
   it.each(FRESH_TUNING.map(([line, lang, text]) => [line, lang, text]))("line %i [%s] %s", (_line, _lang, text) => {
+    const masked = maskOutboundPII(text).masked
+    expect(masked).toBe(text)
+    expect(residualPII(masked)).toEqual(ZERO)
+    expect(minimised(masked)).toBe(true)
+  })
+})
+
+// R3-6: added only after the measurement (at 76902de: fresh odd 2 of 60, lines 37 and 69; the new held-out corpus 1 of
+// 134, line 121), so the rates reported in the spec are held-out rates. Every line must pass from here on.
+describe("R3-6: the held-out lines pass (regression rows, added after the measurement)", () => {
+  it("has the 60 held-out fresh lines and the 134 lines of the new corpus", () => {
+    expect(FRESH_HELDOUT).toHaveLength(60)
+    expect(FRESH_HELDOUT.every(([line]) => line % 2 === 1)).toBe(true)
+    expect(HELDOUT_CORPUS_R3).toHaveLength(134)
+  })
+
+  it.each([
+    ...FRESH_HELDOUT.map(([line, lang, text]) => [`fresh line ${line}`, lang, text]),
+    ...HELDOUT_CORPUS_R3.map(([category, text], i) => [`new corpus line ${i + 1}`, category, text]),
+  ])("%s [%s] %s", (_line, _lang, text) => {
     const masked = maskOutboundPII(text).masked
     expect(masked).toBe(text)
     expect(residualPII(masked)).toEqual(ZERO)
