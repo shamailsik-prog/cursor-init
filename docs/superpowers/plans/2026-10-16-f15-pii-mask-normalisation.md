@@ -248,3 +248,81 @@ At the head: 0 of 254.
 The bound tests: the round-2 matrix (258 tests, with the round-3 cues) and the round-3 shapes (46 tests) pass at 1.5 s per input.
 
 **Changed earlier expectations:** none.
+
+## Round 4: re-audit round 3 (FAIL 8/10)
+
+Spec §9, rulings R4-0 to R4-6. Same constraints: TDD (RED recorded against adc5aa0), no #44 files, no `app/api/**`, escapes for invisible characters, no PR opened or edited by the builder. First, origin/main (d7f6a2c, #60) was merged with a merge commit (354a4d3).
+
+### Task R4-A: held-out corpus, before any code (R4-6)
+
+- [x] Write `tests/f15-r4-heldout-corpus.ts` (99 lines: 50 English, 49 Urdu; affidavits, deeds, notices, family, revenue, police, medical, service, banking, orders, judgments) and commit it alone (b48fc83), before any round-4 test or code.
+
+### Task R4-B: the re-auditor's inputs as RED tests
+
+**Files:** create `tests/f15-r4-mask.test.ts` (main's mask as the oracle; the re-auditor's differential generator), `tests/f15-r4-residual.test.ts` and `tests/f15-r4-bounds.test.ts`. Modify `functions/test/f15-pii-mask.e2e.emu.test.ts`: add rows (j).
+
+- [x] Commit them (e6f14fa) and run them against adc5aa0's sources.
+
+### Task R4-C: the mask (R4-1)
+
+- [x] Stage 0: main's algorithm on the raw text; the union of spans; `outboundPIISpans`; counts from the tokens written.
+- [x] An exact span differential, with the greedy alignment kept as the fallback.
+
+### Task R4-D: the residual detector (R4-0, R4-2 to R4-5)
+
+- [x] Card numbers and the amount bound; the skipping kinship walk; residence rules; Urdu false positives; the T24 pin.
+
+### Task R4-E: measure, then fix and add the held-out rows (R4-6)
+
+- [x] Measure both corpora at 57fd1c2. Fix the new corpus's three lines (c306407). Add both corpora as regression rows, with the four ruled lines as count rows.
+
+### Task R4-F: docs and verification
+
+- [x] Spec §9 and §5; mask header; README; this record; PR body `pr-body-r4.md` through `ci_gates/check_pr_phase_claims.py` with BASE origin/main.
+
+### Round-4 execution record
+
+**Order of work.**
+1. 354a4d3: origin/main (d7f6a2c, #60) merged with a merge commit; it changes no F15 file.
+2. b48fc83: the new held-out corpus, alone.
+3. e6f14fa: the RED tests.
+4. 57fd1c2: the implementation, the measured state.
+5. c306407: the held-out fixes and regression rows (both corpora).
+6. 379a255: two lower-case rows after an occupation (they kill mutant M8).
+7. b9d684b: docs (spec §9 and §5, README, mask header).
+8. This record.
+
+**RED, against adc5aa0's sources:**
+- `tests/f15-r4-mask.test.ts`: 9 failed / 9 passed (18). Five glue rows and all four differential seeds fail.
+- `tests/f15-r4-residual.test.ts`: 45 failed / 36 passed (81). The two rows added at 379a255 fail too.
+- `functions/test/f15-pii-mask.e2e.emu.test.ts`: 8 failed / 38 passed (46): two glue rows reached the provider and six clauses were sent. The passing new row pins the fail-closed پسر اکبر.
+- `tests/f15-r4-bounds.test.ts`: 21 / 21. It guards the round-4 additions.
+- After the measurement, 3 failed at 57fd1c2 and pass at c306407: the new corpus's lines 77, 96 and 99.
+
+**False-positive rates (R4-6), at 57fd1c2:**
+- the re-auditor's round-3 corpus (held out): 4 / 102. English 1 / 55 (line 49), Urdu 2 / 45 (lines 84 and 88), "debatable" 1 / 2 (line 101). All four fail closed by rulings R4-3 and R4-4.
+- the new corpus (held out): 3 / 99. English 0 / 50, Urdu 3 / 49 (lines 77, 96 and 99).
+- both held-out sets: 7 / 201 (3.5%).
+
+At the head, the four ruled lines are count rows and every other line of both corpora is clean.
+
+**Differential (R4-1):** the re-auditor's generator, seeds 1017, 2026, 4242 and 99991 × 6,000 inputs. Span by span, there are 0 inputs where the mask keeps a unit main replaced. The re-auditor's greedy alignment, run on the same inputs against the round-4 mask, reports 118 differences, 6 of them with an "@"; each is an alignment artifact.
+
+**Mutants** (spec §9): T03, T05, T24, M7, M8 and M9 are all killed.
+
+**GREEN, at b9d684b:**
+- `npm run test:unit`: 179 files, 4855/4855.
+- The `test:rules` set: 13 files, 680/680.
+- The Functions F15 e2e, p1.api, p1.gateway, both f09 files and p1.units: 6 files, 347/347.
+- The full Functions emulator suite, under a hard timeout (3,600 s): 66 of 67 files, 1667/1671. The four failures are 15 s timeouts in `p2.jobs-scheduled`, late in the run (the file took 94 s there; one of its passing tests took 33 s). That file passes alone (6/6; its slowest test takes 0.6 s) and beside the F15 file and `p2.jobs-invariants` (57/57). Its code imports nothing this branch changes (only types from `platform/p1/types`, which is unchanged). As with round 3's late `p2.jobs-invariants` timeout, this is the environment, not an F15 regression; main's full suite was not re-run this round.
+- `npm run typecheck`, `npm run typecheck:tests`, `npm --prefix functions run typecheck` and `build`: exit 0.
+- `npm run lint`: 0 errors (89 warnings, none in a touched file).
+- G-0: PASSED.
+
+**Timings** (rank-3 work at 100,000 characters, best of three; the round-3 shapes plus 21 round-4 shapes):
+- every separator-run, repetition and round-4 shape: at most 1,011 ms with 50 names (the Urdu phrase کا باشندہ repeated; 940 ms with none);
+- U+FDFA × 100,000: 1.8 s with no names, 3.0 s with 50, as in round 3.
+
+The bound tests: the round-2 matrix, the round-3 shapes and the 21 round-4 shapes (350 tests) pass at 1.5 s per input.
+
+**Changed earlier expectation:** `tests/f15-r3-residual.test.ts`, round 3's held-out fresh line 69 ("The complainant shifted to House No. 7 after the occurrence.") is a count row by ruling R4-3.
