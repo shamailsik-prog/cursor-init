@@ -1,6 +1,6 @@
 /**
  * Detection views for the P1 PII mask and the residual check (audit F15; spec
- * docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1, 3, R2-1 and R2-5).
+ * docs/superpowers/specs/2026-10-16-f15-pii-mask-normalisation-design.md, rulings 1, 3, R2-1, R2-5 and R3-7).
  *
  * A view is the text detection runs on, plus, for each of its UTF-16 code units, the span [start, end) of the original
  * code point it came from. Detection never changes the text that is sent: a match in a view is mapped back to its span
@@ -18,20 +18,27 @@ const ASCII_RUN = /[\x00-\x7F]+/y
  * Dropped from the detection view (ruling R2-1): format characters (`\p{Cf}`), every default-ignorable code point
  * (combining grapheme joiner, variation selectors, Mongolian free variation selectors, Hangul fillers, Khmer inherent
  * vowels, U+2065, U+FFF0-FFF8, tags) and every combining mark (`\p{M}`: accents, the low line that underlines, the
- * keycap, harakat). None of them can carry a digit or a letter of an identifier, and each can sit between two digits.
+ * keycap, harakat) and, from ruling R3-7, every private-use character (`\p{Co}`: U+E000-F8FF and planes 15-16, which
+ * render as nothing or as a box). None of them can carry a digit or a letter of an identifier, and each can sit between
+ * two digits.
  */
-const DROPPED = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]/u
+const DROPPED = /[\p{Cf}\p{Co}\p{Default_Ignorable_Code_Point}\p{M}]/u
 const PD = /[\p{Pd}\u2212]/u
 const ZS = /\p{Zs}/u
 const MARK = /\p{M}/u
 const TATWEEL = "\u0640"
 
-/** Separators NFKC leaves alone, mapped to their ASCII role (ruling R2-5). */
+/**
+ * Separators NFKC leaves alone, mapped to their ASCII role (ruling R2-5), and symbols that render as a blank, mapped to
+ * a space (ruling R3-7).
+ */
 const SEPARATOR: Readonly<Record<string, string>> = {
   "\u066B": ".", // ARABIC DECIMAL SEPARATOR
   "\u066C": ",", // ARABIC THOUSANDS SEPARATOR
   "\u060C": ",", // ARABIC COMMA
   "\u3002": ".", // IDEOGRAPHIC FULL STOP
+  "\u2800": " ", // BRAILLE PATTERN BLANK
+  "\u303F": " ", // IDEOGRAPHIC HALF FILL SPACE
 }
 
 /**
@@ -136,7 +143,9 @@ function detectionForm(ch: string): string {
  * mark is dropped (ruling R2-1); an enclosed or dingbat digit becomes its number (R2-5); anything else is
  * NFKC-normalised, then each character of that form maps: a decimal digit of any script to its ASCII digit, a dash
  * (`\p{Pd}`, U+2212) to "-", a space separator (`\p{Zs}`) to " ", an Arabic decimal separator or ideographic full stop
- * to ".", an Arabic thousands separator or comma to ",". Every unit keeps the span of the code point it came from; an
+ * to ".", an Arabic thousands separator or comma to ",", the braille blank and the ideographic half fill space to " "
+ * (R3-7). A private-use character is dropped with the invisibles (R3-7). Every unit keeps the span of the code point it
+ * came from; an
  * NFKC expansion gives several units the same span. Tabs and line breaks are kept.
  */
 export function detectionView(original: string): TextView {

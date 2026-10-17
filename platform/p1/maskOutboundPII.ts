@@ -76,15 +76,71 @@ export const MASK_CUES: readonly string[] = [
   "111", "@", "a@", "a@b.", "35202", "03", "0300", "AB",
 ]
 
-// Separators between mobile groups: at most three characters, so no quantifier can repeat a long whitespace run (R2-2).
-// No slash: "03/01/2021 123" is a date and a number, not a mobile.
-const SEP = "[\\s.,\\-()_]{0,3}"
-const CNIC_SEPARATED = /\b\d{5}[.,/\-\s_]{1,3}\d{7}[.,/\-\s_]{1,3}\d\b/g
-const CNIC_PLAIN = /\b\d{13}\b/g
-const PK_IBAN = /\bPK[\s-]{0,3}\d{2}[\s-]{0,3}[A-Z]{4}(?:[\s-]{0,3}\d{4}){4}\b/gi
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 1: main's patterns (origin/main 0844ed8), in main's order, so whatever main masked is masked again (ruling
+// R3-1). They are main's verbatim, except that the mobiles also take the country prefix main left to their left, and
+// main's email is replaced: it backtracked quadratically, and EMAIL below matches every email it did (the differential
+// test in tests/f15-r3-mask.test.ts checks these claims on generated inputs).
+// ---------------------------------------------------------------------------------------------------------------------
+
+const MAIN_CNIC_SEPARATED = /\b\d{5}[.\-\s]+\d{7}[.\-\s]+\d\b/g
+const MAIN_CNIC_PLAIN = /\b\d{13}\b/g
+/**
+ * Main's two mobile patterns, each also taking a country prefix main left in front of its match ("+92 (300) 1234567",
+ * "0092-300-1234567"): the prefix only widens a match to the left, so main's span is still covered.
+ */
+const MAIN_MOBILE_PAREN = /(?:(?:\+\s?92|0092)[\s.-]?)?\(0?3\d{2}\)[.\s-]?\d{7}\b/g
+const MAIN_MOBILE = /(?:(?:\+|00)(?=92))?(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g
+const MAIN_IBAN = /\bPK\s*\d{2}\s*[A-Z]{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\b/gi
+const MAIN_NTN = /\bNTN[:\s-]*\d{7}-\d\b/gi
+const MAIN_PASSPORT = /\b(?:passport|ppt\.?)[:\s-]*[A-Z]{2}\d{7}\b/gi
+/**
+ * An email, anchored at the start of a run of local-part characters (audit F15): main's `\b`-anchored form restarted
+ * inside every run and backtracked quadratically. Letters and digits of any script (R2-5: "nūra@...", IDN domains).
+ * Like main's, its local part holds a letter, digit or underscore (main's `\b` needed one to start), and it ends where
+ * main's did, before anything but an ASCII letter, digit or underscore, so it never reads further than main's into
+ * digits main gave to a later pattern ("%@90-Z0.Xa.NTN 9159198-8", "...@9XZ.Xb_PK36..."); stage 2 widens both.
+ */
+const EMAIL = /(?<![\p{L}\p{N}._%+-])[.%+-]*[\p{L}\p{N}_][\p{L}\p{N}._%+-]*@[\p{L}\p{N}.-]+\.\p{L}{2,}(?![A-Za-z0-9_])/gu
+/**
+ * An email that starts exactly where the previous one ended ("a@b.pk.c@d.pk"): main's `\b` form restarted there, the
+ * anchored form cannot (found by the differential test). Tried once at each match end, sticky, so the scan stays
+ * linear.
+ */
+const EMAIL_AT = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}(?![A-Za-z0-9_])/uy
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 2: what main did not catch, on what stage 1 left. Separator runs are unbounded, as on main (ruling R3-1: round
+// 2's bound of three characters let a CNIC with five spaces through). Each run is a class disjoint from the digits and
+// letters around it, so it has one parse: a start (a word boundary, a label or the first digit of a run) consumes it
+// once and gives it back once, and the scan stays linear in the text (tests/f15-r3-bounds.test.ts).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** An email ending before an underscore or a letter of any script too ("nura@qalvo.pk_"). */
+const EMAIL_WIDE = /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}(?![\p{L}\p{N}])/gu
+const EMAIL_WIDE_AT = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}(?![\p{L}\p{N}])/uy
+/** A CNIC split 5-7-1 by runs that may also hold commas, slashes and underscores (R2-4, R3-1). */
+const CNIC_SEPARATED = /\b\d{5}[.,/\-\s_]+\d{7}[.,/\-\s_]+\d\b/g
+/**
+ * Digit groups split by one to three spaces or dashes, kept as a CNIC when they hold thirteen digits: a CNIC written
+ * in form boxes ("3 5 2 0 2 - 1 2 3 4 5 6 7 - 1") or in 4-4-4-1 groups (ruling R3-7). The lookarounds make a match a
+ * maximal run, so a sixteen-digit card number is never cut to thirteen.
+ */
+const CNIC_GROUPED = /(?<!\d[ -]{0,3})\d+(?:[ -]{1,3}\d+)+(?![ -]{0,3}\d)/g
+const thirteenDigits = (match: string) => match.replace(/\D/g, "").length === 13
+const PK_IBAN = /\bPK[\s-]*\d{2}[\s-]*[A-Z]{4}(?:[\s-]*\d{4}){4}\b/gi
+/**
+ * Between mobile digit groups (ruling R3-2): any run of whitespace, dots, commas, dashes, brackets, colons and
+ * underscores, and a slash only where it touches whitespace ("0300 / 1234567", "0300/ 1234567"), so "03/01/2021 123"
+ * is a date and a number, not a mobile. The two slash alternatives exclude each other: every character of a run has
+ * one parse.
+ */
+const MOBILE_SEP = "(?:[\\s.,\\-()_:]|(?<=\\s)\\/|(?<!\\s)\\/(?=\\s))*"
+/** A date at the start ("03.01.2021 123"): a date and a number, not a mobile (the residual check's rule, R3-2). */
+const NOT_A_DATE = "(?!\\d{1,2}[./-]\\d{1,2}[./-](?:19|20)\\d\\d(?!\\d))"
 /** A Pakistani mobile: a +92, 0092, 92 or 0 prefix (brackets allowed), a 3, then nine digits, any grouping (R2-4). */
 const PK_MOBILE = new RegExp(
-  `(?<![\\d+])(?:\\(\\s?(?:\\+\\s?92|0092|92)\\s?\\)|\\+\\s?92|0092|92|\\(?0)${SEP}3(?:${SEP}\\d){9}(?!\\d)`,
+  `(?<![\\d+])${NOT_A_DATE}(?:\\(\\s*(?:\\+\\s*92|0092|92)\\s*\\)|\\+\\s*92|0092|92|\\(?0)${MOBILE_SEP}3(?:${MOBILE_SEP}\\d){9}(?!\\d)`,
   "g"
 )
 /** A UAN: 111 and six digits, with an optional area code (R2-4). */
@@ -95,33 +151,53 @@ const PK_LANDLINE = new RegExp(
     "[\\s.-]{0,3}\\d{6,8}(?!\\d)",
   "g"
 )
-// Anchored at the start of a run of local-part characters (audit F15): main's `\b`-anchored form restarted inside
-// every run and backtracked quadratically. Letters and digits of any script (R2-5: "nūra@...", IDN domains).
-const EMAIL = /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}(?![\p{L}\p{N}])/gu
-const LABEL_NUMBER = "(?:[\\s:#-]{0,3}(?:No\\.?|Number))?[\\s:#-]{0,3}"
-const NTN = new RegExp(`(?<![\\p{L}\\p{N}])(?:NTN|N\\.T\\.N\\.?)${LABEL_NUMBER}\\d{7}(?:-\\d)?(?!\\d)`, "giu")
-const PASSPORT = new RegExp(`\\b(?:passport|ppt\\.?)${LABEL_NUMBER}[A-Z]{2}\\d{7}\\b`, "gi")
+/**
+ * Between a label and its value (ruling R3-1): an unbounded run of colons, whitespace, dashes, hashes and dots, then
+ * optionally "No", "Nos" or "Number" and another such run. The optional word is required before the second run, so
+ * the two runs never compete for the same characters.
+ */
+const LABEL_GAP = "[:\\s\\-#.]*(?:(?:No|Nos|Number)(?![A-Za-z])[:\\s\\-#.]*)?"
+const NTN = new RegExp(`(?<![\\p{L}\\p{N}])(?:NTN|N\\.T\\.N\\.?)${LABEL_GAP}\\d{7}(?: ?- ?\\d)?(?!\\d)`, "giu")
+const PASSPORT = new RegExp(`\\b(?:passport|ppt\\.?)${LABEL_GAP}[A-Z]{2}\\d{7}\\b`, "gi")
 /** Two capitals and seven digits, the Pakistani passport number, without a label (R2-5). Case-sensitive. */
 const PASSPORT_UNLABELLED = /\b[A-Z]{2}\d{7}\b/g
 
 /**
- * The patterns in priority order: an earlier pattern's match is never seen by a later one. The IBAN comes before the
- * phone numbers, so its digit groups are never read as one; the general mobile pattern comes before main's narrower
- * ones, which stay as a backstop.
+ * A pattern: its kind, its regex, an optional test a match must pass (`accept`) and an optional sticky regex tried at
+ * the end of each accepted match (`chain`).
  */
-const PATTERNS: ReadonlyArray<[RedactionKind, RegExp]> = [
-  ["cnic", CNIC_SEPARATED],
-  ["cnic", CNIC_PLAIN],
-  ["iban", PK_IBAN],
-  ["phone", PK_MOBILE],
-  ["phone", /\(0?3\d{2}\)[.\s-]?\d{7}\b/g],
-  ["phone", /(?:\+92|92|0)[.\s-]?3\d{2}[.\s-]?\d{7}\b/g],
-  ["phone", PK_UAN],
-  ["phone", PK_LANDLINE],
-  ["email", EMAIL],
-  ["ntn", NTN],
-  ["passport", PASSPORT],
-  ["passport", PASSPORT_UNLABELLED],
+type Pattern = {
+  kind: RedactionKind
+  re: RegExp
+  accept?: (match: string) => boolean
+  chain?: RegExp
+}
+
+/**
+ * The patterns in priority order: an earlier pattern's match is never seen by a later one. Stage 1 is main's, so
+ * nothing main masked is read differently; in stage 2 the labelled values and the IBAN come before the mobiles (the
+ * unbounded mobile separators must not read their digits as a mobile), the general mobile pattern before the
+ * landline and UAN, and the grouped CNIC last, so it only reads digits no other pattern took.
+ */
+const PATTERNS: readonly Pattern[] = [
+  { kind: "cnic", re: MAIN_CNIC_SEPARATED },
+  { kind: "cnic", re: MAIN_CNIC_PLAIN },
+  { kind: "phone", re: MAIN_MOBILE_PAREN },
+  { kind: "phone", re: MAIN_MOBILE },
+  { kind: "email", re: EMAIL, chain: EMAIL_AT },
+  { kind: "iban", re: MAIN_IBAN },
+  { kind: "ntn", re: MAIN_NTN },
+  { kind: "passport", re: MAIN_PASSPORT },
+  { kind: "cnic", re: CNIC_SEPARATED },
+  { kind: "iban", re: PK_IBAN },
+  { kind: "ntn", re: NTN },
+  { kind: "passport", re: PASSPORT },
+  { kind: "phone", re: PK_MOBILE },
+  { kind: "phone", re: PK_UAN },
+  { kind: "phone", re: PK_LANDLINE },
+  { kind: "email", re: EMAIL_WIDE, chain: EMAIL_WIDE_AT },
+  { kind: "passport", re: PASSPORT_UNLABELLED },
+  { kind: "cnic", re: CNIC_GROUPED, accept: thirteenDigits },
 ]
 
 /** Written over an accepted match in a view: no pattern or name can match it. */
@@ -173,17 +249,18 @@ function pastMarks(original: string, end: number): number {
 }
 
 /**
- * Accepts every match of `re` in `units`: records its original span (moved past any trailing combining marks) and
- * blanks every unit whose original span overlaps it (so the units an NFKC expansion shares with it go too). Returns
- * the number of matches.
+ * Accepts every match of the pattern in `units` that its `accept` keeps (all of them by default), and every match of its
+ * `chain` that starts exactly where an accepted match ends: records its original span (moved past any trailing
+ * combining marks) and blanks every unit whose original span overlaps it (so the units an NFKC expansion shares with it
+ * go too). Returns the number of matches accepted.
  */
-function take(original: string, units: Units, re: RegExp, kind: RedactionKind, spans: Span[]): number {
+function take(original: string, units: Units, pattern: Pattern, spans: Span[]): number {
+  const { kind, re, accept, chain } = pattern
   const view = units.view
   const text = units.text()
   let count = 0
-  for (const m of text.matchAll(re)) {
-    const first = m.index
-    const last = first + m[0].length - 1
+  const accepted = (first: number, length: number): number => {
+    const last = first + length - 1
     const start = view.start[first]!
     const end = pastMarks(original, view.end[last]!)
     let from = first
@@ -193,6 +270,17 @@ function take(original: string, units: Units, re: RegExp, kind: RedactionKind, s
     units.blank(from, to)
     spans.push({ start, end, kind })
     count += 1
+    return last + 1
+  }
+  for (const m of text.matchAll(re)) {
+    if (accept !== undefined && !accept(m[0])) continue
+    let next = accepted(m.index, m[0].length)
+    while (chain !== undefined) {
+      chain.lastIndex = next
+      const c = chain.exec(text)
+      if (c === null) break
+      next = accepted(c.index, c[0].length)
+    }
   }
   return count
 }
@@ -222,14 +310,14 @@ export function maskOutboundPII(text: string, options: MaskOptions = {}): MaskRe
 
   // 1. The identifier patterns, on the detection view.
   const detection = new Units(detectionView(text))
-  for (const [kind, re] of PATTERNS) counts[kind] += take(text, detection, re, kind, spans)
+  for (const pattern of PATTERNS) counts[pattern.kind] += take(text, detection, pattern, spans)
 
   // 2. The party names, on the name view of what the patterns left.
   const names = namePatterns(options.partyNames ?? [])
   if (names.length > 0) {
     const blanked: TextView = { text: detection.text(), start: detection.view.start, end: detection.view.end }
     const units = new Units(nameView(blanked))
-    for (const re of names) counts.party += take(text, units, re, "party", spans)
+    for (const re of names) counts.party += take(text, units, { kind: "party", re }, spans)
   }
 
   // 3. The original text with each accepted span replaced by its token; spans that share an original code point (only
