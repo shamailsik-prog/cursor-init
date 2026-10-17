@@ -92,6 +92,13 @@ function buildBaseTree(): string {
     "scripts/e2e-console-auth.sh",
     // Check [16] compares the runner, this ledger and the frontend-real test file names.
     "docs/audits/lattice-focused-ops-vitest-bundle.md",
+    // Check [17] (audit F17) compares the committee routing, the registry version, the grounding rules and the
+    // evaluation set with the evaluation record.
+    "functions/src/p1/costTable.ts",
+    "platform/p1/constants.ts",
+    "platform/p1/systemPolicy.ts",
+    "functions/src/p1/grounding.ts",
+    "docs/evals",
   ]) {
     copyFromRepo(dir, rel);
   }

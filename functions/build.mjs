@@ -41,16 +41,19 @@ await build({
   logLevel: "info",
 })
 
-// Operator CLI (not a deployed export): `npm run jobs:backfill`.
-await build({
-  entryPoints: [path.join(here, "src/cli/jobsBackfill.ts")],
-  outfile: path.join(here, "lib/cli/jobsBackfill.js"),
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "cjs",
-  sourcemap: true,
-  external: EXTERNAL,
-  alias: { "@": repoRoot },
-  logLevel: "info",
-})
+// Operator CLIs (not deployed exports): `npm run jobs:backfill`, and `npm run eval:committee-live` (audit F17: the live
+// evaluation of docs/evals/committee-brain-eval-set.json, which reports NOT RUN without AI_GATEWAY_API_KEY).
+for (const cli of ["jobsBackfill", "committeeEval"]) {
+  await build({
+    entryPoints: [path.join(here, `src/cli/${cli}.ts`)],
+    outfile: path.join(here, `lib/cli/${cli}.js`),
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "cjs",
+    sourcemap: true,
+    external: EXTERNAL,
+    alias: { "@": repoRoot },
+    logLevel: "info",
+  })
+}

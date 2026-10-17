@@ -9,6 +9,7 @@
   "scripts": {
     "build": "node build.mjs",
     "jobs:backfill": "node lib/cli/jobsBackfill.js",
+    "eval:committee-live": "node build.mjs && cd .. && node functions/lib/cli/committeeEval.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "test:emu": "cd .. && npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test\"",
