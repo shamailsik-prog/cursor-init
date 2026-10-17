@@ -138,3 +138,17 @@ Spec section 2a (ruling R7a and the rulings on L1 to L5).
 | L5: a fabricated statute in the prose beside a verified judgment grades `grounded` | 738896e | n/a (residual risk 9, unchanged by ruling) | n/a |
 
 Verification at the head: `npm run test:unit` 195 files, 5,611 passed, 54 skipped; the P1/F06/F07-F08/F09/F15/F16/F17/D4 emulator files 26 files, 1,040 passed; the F05 suite with the F17 file 4 files, 90 passed (local PG16 + pgvector); `npm run typecheck`, `typecheck:tests`, functions typecheck and build exit 0 (route check 52 routes); `npm run lint` 0 errors (89 pre-existing warnings, none in changed files); `npx eslint --max-warnings 0 functions` exit 0; `BASE=origin/main bash ci_gates/gate_g0.sh` PASSED with [17] PASS; the live harness without a key prints NOT RUN for the 74 items of f17.3 and exits 0.
+
+## Re-audit round 2 (independent re-audit of d729ff8: FAIL 7/10)
+
+Spec section 2a (ruling R7b and the round-2 LOWs).
+
+| Finding | Commit | RED (each new test seen failing first, or the mutant it kills) | GREEN |
+| --- | --- | --- | --- |
+| HIGH-1 narrowed but open: eight forms grounded through the route, about 25 more at unit level (R7b) | 0d164f2, b600f01, 9c0a520 | At d729ff8's code: `f17-prose-authority.test.ts` and the time-budget file 69 failed, 295 passed (every re-auditor leak line, the coordinator's forms, 7 of 40 self-audit forms, controls flagged today, the 7-word name, the mid-word cut, the 256 KB case numbers at 5,387 ms); the route e2e 8 failed, 9 passed; the eval-set and eval-live tests 5 failed. Second self-audit pass: 11 failed, 249 passed. Mutants: normalisation removed (9), masking the field first removed (1), the word-boundary cut removed (1), the statute and record exclusion removed (2) | unit 262, time budget 136 (256 KB worst cases about 1 s against 2 s), route e2e 17, eval set f17.4 (89 items) graded as authored, all F17 Functions files 619 |
+| P02, P03, P15 survived | 0d164f2, b600f01 | P02 on either past-cap path 2 failed; P03 1; P15 2 | as above |
+| The template-literal shadow passed the gate; a lower-case "not run" note passed | 131615a | `tests/f17-eval-record-gate.test.ts` 4 failed, 54 passed; the literal-blanking mutant 2 failed | 58 passed; G-0 [17] PASS |
+| The name cut (a partial party name on unmasked input) | 0d164f2 | the 7-word party name and the zero-width-split name failed | pinned by both tests |
+| Spec, README, grounding doc comments: what grounded means | 80fa09e | n/a | n/a |
+
+Verification for round 2: `npm run test:unit` 195 files, 5,616 passed, 54 skipped; the P1/F06/F07-F08/F09/F15/F16/F17/D4 emulator files 26 files, 1,284 passed; the F05 suite with the F17 file 4 files, 90 passed (local PG16 + pgvector); `npm run test:rules` 14 files, 682 passed; the full Functions emulator suite 81 files, 2,333 passed (the p2.jobs-scheduled order-dependent timeouts did not occur in this order); after the hygiene commit all F17 Functions files 619 passed and the gate tests with g0-gate-e2e 78 passed; typecheck, typecheck:tests, functions typecheck and build exit 0 (route check 52 routes); lint 0 errors (89 pre-existing warnings, none in changed files); functions eslint exit 0; G-0 PASSED with [17] PASS; the live harness without a key prints NOT RUN for the 89 items of f17.4.
