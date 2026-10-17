@@ -22,7 +22,8 @@ import { EMULATORS, mintIdToken, uniq } from "./emu"
  *
  * On main 0844ed8, (a) to (d), (e)'s first and malformed-receipt rows, and the round-2 attack rows (f) fail. The rest
  * are guards that pass on main too and must keep passing: (d') another firm's client record, (e)'s pre-F15 receipt,
- * the round-2 false-positive rows (g) and the timing row (h).
+ * the round-2 false-positive rows (g) and the timing row (h). On round 2's head 15a5385 every row of (i) fails: its
+ * identifiers reached the provider, and its two clean rows were blocked.
  *
  * Every name is invented; every number is synthetic.
  */
@@ -301,6 +302,63 @@ describe.skipIf(!EMULATORS)("audit F15: the outbound mask and the minimisation c
     ])("%s", async (_label, body) => {
       const f = await newFirm({ classification: "privileged" })
       setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      const sent = capture()
+      const r = await ask(f, body)
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe(body)
+    })
+  })
+
+  // Re-audit round 2 (FAIL 7/10): the re-auditor's privileged probes (r2-e2e-attack), spec rulings R3-1 to R3-5.
+  describe("(i) round 3: what the re-auditor sent to the provider at rank 3 is masked, or the call is blocked", () => {
+    const privileged = async () => {
+      const f = await newFirm({ classification: "privileged" })
+      setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
+      return f
+    }
+
+    it.each([
+      ["a CNIC with five spaces between groups", "Client CNIC 35202     1234567     1. Draft the bail grounds.", "Client CNIC [CNIC]. Draft the bail grounds."],
+      ["a CNIC wrapped over a line and indented", "Client CNIC 35202-\n        1234567-1. Draft the bail grounds.", "Client CNIC [CNIC]. Draft the bail grounds."],
+      ["an IBAN with four spaces between groups", "Refund to IBAN PK36    SCBL    0000    0011    2345    6702. Draft the notice.", "Refund to IBAN [IBAN]. Draft the notice."],
+      ["a mobile with four spaces", "Client can be reached at 0300    1234567. Draft the bail grounds.", "Client can be reached at [PHONE]. Draft the bail grounds."],
+      ["a labelled mobile with a spaced slash", "Mobile: 0300 / 1234567. Draft the bail grounds.", "Mobile: [PHONE]. Draft the bail grounds."],
+    ])("%s: the provider receives no digit of it", async (_label, body, expected) => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, body)
+      expect(r.blocked).toBe(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]!.body).toBe(expected)
+      expect(ANY_DIGIT.test(sent[0]!.body)).toBe(false)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts).toEqual(NO_RESIDUAL)
+    })
+
+    it.each([
+      ["son of the said Kamran", "Tariq, son of the said Kamran, was arrested. Draft the bail grounds.", "kinship_name"],
+      ["son of one Kamran", "Tariq, son of one Kamran, was arrested. Draft the bail grounds.", "kinship_name"],
+      ["Urdu: wife of the accused Kamran", "مسماۃ نورا زوجہ ملزم کامران نے بیان دیا۔", "kinship_name"],
+      ["Father's name field", "Father's name: Kamran Qalvo. Draft the bail grounds.", "kinship_name"],
+      ["plural residents of a named village", "Tariq and Haris, residents of village Kot Qalvo, were arrested. Draft the bail grounds.", "address"],
+      ["Urdu plural residents of a named village", "کامران و حارث سکنائے موضع قلوو کی ضمانت", "address"],
+      ["an address mid-sentence", "The accused gave his address: 12-B Qalvo Road, Lahore. Draft the bail grounds.", "address"],
+    ])("%s: blocked not_minimised, and the provider is never called", async (_label, body, kind) => {
+      const f = await privileged()
+      const sent = capture()
+      const r = await ask(f, body)
+      expect([r.blocked, r.reason]).toEqual([true, "not_minimised"])
+      expect(sent).toHaveLength(0)
+      const row = await outputOf(r.outputId)
+      expect(row.outbound.metadata.residualCounts[kind]).toBeGreaterThan(0)
+    })
+
+    it.each([
+      ["son of a Government servant", "The petitioner is the son of a Government servant. Draft the grounds."],
+      ["an Urdu residential area", "رہائشی علاقہ میں کمرشل سرگرمی کی اجازت نہیں۔"],
+    ])("clean prose the re-auditor saw blocked is allowed out: %s", async (_label, body) => {
+      const f = await privileged()
       const sent = capture()
       const r = await ask(f, body)
       expect(r.blocked).toBe(false)
