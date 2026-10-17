@@ -117,12 +117,12 @@ type CallCommitteeBrainCommon = {
 
 /**
  * Audit F16: the caller's own text as one user turn (`body`: the HTTP route, translation), or the turns of a
- * conversation (`turns`: the eve bridge, which sets `withAgentInstructions` when the prompt carries the pinned agent
- * instructions, spec refinements R1b and R3a). No caller supplies system text: it is the registry's text for the
- * purpose, and on the bridge the pinned instructions after it.
+ * conversation (`turns`: the eve bridge, which passes the agent instructions it found in the prompt, spec refinements
+ * R1b and R3a). No caller supplies other system text: the system message is the registry's text for the purpose and,
+ * on the bridge, agent/instructions.md as pinned by its digest after it; any other instructions text is refused.
  */
 export type CallCommitteeBrainInput = CallCommitteeBrainCommon &
-  ({ body: string; turns?: never; withAgentInstructions?: never } | { turns: readonly PromptTurn[]; withAgentInstructions?: boolean; body?: never })
+  ({ body: string; turns?: never; agentInstructions?: never } | { turns: readonly PromptTurn[]; agentInstructions?: string; body?: never })
 
 export async function callCommitteeBrain(
   input: CallCommitteeBrainInput
@@ -136,7 +136,7 @@ export async function callCommitteeBrain(
   const built = buildOutbound({
     purpose: input.purpose,
     turns,
-    withAgentInstructions: conversation && input.withAgentInstructions === true,
+    agentInstructions: conversation ? input.agentInstructions : undefined,
     partyNames: input.partyNames,
   })
   const purpose = maskOutboundPII(input.purpose, {

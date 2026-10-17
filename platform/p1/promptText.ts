@@ -1,5 +1,5 @@
 import type { LanguageModelV3CallOptions, LanguageModelV3ToolResultOutput } from "@ai-sdk/provider"
-import { carriesPinnedAgentInstructions } from "@/platform/p1/agentInstructions"
+import { pinnedAgentInstructionsIn } from "@/platform/p1/agentInstructions"
 import type { PromptSegment, PromptTurn } from "@/platform/p1/outboundPrompt"
 import { isEnvelopeSource } from "@/platform/p1/promptEnvelope"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -8,11 +8,12 @@ import { isClassification, type Classification } from "@/platform/p1/types"
  * An AI SDK prompt as P1 turns (audit F16; spec docs/superpowers/specs/2026-10-17-f16-prompt-trust-roles-design.md,
  * rulings 1 and 2). Nothing is flattened and nothing is silently dropped:
  *
- * - `system` messages are eve's composed system prompt. Their text is never forwarded (review round, R3a): it must carry
- *   the pinned agent instructions as a whole block (platform/p1/agentInstructions.ts), and then the builder appends the
- *   pinned constant after the registry policy (`withAgentInstructions`); eve's other blocks (tool execution, workspace,
- *   skills, framework notes) are not sent, since the P1 request carries no tools. A prompt whose system text does not
- *   carry the pinned block fails closed. A prompt with no system message gets the registry policy alone;
+ * - `system` messages are eve's composed system prompt, which is never forwarded as such (review round, R3a): it must
+ *   carry agent/instructions.md as one whole block that matches the pinned digest (platform/p1/agentInstructions.ts),
+ *   and only that block's text goes on, as `agentInstructions`, after the registry policy; eve's other blocks (tool
+ *   execution, workspace, skills, framework notes) are not sent, since the P1 request carries no tools. A prompt whose
+ *   system text does not carry the pinned block fails closed. A prompt with no system message gets the registry policy
+ *   alone;
  * - `user` text parts stay the user's turn; `assistant` text parts stay the assistant's turn;
  * - a `tool-call` part is enveloped (`tool-call:<name>`, its JSON input) in the assistant turn that made it;
  * - a `tool-result` part (from a `tool` message, or provider-executed in an `assistant` message) is enveloped
@@ -22,7 +23,7 @@ import { isClassification, type Classification } from "@/platform/p1/types"
  *
  * Classification is never read from or added to the prompt.
  */
-export type PromptConversion = { ok: true; withAgentInstructions: boolean; turns: PromptTurn[] } | { ok: false; reason: string }
+export type PromptConversion = { ok: true; agentInstructions?: string; turns: PromptTurn[] } | { ok: false; reason: string }
 
 const cannotCarry = (what: string): PromptConversion => ({ ok: false, reason: `P1 cannot carry ${what}; nothing was sent` })
 
@@ -133,12 +134,11 @@ export function promptToTurns(prompt: LanguageModelV3CallOptions["prompt"]): Pro
     return cannotCarry("a message with an unknown role")
   }
   if (turns.length === 0) return cannotCarry("a prompt without a user or assistant turn")
-  // R3a: the system text is only checked, never forwarded. eve joins its system messages with a blank line.
-  const withAgentInstructions = systemTexts.length > 0
-  if (withAgentInstructions && !carriesPinnedAgentInstructions(systemTexts.join("\n\n"))) {
-    return cannotCarry("system instructions that differ from the pinned agent instructions")
-  }
-  return { ok: true, withAgentInstructions, turns }
+  // R3a: of the system text only the pinned instructions block goes on. eve joins its system messages with a blank line.
+  if (systemTexts.length === 0) return { ok: true, turns }
+  const agentInstructions = pinnedAgentInstructionsIn(systemTexts.join("\n\n"))
+  if (agentInstructions === null) return cannotCarry("system instructions that differ from the pinned agent instructions")
+  return { ok: true, agentInstructions, turns }
 }
 
 /**

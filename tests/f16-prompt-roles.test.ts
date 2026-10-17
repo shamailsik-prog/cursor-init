@@ -297,7 +297,7 @@ describe("audit F16 review round: the stored outbound holds no duplicate content
         { role: "user", segments: [{ kind: "untrusted", source: "tool:mask_preview", text: "Notice to [PARTY]" }] },
         { role: "user", segments: [{ kind: "text", text: "Now draft the reply." }] },
       ],
-      withAgentInstructions: true,
+      agentInstructions: INSTRUCTIONS,
       classification: "public",
       provider: "ai-gateway",
       purpose: "committee-brain",

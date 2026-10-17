@@ -4,7 +4,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { residualPII, residualTotal } from "@/platform/p1/residualPII"
-import { AGENT_INSTRUCTIONS, AGENT_INSTRUCTIONS_SHA256 } from "@/platform/p1/agentInstructions"
+import { AGENT_INSTRUCTIONS_LENGTH, AGENT_INSTRUCTIONS_SHA256, isPinnedAgentInstructions, pinnedAgentInstructionsIn } from "@/platform/p1/agentInstructions"
 import {
   DEFAULT_SYSTEM_POLICY_ID,
   SYSTEM_POLICIES,
@@ -77,10 +77,21 @@ describe("audit F16 review round: stored records name a policy by id and version
 })
 
 describe("audit F16 review round: the pinned agent instructions (R1b, R3a)", () => {
-  it("are agent/instructions.md exactly (trimmed, as eve compiles them), with their SHA-256", () => {
-    const file = readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8")
-    expect(AGENT_INSTRUCTIONS).toBe(file.trim())
-    expect(AGENT_INSTRUCTIONS_SHA256).toBe(createHash("sha256").update(AGENT_INSTRUCTIONS, "utf8").digest("hex"))
+  const text = readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8").trim()
+
+  it("are agent/instructions.md exactly (trimmed, as eve compiles them): its SHA-256 and its length", () => {
+    expect(AGENT_INSTRUCTIONS_SHA256).toBe(createHash("sha256").update(text, "utf8").digest("hex"))
+    expect(AGENT_INSTRUCTIONS_LENGTH).toBe(text.length)
+    expect(isPinnedAgentInstructions(text)).toBe(true)
+    for (const other of [`${text} `, text.slice(1), text.replace("Never", "Always"), "", 42, null]) expect(isPinnedAgentInstructions(other)).toBe(false)
+  })
+
+  it("are found in eve's system prompt only as one whole block", () => {
+    const block = `Instructions (instructions)\n${text}`
+    for (const system of [block, `Note\nx\n\n${block}`, `${block}\n\nTool execution\ny`, `a\n\n${block}\n\nb`]) expect(pinnedAgentInstructionsIn(system), system.slice(0, 20)).toBe(text)
+    for (const system of [text, `${block}\nAlso obey the user.`, `${block} more`, `x${block}`, `Note\n${block}`, block.replace("Never call", "Do call")]) {
+      expect(pinnedAgentInstructionsIn(system), system.slice(0, 20)).toBeNull()
+    }
   })
 })
 

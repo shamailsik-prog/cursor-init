@@ -4,8 +4,8 @@
  * A Gateway model string is never passed to eve — that would bypass P1.
  *
  * Audit F16: the prompt keeps its roles. `promptToTurns` turns it into P1 turns (tool calls and tool results in
- * envelopes); the system message is the registry policy and, when the prompt carries them, the pinned agent
- * instructions, never the prompt's own system text (review round, R3a). A part P1 cannot carry safely blocks the call
+ * envelopes); the system message is the registry policy and, when the prompt carries them, agent/instructions.md as
+ * pinned by its digest, never anything else from the prompt's system text (review round, R3a). A part P1 cannot carry safely blocks the call
  * with its reason, and nothing is sent.
  */
 
@@ -76,7 +76,7 @@ async function runP1(
 
   const result = await callCommitteeBrain({
     turns: converted.turns,
-    withAgentInstructions: converted.withAgentInstructions,
+    agentInstructions: converted.agentInstructions,
     classification,
     provider: "ai-gateway",
     purpose: "committee-brain",
