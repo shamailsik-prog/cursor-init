@@ -2,6 +2,7 @@ import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Tra
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
+import { residualPII } from "@/platform/p1/residualPII"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { isContentionAbort } from "../d1/contention"
@@ -116,8 +117,12 @@ export type P1Result = {
   inputTokens: number
   outputTokens: number
   costMicroUsd: number
-  /** What was (or would have been) sent: the masked body and purpose, and the body's redaction counts. */
-  outbound: { body: string; purpose: string; redactionCounts: Record<string, number> }
+  /**
+   * What was (or would have been) sent: the masked body and purpose, the body's redaction counts, and the residual
+   * detector's counts on the masked body (audit F15). `callP1` always sets `residualCounts`; an attempt receipt recorded
+   * before F15 has none.
+   */
+  outbound: { body: string; purpose: string; redactionCounts: Record<string, number>; residualCounts?: Record<string, number> }
   /** Whether this call's books are complete, apart from whether its result is available (F08; see P1Accounting). */
   accounting: P1Accounting
 }
@@ -459,13 +464,15 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const [platformSnap, configSnap, totalSnap, overheadSnap] = await db.getAll(platformConfigRef(), configRef, totalRef, overheadRef())
   const config = configSnap.data()
 
-  // 3. Route (P3-62). 4. Mask the body and the purpose with the party names.
+  // 3. Route (P3-62). 4. Mask the body and the purpose with the party names, and count what the independent residual
+  // detector still finds in the masked body (audit F15): counts by kind only, recorded on every call, blocked or not.
   const model = t.modelOverride ?? (Object.hasOwn(TASK_MODEL, taskType) ? TASK_MODEL[taskType] : "")
   const bodyMask = maskOutboundPII(req.body, { partyNames })
-  const outbound = {
+  const outbound: P1Result["outbound"] = {
     body: bodyMask.masked,
     purpose: maskOutboundPII(req.purpose, { partyNames }).masked,
     redactionCounts: Object.fromEntries(bodyMask.redactions.map((r) => [r.kind, r.count])),
+    residualCounts: residualPII(bodyMask.masked),
   }
   // The call's worst case (F07, re-audit R1-D1, R2-D3): the input ceiling of the masked body that is sent (one token
   // per UTF-8 byte of its largest normal form, plus the model's request overhead or the larger overhead learned from a

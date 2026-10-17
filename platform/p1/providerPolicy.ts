@@ -1,5 +1,6 @@
 import dpaSeed from "@/data/provider_dpa.json"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { residualPII, residualTotal } from "@/platform/p1/residualPII"
 import {
   classificationRank,
   isClassification,
@@ -126,8 +127,10 @@ export function providerAllowedFor(
 }
 
 /**
- * Rank >= 3 obligation check: the outbound body and the trace metadata that is
- * returned and persisted (purpose) carry no PII the mask would still redact.
+ * Rank >= 3 obligation check (audit F15, spec ruling 6): the outbound body and the trace metadata that is returned and
+ * persisted (purpose) carry no PII the mask would still redact, AND the independent residual detector (`residualPII`:
+ * identifier-length digit runs, labelled identifiers, addresses, parentage) finds nothing in them. Passing is a
+ * minimisation check, not proof of anonymity (see maskOutboundPII.ts).
  */
 export function assertMinimised(
   request: { body: string; metadata: { purpose: string } },
@@ -136,6 +139,7 @@ export function assertMinimised(
   for (const text of [request.body, request.metadata.purpose]) {
     const again = maskOutboundPII(text, { partyNames })
     if (again.redactions.some((r) => r.count > 0)) return false
+    if (residualTotal(residualPII(text)) > 0) return false
   }
   return true
 }

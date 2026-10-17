@@ -290,6 +290,8 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
         body: "Client [PARTY], CNIC [CNIC], mobile [PHONE], asks about bail.",
         purpose: "committee-brain for [PARTY]",
         redactionCounts: { cnic: 1, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 },
+        // Audit F15: the residual detector finds nothing left in the masked body.
+        residualCounts: { id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 },
       })
 
       const row = await rowOf(r.usageLogId)
