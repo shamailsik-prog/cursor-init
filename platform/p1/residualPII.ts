@@ -224,6 +224,8 @@ const UR_STOP = new Set([
   "تھا", "تھی", "تھے", "گیا", "گئی", "گئے", "نہ", "نہیں", "بھی",
   "تو", "یہ", "وہ", "جو", "ان", "اس", "ہو", "ہوا", "ہوئی", "ہوئے",
   "رہا", "رہی", "رہے", "تک", "لیے", "ہونا", "ہونے", "ہوں", "ہوتا", "ہوتی", "ہوتے", "دونوں", "ہذا",
+  // prepositions end the walk (R4-2): "دختر زیر تعلیم ہے", "ولد بطور گواہ" (held-out lines 77 and 99, after the measurement)
+  "زیر", "بطور", "بابت", "برائے", "بغیر", "بذریعہ", "بمطابق", "مطابق", "خلاف", "بجائے", "بمع", "بشمول",
 ])
 /** Urdu legal role and heir nouns: skipped after a kinship cue; the word after them is judged (rulings R2-3a, R3-4). */
 const UR_ROLE_NOUNS = new Set([
@@ -240,6 +242,8 @@ const UR_OCCUPATIONS = new Set([
   "ڈرائیور", "مالک", "کرایہ", "دار", "ملازم", "مزدور", "دکاندار", "کسان", "کاشتکار", "کلرک", "چوکیدار", "باورچی", "استاد", "ڈاکٹر", "تاجر",
   "ٹھیکیدار", "افسر", "سپاہی", "کانسٹیبل", "حوالدار", "انسپکٹر", "وکیل", "منشی", "نمبردار", "پٹواری", "زمیندار", "مستری", "درزی", "موکل",
   "عورت", "خاتون",
+  // nouns that are never given names, walked past like descriptors: "پسر وقوعہ کے وقت" (held-out line 96)
+  "وقوعہ", "مقدمہ", "جائیداد", "جائداد", "وراثت",
 ])
 /**
  * Urdu phrases after a kinship cue that are not names (ruling R4-2: نیک, شادی and عدالت are given names, so only the

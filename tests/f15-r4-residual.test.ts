@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { assertMinimised } from "@/platform/p1/providerPolicy"
 import { residualPII, type ResidualKind } from "@/platform/p1/residualPII"
+import { FRESH_R3 } from "./f15-r4-fresh-corpus"
+import { HELDOUT_CORPUS_R4 } from "./f15-r4-heldout-corpus"
 
 /**
  * Audit F15, re-audit round 3 (FAIL 8/10): the residual detector. Spec rulings R4-0 (at rank 3 and above a leak is
@@ -138,4 +140,31 @@ describe("R4-0 applied to numbers: no exemption for a card number or a twelve-di
     ["an eleven-digit amount with /=", "The property was valued at 12500000000/= by the valuer."],
     ["a reference number with its No.", "Reference No. 123456789012 of 2019 was decided."],
   ])("passes: %s", (_label, text) => expectClean(text))
+})
+
+// R4-6: added only after the measurement at 57fd1c2 (the re-auditor's round-3 corpus: 4 of 102 flagged, lines 49, 84, 88
+// and 101; the new corpus: 3 of 99, lines 77, 96 and 99), so the rates reported in the spec are held-out rates. The new
+// corpus's three lines are fixed; the re-auditor's four are true positives or fail-closed by ruling, each named below.
+const RULED_R4: ReadonlyMap<number, [ResidualKind, string]> = new Map([
+  [49, ["address", "R4-3: an explicit House No. always counts"]],
+  [84, ["kinship_name", "R4-4: a word after دختر is not exempted as a bank (fail closed)"]],
+  [88, ["kinship_name", "R4-4: پسر اکبر stays counted (Akbar is a name)"]],
+  [101, ["address", "R4-3: District followed by a name counts"]],
+])
+
+describe("R4-6: the held-out lines (regression rows, added after the measurement)", () => {
+  it("has the re-auditor's 102 lines and the 99 lines of the new corpus", () => {
+    expect(FRESH_R3).toHaveLength(102)
+    expect(HELDOUT_CORPUS_R4).toHaveLength(99)
+  })
+
+  it.each([...RULED_R4].map(([line, [kind, reason]]) => [line, kind, reason]))("fresh line %i counts %s (%s)", (line, kind) => {
+    const text = FRESH_R3.find(([n]) => n === line)![2]
+    expect(residualPII(maskOutboundPII(text).masked)[kind as ResidualKind]).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ...FRESH_R3.filter(([line]) => !RULED_R4.has(line)).map(([line, lang, text]) => [`fresh line ${line}`, lang, text]),
+    ...HELDOUT_CORPUS_R4.map(([genre, text], i) => [`new corpus line ${i + 1}`, genre, text]),
+  ])("%s [%s] %s", (_line, _lang, text) => expectClean(text))
 })
