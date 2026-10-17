@@ -22,7 +22,12 @@
  * under its own key (kind and ref), so the same citation found in the prose (resolved as a judgment, source `text`)
  * stays a separate entry: a claim is supported only by its own declared judgment authorities, never by a prose hit.
  *
- * Status rules `f17.2`, in order: no text, `not_assessed`; the contract not met, `unstructured`; no citation at all,
+ * Every prose field is also read by `proseAuthority.ts` for what the D4 extractor does not see (rules f17.3, re-audit
+ * ruling R7a): a report shape that reads as one reported citation is resolved like any other; any other report shape,
+ * and every case name, case number, page-only reference or "reported at/in/as" that is not bound to a VERIFIED citation
+ * next to it, is an UNRECOGNISED suspect from the text (masked, then bounded), under the same cap.
+ *
+ * Status rules `f17.3`, in order: no text, `not_assessed`; the contract not met, `unstructured`; no citation at all,
  * `not_assessed` (F06: never OK); any OVERRULED, PENDING_OVERRULING, UNVERIFIED or UNRECOGNISED citation,
  * `partially_grounded` when some claim is supported (it cites at least one authority and every one is VERIFIED), else
  * `ungrounded`; any UNAVAILABLE citation or any omitted, `unverifiable`; otherwise `grounded` when every claim (at least
