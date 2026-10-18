@@ -7,7 +7,7 @@
     "packageManager": {
       "name": "npm",
       "version": "~10.9.0",
-      "onFail": "error"
+      "onFail": "warn"
     }
   },
   "scripts": {

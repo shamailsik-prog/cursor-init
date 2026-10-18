@@ -17,7 +17,8 @@ Static checks (Gate G-0 check [18]; offline):
      lockfile, so override drift is left to check 8.
   4. Every direct dependency has a node_modules/<name> entry in the lockfile.
   5. Every manifest with a lockfile pins npm: packageManager "npm@X.Y.Z" and devEngines.packageManager
-     {name "npm", version "~X.Y.Z" or "X.Y.Z", onFail "error"}, packageManager inside that range, one pin for all.
+     {name "npm", version "~X.Y.Z" or "X.Y.Z", onFail "warn" or "error"}, packageManager inside that range, one pin
+     for all. Ruling R3d chose "warn": npm warns outside the pin, and check 7 enforces it where the guard runs (CI).
   6. No install surface (.github/workflows/*.yml|yaml, .cursor/environment.json, .claude/hooks/*, package.json
      scripts) runs a non-frozen npm command (install and its aliases, install-test, update, uninstall, dedupe; a
      global install is allowed) or skips the lockfile (--package-lock=false, --no-package-lock), and every directory
@@ -78,6 +79,8 @@ DECLARING_FIELDS = INSTALLED_DEP_FIELDS + ("peerDependencies", "overrides")
 
 PACKAGE_MANAGER_RE = re.compile(r"^npm@(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$")
 PIN_RANGE_RE = re.compile(r"^(~?)(\d+)\.(\d+)\.(\d+)$")
+# Ruling R3d: npm warns outside the pin ("warn", the policy) or refuses ("error"); "ignore" or nothing is no pin.
+ON_FAIL_ALLOWED = ("warn", "error")
 
 # npm 10 commands that install without the lockfile or rewrite it, with their aliases (npm lib/utils/cmd-list.js).
 NON_FROZEN = frozenset(
@@ -257,8 +260,9 @@ def parse_pin(root: Path, manifest_path: Path, manifest: dict, problems: Problem
     if pin.get("name") != "npm":
         problems.add(f'{where}: devEngines.packageManager.name is {json.dumps(pin.get("name"))}, expected "npm"')
         ok = False
-    if pin.get("onFail") != "error":
-        problems.add(f'{where}: devEngines.packageManager.onFail is {json.dumps(pin.get("onFail"))}, expected "error"')
+    # Ruling R3d: "warn" is the policy (npm >= 10.9 warns, CI enforces the pin through --npm-ci); "error" is accepted.
+    if pin.get("onFail") not in ON_FAIL_ALLOWED:
+        problems.add(f'{where}: devEngines.packageManager.onFail is {json.dumps(pin.get("onFail"))}, expected "warn" or "error"')
         ok = False
     version_range = pin.get("version")
     match = PIN_RANGE_RE.match(version_range) if isinstance(version_range, str) else None
@@ -822,8 +826,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             pin_ok = False
     if pairs and pin_ok and reference is not None:
+        on_fail = ", ".join(sorted({
+            manifest_by_path[path]["devEngines"]["packageManager"]["onFail"] for path, _ in pins
+        }))
         passes.append(
-            f"PASS: npm pinned to {reference[0]} (devEngines {reference[1]}, onFail error) in {len(pins)} "
+            f"PASS: npm pinned to {reference[0]} (devEngines {reference[1]}, onFail {on_fail}) in {len(pins)} "
             f"manifest{'s' if len(pins) != 1 else ''}"
         )
 
