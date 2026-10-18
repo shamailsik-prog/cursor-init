@@ -5,14 +5,18 @@
 # 1. route coverage by domain (check_route_coverage.py): 21 /api/d1 routes and 4 /api/platform/jobs routes,
 #    each exercised by a viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed)
-# 3. twenty-nine tests selected by exact full name (the gate counts them from the name arrays below), under
+# 3. forty-five tests selected by exact full name (the gate counts them from the name arrays below), under
 #    the Auth and Firestore emulators: the four saga invariants and the two O-46 openMatter refusals of
 #    d1.entity-unmerge.emu.test.ts, the five "P2 invariant"
 #    tests of p2.jobs-invariants.emu.test.ts, the two registry-discipline tests of p2.registry-discipline.emu.test.ts,
 #    the back-off and head-of-line sweeper tests of p2.jobs-sweeper.emu.test.ts (O-36) and the long-handler load
-#    test of p2.jobs-load.emu.test.ts (P3-37), and the thirteen auto-confirm tests of d1.entity-autoconfirm.emu.test.ts
+#    test of p2.jobs-load.emu.test.ts (P3-37), the thirteen auto-confirm tests of d1.entity-autoconfirm.emu.test.ts
 #    (P3-42..P3-50: four; P3-53..P3-58: nine, among them the four cases of the in-transaction re-check, the retry that
-#    never reaches fenced_step_limit, the audit row, the deterministic event id and the two flag tests)
+#    never reaches fenced_step_limit, the audit row, the deterministic event id and the two flag tests), and the
+#    sixteen progress tests of f38-autoconfirm-progress.e2e.emu.test.ts (audit F38: more than 2,000 ineligible head
+#    pairs never starve the eligible ones, the backlog alert, crash and retry, fencing of the steps and of the
+#    checkpoint (a claim taken, a job finished by a newer attempt, a job dead-lettered), the flag mid-continuation and
+#    at the checkpoint, rechecks, cross-firm isolation, and the straddling, unnameable-row and concurrent cases)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
 #
@@ -53,6 +57,25 @@ AUTO_TESTS=(
   'P3-56: L17.2 switched off between two steps stops every later step from writing'
   'P3-56: a failed flag read fails the attempt with the retryable flag_read_failed, and the retry materialises the pair'
 )
+F38_SUITE='F38 auto-confirm progress (audit F38)'
+F38_TESTS=(
+  'F38 RED/GREEN: more than 2,000 ineligible head pairs never starve the eligible pairs behind them'
+  'F38 alert: a stale backlog logs autoconfirm.backlog_stale and records it; the run that drains it logs autoconfirm.backlog_cleared'
+  'F38 alert: the stale state is recorded on the progress doc while the backlog waits'
+  "F38 the period's last continuation leaves the rest to the next day and says so (autoconfirm.backlog_remaining)"
+  'F38 crash and retry: a failed checkpoint and a continuation failing mid-run are retried; one continuation each; duplicates are dropped; every pair confirmed once'
+  'F38 fencing: a continuation attempt whose lease is reclaimed mid-run commits nothing after it loses the fence'
+  'F38 checkpoint fence: an attempt whose claim another delivery took before its checkpoint writes no progress and enqueues no continuation'
+  'F38 checkpoint fence: an attempt reclaimed and finished by a newer attempt neither overwrites its progress nor enqueues a continuation'
+  'F38 checkpoint fence: an attempt whose job was dead-lettered meanwhile writes nothing at its checkpoint'
+  'F38 flag off mid-continuation: that step and the rest write nothing, no further continuation, and the next run resumes after the last committed step'
+  'F38 flag off at the checkpoint: nothing is checkpointed and no continuation is enqueued'
+  'F38 rechecks: a repaired pair is confirmed when its recheck falls due, a pair that left the backlog loses its record, a record not yet due is not re-read'
+  "F38 cross-firm: one firm's chain never touches another firm's rows, records or progress; the same pair id defers separately per firm"
+  'F38 a pair whose rows straddle the cursor is judged whole each time and confirmed once'
+  'F38 rows that cannot name a pair are passed over and counted, and never starve the pairs behind them'
+  "F38 two periods' chains of one firm at once: every pair confirmed once and both chains end"
+)
 LOAD_SUITE='P2 long-handler load test (P3-37, O-36)'
 LOAD_TESTS=(
   "250 jobs, 240 s handlers, 10 FIFO slots: every job done, none starved, tasks within the P3-35 schedule and at most 1/5 of the fixed-grace control's"
@@ -88,8 +111,9 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${SWEEP_TESTS[@]}"; do names+=("$SWEEP_SUITE $t"); done
   for t in "${LOAD_TESTS[@]}"; do names+=("$LOAD_SUITE $t"); done
   for t in "${AUTO_TESTS[@]}"; do names+=("$AUTO_SUITE $t"); done
+  for t in "${F38_TESTS[@]}"; do names+=("$F38_SUITE $t"); done
   for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
-  npx vitest run test/d1.entity-unmerge.emu.test.ts test/p2.jobs-invariants.emu.test.ts test/p2.registry-discipline.emu.test.ts test/p2.jobs-sweeper.emu.test.ts test/p2.jobs-load.emu.test.ts test/d1.entity-autoconfirm.emu.test.ts -t "${G4C_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
+  npx vitest run test/d1.entity-unmerge.emu.test.ts test/p2.jobs-invariants.emu.test.ts test/p2.registry-discipline.emu.test.ts test/p2.jobs-sweeper.emu.test.ts test/p2.jobs-load.emu.test.ts test/d1.entity-autoconfirm.emu.test.ts test/f38-autoconfirm-progress.e2e.emu.test.ts -t "${G4C_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
   EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
     const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
     console.log(`saga and job-engine invariants: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
