@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -55,6 +55,9 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect([index.d1AutoConfirmTick.__endpoint.region, index.d1AutoConfirmTick.__endpoint.scheduleTrigger]).toEqual([["asia-south1"], expect.objectContaining({ schedule: "15 2 * * *", timeZone: "Asia/Karachi" })])
     // O-43 (P3-51): a failed daily tick is retried by the scheduler; the runs are idempotent per firm and day.
     expect(index.d1AutoConfirmTick.__endpoint.scheduleTrigger).toMatchObject({ retryConfig: { retryCount: 3, minBackoffSeconds: 60, maxBackoffSeconds: 600 } })
+    // Audit F37: the daily conflict name index reconciliation tick, after auto-confirm, with the same retry.
+    expect([index.d1ConflictReindexTick.__endpoint.region, index.d1ConflictReindexTick.__endpoint.scheduleTrigger]).toEqual([["asia-south1"], expect.objectContaining({ schedule: "35 2 * * *", timeZone: "Asia/Karachi" })])
+    expect(index.d1ConflictReindexTick.__endpoint.scheduleTrigger).toMatchObject({ retryConfig: { retryCount: 3, minBackoffSeconds: 60, maxBackoffSeconds: 600 } })
     // The sweeper sets no retry count: the next minute's sweep is its retry.
     expect(index.jobSweeper.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
@@ -75,7 +78,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm"])
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex"])
     expect(SUBSCRIBERS).toEqual([])
   })
 

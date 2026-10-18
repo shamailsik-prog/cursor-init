@@ -14,6 +14,10 @@ Builders:
 * ``slow_pdf``: a page with ``ops`` path operators (CPU time in the parser, little memory).
 * ``many_pages_pdf``: ``pages`` pages sharing one tiny content stream.
 * ``blank_pdf``: pages with no content at all, of any size (no text layer: the extractor turns to OCR).
+* ``log_flood_pdf``: the re-audit's 2.8 KB log flood (F26-FU, FA-corpus-009): a form XObject holding a
+  100 KB string and an invalid operator, invoked 200,000 times, so pdfminer logs one warning per call.
+* ``active_pdf``: a text page carrying exactly one active-content name (spec R4, R20) and no other.
+* ``uri_link_pdf``: a text page with a URI link annotation (accepted, spec R20).
 """
 
 from __future__ import annotations
@@ -258,3 +262,71 @@ def judgment_lines(n: int, *, seed: str = "A") -> List[str]:
 def pages_of(lines: Iterable[str], per_page: int) -> List[List[str]]:
     lines = list(lines)
     return [lines[i:i + per_page] for i in range(0, len(lines), per_page)] or [[]]
+
+
+def log_flood_pdf(invocations: int = 200_000, string_bytes: int = 100_000) -> bytes:
+    """The re-audit's flood (``probes/write_flood_pdf.py``, 2,777 bytes at the defaults): one page
+    whose content invokes form XObject /X ``invocations`` times; the form's content is a
+    ``string_bytes`` string followed by ``G`` (set gray), which takes a number, so pdfminer logs a
+    warning quoting the operand at every invocation. No text is shown."""
+    form_content = b"(" + b"A" * string_bytes + b") G\n"
+    page_content = zlib.compress(b"/X Do\n" * invocations, 9)
+    form = zlib.compress(form_content, 9)
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [10 0 R] /Count 1 >>",
+        3: FONT,
+        10: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /X 12 0 R >> >> /Contents 11 0 R >>",
+        11: b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(page_content) + page_content + b"\nendstream",
+        12: b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length %d /Filter /FlateDecode >>\nstream\n" % len(form)
+            + form + b"\nendstream",
+    }
+    return _classic(objects, root=1)
+
+
+# One construct per active-content name (spec R4 and R20), built so that the document carries that
+# name and no other listed one: removing the name from the policy must let the document through.
+# Each entry: extra objects (numbers 5-9), what the catalog gains, and which extra objects are the
+# page's annotations.
+_ACTIVE = {
+    "Launch": ({5: b"<< /S /Launch /F (f26-synthetic.exe) >>"}, b"/OpenAction 5 0 R", ()),
+    "EmbeddedFile": ({5: _stream(b"F26 synthetic embedded file, not a real file.", compress=False, extra=b" /Type /EmbeddedFile")}, b"", ()),
+    "EmbeddedFiles": ({5: b"<< /Type /Filespec /F (f26-synthetic.txt) >>"}, b"/Names << /EmbeddedFiles << /Names [(f26-synthetic.txt) 5 0 R] >> >>", ()),
+    "EF": ({5: b"<< /Type /Filespec /F (f26-synthetic.txt) /EF << /F 6 0 R >> >>",
+            6: _stream(b"F26 synthetic file, not a real file.", compress=False)}, b"", ()),
+    "FileAttachment": ({5: b"<< /Type /Annot /Subtype /FileAttachment /Rect [72 72 90 90] /FS (f26-synthetic.txt) >>"}, b"", (5,)),
+    "RichMedia": ({5: b"<< /Type /Annot /Subtype /RichMedia /Rect [72 72 90 90] >>"}, b"", (5,)),
+    "OnInstantiate": ({5: _stream(b"F26 synthetic 3D data", compress=False, extra=b" /Type /3D /Subtype /U3D /OnInstantiate 6 0 R"),
+                       6: _stream(b"// F26 synthetic 3D script, not a real script", compress=False)}, b"", ()),
+    "3DD": ({5: b"<< /Type /Annot /Subtype /3D /Rect [72 72 90 90] /3DD 6 0 R >>",
+             6: _stream(b"F26 synthetic 3D data", compress=False, extra=b" /Type /3D /Subtype /U3D")}, b"", (5,)),
+    "GoToR": ({5: b"<< /S /GoToR /F (f26-synthetic-remote.pdf) /D [0 /Fit] >>"}, b"/OpenAction 5 0 R", ()),
+    "GoToE": ({5: b"<< /S /GoToE /T << /R /C /N (f26-synthetic) >> /D [0 /Fit] >>"}, b"/OpenAction 5 0 R", ()),
+    "SubmitForm": ({5: b"<< /S /SubmitForm /F << /FS /URL /F (https://f26.invalid/submit) >> /Flags 4 >>"}, b"/OpenAction 5 0 R", ()),
+    "ImportData": ({5: b"<< /S /ImportData /F (f26-synthetic.fdf) >>"}, b"/OpenAction 5 0 R", ()),
+}
+ACTIVE_NAMES = tuple(_ACTIVE)
+
+
+def _page_with(lines: Sequence[str], extra: Dict[int, bytes], catalog: bytes = b"", annots: Sequence[int] = ()) -> bytes:
+    objects = _pages([text_content(lines)], compress=True)
+    objects.update(extra)
+    if catalog:
+        objects[1] = b"<< /Type /Catalog /Pages 2 0 R " + catalog + b" >>"
+    if annots:
+        page = min(k for k in objects if k >= 10)
+        objects[page] = objects[page][:-2] + b" /Annots [" + b" ".join(b"%d 0 R" % a for a in annots) + b"] >>"
+    return _classic(objects, root=1)
+
+
+def active_pdf(name: str, lines: Sequence[str]) -> bytes:
+    """A text page carrying the active-content name ``name`` (one of ``ACTIVE_NAMES``) and no other."""
+    extra, catalog, annots = _ACTIVE[name]
+    return _page_with(lines, extra, catalog, annots)
+
+
+def uri_link_pdf(lines: Sequence[str]) -> bytes:
+    """A text page with a link annotation whose action opens a web address (a judgment citing a
+    statute online does this)."""
+    link = b"<< /Type /Annot /Subtype /Link /Rect [72 700 300 720] /A << /S /URI /URI (https://f26.invalid/statutes/2099) >> >>"
+    return _page_with(lines, {5: link}, annots=(5,))

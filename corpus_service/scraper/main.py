@@ -2,12 +2,14 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import os
 import pathlib
 from scraper.auth import require_admin_api_key
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
 from scraper import client_identity
+from scraper.parsers import raw_store
 from scraper.rate_limit import RateLimitedPathsMiddleware
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,25 @@ app.add_middleware(RateLimitedPathsMiddleware, paths=[app.openapi_url, app.docs_
 async def startup():
     client_identity.log_forwarded_trust_at_startup()
     await init_db()
+def _live_dir() -> pathlib.Path:
+    """The PDF vault /health and /api/vault read (bootstrap_harvest.py's live/)."""
+    return pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
+def _vault_pdfs(live_dir: pathlib.Path):
+    """(path, stat) of every *.pdf under ``live_dir``, never inside the raw PDF store (audit F26-FU,
+    spec R19): since F26 that store lives under the same vault, and these routes counted and listed
+    the bootstrap files before it. Directory links are not followed."""
+    if not live_dir.exists():
+        return
+    for top, dirs, files in os.walk(live_dir):
+        dirs[:] = [d for d in dirs if d != raw_store.STORE_DIR]
+        for name in files:
+            if name.endswith(".pdf"):
+                path = pathlib.Path(top) / name
+                try:
+                    st = path.stat()
+                except OSError:  # removed or a dangling link: not a PDF in the vault
+                    continue
+                yield path, st
 @app.get("/health")
 async def health():
     import pathlib, json
@@ -42,8 +63,7 @@ async def health():
     from sqlalchemy import select, func
     from scraper.models import CaseLawMaster
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
-    LIVE_DIR = pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
-    total_pdfs = sum(1 for p in LIVE_DIR.rglob("*.pdf") if p.stat().st_size>15000) if LIVE_DIR.exists() else 0
+    total_pdfs = sum(1 for _, st in _vault_pdfs(_live_dir()) if st.st_size>15000)
     seen=0
     sf=STATE_DIR/"harvest-seen.json"
     if sf.exists():
@@ -88,11 +108,9 @@ async def stop_h(_: None = Depends(require_admin_api_key)):
     return {"status":"stopped"}
 @app.get("/api/vault")
 async def vault(_: None = Depends(require_admin_api_key)):
-    import pathlib
-    LIVE_DIR = pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
+    LIVE_DIR = _live_dir()
     files=[]
-    if LIVE_DIR.exists():
-        for pdf in sorted(LIVE_DIR.rglob("*.pdf"), key=lambda x: x.stat().st_mtime, reverse=True)[:100]:
-            if pdf.stat().st_size<15000: continue
-            files.append({"path": str(pdf.relative_to(LIVE_DIR)), "size": pdf.stat().st_size, "mtime": pdf.stat().st_mtime})
+    for pdf, st in sorted(_vault_pdfs(LIVE_DIR), key=lambda item: item[1].st_mtime, reverse=True)[:100]:
+        if st.st_size<15000: continue
+        files.append({"path": str(pdf.relative_to(LIVE_DIR)), "size": st.st_size, "mtime": st.st_mtime})
     return {"files": files}

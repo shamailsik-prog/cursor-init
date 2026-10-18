@@ -140,6 +140,19 @@ function bestRatio(left: string[][], right: string[][], map?: (t: string[]) => s
   return best
 }
 
+/**
+ * The name score `screen` gives a (subject, candidate) pair that no key settles: the best token-set
+ * ratio over their form pairs, and, for a subject whose name went through the lossy script fallback,
+ * the best ratio over consonant skeletons when the plain score is below the threshold. A pair is a
+ * name hit iff this is ≥ NAME_THRESHOLD. Shared with the candidate loader (F37), which applies it to
+ * every name in the firm's name index, so the names it fetches are exactly the names that can hit.
+ */
+export function nameScore(subjectForms: string[][], candidateForms: string[][], subjectFallback: boolean): number {
+  const score = bestRatio(subjectForms, candidateForms)
+  if (subjectFallback && score < NAME_THRESHOLD) return Math.max(score, bestRatio(subjectForms, candidateForms, skeleton))
+  return score
+}
+
 function conflictType(subjectRole: Role, c: Candidate): ConflictType {
   if (subjectRole === c.role) return "informational"
   if (subjectRole === "client") return "adverse_history"
@@ -188,8 +201,7 @@ export function screen(
       const keyHit = sameEntity || (keyEqual && !cnicsDiffer)
       let score = 1
       if (!keyHit) {
-        score = bestRatio(forms, c.forms)
-        if (fallback && score < NAME_THRESHOLD) score = Math.max(score, bestRatio(forms, c.forms, skeleton))
+        score = nameScore(forms, c.forms, fallback)
         // An equal phone/NTN/SECP beside differing CNICs still asks for review (score 1: the key matched).
         if (keyEqual) score = 1
         if (score < NAME_THRESHOLD) continue

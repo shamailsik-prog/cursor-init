@@ -6,11 +6,12 @@ import { contentionDeadline, isContentionAbort } from "../contention"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { requirePermission } from "../../p5/permission"
+import { bornFreshPatch, stageRegistryWrite } from "../conflict/nameIndex"
 import { normalisePhone } from "../conflict/normalise"
 import { allocateNumber, formatClientCode, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
 import { DETERMINISTIC_KEY_SCORE } from "../entity/linkState"
-import { bumpRegistryVersion } from "../registryVersion"
+import { readRegistryStateTx } from "../registryVersion"
 import { parseKeys, parseName, type Keys } from "../validate"
 
 const clients = () => adminDb().collection("clients")
@@ -84,7 +85,8 @@ export type RegisterResult = {
  * registerClient({ name, type, primaryMobile, classification, companyName?, reference?, alternateMobile?,
  * concernedPersonName?, email?, cnic?, ntn?, secpNumber?, address?, corporateGroup? }). One transaction
  * allocates the client code, writes the `entities` and `clients` rows and, for every other firm entity
- * sharing an exact normalised key, a candidate `entity_links` row per matching key (L18 §7.1).
+ * sharing an exact normalised key, a candidate `entity_links` row per matching key (L18 §7.1), and adds the
+ * client's name to the firm's conflict name index with the registry version bump (F37).
  */
 export const registerClientOp: FirmOperation<RegisterResult> = {
   auth: "firm",
@@ -128,7 +130,10 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
     const runRound = (round: number) =>
       db.runTransaction(
       async (tx) => {
-      // Reads first: prefixes, entities sharing a key, the clients of those entities, then the counter.
+      // Reads first: the registry state (F37 name index), prefixes, entities sharing a key, the clients of those
+      // entities, then the counter.
+      const registryState = await readRegistryStateTx(tx, caller.firmId)
+      const indexPatch = await bornFreshPatch(tx, caller.firmId, registryState)
       const { clientPrefix } = await readPrefixes(tx, caller.firmId)
       const matched = new Map<string, KeyName[]>()
       const matchedClass = new Map<string, Classification>()
@@ -156,7 +161,8 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
       await registerClientTestSeam.beforeCommit?.(round)
 
       await audit.stage(tx, "allow", "ok")
-      bumpRegistryVersion(tx, caller.firmId)
+      // The registry bump, with the client's name joining the firm's conflict name index (F37).
+      stageRegistryWrite(tx, caller.firmId, registryState, [canonicalName], indexPatch)
       tx.create(entityRef, {
         firmId: caller.firmId,
         canonicalName,
