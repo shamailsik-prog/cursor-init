@@ -1,9 +1,8 @@
 import re, logging, asyncio
 from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
-from scraper.parsers.pdf_extractor import extract_pdf_text
 from scraper.models import StatutesMaster
-from scraper.tasks import outcomes
+from scraper.tasks import outcomes, pdf_intake
 logger = logging.getLogger(__name__)
 
 async def scrape_nationalassembly(source, db):
@@ -24,20 +23,11 @@ async def scrape_nationalassembly(source, db):
         for pdf_url in pdf_links[:20]:
             try:
                 full = pdf_url if pdf_url.startswith("http") else f"https://na.gov.pk{pdf_url}" if pdf_url.startswith("/") else f"https://na.gov.pk/en/{pdf_url}"
-                rr = await client.get(full)
-                if rr.status_code != 200:
-                    tally.item_failed(f"http_{rr.status_code}")
-                    continue
-                # Audit F28 R16: the %PDF- signature before extraction, and text after it; an empty
-                # body or an unreadable PDF is a failed document, never an empty success.
-                if not outcomes.looks_like_pdf(rr.content):
-                    tally.item_failed(outcomes.ERROR_NOT_PDF)
-                    continue
-                txt = extract_pdf_text(rr.content)
-                if not outcomes.has_text(txt):
-                    logger.warning(f"NA pdf {full} has no extractable text; nothing written")
-                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
-                    continue
+                # Audit F26: the one bounded PDF path (size cap at the fetch boundary, type and
+                # signature checks, raw store by sha256, sandboxed parse). A refusal, an empty body or
+                # an unreadable PDF (F28 R16) is a failed document, never an empty success. NA's
+                # statutes_master rows have no raw-reference column (spec R5, F26-FU2).
+                txt = (await pdf_intake.intake(client, full)).text
                 # naive split
                 rows = 0
                 for chunk in txt.split("\n\n")[:10]:
@@ -48,6 +38,8 @@ async def scrape_nationalassembly(source, db):
                 await db.commit()
                 tally.item_ok(rows)
                 await asyncio.sleep(1)
+            except outcomes.DocumentRejected as rejected:
+                tally.item_failed(rejected)
             except Exception as e:
                 if outcomes.is_database_error(e):
                     raise

@@ -3,7 +3,8 @@
 The real dispatcher (`_run_async`) runs the real harvesters; only the network is replaced: the fetch
 boundary's client factory (`scraper.net.fetch_policy.fetcher_for`, audit F25; before F25 this
 replaced httpx.AsyncClient, which no connector builds any more), each court module's listing
-discovery, PDF text extraction and the politeness sleeps.
+discovery, PDF text extraction (audit F26: the sandbox's ``pdf_sandbox.parse``) and the politeness
+sleeps.
 
 * MEDIUM-1: every staging row a harvester writes carries the scraper_sources row it came from
   (source_id plus parsing_metadata source_id / source_name), so promotion never resolves it by a
@@ -94,15 +95,19 @@ class FakeFetcher:
 
 
 def install_offline_harvesters(monkeypatch):
-    import scraper.parsers.pdf_extractor as pdf_extractor
-    import scraper.tasks.nationalassembly as nationalassembly
     from scraper.net import fetch_policy
+    from scraper.parsers import pdf_sandbox
 
     monkeypatch.setattr(fetch_policy, "fetcher_for", lambda name, *a, **kw: FakeFetcher(name))
-    monkeypatch.setattr(pdf_extractor, "extract_pdf_text", lambda content, *a, **k: "Synthetic F20 judgment text.")
+    # Audit F26: every PDF goes through scraper.tasks.pdf_intake (fetch, checks, raw store) to the
+    # sandbox's parse(); the stub replaces only the parse. One synthetic text serves every harvester:
+    # the courts stage it, National Assembly splits it into sections of more than 100 characters.
     monkeypatch.setattr(
-        nationalassembly, "extract_pdf_text",
-        lambda content, *a, **k: ("Section one of the synthetic Test Act 2099. " * 4) + "\n\n" + ("Section two. " * 12),
+        pdf_sandbox, "parse",
+        lambda path, sha256, size, **kw: pdf_sandbox.ParseResult(
+            text=("Section one of the synthetic Test Act 2099. " * 4) + "\n\n" + ("Section two. " * 12),
+            pages=1, ocr_applied=False,
+        ),
     )
     real_sleep = asyncio.sleep
 

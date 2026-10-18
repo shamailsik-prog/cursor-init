@@ -277,3 +277,19 @@ def corpus_db(request):
         database.engine = saved_engine
         asyncio.run(engine.dispose())
         db.drop()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def raw_pdf_vault(tmp_path_factory):
+    """Audit F26: harvested PDFs are kept in the raw store under PDF_STORAGE_PATH before they are
+    parsed. Tests keep theirs in a session temporary directory, never the image's /app/live; a test
+    that inspects the store points PDF_STORAGE_PATH at its own directory."""
+    from scraper import config
+
+    vault = tmp_path_factory.mktemp("pdf-vault")
+    saved = config.settings.PDF_STORAGE_PATH
+    config.settings.PDF_STORAGE_PATH = str(vault)
+    try:
+        yield vault
+    finally:
+        config.settings.PDF_STORAGE_PATH = saved
