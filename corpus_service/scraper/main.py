@@ -7,6 +7,8 @@ from scraper.auth import require_admin_api_key
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
+from scraper import client_identity
+from scraper.rate_limit import RateLimitedPathsMiddleware
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Blackletter Legal Scraper")
@@ -25,8 +27,13 @@ app.include_router(jobs.router)
 app.include_router(quarantine.router)
 app.include_router(search.router)
 app.include_router(export.router)
+# Audit F24 re-audit: the anonymous pages outside the public router share its per-client quota
+# (/health is F44's route and is not listed).
+app.add_middleware(RateLimitedPathsMiddleware, paths=[app.openapi_url, app.docs_url, app.redoc_url,
+                                                      app.swagger_ui_oauth2_redirect_url, "/dashboard"])
 @app.on_event("startup")
 async def startup():
+    client_identity.log_forwarded_trust_at_startup()
     await init_db()
 @app.get("/health")
 async def health():

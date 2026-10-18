@@ -269,8 +269,10 @@ MASTER_UPDATER_ALLOWLIST = {
 }
 MASTER_READ_ONLY_ALLOWLIST = {
     "scraper.main": "/health counts case_law_master rows",
-    "scraper.routers.search": "read-only search",
-    "scraper.routers.export": "read-only export",
+    # Audit F24: the public routes (scraper.routers.search) and the export (scraper.routers.export)
+    # read the master tables only through this published-only helper, so neither router is listed
+    # here: a direct CaseLawMaster / StatutesMaster reference in either fails this scan.
+    "scraper.public_corpus": "published-only public reads and export (F24)",
 }
 
 MASTER_CLASSES = {"scraper.models.CaseLawMaster", "scraper.models.StatutesMaster"}
@@ -320,6 +322,17 @@ def _dotted(node, aliases):
     return None
 
 
+def _is_master_class(dotted):
+    """A master ORM class, however it is reached: from scraper.models, or re-exported by any other
+    scraper module (``pc.CaseLawMaster`` with ``from scraper import public_corpus as pc``, or
+    ``from scraper.public_corpus import CaseLawMaster``). Audit F24 re-audit L5."""
+    if not dotted:
+        return False
+    return dotted in MASTER_CLASSES or (
+        dotted.startswith("scraper.") and dotted.rsplit(".", 1)[-1] in {c.rsplit(".", 1)[-1] for c in MASTER_CLASSES}
+    )
+
+
 def scan_source_for_master_tables(source, module):
     """{'refs': ..., 'writes': ...} for one module's source: references to a master ORM class or
     table name, and the subset that are writes (instantiation, insert/update/delete(...),
@@ -329,12 +342,12 @@ def scan_source_for_master_tables(source, module):
     refs, writes = set(), set()
 
     def is_master(expr):
-        return _dotted(expr, aliases) in MASTER_CLASSES or (
+        return _is_master_class(_dotted(expr, aliases)) or (
             isinstance(expr, ast.Constant) and isinstance(expr.value, str) and bool(_TABLE_NAME_RE.match(expr.value))
         )
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Name, ast.Attribute)) and _dotted(node, aliases) in MASTER_CLASSES:
+        if isinstance(node, (ast.Name, ast.Attribute)) and _is_master_class(_dotted(node, aliases)):
             refs.add(f"class {_dotted(node, aliases)} line {node.lineno}")
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if node.value in ("CaseLawMaster", "StatutesMaster") or _TABLE_NAME_RE.match(node.value):
@@ -344,7 +357,7 @@ def scan_source_for_master_tables(source, module):
                 writes.add(f"sql line {node.lineno}")
         if isinstance(node, ast.Call):
             func = node.func
-            if _dotted(func, aliases) in MASTER_CLASSES:
+            if _is_master_class(_dotted(func, aliases)):
                 writes.add(f"instantiation line {node.lineno}")
             fname = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             target = (_dotted(func, aliases) or fname).rsplit(".", 1)[-1]
@@ -352,7 +365,7 @@ def scan_source_for_master_tables(source, module):
                 writes.add(f"{target}() line {node.lineno}")
             if (isinstance(func, ast.Attribute) and func.attr in ("insert", "update", "delete")
                     and isinstance(func.value, ast.Attribute) and func.value.attr == "__table__"
-                    and _dotted(func.value.value, aliases) in MASTER_CLASSES):
+                    and _is_master_class(_dotted(func.value.value, aliases))):
                 writes.add(f"__table__.{func.attr}() line {node.lineno}")
     return {"refs": refs, "writes": writes}
 
@@ -377,6 +390,117 @@ def scan_corpus_for_master_tables():
     outside scraper/ is scanned too (round-3 B6)."""
     return {module: scan_source_for_master_tables(path.read_text(), module)
             for module, path in corpus_modules() if module != "scraper.models"}
+
+
+# ---------------------------------------------------------------------------------------------
+# Audit F24 re-audit L5: who READS the master tables. The scan above counts every ORM reference
+# (reads included) but, by design, not read SQL text (see its "quiet" cases). This stricter read
+# scan adds SQL text that reads a master table, and the public routers get their own guard: they
+# may use scraper.public_corpus's public API and nothing else, so neither the ORM, the database,
+# SQL, the helper's column tuples, statement builders or raw reader, nor dynamic attribute access.
+# ---------------------------------------------------------------------------------------------
+PUBLIC_ROUTERS = ("scraper.routers.search", "scraper.routers.export")
+PUBLIC_HELPER = "scraper.public_corpus"
+PUBLIC_HELPER_API = frozenset({
+    "CasePage", "CaseDetail", "StatutePage", "StatuteDetail",
+    "SEARCH_DEFAULT_LIMIT", "STATUTES_DEFAULT_LIMIT", "MAX_PAGE_SIZE", "CASE_CURSOR", "STATUTE_CURSOR",
+    "limit_param", "query_text_or_422", "cursor_or_400",
+    "search_cases", "case_detail", "list_statutes", "statute_detail",
+    "acquire_export_slot", "export_is_truncated", "stream_export_cases", "ExportDeadlineExceeded",
+})
+_ROUTER_FORBIDDEN_MODULES = ("sqlalchemy", "scraper.models", "scraper.database", "asyncpg", "psycopg", "psycopg2",
+                             "importlib", "sys", "builtins", "ctypes", "gc")
+_ROUTER_FORBIDDEN_CALLS = frozenset({"getattr", "setattr", "delattr", "vars", "globals", "locals", "eval", "exec",
+                                     "compile", "__import__"})
+_SQL_READ_RE = re.compile(
+    rf"\b(?:FROM|JOIN)\s+(?:ONLY\s+)?(?:{_IDENT}\s*\.\s*)?{_MASTER_TABLE_RE}(?![A-Za-z0-9_$])",
+    re.IGNORECASE,
+)
+
+
+def _code_strings(tree):
+    """(value, line) of every string constant that is not a docstring (f-string parts included)."""
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    return [(n.value, n.lineno) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+
+
+def scan_source_for_master_reads(source, module):
+    """Read access to a master table through SQL text: a string (not a docstring) with
+    FROM/JOIN <master table>, or naming a master table exactly (a table() construct or a
+    concatenated query), or write SQL. ORM references are scan_source_for_master_tables' job."""
+    refs = set()
+    for value, line in _code_strings(ast.parse(source)):
+        if _SQL_READ_RE.search(value) or _TABLE_NAME_RE.match(value) or _SQL_WRITE_RE.search(value):
+            refs.add(f"sql line {line}")
+    return refs
+
+
+def _forbidden_for_router(dotted):
+    return any(dotted == m or dotted.startswith(m + ".") for m in _ROUTER_FORBIDDEN_MODULES)
+
+
+def public_router_violations(source, module):
+    """Why ``source`` (a public router) breaks the helper-API rule; empty when it does not."""
+    tree = ast.parse(source)
+    aliases = _import_aliases(tree, module)
+    found = set()
+
+    def helper_name(dotted):
+        if dotted and dotted.startswith(PUBLIC_HELPER + "."):
+            return dotted[len(PUBLIC_HELPER) + 1:].split(".", 1)[0]
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                if _forbidden_for_router(name.name):
+                    found.add(f"imports {name.name} (line {node.lineno})")
+        elif isinstance(node, ast.ImportFrom):
+            base = _import_aliases(ast.Module(body=[node], type_ignores=[]), module)
+            for bound, target in base.items():
+                if _forbidden_for_router(target):
+                    found.add(f"imports {target} (line {node.lineno})")
+                name = helper_name(target)
+                if name is not None and name not in PUBLIC_HELPER_API:
+                    found.add(f"imports {PUBLIC_HELPER}.{name}, not in its public API (line {node.lineno})")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _ROUTER_FORBIDDEN_CALLS:
+            found.add(f"calls {node.func.id}() (line {node.lineno})")
+        elif isinstance(node, (ast.Attribute, ast.Name)):
+            name = helper_name(_dotted(node, aliases))
+            if name is not None and name not in PUBLIC_HELPER_API:
+                found.add(f"uses {PUBLIC_HELPER}.{name}, not in its public API (line {node.lineno})")
+    found |= {f"master table {ref}" for ref in scan_source_for_master_tables(source, module)["refs"]}
+    found |= {f"master table {ref}" for ref in scan_source_for_master_reads(source, module)}
+    return sorted(found)
+
+
+def public_corpus_read_violations(root=PROJECT_ROOT):
+    """{module: reasons} for every module under ``root`` (a corpus_service tree) that reads a master
+    table without being a reviewed reader (a direct route or on the allowlists above), and for every
+    public router that breaks the helper-API rule."""
+    from scraper.tasks import dispatcher
+
+    allowed = ({route[0] for route in dispatcher.ROUTES.values() if route[2] == "direct"}
+               | set(MASTER_WRITER_ALLOWLIST) | set(MASTER_UPDATER_ALLOWLIST) | set(MASTER_READ_ONLY_ALLOWLIST))
+    violations = {}
+    for module, path in corpus_modules(root):
+        if module == "scraper.models":
+            continue
+        source = path.read_text()
+        if module in PUBLIC_ROUTERS:
+            problems = public_router_violations(source, module)
+        else:
+            refs = scan_source_for_master_tables(source, module)["refs"] | scan_source_for_master_reads(source, module)
+            problems = sorted(refs) if refs and module not in allowed else []
+        if problems:
+            violations[module] = problems
+    return violations
 
 
 # ---------------------------------------------------------------------------------------------
@@ -654,6 +778,96 @@ class AnnexAWriteScanTests(unittest.TestCase):
             (root / "scraper" / "publication" / "sanctioned_writer.py").write_text(rogue)
             violations = annex_a_policy_violations(scan_corpus_for_annex_a_writes(root))
         self.assertEqual(set(violations), {"scraper.tasks.rogue_annex_writer", "scraper.publication_backdoor", "rogue_bootstrap"})
+
+
+class PublicCorpusReadGuardTests(unittest.TestCase):
+    """Audit F24 re-audit L5. The public routers (search, export) reach case_law_master /
+    statutes_master only through scraper.public_corpus's public API. The guard sees the three
+    routes the first version missed: read SQL in a string, a master class reached through a
+    re-export (module alias attribute or from-import from scraper.public_corpus), and a router
+    using the helper's internals (its column tuples, statement builders or raw reader)."""
+
+    ROGUE_READS = {
+        "text_sql": "\n\nfrom sqlalchemy import text as _t\n_ROGUE = _t('SELECT full_text, embedding FROM case_law_master')\n",
+        "alias_attr": "\n\n_ROGUE = pc.CaseLawMaster.embedding\n",
+        "reimport": "\n\nfrom scraper.public_corpus import StatutesMaster as _S\n_ROGUE = _S.section_text\n",
+        "column_tuple": "\n\n_ROGUE = pc.CASE_DETAIL_COLUMNS\n",
+        "statement": "\n\n_ROGUE = pc.case_detail_stmt\n",
+        "getattr": "\n\n_ROGUE = getattr(pc, 'Case' + 'LawMaster')\n",
+    }
+
+    def test_reexported_master_classes_are_master_references(self):
+        cases = {
+            "module_alias_attr": "from scraper import public_corpus as pc\nselect(pc.CaseLawMaster.embedding)\n",
+            "from_reexport": "from scraper.public_corpus import CaseLawMaster\nselect(CaseLawMaster.full_text)\n",
+            "dotted_reexport": "import scraper.public_corpus\nselect(scraper.public_corpus.StatutesMaster)\n",
+            "other_module_reexport": "from scraper import trust as t\nselect(t.CaseLawMaster)\n",
+        }
+        scans = {name: scan_source_for_master_tables(source, "scraper.routers.search") for name, source in cases.items()}
+        self.assertEqual({name for name, scan in scans.items() if not scan["refs"]}, set(), "re-exports the scan missed")
+        write = scan_source_for_master_tables(
+            "from scraper import public_corpus as pc\ndb.add(pc.CaseLawMaster(citation='x'))\n", "scraper.tasks.example")
+        self.assertTrue(write["writes"], "an instantiation through a re-export is a write")
+
+    def test_the_read_scan_sees_sql_text_reads(self):
+        caught = {
+            "select_text": "from sqlalchemy import text\ntext('SELECT full_text, embedding FROM case_law_master')\n",
+            "schema_join": "q = 'select c.id from x join public.\"statutes_master\" s on true'\n",
+            "fstring": "q = f'SELECT * FROM case_law_master WHERE id = {i}'\n",
+            "table_name": "from sqlalchemy import table\ntable('case_law_master')\n",
+            "concatenated": "q = 'SELECT * FROM ' + 'statutes_master'\n",
+            "lower_from": "q = 'select citation from   only case_law_master'\n",
+        }
+        missed = {name for name, source in caught.items() if not scan_source_for_master_reads(source, "scraper.routers.search")}
+        self.assertEqual(missed, set(), "read SQL the scan did not see")
+        quiet = {
+            "docstring": '"""Reads published rows from case_law_master through the helper."""\nx = 1\n',
+            "other_table": "text('SELECT * FROM scraper_staging')\n",
+            "similar_name": "text('SELECT * FROM case_law_master_archive')\n",
+        }
+        noisy = {name for name, source in quiet.items() if scan_source_for_master_reads(source, "scraper.routers.search")}
+        self.assertEqual(noisy, set(), "false positives")
+
+    def test_public_routers_use_only_the_helper_api(self):
+        for module in PUBLIC_ROUTERS:
+            path = PROJECT_ROOT.joinpath(*module.split(".")).with_suffix(".py")
+            self.assertEqual(public_router_violations(path.read_text(), module), [], module)
+        header = "from scraper import public_corpus as pc\n"
+        for name, rogue in self.ROGUE_READS.items():
+            with self.subTest(form=name):
+                self.assertTrue(public_router_violations(header + rogue, "scraper.routers.search"), name)
+        for name, source in {
+            "models": "from scraper.models import CaseLawMaster\n",
+            "database": "from scraper import database\n",
+            "sqlalchemy": "import sqlalchemy\n",
+            "importlib": "import importlib\nimportlib.import_module('scraper.models')\n",
+            "dunder_import": "__import__('scraper.models')\n",
+            "raw_reader": header + "pc.read_rows\n",
+            "fetch_rows": header + "pc.fetch_rows\n",
+            "dunder_dict": header + "pc.__dict__\n",
+        }.items():
+            with self.subTest(form=name):
+                self.assertTrue(public_router_violations(source, "scraper.routers.search"), name)
+
+    def test_the_corpus_read_policy_holds_and_catches_rogue_routers(self):
+        """The policy on the real tree, then on copies of it with one rogue read appended to a public
+        router (search.py or export.py), in each of the forms above."""
+        import shutil
+        import tempfile
+
+        self.assertEqual(public_corpus_read_violations(), {})
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, rogue in self.ROGUE_READS.items():
+                for router in PUBLIC_ROUTERS:
+                    with self.subTest(form=name, router=router):
+                        root = Path(tmp) / f"{name}-{router}" / "corpus_service"
+                        shutil.copytree(PROJECT_ROOT, root, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+                        target = root.joinpath(*router.split(".")).with_suffix(".py")
+                        source = target.read_text()
+                        if "public_corpus as pc" not in source:
+                            source += "\nfrom scraper import public_corpus as pc\n"
+                        target.write_text(source + rogue)
+                        self.assertIn(router, public_corpus_read_violations(root), f"{name} in {router}")
 
 
 if __name__ == "__main__":
