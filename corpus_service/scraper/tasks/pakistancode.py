@@ -1,5 +1,6 @@
-import httpx, asyncio, re, logging
+import asyncio, re, logging
 from bs4 import BeautifulSoup
+from scraper.net import fetch_policy
 from scraper.parsers.statute_parser import split_into_sections, detect_statute_name
 from scraper.parsers.text_cleaner import clean_html
 from scraper.database import SessionLocal
@@ -9,7 +10,8 @@ logger = logging.getLogger(__name__)
 TARGET_SLUGS = ["ppc1860","crpc1898","cpc1908","constitution1973","limitation-act1908","specific-relief-act1877","transfer-of-property-act1882","contract-act1872","evidence-act1872","companies-act2017"]
 
 async def scrape_pakistancode(source, db):
-    async with httpx.AsyncClient(timeout=30, headers={"User-Agent":"Mozilla/5.0"}) as client:
+    # Audit F25: fixed URLs, still through the PakistanCode fetch policy (one boundary for all).
+    async with fetch_policy.fetcher_for("PakistanCode", headers={"User-Agent": "Mozilla/5.0"}) as client:
         try:
             r = await client.get("https://pakistancode.gov.pk/federal")
             soup = BeautifulSoup(r.text, "html.parser")

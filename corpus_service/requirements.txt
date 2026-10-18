@@ -5,7 +5,9 @@ asyncpg
 alembic
 celery[redis]
 redis
-httpx
+# Audit F25: scraper/net/fetch_policy.py guards httpx 0.28's transport (it fails closed on any
+# other layout), so the runtime runs the version the tests prove (requirements-test.txt).
+httpx==0.28.1
 beautifulsoup4
 lxml
 playwright
