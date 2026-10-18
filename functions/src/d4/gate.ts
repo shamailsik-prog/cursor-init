@@ -44,6 +44,9 @@ export type GateRunOptions = { budgetMs?: number; now?: () => number }
 export function budgetedStore(store: AuthorityStore, budgetMs: number, now: () => number): AuthorityStore {
   let used = 0
   let logged = false
+  // Set when the budget timer fires: Date.now() can lag a timer by a millisecond or so, so `used` alone may still show
+  // budget left after the cut-off, and a later call would reach the store.
+  let exhausted = false
   const spent = (): AuthorityUnavailableError => {
     if (!logged) {
       logged = true
@@ -53,14 +56,17 @@ export function budgetedStore(store: AuthorityStore, budgetMs: number, now: () =
   }
   const call = async <T>(lookup: () => Promise<T>): Promise<T> => {
     const left = budgetMs - used
-    if (left <= 0) throw spent()
+    if (exhausted || left <= 0) throw spent()
     const started = now()
     let timer: ReturnType<typeof setTimeout> | undefined
     const work = (async () => lookup())()
     // A lookup the budget cut off may still fail later; that failure has nobody left to tell.
     work.catch(() => undefined)
     const expiry = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(spent()), left)
+      timer = setTimeout(() => {
+        exhausted = true
+        reject(spent())
+      }, left)
     })
     try {
       return await Promise.race([work, expiry])

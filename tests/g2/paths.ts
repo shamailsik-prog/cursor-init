@@ -248,7 +248,7 @@ const D1_D3_D2_PATHS: ReadPath[] = [
   },
   {
     service: "D5-1", channel: "whatsapp", route: "/api/d2/court-ops", method: "POST", selector: "command=/research", kind: "read",
-    note: "D5-1 search through the D2-1 channel; the handler returns no corpus rows yet",
+    note: "D5-1 corpus search (services/d5-1 searchCorpus) through the D2-1 channel; it reads judgments, embeddings and treatments only, never firm rows, so a firm-A title as the query must return no firm-A data",
     base: () => WA("/research PPC 302"),
     aimed: (a) => [filter("query = firm-A matter title", WA(`/research ${a.matterTitle}`))],
   },
@@ -508,7 +508,7 @@ export const NOT_BUILT: Array<{ service: Service; channel: Channel; path: string
   { service: "D1-1", channel: "web", path: "/api/d1/client/* read by id (client file)", note: "only list + conflict_check exist" },
   { service: "D1-2", channel: "web", path: "/api/d1/matter/* read by id; relevant_law_dates (L17.1); entity resolution views (L17.2)", note: "only list exists" },
   { service: "D3-1", channel: "web", path: "/api/d3/vault/* document read/download by id, versions, exports, share links, Ghost Archive, loose vault view", note: "document_versions has rules but no read route" },
-  { service: "D5-1", channel: "web", path: "/api/d5/research/* search, arguments, compendium, precedent discovery, authority viewer", note: "services/d5-1 searchCorpus is not routed" },
+  { service: "D5-1", channel: "web", path: "/api/d5/research/* search, arguments, compendium, precedent discovery, authority viewer", note: "searchCorpus is reached only through WhatsApp /research (D2-1); no /api/d5 route exists" },
   { service: "D2-1", channel: "whatsapp", path: "/api/d2/whatsapp/* inbound webhook with phone-number to user binding", note: "commands run as an authenticated session via /api/d2/court-ops; re-run G-2 when the webhook lands" },
   { service: "D2-1", channel: "whatsapp", path: "/matters <Query|CaseRef>", note: "grammar accepts bare /matters only" },
   { service: "D2-1", channel: "whatsapp", path: "/hearings [Date]", note: "not in the command grammar" },

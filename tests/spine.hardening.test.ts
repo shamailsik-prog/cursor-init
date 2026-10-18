@@ -241,7 +241,8 @@ describe("G-1 spine hardening", () => {
       model: "text-embedding-3-small",
       vector: [0, 1, 2],
     })
-    expect(() => searchCorpus(store, "text-embedding-3-small")).toThrow(/refuses/)
+    // FA-D5-001: search takes a query; the lock refuses before any row is scored.
+    expect(() => searchCorpus(store, { text: "bail" })).toThrow(/refuses/)
   })
 
   it("citation OVERRULED override is partner-only", () => {
