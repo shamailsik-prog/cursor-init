@@ -677,6 +677,11 @@ EXPECTED_TRIGGER_DEFS = {
         f"FOR EACH STATEMENT EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()"),
 }
 _RECREATE_ROW_TRIGGER = f"DROP TRIGGER {ROW_TRIGGER_NAME} ON {DECISIONS}"
+# Re-audit round 2, L1 (mutants N08 and N09): a recreated trigger is enabled 'O' by default, and that
+# alone makes migrate rebuild it, so the WHEN clause or the column list would never be what migrate
+# saw. Every drift that recreates the row trigger therefore ends with ENABLE ALWAYS: the drift is
+# then the one attribute it names. "origin_enabled" keeps the 'O' case.
+_ALWAYS_ROW_TRIGGER = f"ALTER TABLE {DECISIONS} ENABLE ALWAYS TRIGGER {ROW_TRIGGER_NAME}"
 # Each drift is applied by the admin after a first migrate. "bypass" says whether, before the next
 # migrate, the runtime role can then rewrite a decision (the drift is a real hole, not just a change).
 DRIFTS = {
@@ -684,17 +689,22 @@ DRIFTS = {
         _RECREATE_ROW_TRIGGER,
         f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OR DELETE ON {DECISIONS} FOR EACH ROW WHEN (false) "
         f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+        _ALWAYS_ROW_TRIGGER,
     ], True),
     "update_of_reason": ([
         _RECREATE_ROW_TRIGGER,
         f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OF reason OR DELETE ON {DECISIONS} FOR EACH ROW "
         f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+        _ALWAYS_ROW_TRIGGER,
     ], True),
     "for_each_statement": ([
         _RECREATE_ROW_TRIGGER,
         f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OR DELETE ON {DECISIONS} FOR EACH STATEMENT "
         f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+        _ALWAYS_ROW_TRIGGER,
     ], False),
+    # Enabled in origin mode only: the runtime role is still refused, a replica-mode session is not.
+    "origin_enabled": ([f"ALTER TABLE {DECISIONS} ENABLE TRIGGER {ROW_TRIGGER_NAME}"], False),
     "no_op_function": ([
         f"CREATE OR REPLACE FUNCTION {APPEND_ONLY_FUNCTION}() RETURNS trigger LANGUAGE plpgsql AS "
         "$noop$ BEGIN IF TG_OP = 'DELETE' THEN RETURN OLD; END IF; RETURN NEW; END $noop$",

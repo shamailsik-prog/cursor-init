@@ -10,6 +10,12 @@
 # tests): 951 passed, 0 skipped.
 fastapi==0.142.2
 httpx==0.28.1
+# Audit F23 re-audit round 2 (spec ruling 26): tests/test_f23_review_body_guard_e2e.py starts the API as
+# compose does (uvicorn scraper.main:app) and proves the review routes' body guard under both of
+# uvicorn's HTTP implementations: h11 and httptools, which production's uvicorn[standard] selects.
+# uvicorn is the version tests/e2e/Dockerfile pins.
+uvicorn==0.54.0
+httptools==0.7.1
 sqlalchemy[asyncio]==2.1.3
 asyncpg==0.32.0
 pgvector==0.5.0
