@@ -1,6 +1,6 @@
 # F27: embedding work is claimed under a lease, paid once per operation, and recoverable
 
-Date: 2026-10-18. Base: `origin/main` @ f670d62. Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design intent is kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
+Date: 2026-10-18. Base: `origin/main` @ f670d62; origin/main a9a5256 (#81) and 957fe26 (#82, #83) were merged into the branch before any code change, so the RED runs are on 957fe26's code. Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design intent is kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
 
 Audit sources:
 - `docs/audit/2026-10-13-forensic-audit.md` F27 (:601), its capability row "Embedding" (:1009) and the P1 queue/chaos drill (:1109: "Kill embedding worker after provider response ... Recovered lease, no duplicate vector/version, bounded paid retries and reconciled run").
@@ -43,7 +43,7 @@ UPDATE embedding_queue q
 RETURNING ...
 ```
 
-committed on its own before the first provider call. Two concurrent claims never return the same row: the second skips rows the first has locked, and after the first commits those rows are `processing`. The order is the model's own ("priority: higher = earlier"), then age. *Reason:* the finding's "claim bounded rows transactionally with leases". *Steelman for holding a row lock across the call instead:* simpler, no lease column. Rejected: it ties a database transaction to a paid network call, and a crash then rolls the claim back and leaves nothing behind, which is exactly scenario 3.
+committed on its own before the first provider call. Two concurrent claims never return the same row: the second skips rows the first has locked, and after the first commits those rows are `processing`. Two claims that run at the same moment can therefore split one window between them (38 and 12 of 50 in one prefork run; 0 and 50 in another); what is guaranteed is that the sets are disjoint. The order is the model's own ("priority: higher = earlier"), then age. *Reason:* the finding's "claim bounded rows transactionally with leases". *Steelman for holding a row lock across the call instead:* simpler, no lease column. Rejected: it ties a database transaction to a paid network call, and a crash then rolls the claim back and leaves nothing behind, which is exactly scenario 3.
 
 **R2. Lease length and fencing.** `LEASE = 3900 s`, Celery's `task_time_limit` (3600 s) plus 300 s. The hard limit kills a worker child at 3600 s after the task started, and the claim happens after the task started, so a live batch never outlasts its lease. A test pins `LEASE > task_time_limit`. Every write to a claimed row is fenced: `WHERE id = :id AND lease_owner = :token AND status = 'processing'`. A fenced write that matches nothing raises `LeaseLost`, which fails the batch (it cannot happen inside the time limits; if it does, it is loud). The database enforces `status = 'processing'` exactly when a lease is held (`ck_embedding_lease_held`).
 
@@ -89,6 +89,8 @@ A unique partial index allows at most one unresolved (`started` or `answered`) r
 ## 3. What is not changed or not solved
 
 - The provider can bill a request whose answer never reaches the worker (a kill or interruption during the call). The receipt then reads `abandoned` or `interrupted`: visible, not reconcilable, since the embeddings API has no idempotency key. Recorded as a residual risk.
+- R2's lease rests on the prefork pool's hard time limit (compose runs the default prefork pool). A worker started with `--pool=solo` or `threads` has no time limit; a batch slower than 65 minutes there could be overtaken by a reclaim. The fencing then refuses its writes (no double store), but the overtaking batch may pay for the operation again.
+- A long provider outage charges each claimed row one attempt per batch; after `max_attempts` (5, about 75 minutes of backoff) rows go to the dead letter, the `dead_letter` alert fires and an operator requeues them (README). Main parked them as `failed` after 15 minutes with no alert. A circuit breaker that stops a batch at the first outage error is a possible follow-up.
 - The OpenAI SDK's own retries inside one attempt are unchanged: the client is built as on main (`AsyncOpenAI(api_key=...)`), which F28's tests pin.
 - Receipts are not pruned. Growth is one row per provider attempt. Follow-up: retention.
 - There is no requeue tool for dead letters; an operator sets `status = 'pending', attempts = 0` (documented in the README).

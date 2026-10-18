@@ -28,8 +28,6 @@ import threading
 import types
 import uuid
 
-import pytest
-
 from test_f20_trust_policy_db import _threaded, assert_migrated, execute, fetch, run
 from test_f28_source_outcomes_e2e import fire, jobs, no_sleep
 
@@ -439,6 +437,34 @@ def test_r3_an_expired_lease_is_reclaimed_once_and_an_answered_vector_is_stored_
     assert receipts() == [
         ("abandoned", None, False, False, None), ("stored", 7, False, True, None), ("stored", TOKENS, False, False, None),
     ], receipts()
+
+
+# ---------------------------------------------------------------------------------------------
+# R2: fencing (no main equivalent: main holds no lease)
+# ---------------------------------------------------------------------------------------------
+def test_r2_a_batch_that_lost_its_lease_writes_nothing_to_the_row_or_the_record(corpus_db, monkeypatch):
+    """While the request is out, the row passes to another holder (what a reclaim and a new claim
+    would do to a batch that outlived its lease). Every write to a claimed row is fenced on the
+    batch's token, so the old batch's store fails (LeaseLost) and is rolled back: the record gets no
+    vector, the row stays with its new holder, and the paid answer stays in its receipt for whoever
+    holds the operation next. Spec R2, R5."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+    other_batch = uuid.uuid4()
+
+    async def overtaken(marker):
+        await execute("UPDATE embedding_queue SET lease_owner = :o", params={"o": other_batch})
+
+    provider.during_call = overtaken
+
+    result = fire("process-embeddings")
+
+    assert (result.state, type(result.result).__name__) == ("FAILURE", "LeaseLost"), repr(result.result)
+    assert queue_by_row()[1] == ("processing", 0, None, False), queue_by_row()
+    assert run(fetch("SELECT lease_owner FROM embedding_queue"))[0][0] == other_batch
+    assert receipts() == [("answered", TOKENS, True, False, None)], receipts()
 
 
 # ---------------------------------------------------------------------------------------------

@@ -21,5 +21,20 @@ Branch: `claude/remediate-f27` from origin/main f670d62. Evidence log: scratchpa
 
 Filled in as the work runs; exact commands and counts are in the evidence log.
 
+Environment: Python 3.12.3 venv from `corpus_service/requirements-test.txt` only; PostgreSQL 16.13 + pgvector 0.6.0 on 127.0.0.1:55571 with the Annex A DDL (001, 003, 004) applied twice to the server database (all six psql runs rc=0); every e2e test also applies Annex A twice to its own database before `python -m scraper.migrate`. `CI=1 CORPUS_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55571/corpus_ci` throughout. Machine load average 15-20 on 4 cores.
+
+Merges: origin/main a9a5256 (#81, F26) was merged as 6a75c21 before the RED run; the coordinator then reported #82 (F23, migration 003) and #83 merged, and origin/main 957fe26 was merged as 21315ca, still before any code change. Migration 004 stays independent of 003.
+
 | Step | Command | Result |
 | --- | --- | --- |
+| Baseline, main 957fe26 (git-archive export) | `python -m pytest corpus_service/tests -q` | **1168 passed**, 3 warnings, 157 subtests, 0 skipped, 24 min 14 s |
+| RED unit, main code | `python -m pytest corpus_service/tests/test_f27_embedding_rules.py -q` | **17 failed**: `embeddings` has no `operation_id`, `retry_delay_seconds`, `text_problem`, `SUPPORTED_MODELS`, `LEASE_SECONDS`, `BATCH_SIZE`, `BACKLOG_ALERT_SECONDS` |
+| RED in process, main code | `python -m pytest corpus_service/tests/test_f27_embedding_claims_e2e.py -q` | **10 failed**: missing-record window `[(50, 50, 0, None)] x 3` (claimed, missing, completed, dead_lettered); unusable rows paid `{1: 2, '  ': 1, '  -- . -- ; --': 1, 900: 1}`; failed row retried by the next batch (2 calls); two threads: 50 rows paid more than once; unchanged re-queue paid twice; stale vector stored; no alerts; no receipts; r3 and r14 error (no lease column, no receipt table) |
+| RED prefork, main code | `python -m pytest corpus_service/tests/test_f27_embedding_prefork_e2e.py -q` | **2 failed**: 99 requests for 50 rows, 49 rows paid twice (a9a5256); 100 requests, all 50 paid twice (957fe26); after a SIGKILL after the answer: `('FAILURE', 'WorkerLostError', ('pending', 0), [])` and the next batch paid again (2 requests), no receipt |
+| RED, added R10 tests, main code | `-k r10` on the in-process file | **2 failed**: a database-failed row left `('pending', 0)` with nothing kept; an interrupted request left no receipt |
+| GREEN unit | rules file | **17 passed** |
+| GREEN in process | claims file | **10 passed** (first run), then **12 passed** with the R10 tests |
+| GREEN prefork, attempt 1 | prefork file | 1 failed, 1 passed: claims 38 and 12, every row requested once. The test had assumed the second simultaneous claim finds nothing; SKIP LOCKED splits the window. Expectation corrected to the spec's property (disjoint claims covering the 50); no code change |
+| GREEN prefork | prefork file | **2 passed** (claims [0, 50] in the next run; 50 requests for 50 rows) |
+| F28 files, unchanged | the five `test_f28_*` files | **145 passed** |
+| Gate G-0 | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===` (provider guard: the allowlisted `embeddings.py:openai` entry verified) |
