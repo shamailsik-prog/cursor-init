@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc, type Firestore } from "@/platform/persistence/firestoreDbModular"
-import { listRowsByFirm, listRowsByFirmAndField } from "@/platform/persistence/firmScopedList"
+import { listAllRowsByFirm, listAllRowsByFirmAndField } from "@/platform/persistence/firmScopedList"
 
 /**
  * Firestore collection paths for workflow-ops spine repositories that use
@@ -170,7 +170,7 @@ export function createDenyByDefaultWorkflowOpsRepositoryBinder(db: Firestore) {
         return row
       },
       async listByFirm(firmId: string): Promise<TRow[]> {
-        const page = await listRowsByFirm<TRow & { firmId: string; id?: string }>(
+        const page = await listAllRowsByFirm<TRow & { firmId: string; id?: string }>(
           db,
           collectionName,
           firmId
@@ -178,7 +178,7 @@ export function createDenyByDefaultWorkflowOpsRepositoryBinder(db: Firestore) {
         return page.items
       },
       async listByMatter(firmId: string, matterId: string): Promise<TRow[]> {
-        const page = await listRowsByFirmAndField<TRow & { id?: string }>(
+        const page = await listAllRowsByFirmAndField<TRow & { id?: string }>(
           db,
           collectionName,
           firmId,

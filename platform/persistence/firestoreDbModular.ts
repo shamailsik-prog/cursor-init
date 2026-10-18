@@ -1,4 +1,4 @@
-import type { Firestore as AdminFirestore } from "firebase-admin/firestore"
+import type { DocumentData as AdminDocumentData, Firestore as AdminFirestore } from "firebase-admin/firestore"
 import {
   collection as clientCollection,
   doc as clientDoc,
@@ -159,14 +159,21 @@ export function withFirmQueryStartAfter(
   return clientQuery(baseQuery as never, clientStartAfter(cursorSnap as never)) as FirmIdQuery
 }
 
+/** One row of an Admin SDK query result. `cursor` is the SDK's own snapshot, so a firm-scoped listing can
+ * `startAfter` it without reading the document again (F12 paging); test doubles may leave it out. */
+export type AdminQueryRow = { id: string; data: () => AdminDocumentData; cursor?: unknown }
+
 export async function getDocs(query: FirmIdQuery | ReturnType<typeof collection>) {
   if ("get" in query && typeof query.get === "function") {
     const snap = await query.get()
     return {
-      docs: snap.docs.map((row) => ({
-        id: row.id,
-        data: () => row.data(),
-      })),
+      docs: snap.docs.map(
+        (row): AdminQueryRow => ({
+          id: row.id,
+          data: () => row.data(),
+          cursor: row,
+        })
+      ),
       empty: snap.empty,
     }
   }

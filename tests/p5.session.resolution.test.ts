@@ -64,6 +64,7 @@ import {
   resetSessionStateForTests,
   resolveAuthMode,
   resolveSession,
+  setIdTokenVerifierForTests,
 } from "@/platform/p5/session"
 import { newStore } from "@/platform/spine/store"
 
@@ -486,5 +487,52 @@ describe("loadUserRecord", () => {
 
   it("answers null for a user in neither the store nor the repository", async () => {
     expect(await loadUserRecord("missing", { store: newStore() })).toBeNull()
+  })
+})
+
+describe("F01 re-audit follow-up (takeover of #44)", () => {
+  it("caches a repository row that carries no `id` under the requested uid, never under `undefined`", async () => {
+    const store = newStore()
+    const { id: _omitted, ...withoutId } = partner
+    runtime.repoUsers = new Map([[partner.id, withoutId as User]])
+    const record = await loadUserRecord(partner.id, { store, preferRepository: true, firmId: "firmA" })
+    expect(record?.id).toBe(partner.id)
+    expect(store.users.get(partner.id)?.id).toBe(partner.id)
+    expect(store.users.has("undefined")).toBe(false)
+    expect([...store.users.keys()]).toEqual([partner.id])
+  })
+
+  it("refuses FIREBASE_AUTH_EMULATOR_HOST under NODE_ENV=production (503) before any token is verified", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9099")
+    const err = await authError(resolveSession(good()))
+    expect(err).toMatchObject({ status: 503, code: "AUTH_MISCONFIGURED" })
+    expect(admin.initializeApp).not.toHaveBeenCalled()
+    expect(admin.verifyIdToken).not.toHaveBeenCalled()
+  })
+
+  it("keeps the emulator outside production, and production without the emulator", async () => {
+    vi.stubEnv("NODE_ENV", "test")
+    vi.stubEnv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9099")
+    expect((await resolveSession(good())) as { userId?: string }).toMatchObject({ userId: "partner_a" })
+    resetSessionStateForTests()
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("FIREBASE_AUTH_EMULATOR_HOST", "")
+    expect((await resolveSession(good())) as { userId?: string }).toMatchObject({ userId: "partner_a" })
+  })
+
+  it("the test verifier seam replaces firebase-admin until it is cleared", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9099")
+    const seamVerify = vi.fn(async () => partnerToken)
+    setIdTokenVerifierForTests(seamVerify)
+    try {
+      expect((await resolveSession(good())) as { userId?: string }).toMatchObject({ userId: "partner_a" })
+      expect(seamVerify).toHaveBeenCalledWith("tok")
+      expect(admin.verifyIdToken).not.toHaveBeenCalled()
+    } finally {
+      setIdTokenVerifierForTests(null)
+    }
+    expect(await authError(resolveSession(good()))).toMatchObject({ status: 503, code: "AUTH_MISCONFIGURED" })
   })
 })

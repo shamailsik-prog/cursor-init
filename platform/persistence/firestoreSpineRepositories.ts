@@ -11,8 +11,8 @@ import {
 import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
 import {
   asFirmScopedList,
-  listRowsByFirm,
-  listRowsByFirmAndField,
+  listAllRowsByFirm,
+  listAllRowsByFirmAndField,
   type FirmScopedList,
 } from "@/platform/persistence/firmScopedList"
 import type {
@@ -197,7 +197,11 @@ async function setById<T extends { id: string }>(db: Firestore, collectionName: 
   await setDoc(doc(db, collectionName, row.id), row)
 }
 
-async function getById<T>(
+/**
+ * A firm-scoped read (F12): the row is returned only when it belongs to the caller's firm. A row with no `firmId`
+ * belongs to no firm and is never returned (fail closed), so a malformed or legacy row cannot be read across tenants.
+ */
+async function getById<T extends { firmId: string }>(
   db: Firestore,
   collectionName: string,
   id: string,
@@ -206,8 +210,8 @@ async function getById<T>(
   const firm = requireCallerFirmId(callerFirmId, `getById(${collectionName})`)
   const snap = await getDoc(doc(db, collectionName, id))
   if (!snap.exists()) return null
-  const data = snap.data() as T & { firmId?: string }
-  if (typeof data.firmId === "string" && data.firmId !== firm) {
+  const data = snap.data() as T & { firmId?: unknown }
+  if (data.firmId !== firm) {
     return null
   }
   return data as T
@@ -223,7 +227,7 @@ export async function getSessionReferenceForReplay(
   return snap.data() as TenancySessionReferenceRow
 }
 
-async function updateById<T>(
+async function updateById<T extends { firmId: string }>(
   db: Firestore,
   collectionName: string,
   id: string,
@@ -234,8 +238,9 @@ async function updateById<T>(
   const ref = doc(db, collectionName, id)
   const current = await getDoc(ref)
   if (!current.exists()) return null
-  const currentData = current.data() as T & { firmId?: string }
-  if (typeof currentData.firmId === "string" && currentData.firmId !== firm) {
+  const currentData = current.data() as T & { firmId?: unknown }
+  // Fail closed as getById does: a row of another firm, or of no firm, is not updated.
+  if (currentData.firmId !== firm) {
     return null
   }
   const patchFirm = (patch as { firmId?: string }).firmId
@@ -252,7 +257,7 @@ async function listByFirm<T extends { firmId: string; id?: string }>(
   collectionName: string,
   firmId: string
 ): Promise<FirmScopedList<T>> {
-  const page = await listRowsByFirm<T>(db, collectionName, firmId)
+  const page = await listAllRowsByFirm<T>(db, collectionName, firmId)
   return asFirmScopedList(page)
 }
 
@@ -285,13 +290,18 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         await setById(db, "users", row)
       },
       async get(id, firmId) {
+        // F01 (re-audit 2026-10-16, HIGH): the user id IS the document id. The Cloud Functions writers
+        // (createFirmUser, the founder document) store no `id` field, so a row returned without its document id was
+        // cached under `undefined` by the session and every route answered 404. The document id is authoritative: it
+        // wins over any `id` in the data (as F14 R8 rules for matters).
         // Actor bootstrap (e.g. ops-reporting resolveActor) runs before firm bind.
         if (!firmId?.trim()) {
           const snap = await getDoc(doc(db, "users", id))
           if (!snap.exists()) return null
-          return snap.data() as User
+          return { ...(snap.data() as User), id }
         }
-        return getById<User>(db, "users", id, firmId)
+        const row = await getById<User>(db, "users", id, firmId)
+        return row ? { ...row, id } : null
       },
       async listByFirm(firmId) {
         return listByFirm<User>(db, "users", firmId)
@@ -363,7 +373,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByMatter(firmId, matterId) {
         return asFirmScopedList(
-          await listRowsByFirmAndField<MatterMember & { id?: string }>(
+          await listAllRowsByFirmAndField<MatterMember & { id?: string }>(
             db,
             "matter_members",
             firmId,
@@ -453,7 +463,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingPacketArtifactRow>(db, "filing_packet_artifacts", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingPacketArtifactRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingPacketArtifactRow>(
           db,
           "filing_packet_artifacts",
           firmId,
@@ -473,7 +483,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingDispatchQueueRow>(db, "filing_submission_dispatch_queue", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingDispatchQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingDispatchQueueRow>(
           db,
           "filing_submission_dispatch_queue",
           firmId,
@@ -493,7 +503,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingAnnexureRow>(db, "filing_annexures", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingAnnexureRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingAnnexureRow>(
           db,
           "filing_annexures",
           firmId,
@@ -513,7 +523,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingSubmissionReceiptRow>(db, "filing_submission_receipts", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingSubmissionReceiptRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingSubmissionReceiptRow>(
           db,
           "filing_submission_receipts",
           firmId,
@@ -541,7 +551,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingSubmissionReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingSubmissionReconciliationRow>(
           db,
           "filing_submission_reconciliation",
           firmId,
@@ -561,7 +571,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingSubmissionExceptionRow>(db, "filing_submission_exceptions", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingSubmissionExceptionRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingSubmissionExceptionRow>(
           db,
           "filing_submission_exceptions",
           firmId,
@@ -581,7 +591,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingTransportExecutionEvidenceRow>(db, "filing_transport_execution_evidence", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingTransportExecutionEvidenceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingTransportExecutionEvidenceRow>(
           db,
           "filing_transport_execution_evidence",
           firmId,
@@ -601,7 +611,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingSubmissionSlaDigestRow>(db, "filing_submission_sla_digests", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingSubmissionSlaDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingSubmissionSlaDigestRow>(
           db,
           "filing_submission_sla_digests",
           firmId,
@@ -621,7 +631,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingEscalationOwnerRotaRow>(db, "filing_escalation_owner_rota", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationOwnerRotaRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationOwnerRotaRow>(
           db,
           "filing_escalation_owner_rota",
           firmId,
@@ -641,7 +651,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingEscalationWorkloadDigestRow>(db, "filing_escalation_workload_digests", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationWorkloadDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationWorkloadDigestRow>(
           db,
           "filing_escalation_workload_digests",
           firmId,
@@ -661,7 +671,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingEscalationPolicyBaselineRow>(db, "filing_escalation_policy_baselines", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationPolicyBaselineRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationPolicyBaselineRow>(
           db,
           "filing_escalation_policy_baselines",
           firmId,
@@ -681,7 +691,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<FilingEscalationBreachWaiverLedgerRow>(db, "filing_escalation_breach_waivers", firmId)
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationBreachWaiverLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationBreachWaiverLedgerRow>(
           db,
           "filing_escalation_breach_waivers",
           firmId,
@@ -709,7 +719,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationPolicyVarianceDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationPolicyVarianceDigestRow>(
           db,
           "filing_escalation_policy_variance_digests",
           firmId,
@@ -737,7 +747,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationWaiverExpiryDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationWaiverExpiryDigestRow>(
           db,
           "filing_escalation_waiver_expiry_digests",
           firmId,
@@ -765,7 +775,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationVarianceRemediationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationVarianceRemediationRow>(
           db,
           "filing_escalation_variance_remediations",
           firmId,
@@ -793,7 +803,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationWaiverRolloverAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationWaiverRolloverAttestationRow>(
           db,
           "filing_escalation_waiver_rollover_attestations",
           firmId,
@@ -821,7 +831,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationRemediationExpiryDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationRemediationExpiryDigestRow>(
           db,
           "filing_escalation_remediation_expiry_digests",
           firmId,
@@ -849,7 +859,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationRolloverBreachWatchRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationRolloverBreachWatchRow>(
           db,
           "filing_escalation_rollover_breach_watches",
           firmId,
@@ -877,7 +887,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationRemediationLifecycleRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationRemediationLifecycleRow>(
           db,
           "filing_escalation_remediation_lifecycles",
           firmId,
@@ -905,7 +915,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByPackageId(firmId, packageId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationRolloverReaffirmationSlaRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationRolloverReaffirmationSlaRow>(
           db,
           "filing_escalation_rollover_reaffirmation_sla",
           firmId,
@@ -933,7 +943,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureComplianceDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureComplianceDigestRow>(
           db,
           "filing_escalation_closure_compliance_digests",
           firmId,
@@ -961,7 +971,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureFollowupQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureFollowupQueueRow>(
           db,
           "filing_escalation_closure_followup_queue",
           firmId,
@@ -989,7 +999,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaWindowConfigRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaWindowConfigRow>(
           db,
           "filing_escalation_closure_sla_window_configs",
           firmId,
@@ -1017,7 +1027,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAutoAssignmentRuleRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAutoAssignmentRuleRow>(
           db,
           "filing_escalation_closure_auto_assignment_rules",
           firmId,
@@ -1045,7 +1055,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaWindowRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaWindowRow>(
           db,
           "filing_escalation_closure_sla_windows",
           firmId,
@@ -1073,7 +1083,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAttestationRow>(
           db,
           "filing_escalation_closure_attestations",
           firmId,
@@ -1082,7 +1092,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAttestationRow>(
           db,
           "filing_escalation_closure_attestations",
           firmId,
@@ -1110,7 +1120,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaExceptionDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaExceptionDigestRow>(
           db,
           "filing_escalation_closure_sla_exception_digests",
           firmId,
@@ -1119,7 +1129,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaExceptionDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaExceptionDigestRow>(
           db,
           "filing_escalation_closure_sla_exception_digests",
           firmId,
@@ -1147,7 +1157,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
           db,
           "filing_escalation_closure_attestation_disputes",
           firmId,
@@ -1156,7 +1166,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
           db,
           "filing_escalation_closure_attestation_disputes",
           firmId,
@@ -1165,7 +1175,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAttestationId(firmId, attestationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAttestationDisputeRow>(
           db,
           "filing_escalation_closure_attestation_disputes",
           firmId,
@@ -1193,7 +1203,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaExceptionEnforcementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaExceptionEnforcementRow>(
           db,
           "filing_escalation_closure_sla_exception_enforcement",
           firmId,
@@ -1202,7 +1212,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSlaExceptionEnforcementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSlaExceptionEnforcementRow>(
           db,
           "filing_escalation_closure_sla_exception_enforcement",
           firmId,
@@ -1230,7 +1240,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
           db,
           "filing_escalation_closure_adjudication_queue",
           firmId,
@@ -1239,7 +1249,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
           db,
           "filing_escalation_closure_adjudication_queue",
           firmId,
@@ -1248,7 +1258,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByDisputeId(firmId, disputeId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQueueRow>(
           db,
           "filing_escalation_closure_adjudication_queue",
           firmId,
@@ -1276,7 +1286,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureEnforcementRebalanceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureEnforcementRebalanceRow>(
           db,
           "filing_escalation_closure_enforcement_rebalance",
           firmId,
@@ -1285,7 +1295,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureEnforcementRebalanceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureEnforcementRebalanceRow>(
           db,
           "filing_escalation_closure_enforcement_rebalance",
           firmId,
@@ -1313,7 +1323,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
           db,
           "filing_escalation_closure_adjudication_quorum",
           firmId,
@@ -1322,7 +1332,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
           db,
           "filing_escalation_closure_adjudication_quorum",
           firmId,
@@ -1331,7 +1341,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationQuorumRow>(
           db,
           "filing_escalation_closure_adjudication_quorum",
           firmId,
@@ -1359,7 +1369,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
           db,
           "filing_escalation_closure_rebalance_execution",
           firmId,
@@ -1368,7 +1378,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
           db,
           "filing_escalation_closure_rebalance_execution",
           firmId,
@@ -1377,7 +1387,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceExecutionRow>(
           db,
           "filing_escalation_closure_rebalance_execution",
           firmId,
@@ -1405,7 +1415,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
           db,
           "filing_escalation_closure_adjudication_slo",
           firmId,
@@ -1414,7 +1424,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
           db,
           "filing_escalation_closure_adjudication_slo",
           firmId,
@@ -1423,7 +1433,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloRow>(
           db,
           "filing_escalation_closure_adjudication_slo",
           firmId,
@@ -1451,7 +1461,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
           db,
           "filing_escalation_closure_rebalance_safeguards",
           firmId,
@@ -1460,7 +1470,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
           db,
           "filing_escalation_closure_rebalance_safeguards",
           firmId,
@@ -1469,7 +1479,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardRow>(
           db,
           "filing_escalation_closure_rebalance_safeguards",
           firmId,
@@ -1497,7 +1507,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
           db,
           "filing_escalation_closure_adjudication_slo_debt_remediation",
           firmId,
@@ -1506,7 +1516,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
           db,
           "filing_escalation_closure_adjudication_slo_debt_remediation",
           firmId,
@@ -1515,7 +1525,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationSloDebtRemediationRow>(
           db,
           "filing_escalation_closure_adjudication_slo_debt_remediation",
           firmId,
@@ -1543,7 +1553,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
           db,
           "filing_escalation_closure_rebalance_safeguard_expiry",
           firmId,
@@ -1552,7 +1562,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
           db,
           "filing_escalation_closure_rebalance_safeguard_expiry",
           firmId,
@@ -1561,7 +1571,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureRebalanceSafeguardExpiryRow>(
           db,
           "filing_escalation_closure_rebalance_safeguard_expiry",
           firmId,
@@ -1589,7 +1599,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
           db,
           "filing_escalation_closure_adjudication_debt_burndown",
           firmId,
@@ -1598,7 +1608,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
           db,
           "filing_escalation_closure_adjudication_debt_burndown",
           firmId,
@@ -1607,7 +1617,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureAdjudicationDebtBurndownRow>(
           db,
           "filing_escalation_closure_adjudication_debt_burndown",
           firmId,
@@ -1635,7 +1645,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
           db,
           "filing_escalation_closure_safeguard_expiry_attestations",
           firmId,
@@ -1644,7 +1654,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
           db,
           "filing_escalation_closure_safeguard_expiry_attestations",
           firmId,
@@ -1653,7 +1663,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSafeguardExpiryAttestationRow>(
           db,
           "filing_escalation_closure_safeguard_expiry_attestations",
           firmId,
@@ -1681,7 +1691,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
           db,
           "filing_escalation_closure_burndown_recalibration",
           firmId,
@@ -1690,7 +1700,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
           db,
           "filing_escalation_closure_burndown_recalibration",
           firmId,
@@ -1699,7 +1709,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownRecalibrationRow>(
           db,
           "filing_escalation_closure_burndown_recalibration",
           firmId,
@@ -1727,7 +1737,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue",
           firmId,
@@ -1736,7 +1746,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue",
           firmId,
@@ -1745,7 +1755,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue",
           firmId,
@@ -1773,7 +1783,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
           db,
           "filing_escalation_closure_burndown_settlement",
           firmId,
@@ -1782,7 +1792,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
           db,
           "filing_escalation_closure_burndown_settlement",
           firmId,
@@ -1791,7 +1801,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureBurndownSettlementRow>(
           db,
           "filing_escalation_closure_burndown_settlement",
           firmId,
@@ -1819,7 +1829,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue_drain",
           firmId,
@@ -1828,7 +1838,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue_drain",
           firmId,
@@ -1837,7 +1847,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureExpiryAttestationQueueDrainRow>(
           db,
           "filing_escalation_closure_expiry_attestation_queue_drain",
           firmId,
@@ -1865,7 +1875,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
           db,
           "filing_escalation_closure_settlement_attestation",
           firmId,
@@ -1874,7 +1884,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
           db,
           "filing_escalation_closure_settlement_attestation",
           firmId,
@@ -1883,7 +1893,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementAttestationRow>(
           db,
           "filing_escalation_closure_settlement_attestation",
           firmId,
@@ -1911,7 +1921,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
           db,
           "filing_escalation_closure_queue_drain_reconciliation",
           firmId,
@@ -1920,7 +1930,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
           db,
           "filing_escalation_closure_queue_drain_reconciliation",
           firmId,
@@ -1929,7 +1939,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueDrainReconciliationRow>(
           db,
           "filing_escalation_closure_queue_drain_reconciliation",
           firmId,
@@ -1957,7 +1967,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
           db,
           "filing_escalation_closure_settlement_arbitration",
           firmId,
@@ -1966,7 +1976,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
           db,
           "filing_escalation_closure_settlement_arbitration",
           firmId,
@@ -1975,7 +1985,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByAdjudicationId(firmId, adjudicationId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureSettlementArbitrationRow>(
           db,
           "filing_escalation_closure_settlement_arbitration",
           firmId,
@@ -2003,7 +2013,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByOwnerId(firmId, ownerId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
           db,
           "filing_escalation_closure_queue_reentry_compliance",
           firmId,
@@ -2012,7 +2022,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByQueueId(firmId, queueId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
           db,
           "filing_escalation_closure_queue_reentry_compliance",
           firmId,
@@ -2021,7 +2031,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listByRebalanceId(firmId, rebalanceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<FilingEscalationClosureQueueReentryComplianceRow>(
           db,
           "filing_escalation_closure_queue_reentry_compliance",
           firmId,
@@ -2038,7 +2048,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<Job>(db, "jobs", firmId)
       },
       async listByDocument(firmId, documentId) {
-        return asFirmScopedList(await listRowsByFirmAndField<Job>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<Job>(
           db,
           "jobs",
           firmId,
@@ -2085,7 +2095,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<Intimation>(db, "intimation_register", firmId)
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<Intimation>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<Intimation>(
           db,
           "intimation_register",
           firmId,
@@ -2102,7 +2112,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         await setDoc(doc(db, "audit_dead_letter", id), { row, reason: letter.reason, deadLetteredAt: letter.deadLetteredAt })
       },
       async listByFirm(firmId) {
-        const page = await listRowsByFirm<AuditDeadLetter & { firmId: string; id?: string }>(
+        const page = await listAllRowsByFirm<AuditDeadLetter & { firmId: string; id?: string }>(
           db,
           "audit_dead_letter",
           firmId
@@ -2182,7 +2192,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<MatterReportExportAnalyticsRow>(db, "matter_report_export_analytics", firmId)
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<MatterReportExportAnalyticsRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<MatterReportExportAnalyticsRow>(
           db,
           "matter_report_export_analytics",
           firmId,
@@ -2206,7 +2216,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<MatterReportRelevanceSnapshotRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<MatterReportRelevanceSnapshotRow>(
           db,
           "matter_report_relevance_snapshots",
           firmId,
@@ -2237,7 +2247,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<WorkflowOpsAlertDigestRow>(db, "workflow_ops_alert_digests", firmId)
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertDigestRow>(
           db,
           "workflow_ops_alert_digests",
           firmId,
@@ -2257,7 +2267,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return listByFirm<WorkflowOpsAlertAttestationRow>(db, "workflow_ops_alert_attestations", firmId)
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertAttestationRow>(
           db,
           "workflow_ops_alert_attestations",
           firmId,
@@ -2285,7 +2295,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertEscalationLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertEscalationLedgerRow>(
           db,
           "workflow_ops_alert_escalation_ledgers",
           firmId,
@@ -2313,7 +2323,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertAttestationDisputeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertAttestationDisputeRow>(
           db,
           "workflow_ops_alert_attestation_disputes",
           firmId,
@@ -2341,7 +2351,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertEscalationClosureRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertEscalationClosureRow>(
           db,
           "workflow_ops_alert_escalation_closures",
           firmId,
@@ -2369,7 +2379,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertDisputeEnforcementLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertDisputeEnforcementLedgerRow>(
           db,
           "workflow_ops_alert_dispute_enforcement_ledgers",
           firmId,
@@ -2397,7 +2407,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertClosureDebtReconciliationDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertClosureDebtReconciliationDigestRow>(
           db,
           "workflow_ops_alert_closure_debt_reconciliation_digests",
           firmId,
@@ -2425,7 +2435,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertEnforcementAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertEnforcementAttestationRow>(
           db,
           "workflow_ops_alert_enforcement_attestations",
           firmId,
@@ -2453,7 +2463,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertClosureDebtVarianceDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertClosureDebtVarianceDigestRow>(
           db,
           "workflow_ops_alert_closure_debt_variance_digests",
           firmId,
@@ -2481,7 +2491,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertEnforcementWaiverLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertEnforcementWaiverLedgerRow>(
           db,
           "workflow_ops_alert_enforcement_waiver_ledgers",
           firmId,
@@ -2509,7 +2519,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationQueueRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationQueueRow>(
           db,
           "workflow_ops_alert_variance_remediation_queues",
           firmId,
@@ -2537,7 +2547,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDigestRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDigestRow>(
           db,
           "workflow_ops_alert_waiver_expiry_digests",
           firmId,
@@ -2565,7 +2575,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaLedgerRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_ledgers",
           firmId,
@@ -2593,7 +2603,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeRow>(
           db,
           "workflow_ops_alert_waiver_expiry_disputes",
           firmId,
@@ -2624,7 +2634,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachEscalationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_escalations",
           firmId,
@@ -2652,7 +2662,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudications",
           firmId,
@@ -2687,7 +2697,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoints",
           firmId,
@@ -2718,7 +2728,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardshipRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardships",
           firmId,
@@ -2753,7 +2763,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestations",
           firmId,
@@ -2784,7 +2794,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_remediations",
           firmId,
@@ -2820,7 +2830,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_exception_reconciliations",
           firmId,
@@ -2851,7 +2861,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndowns",
           firmId,
@@ -2887,7 +2897,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_orchestrations",
           firmId,
@@ -2922,7 +2932,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlements",
           firmId,
@@ -2957,7 +2967,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drains",
           firmId,
@@ -2992,7 +3002,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_attestations",
           firmId,
@@ -3028,7 +3038,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_drain_reconciliations",
           firmId,
@@ -3063,7 +3073,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitrations",
           firmId,
@@ -3099,7 +3109,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliances",
           firmId,
@@ -3135,7 +3145,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_finalizations",
           firmId,
@@ -3171,7 +3181,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirements",
           firmId,
@@ -3207,7 +3217,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governances",
           firmId,
@@ -3243,7 +3253,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliations",
           firmId,
@@ -3279,7 +3289,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledgers",
           firmId,
@@ -3315,7 +3325,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verifications",
           firmId,
@@ -3351,7 +3361,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestations",
           firmId,
@@ -3387,7 +3397,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_exports",
           firmId,
@@ -3423,7 +3433,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledgers",
           firmId,
@@ -3459,7 +3469,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceiptRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_receipts",
           firmId,
@@ -3495,7 +3505,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications",
           firmId,
@@ -3531,7 +3541,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliations",
           firmId,
@@ -3567,7 +3577,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoffs",
           firmId,
@@ -3603,7 +3613,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestations",
           firmId,
@@ -3639,7 +3649,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgments",
           firmId,
@@ -3675,7 +3685,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgments",
           firmId,
@@ -3711,7 +3721,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliations",
           firmId,
@@ -3747,7 +3757,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliations",
           firmId,
@@ -3783,7 +3793,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers",
           firmId,
@@ -3819,7 +3829,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations",
           firmId,
@@ -3855,7 +3865,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations",
           firmId,
@@ -3891,7 +3901,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledgers",
           firmId,
@@ -3928,7 +3938,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications",
           firmId,
@@ -3964,7 +3974,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications",
           firmId,
@@ -4000,7 +4010,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications",
           firmId,
@@ -4036,7 +4046,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications",
           firmId,
@@ -4072,7 +4082,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations",
           firmId,
@@ -4093,7 +4103,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments",
           firmId,
@@ -4129,7 +4139,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments",
           firmId,
@@ -4181,7 +4191,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations",
           firmId,
@@ -4217,7 +4227,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations",
           firmId,
@@ -4253,7 +4263,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           )
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verifications_transport_boundary_receipt_reconciliations",
           firmId,
@@ -4274,7 +4284,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments",
           firmId,
@@ -4295,7 +4305,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(db, "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments",
           firmId,
@@ -4316,7 +4326,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations",
           firmId,
@@ -4381,7 +4391,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers",
           firmId,
@@ -4402,7 +4412,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestations",
           firmId,
@@ -4423,7 +4433,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(db, "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliations",
           firmId,
@@ -4470,7 +4480,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(db, "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow>(
           db,
           "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_debt_burndown_settlement_arbitration_disposition_publication_governance_external_distribution_audit_ledger_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_archival_export_custody_handoff_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledger_partner_handoff_attestation_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_external_distribution_audit_ledgers",
           firmId,
@@ -4667,7 +4677,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return listByFirm<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow>(db, "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations", firmId)
         },
         async listByMatter(firmId, matterId) {
-        return asFirmScopedList(await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationRow>(
           db,
           "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_closure_attestation_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestations",
           firmId,
@@ -4689,7 +4699,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         },
         async listByMatter(firmId, matterId) {
           return asFirmScopedList(
-            await listRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
+            await listAllRowsByFirmAndField<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerRow>(
               db,
               "workflow_ops_alert_variance_remediation_sla_breach_resolution_checkpoint_expiry_attestation_queue_reentry_compliance_debt_retirement_dispute_reconciliation_closure_verification_archival_export_partner_delivery_transport_boundary_receipt_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledger_partner_delivery_receipt_freeze_override_seal_verification_transport_boundary_receipt_reconciliations_external_transport_receipt_acknowledgments_external_transport_receipt_acknowledgment_reconciliation_partner_handoff_attestation_outbound_registry_attestation_ledgers",
               firmId,
@@ -4714,7 +4724,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByUserId(firmId, userId) {
         return asFirmScopedList(
-          await listRowsByFirmAndField<TenancySessionReferenceRow>(
+          await listAllRowsByFirmAndField<TenancySessionReferenceRow>(
             db,
             "tenancy_session_references",
             firmId,
@@ -4743,7 +4753,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageDisputeAttestationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageDisputeAttestationRow>(
           db,
           "tenancy_lineage_dispute_attestations",
           firmId,
@@ -4790,7 +4800,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageReconciliationQueueArbitrationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageReconciliationQueueArbitrationRow>(
           db,
           "tenancy_lineage_reconciliation_queue_arbitrations",
           firmId,
@@ -4818,7 +4828,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageDigestClosureCheckpointRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageDigestClosureCheckpointRow>(
           db,
           "tenancy_lineage_digest_closure_checkpoints",
           firmId,
@@ -4846,7 +4856,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageClosureAdjudicationRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageClosureAdjudicationRow>(
           db,
           "tenancy_lineage_closure_adjudications",
           firmId,
@@ -4874,7 +4884,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageArbitrationDebtRetirementLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageArbitrationDebtRetirementLedgerRow>(
           db,
           "tenancy_lineage_arbitration_debt_retirement_ledgers",
           firmId,
@@ -4902,7 +4912,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageClosureAdjudicationSettlementRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageClosureAdjudicationSettlementRow>(
           db,
           "tenancy_lineage_closure_adjudication_settlements",
           firmId,
@@ -4930,7 +4940,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyLineageArbitrationDebtRetirementDisputeLedgerRow>(
           db,
           "tenancy_lineage_arbitration_debt_retirement_dispute_ledgers",
           firmId,
@@ -4958,7 +4968,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         )
       },
       async listByLineageRoot(firmId, lineageRootSessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyExternalSessionIdentityBridgeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyExternalSessionIdentityBridgeRow>(
           db,
           "tenancy_external_session_identity_bridges",
           firmId,
@@ -4967,7 +4977,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
       async listBySessionReference(firmId, sessionReferenceId) {
-        return asFirmScopedList(await listRowsByFirmAndField<TenancyExternalSessionIdentityBridgeRow>(
+        return asFirmScopedList(await listAllRowsByFirmAndField<TenancyExternalSessionIdentityBridgeRow>(
           db,
           "tenancy_external_session_identity_bridges",
           firmId,

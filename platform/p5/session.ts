@@ -116,6 +116,32 @@ type DecodedToken = { uid: string } & Record<string, unknown>
 type IdTokenVerifier = (token: string) => Promise<DecodedToken>
 
 let verifierPromise: Promise<IdTokenVerifier> | null = null
+let verifierForTests: IdTokenVerifier | null = null
+
+/**
+ * Test seam (as `setFirestorePersistenceForTests` is for the database): verify ID tokens with `verifier` instead of
+ * this process's firebase-admin app. A production process refuses the Auth emulator (F01 LOW, below), so a
+ * production-mode e2e hands in firebase-admin's own `verifyIdToken` bound to the emulator. Nothing outside tests
+ * calls it; `null` restores the real verifier.
+ */
+export function setIdTokenVerifierForTests(verifier: IdTokenVerifier | null): void {
+  verifierForTests = verifier
+}
+
+/**
+ * F01 re-audit LOW: with FIREBASE_AUTH_EMULATOR_HOST set, firebase-admin accepts UNSIGNED ID tokens, so a production
+ * process that inherits the variable would let anyone mint any identity. It is refused when NODE_ENV=production
+ * (as adminFirestore.ts refuses FIRESTORE_EMULATOR_HOST), failing closed with 503.
+ */
+function refuseAuthEmulatorInProduction(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV === "production" && env.FIREBASE_AUTH_EMULATOR_HOST?.trim()) {
+    throw new AuthError(
+      503,
+      "AUTH_MISCONFIGURED",
+      "FIREBASE_AUTH_EMULATOR_HOST is refused when NODE_ENV=production"
+    )
+  }
+}
 
 function firebaseConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(
@@ -127,6 +153,8 @@ function firebaseConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
 
 /** Lazily initialises firebase-admin from standard env. Never called in insecure-dev. */
 async function getVerifier(): Promise<IdTokenVerifier> {
+  if (verifierForTests) return verifierForTests
+  refuseAuthEmulatorInProduction()
   if (!firebaseConfigured()) {
     throw new AuthError(503, "AUTH_NOT_CONFIGURED", "auth not configured")
   }
@@ -199,8 +227,11 @@ export async function loadUserRecord(
     }
   }
   if (fromRepo) {
-    store.users.set(fromRepo.id, fromRepo)
-    return fromRepo
+    // F01 (re-audit HIGH): the record is the user `userId` names. The repository attaches the document id; caching
+    // under the requested id as well means a row that reaches here without one can never be cached under `undefined`.
+    const record = fromRepo.id === userId ? fromRepo : { ...fromRepo, id: userId }
+    store.users.set(userId, record)
+    return record
   }
   if (options.preferRepository) {
     // The repository is authoritative and says the user no longer exists:

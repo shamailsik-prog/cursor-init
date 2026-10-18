@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 import { executeConsoleApiCall } from "@/lib/console/execute-console-api-call"
 
@@ -58,6 +59,12 @@ describe("operator console authenticated fetch", () => {
     expect(headers.get("Idempotency-Key")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     )
+  })
+
+  it("keeps operator console call-site wiring for authenticated fetch", () => {
+    const source = readFileSync("app/ops/operator-audit-console.tsx", "utf8")
+    expect(source).toContain("executeConsoleApiCall")
+    expect(source).toContain('path: "/api/d2/ops-reporting"')
   })
 
   it("operator console path: missing Bearer yields unauthorized (FA-F02-003)", async () => {

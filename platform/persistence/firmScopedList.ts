@@ -39,27 +39,104 @@ export type FirmScopedListOptions = {
   startAfterId?: string | null
 }
 
+type FirmScopedRawPage<T> = FirmScopedPage<T> & {
+  /** The SDK's own snapshot of the last row kept, for a `startAfter` that needs no second read. */
+  lastCursor: unknown
+}
+
 async function runFirmScopedPageQuery<T extends { id?: string }>(
   db: Firestore,
   collectionName: string,
   buildBaseQuery: (fetchLimit: number) => FirmIdQuery,
   firmId: string,
-  options: FirmScopedListOptions
-): Promise<FirmScopedPage<T>> {
+  options: FirmScopedListOptions & { startAfterCursor?: unknown }
+): Promise<FirmScopedRawPage<T>> {
   const pageLimit = options.limit ?? FIRM_SCOPED_LIST_LIMIT
   const fetchLimit = pageLimit + 1
   let query = buildBaseQuery(fetchLimit)
-  if (options.startAfterId) {
+  if (options.startAfterCursor !== undefined) {
+    query = withFirmQueryStartAfter(db, query, options.startAfterCursor)
+  } else if (options.startAfterId) {
     const cursorSnap = await validateFirmListCursor(db, collectionName, firmId, options.startAfterId)
     query = withFirmQueryStartAfter(db, query, cursorSnap)
   }
   const snap = await getDocs(query)
-  const raw = snap.docs.map((row) => ({ ...(row.data() as T), id: row.id }))
-  const truncated = raw.length > pageLimit
-  const items = truncated ? raw.slice(0, pageLimit) : raw
-  const last = items[items.length - 1]
-  const nextCursor = truncated && last?.id ? last.id : null
-  return { items, truncated, nextCursor }
+  const truncated = snap.docs.length > pageLimit
+  const kept = truncated ? snap.docs.slice(0, pageLimit) : snap.docs
+  // F14 R8 / F01: the document id is authoritative; it wins over any `id` in the data.
+  const items = kept.map((row) => ({ ...(row.data() as T), id: row.id }))
+  const lastDoc = kept[kept.length - 1]
+  const nextCursor = truncated && lastDoc?.id ? lastDoc.id : null
+  const lastCursor = lastDoc ? ((lastDoc as { cursor?: unknown }).cursor ?? lastDoc) : undefined
+  return { items, truncated, nextCursor, lastCursor }
+}
+
+/**
+ * Hard ceiling on the pages a complete listing reads (F12). At the default page size this is 5,000,000 rows of ONE
+ * firm; reaching it means the query is not advancing, so the listing fails loudly instead of looping or truncating.
+ */
+export const FIRM_SCOPED_LIST_MAX_PAGES = 10_000
+
+/**
+ * Every row of the caller's firm, read page by page through the firm-scoped query (F12): the database applies the
+ * firm filter, so no other tenant's row is ever read, and no row of the firm is silently dropped. Repository
+ * `listByFirm` / `listBy<Field>` callers (membership and matter syncs, conflict and permission checks) rely on a
+ * complete answer; a truncated one would deny access or miss a conflict without saying so. Callers that want one
+ * bounded page use `listRowsByFirm` / `listRowsByFirmAndField` with `limit` / `startAfterId`.
+ */
+async function listAllPages<T extends { id?: string }>(
+  db: Firestore,
+  collectionName: string,
+  buildBaseQuery: (fetchLimit: number) => FirmIdQuery,
+  firmId: string,
+  pageLimit: number
+): Promise<FirmScopedPage<T>> {
+  const items: T[] = []
+  let startAfterCursor: unknown = undefined
+  for (let pages = 0; pages < FIRM_SCOPED_LIST_MAX_PAGES; pages += 1) {
+    const page: FirmScopedRawPage<T> = await runFirmScopedPageQuery<T>(db, collectionName, buildBaseQuery, firmId, {
+      limit: pageLimit,
+      startAfterCursor,
+    })
+    items.push(...page.items)
+    if (!page.truncated) return { items, truncated: false, nextCursor: null }
+    startAfterCursor = page.lastCursor
+  }
+  throw new Error(`firm-scoped listing of ${collectionName} exceeded ${FIRM_SCOPED_LIST_MAX_PAGES} pages`)
+}
+
+export async function listAllRowsByFirm<T extends { firmId: string; id?: string }>(
+  db: Firestore,
+  collectionName: string,
+  firmId: string,
+  pageLimit: number = FIRM_SCOPED_LIST_LIMIT
+): Promise<FirmScopedPage<T>> {
+  const firm = requireCallerFirmId(firmId, "listAllRowsByFirm")
+  return listAllPages<T>(
+    db,
+    collectionName,
+    (fetchLimit) => queryByFirmId(db, collectionName, firm, fetchLimit),
+    firm,
+    pageLimit
+  )
+}
+
+export async function listAllRowsByFirmAndField<T extends { id?: string }>(
+  db: Firestore,
+  collectionName: string,
+  firmId: string,
+  field: string,
+  fieldValue: string,
+  pageLimit: number = FIRM_SCOPED_LIST_LIMIT
+): Promise<FirmScopedPage<T>> {
+  const firm = requireCallerFirmId(firmId, "listAllRowsByFirmAndField")
+  return listAllPages<T>(
+    db,
+    collectionName,
+    (fetchLimit) => queryByFirmIdAndField(db, collectionName, firm, field, fieldValue, fetchLimit),
+    firm,
+    pageLimit
+  )
 }
 
 export async function listRowsByFirm<T extends { firmId: string; id?: string }>(
@@ -69,13 +146,14 @@ export async function listRowsByFirm<T extends { firmId: string; id?: string }>(
   options: FirmScopedListOptions = {}
 ): Promise<FirmScopedPage<T>> {
   const firm = requireCallerFirmId(firmId, "listRowsByFirm")
-  return runFirmScopedPageQuery<T>(
+  const { items, truncated, nextCursor } = await runFirmScopedPageQuery<T>(
     db,
     collectionName,
     (fetchLimit) => queryByFirmId(db, collectionName, firm, fetchLimit),
     firm,
-    options
+    { limit: options.limit, startAfterId: options.startAfterId }
   )
+  return { items, truncated, nextCursor }
 }
 
 export async function listRowsByFirmAndField<T extends { id?: string }>(
@@ -87,11 +165,12 @@ export async function listRowsByFirmAndField<T extends { id?: string }>(
   options: FirmScopedListOptions = {}
 ): Promise<FirmScopedPage<T>> {
   const firm = requireCallerFirmId(firmId, "listRowsByFirmAndField")
-  return runFirmScopedPageQuery<T>(
+  const { items, truncated, nextCursor } = await runFirmScopedPageQuery<T>(
     db,
     collectionName,
     (fetchLimit) => queryByFirmIdAndField(db, collectionName, firm, field, fieldValue, fetchLimit),
     firm,
-    options
+    { limit: options.limit, startAfterId: options.startAfterId }
   )
+  return { items, truncated, nextCursor }
 }
