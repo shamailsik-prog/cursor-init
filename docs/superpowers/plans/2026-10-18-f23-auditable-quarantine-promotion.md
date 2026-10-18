@@ -232,13 +232,87 @@ Spec section 7, rulings 13–26. Branch `claude/remediate-f23-fu` from `origin/m
 
 ### Tasks
 
-- [ ] **Task R2-1: spec and plan.** Spec section 7 (rulings 13–26, residuals); this section.
-- [ ] **Task R2-2: RED tests, committed alone.** The new test files and the `test_i` change, run on 84025e8's code; the failing output recorded below. Expected RED: every M1 probe (no 401 within 1 s for a 1 GB declared body; no 413; no 408; RSS growth), L3 (500), L4 (500), L5 (echoed input), L6 (200 replayed), L7 (200), the new migration (no column). Expected GREEN on 84025e8: the L1 and L2 pins (their RED is the mutant run).
-- [ ] **Task R2-3: M1 and L4/L5.** Rulings 13–18. GREEN: the body-guard e2e under h11 and httptools, the L4/L5 tests, the structural route test, both F23 files and the F24 files unchanged.
-- [ ] **Task R2-4: L3.** Ruling 19. GREEN: the four SQLSTATE cases.
-- [ ] **Task R2-5: L6.** Rulings 20–21. GREEN: key reuse 422, fingerprint stored, legacy NULL row compared by recomputation, migration 003 idempotent.
-- [ ] **Task R2-6: L7 and L8.** Rulings 22, 25. GREEN: the blank-name cases, unit and e2e.
-- [ ] **Task R2-7: mutation.** `mutate3.py` (the auditor's, with only its runner path and test list pointed at this branch) over the 11 survivors, then all 44.
-- [ ] **Task R2-8: verification.** Full suite as CI runs it, G-0, F31 import contract, gitleaks 8.30.1 over `git diff origin/main HEAD`, claim gate on the PR body; README.
+- [x] **Task R2-1: spec and plan.** Spec section 7 (rulings 13–26, residuals); this section.
+- [x] **Task R2-2: RED tests, committed alone.** The new test files and the `test_i` change, run on 84025e8's code; the failing output recorded below. Expected RED: every M1 probe (no 401 within 1 s for a 1 GB declared body; no 413; no 408; RSS growth), L3 (500), L4 (500), L5 (echoed input), L6 (200 replayed), L7 (200), the new migration (no column). Expected GREEN on 84025e8: the L1 and L2 pins (their RED is the mutant run).
+- [x] **Task R2-3: M1 and L4/L5.** Rulings 13–18. GREEN: the body-guard e2e under h11 and httptools, the L4/L5 tests, the structural route test, both F23 files and the F24 files unchanged.
+- [x] **Task R2-4: L3.** Ruling 19. GREEN: the four SQLSTATE cases.
+- [x] **Task R2-5: L6.** Rulings 20–21. GREEN: key reuse 422, fingerprint stored, legacy NULL row compared by recomputation, migration 003 idempotent.
+- [x] **Task R2-6: L7 and L8.** Rulings 22, 25. GREEN: the blank-name cases, unit and e2e.
+- [x] **Task R2-7: mutation.** `mutate3.py` (the auditor's, with only its runner path and test list pointed at this branch) over the 11 survivors, then all 44.
+- [x] **Task R2-8: verification.** Full suite as CI runs it, G-0, F31 import contract, gitleaks 8.30.1 over `git diff origin/main HEAD`, claim gate on the PR body; README.
 
 ### Ledger: round 2
+
+Full logs and the evidence file are in the builder's scratchpad (`evidence-f23-fu.txt`).
+
+**Prototype, before any test (scratch, never committed).** A minimal FastAPI app under uvicorn 0.54.0, a route whose dependency answers 401 with and without `Connection: close`, both HTTP implementations. Without `close`: the 401 came at once, but the connection stayed open while the client trickled one byte a second (still open after 6 s; each byte cancels uvicorn's keep-alive timer), and a 64 MB unauthenticated body was drained to its end (client read 401). With `close`: the connection closed right after the 401 (h11 0.007 s, httptools 0.006 s), 200 of 200 small unauthenticated requests read their 401, and a 64 MB body sent with httpx saw `ReadError`. This decided ruling 16.
+
+**RED (84025e8's code, the new tests, commit 155cc9f).**
+
+| File | Result | Observed |
+| --- | --- | --- |
+| `test_f23_review_body_guard_e2e.py` | **2 failed** (h11, httptools; 93.9 s) | no answer to an unauthenticated or wrong-key 1 GB declaration, a Content-Length over the cap, a chunked body past the cap, or a stalled body (status None, connection open); 4 x 64 MB unauthenticated bodies grew peak RSS by **1022.3 MB** (h11) and **886.1 MB** (httptools); 64 MB with the key read whole and answered 422; `/api/start`, `/api/stop`, `/admin/sources/{name}/trigger` answered 401 at once, the two review routes never |
+| `test_f23_review_hardening_db.py` | **9 failed, 6 passed** (79.9 s) | L3: 40001, 40P01, 55P03, 57014 all 500; L4: lone surrogate in reviewer, reason or a field name 500; L5: a 20,000-character reviewer echoed (> 2 KB), malformed JSON with `input`/`ctx`, a 10 MB reviewer echoed in a 422; L6: another reviewer or reason with the same key 200 replayed, no fingerprint column; L7: blank names accepted. The 6 passing are the L1 and L2 pins (their RED is the mutant run) |
+| `test_f23_quarantine_review_rules.py` | **7 failed, 29 passed** (43.5 s) | blank-name bad bodies accepted; through the ASGI app every request asked for body data first and never answered `(None, None, 1)`; both review routes have a body field; 40-entry 422 with input; `request_fingerprint` missing (ImportError: a regression guard) |
+| `test_f23_quarantine_review_db.py` with the new drifts | 14 passed | pins; N08 and N09's RED is the mutant run |
+
+The first L2 version failed on 84025e8 for the test's own reason: `pg_stat_activity.query` is cut at 1,024 bytes before `FOR SHARE`. Rewritten to read the waiter's tuple lock from `pg_locks` (RowShareLock); it then passed on 84025e8, as a pin must. The L8 hygiene test, run on 84025e8's rules file: U+202E (Cf) at line 198, U+200B (Cf) at line 199.
+
+**GREEN, per fix.**
+
+| Commit | Fix | Result |
+| --- | --- | --- |
+| eb49bda | M1, L4, L5 | body-guard e2e **2 passed**; measured h11: 401 at 0.073 s and closed at once, wrong key 0.010 s, over cap 413 at 0.012 s, chunked 413 0.002 s after passing the cap, peak RSS **+0.6 MB**, 408 at **10.07 s**; httptools: 0.027 s, 0.001 s, 0.002 s, 0.001 s, **+0.8 MB**, 408 at **10.03 s**. L4/L5 e2e passed. F23 e2e + every F24 file: 176 passed |
+| 127bf45 | L3 | 4 passed (each SQLSTATE produced deterministically, nothing written, retry 200) |
+| 36c6fa6 | L6 | 3 passed; F19 publication, F20 trust policy and harvesters, F23 e2e: 87 passed |
+| 5e0a196 | L7 | rules + hardening: 51 passed |
+| 6d3e340 | L8 | rules 37 passed. The editing tools had turned this round's own `\u` escapes into the characters (Hangul fillers, U+2800, U+2028/9, combining marks, and U+202E/U+200B in the spec); written back as escapes, now guarded by the hygiene test |
+| 45ea702 | a Content-Length of non-ASCII digits (found in self-review) | RED (500, None, 0); GREEN (408, close, 1) |
+| 935166d | F31 import contract refused `starlette` imports | `fastapi` re-exports used; F31 + rules: 108 passed |
+| 380934f, a15a224 | gitleaks generic-api-key misread `length=MAX_BODY_BYTES` | call reordered; exact-value `.gitleaks.toml` entry for the intermediate commits (PR #77 brought the same entry to main byte for byte; its text is frozen) |
+| 8daf3dc | round-2 mutant G08 survived (no surrogate reaches the renderer through the body) | the renderer tested directly; G08 killed |
+| 8e344ed | under mutant Q01, `test_l3[40P01]` hung instead of failing | every wait on a request bounded; Q01 killed in 131 s |
+
+**Merges.** 2a8ff8e merged main @ 2bf12d5 (#44, no corpus file); 7633dbe merged main @ 53f4450 (F26 #76: `conftest.py`, `import_contract.py`, `requirements.txt`, `requirements-test.txt` appended at the end, the PDF modules), clean, and the venv was updated to the merged `requirements-test.txt`; 0bf5a18 merged main @ 34e158f (#77, F03 #47, F28 follow-up #78: `scraper/tasks/*`, `describe_error` redaction R29), clean, no F23 file and no requirement touched. The quarantine router does not use `describe_error`.
+
+**Full suite, as CI runs it.** On 7633dbe + a15a224 (main @ 53f4450): 1068 passed, 157 subtests passed (1251 s). On 8daf3dc (main @ 34e158f merged): **1135 passed, 157 subtests passed** (788 s). On the final code, 8e344ed: **1135 passed, 157 subtests passed**, 0 failed, 0 skipped (1019 s, on the shared 4-core machine, alongside a mutant run). main @ 34e158f collects 1110; this branch adds 25 (7 rules tests, 15 hardening, 2 body-guard, 1 `test_i` drift).
+
+**Mutation.** The auditor's `mutate3.py`, copied with only two lines changed (`RUNNER` to this cluster's runner; `TESTS` to this branch's F23 files), each mutant applied to a scratch copy of the tree and the source restored after it.
+
+*L1, the 11 survivors of the re-audit* (tree 5e0a196; the four F23 files, the uvicorn guard included): **11 killed, 0 survived.**
+
+| Mutant | Killed by |
+| --- | --- |
+| N08 (`no_qual` always true) | `test_i[when_false]` |
+| N09 (`attr_count` always 0) | `test_i[update_of_reason]` |
+| Q02 (`reviewed` ignored) | `test_l1_rows_that_are_not_pending_are_409_and_write_nothing` |
+| Q03 (`resolution` ignored) | `test_l1_rows_that_are_not_pending_are_409_and_write_nothing` |
+| Q05 (`staging_already_promoted` check removed) | `test_l1_two_queue_rows_on_one_staging_row_publish_once` |
+| Q07b (advisory lock removed, valid SQL) | `test_l1_two_records_with_one_citation_serialise_on_the_advisory_lock` |
+| Q08 (source not re-read under `FOR SHARE`) | `test_l2_the_source_for_share_lock_waits_for_a_concurrent_block` |
+| Q09 (`populate_existing` dropped) | `test_l2_the_source_for_share_lock_waits_for_a_concurrent_block` |
+| R01 (replay ignores the key's value) | `test_l1_another_key_on_a_promoted_record_is_409_not_a_replay` |
+| R02 (citation not trimmed) | `test_l1_a_padded_citation_is_refused_as_already_published` |
+| R07 (quarantine-time trust recorded) | `test_l1_the_decision_records_the_trust_read_at_decision_time` |
+
+*Round 2, the new code* (`mutate_r2.py`, the same machinery; tree a15a224; the three F23 files without the uvicorn guard): **22 mutants, 20 killed on the first run, 2 survived.** G08 (the 422 renderer without `backslashreplace`) survived because pydantic's JSON parser refuses a lone surrogate itself (`json_invalid`), so none reaches the renderer through the body; `test_the_422_renderer_encodes_and_bounds_whatever_an_error_carries` (8daf3dc) now tests the renderer directly, and G08 is **killed** by it. G10 (no explicit rollback before the 409 / 503) is **equivalent**: the exception unwinds `get_db`'s session context first, which rolls the transaction back before the response is sent. M01b and R11b are the auditor's M01 and R11 re-expressed for text this round changed (both killed; the originals no longer apply as written).
+
+| Mutant | Killed by |
+| --- | --- |
+| M01b numbered migrations not run | `test_h`, `test_i` x5, `test_l6_migration_003_*` |
+| R11b reject without the admin dependency | `test_bad_ids_keys_and_admin_keys_*[reject]`, `test_no_admin_route_reads_a_body_before_authenticating` |
+| G02 declared length over the cap not refused; G03 streamed size not capped; G04 no deadline; G05 `Connection: close` never added; G21 content type not checked | `test_review_routes_answer_before_reading_the_body` |
+| G06 raw errors rendered; G07 no bound on the error count | `test_validation_errors_are_bounded_and_never_echo_the_input` x2 |
+| G08 lone surrogate not escaped | `test_the_422_renderer_encodes_and_bounds_whatever_an_error_carries` (after 8daf3dc) |
+| G09 40001 not mapped; G09b 55P03 as 409; G20 503 without Retry-After | `test_l3_contention_is_409_or_503_after_rollback` |
+| G10 no rollback before the answer | equivalent (see above) |
+| G11 fingerprint not compared | `test_l6` x2 |
+| G12 fingerprint not stored | `test_l6_the_same_key_with_another_body_is_422_not_a_replay` |
+| G13 no recomputation for a row without one; G14 migration 003 not listed; G15 003 without its CHECK | `test_l6_migration_003_*` |
+| G16 Hangul fillers visible; G17 separators allowed; G18 no visible-character rule | `test_bad_bodies_are_422_*` x2, `test_l7_*` |
+
+*The auditor's other mutants* (killed at 3fd7833), re-run on this branch: **22 of 22 applicable killed** (N12, N13 on a15a224; Q01 after 8e344ed; Q04, Q06, Q07, Q10–Q18, R03–R06, R09, R10, R12 on 8e344ed; the three non-uvicorn F23 files). M01 and R11 no longer apply as written, because this round changed their text; M01b and R11b above are their equivalents and are killed. So all 35 of `mutate3.py`'s mutants are killed on this branch (the re-audit: 24 killed, 11 survived).
+
+*A defect the mutant run found in a new test.* Under Q01 (no row locks), `test_l3[40P01]` hung instead of failing: the request waited on the staging row the test's holder kept until the request returned (seen in `pg_stat_activity`). 8e344ed bounds every wait on a request (`_answered`: after 30 s it releases what the test holds and fails); Q01 is then killed in 131 s by `test_b`, `test_l2` and `test_l3[40P01]`.
+
+**Gates on the merged tree.** `BASE=origin/main bash ci_gates/gate_g0.sh`: `=== Gate G-0 PASSED (static) ===`. F31 import contract: 71 passed (after each merge). gitleaks 8.30.1 over `git diff origin/main HEAD`, repository config and default rules: no leaks. Before every push from a15a224 on, every branch commit was scanned the way `gitleaks git --log-opts=origin/main..HEAD` scans it: the sandbox here refuses a `gitleaks git` command line, so each commit's added lines were placed at their repository paths and scanned with `gitleaks dir` and the branch's `.gitleaks.toml`: 0 findings; the control with main's earlier config finds the one in 155cc9f. Claim gate on the PR body: `PASS: PR phase-claim gate.`
