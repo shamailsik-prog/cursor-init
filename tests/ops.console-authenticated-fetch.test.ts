@@ -66,4 +66,42 @@ describe("operator console authenticated fetch", () => {
     expect(source).toContain("executeConsoleApiCall")
     expect(source).toContain('path: "/api/d2/ops-reporting"')
   })
+
+  it("operator console path: missing Bearer yields unauthorized (FA-F02-003)", async () => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers)
+      if (!headers.get("Authorization")) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    const result = await executeConsoleApiCall(
+      { idToken: null, firmId: "firmA" },
+      {
+        method: "GET",
+        path: "/api/d2/ops-reporting",
+        query: { actorId: "partner_a", limit: 1 },
+      },
+      { fetchImpl }
+    )
+    expect(result.status).toBe(401)
+    expect(result.ok).toBe(false)
+    expect(fetchImpl).toHaveBeenCalled()
+  })
+
+  it("rejects invalid committee-brain payloads without calling Next fetch", async () => {
+    const nextFetch = vi.fn(async () => new Response("{}", { status: 200 }))
+    const result = await executeConsoleApiCall(
+      { idToken: "brain-token", firmId: "firmA" },
+      {
+        method: "POST",
+        path: "/api/p1/committee-brain",
+        body: { body: 42, classification: "internal" },
+      },
+      { fetchImpl: nextFetch, functionsFetchImpl: vi.fn() }
+    )
+    expect(result.status).toBe(400)
+    expect(result.transport).toBe("functions")
+    expect(nextFetch).not.toHaveBeenCalled()
+  })
 })
