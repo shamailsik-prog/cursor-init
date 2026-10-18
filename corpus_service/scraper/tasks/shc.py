@@ -126,7 +126,7 @@ def _extract_listing_and_pdf_links(html: str, base_url: str) -> tuple[list[str],
     return _dedupe_preserve_order(listing_urls), _dedupe_preserve_order(pdf_urls)
 
 
-async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
+async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[str], dict[str, str]]:
     pdf_sources: dict[str, str] = {}
     visited_listing_urls: set[str] = set()
     listing_queue = deque(SHC_LISTING_SEED_URLS)
@@ -175,6 +175,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
         len(pdf_sources),
     )
     listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    if tally is not None:
+        # Audit F28 R30: the failed listing pages are recorded in the run (listing:<key>), not partial (R17).
+        tally.add_listing_failures(listings)
     return list(pdf_sources.keys()), pdf_sources
 
 
@@ -185,7 +188,7 @@ async def scrape_shc(source, db):
     from scraper.source_identity import stamp_metadata
 
     tally = outcomes.run_tally()
-    pdf_urls, pdf_sources = await _discover_pdf_urls()
+    pdf_urls, pdf_sources = await _discover_pdf_urls(tally=tally)
     if not pdf_urls:
         logger.warning("SindhHighCourt: no PDF links discovered from configured listing URLs")
         return tally.finish(note="no PDF links discovered")
