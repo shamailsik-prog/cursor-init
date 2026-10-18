@@ -338,6 +338,9 @@ def test_review_routes_answer_before_reading_the_body(api, monkeypatch):
             [(b"r" * 20_000, True), (b"r" * 20_000, True), (b"r" * 20_000, True)]),
         "key, the body stalls": _asgi_call(
             url, {**json_type, "content-length": "100", "x-api-key": key}, [(b'{"reviewer"', True)]),
+        # A server that passes a Content-Length of non-ASCII digits through: the stream decides, never a 500.
+        "key, Content-Length of superscript digits": _asgi_call(
+            url, {**json_type, "content-length": "\u00b2\u00b3", "x-api-key": key}, []),
         "key, a complete body refused by validation": _asgi_call(
             url, {**json_type, "content-length": str(len(complete)), "x-api-key": key}, [(complete, False)]),
     }
@@ -353,6 +356,7 @@ def test_review_routes_answer_before_reading_the_body(api, monkeypatch):
         "key, not JSON": (422, "close", 0),
         "key, chunked past the cap": (413, "close", 2),
         "key, the body stalls": (408, "close", 2),
+        "key, Content-Length of superscript digits": (408, "close", 1),
         "key, a complete body refused by validation": (422, None, 1),
     }
     assert touched == []

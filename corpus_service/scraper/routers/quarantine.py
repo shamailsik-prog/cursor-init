@@ -193,6 +193,7 @@ BODY_READ_SECONDS = 10  # read at call time, so a test may shorten it
 _BODY_COMPLETE: Final = "corpus.review_body_complete"  # request scope flag
 _MAX_ERRORS: Final = 10
 _JSON_TYPE: Final = re.compile(r"application/(?:json|[^/;\s]+\+json)")
+_DIGITS: Final = re.compile(r"[0-9]+")  # str.isdigit() also accepts digits int() refuses
 
 
 def _body_received(request: Request) -> bool:
@@ -220,7 +221,7 @@ async def read_review_body(request: Request) -> ReviewDecisionIn:
     if not _JSON_TYPE.fullmatch(content_type):
         raise _body_error("json_required", "Content-Type must be application/json")
     declared = request.headers.get("content-length")
-    if declared is not None and declared.strip().isdigit() and int(declared) > MAX_BODY_BYTES:
+    if declared is not None and _DIGITS.fullmatch(declared.strip()) and int(declared) > MAX_BODY_BYTES:
         raise _too_large()
     chunks: List[bytes] = []
     size = 0
