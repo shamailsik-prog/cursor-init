@@ -368,16 +368,34 @@ export async function restoreDocumentObjectFile(
   backupFilePath: string
 ): Promise<void> {
   const kind = resolveDocumentObjectBackendKind()
+  // The path rules of readPayload and the deletes, checked before the backup is read or anything is
+  // written: an s3:// path needs the S3 backend; any other path is refused in production and under the
+  // S3 backend, so a restore never writes ciphertext to local disk that the next read would refuse.
+  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
+    if (kind !== "s3") {
+      throw new DocumentObjectConfigurationError(
+        "document storage path uses s3:// but the active backend is not S3-compatible"
+      )
+    }
+  } else if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object restores require s3:// storage paths"
+    )
+  } else if (kind === "s3") {
+    throw new DocumentObjectConfigurationError(
+      "document object restores under the S3 backend require s3:// storage paths"
+    )
+  }
   const payload = await readFile(path.resolve(backupFilePath))
+  if (kind === "s3") {
+    await writeS3Payload(storagePath, payload)
+    return
+  }
   if (kind === "memory") {
     if (memoryObjects.has(storagePath)) {
       throw new Error("document object already exists (immutable)")
     }
     memoryObjects.set(storagePath, payload)
-    return
-  }
-  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
-    await writeS3Payload(storagePath, payload)
     return
   }
   const filePath = filesystemPathForStoragePath(storagePath)

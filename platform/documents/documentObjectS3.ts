@@ -438,11 +438,12 @@ export async function writeS3Payload(storagePath: string, payload: Buffer): Prom
   const key = objectKeyForS3StoragePath(storagePath)
   const { bucket } = s3ConfigFromEnv()
   const timeout = documentObjectS3RequestTimeoutMs()
+  // Built before the request (it resolves the SSE setting): a configuration error leaves here as itself,
+  // before anything is sent, and is never mistaken for an ambiguous PUT.
+  const input = putObjectInput(bucket, key, payload)
   try {
     await withDeadline("put", timeout, (signal) =>
-      documentObjectS3Client().send(new PutObjectCommand(putObjectInput(bucket, key, payload)), {
-        abortSignal: signal,
-      })
+      documentObjectS3Client().send(new PutObjectCommand(input), { abortSignal: signal })
     )
     return
   } catch (err) {
