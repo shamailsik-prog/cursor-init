@@ -103,7 +103,9 @@ Gates:
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: error`, one pin for every manifest), no directory holds
   two lockfiles, the root and every directory an install surface runs `npm ci` in has one, and no workflow,
-  `.cursor/environment.json`, `.claude/hooks/*` or package script installs without the lockfile. With `--npm-ci`
+  `.cursor/environment.json`, `.claude/hooks/*` or package script installs without the lockfile. Commands are read
+  with a shell lexer (a step's `working-directory` and a preceding `cd` are followed); an `npm ci` whose target it
+  cannot read (a variable, a computed `cd`) fails unless `ci_gates/lockfile_install_allowlist.json` vouches for it. With `--npm-ci`
   (`npm run gate:lockfiles`, and a step in the CI gates job) it also checks that the running npm is inside the pin and
   runs `npm ci --dry-run --ignore-scripts` for each lockfile: npm's own validator, which catches an override added,
   changed or removed in `package.json` without the lock. Regenerate a lockfile only with the pinned npm

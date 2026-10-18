@@ -109,3 +109,18 @@ Verification at the branch head:
 | GREEN | 5c7c332 | `npx vitest run tests/f39-lockfile-guard.test.ts tests/f39-frozen-install.e2e.test.ts tests/g0-gate-e2e.test.ts` | 71/71 (47 + 4 + 20) |
 | Gates | 5c7c332 | `BASE=origin/main bash ci_gates/gate_g0.sh`; `npm run gate:lockfiles` | G-0 PASSED; guard with `--npm-ci` PASSED (both `npm ci --dry-run`) |
 | Checks | 5c7c332 | `npx eslint tests/f39-lockfile-guard.test.ts`; `npm run typecheck:tests` | exit 0; exit 0 |
+
+### Review round 2 (Copilot, high, thread 4305283954, head f86510c; spec ruling R3c)
+
+- [x] Commands read with a POSIX shell lexer (quotes never end a command; operators split commands; quoted shell strings read too); an unlexable line that mentions npm fails closed.
+- [x] Residual 6 closed: `npm ci` targets follow the step's `working-directory` and any `cd` before them; an unreadable target fails closed unless `ci_gates/lockfile_install_allowlist.json` vouches for it (three real entries: the session hook, the Cursor environment's two installs).
+
+| step | commit | command | result |
+| --- | --- | --- | --- |
+| RED | c3e07ee (16 new cases, f86510c's guard) | `npx vitest run tests/f39-lockfile-guard.test.ts` | **12 failed / 51 passed (63)**. Every quoting-bypass case (`npm --prefix "functions" install`, `npm --prefix '$dir' i`, `npm -C "x" add foo`, `npm "install"`, an escaped quote) ended `=== lockfile guard PASSED ===`; the four `bash -c` / `sh -c` cases were controls the old scanner already caught |
+| GREEN | 3df9b11 | `npx vitest run tests/f39-lockfile-guard.test.ts` | **63/63** |
+| GREEN | 3df9b11 | the F39 guard tests, the F39 e2e and the G-0 e2e | **87/87** (63 + 4 + 20) |
+| Gates | 3df9b11 | `BASE=origin/main bash ci_gates/gate_g0.sh`; `npm run gate:lockfiles` | G-0 PASSED; guard with `--npm-ci` PASSED |
+| Allowlist | 3df9b11 | the guard on the real tree with the allowlist moved away | exactly three failures: `.cursor/environment.json:4` (`npm ci`, `npm --prefix functions ci`: working directory from `cd /agent/repos/cursor-init`) and `.claude/hooks/session-start.sh:22` (`--prefix $dir` held in a variable); restored |
+| Checks | 3df9b11 | `npx eslint` on the three changed test files; `npm run typecheck:tests` | exit 0; exit 0 |
+| Full suite | 3df9b11 | `npm run test:unit`, `npm run lint` | lint 0 errors (89 warnings). Unit, twice, with the container shared by other builders (load average about 7 on 4 cores): 1 failed / 5682 passed, then 4 failed / 5679 passed, 54 skipped (5737). Every failure is a wall-clock budget in another finding's test (`tests/f15-r4-bounds.test.ts` "Urdu باشندہ, repeated", 1535 ms and 1879 ms against 1500; `tests/citations.time-budget.test.ts` SEC-1, three cases). The branch changes none of the code they time. The same two files on a clean extraction of origin/main 1f0cc27, under the same load, also fail (2 failed / 63 passed); `tests/f15-r4-bounds.test.ts` alone on this branch earlier passed (21/21, 1255 ms). Recorded as load-dependent, not as passing |
