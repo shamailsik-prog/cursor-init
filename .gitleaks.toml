@@ -53,15 +53,26 @@ regexes = ['''^short-pw-15char$''']
 paths = ['''^corpus_service/tests/e2e/store_security_e2e\.sh$''']
 targetRules = ["generic-api-key"]
 
-# Vitest-only AES-256-GCM fixture for document object store tests (64 hex chars, not a credential).
+# Vitest-only AES-256-GCM fixtures for the F03 document vault tests (64 hex chars, not credentials):
+# the deterministic suite key, its upper-case spelling (the key check accepts either case) and a
+# second key that must fail to decrypt objects written under the first. Exact values, these test
+# files, generic-api-key only. Commit 59b25ea on cursor/remediate-f03-r2-9504 (PR #47) carries the
+# last two, and the full-history scan reads every fetched branch, so main needs this entry too.
 [[allowlists]]
-description = "F03 document object encryption test fixture (deterministic vitest key)"
+description = "F03 document object encryption test fixtures (deterministic vitest keys)"
 condition = "AND"
 regexTarget = "secret"
-regexes = ['''^a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00$''']
+regexes = [
+  '''^a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00$''',
+  '''^A1B2C3D4E5F60718293A4B5C6D7E8F90112233445566778899AABBCCDDEEFF00$''',
+  '''^0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff1$''',
+]
 paths = [
   '''^tests/setup/document-object-store\.ts$''',
   '''^tests/f03-document-object-store\.unit\.test\.ts$''',
   '''^tests/f03-document-bytes\.e2e\.test\.ts$''',
+  '''^tests/f03-document-object-s3\.faults\.unit\.test\.ts$''',
+  '''^tests/f03-document-object-store\.s3\.integration\.test\.ts$''',
+  '''^tests/f03-r2-document-vault\.e2e\.firestore\.test\.ts$''',
 ]
 targetRules = ["generic-api-key"]
