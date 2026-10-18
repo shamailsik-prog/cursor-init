@@ -599,6 +599,32 @@ describe("PR phase claim gate hardening", () => {
       expect(result.stdout).toContain("(missing: backend_real, frontend_real, transport_stub)")
     })
 
+    it("ends the block only at a closing marker on its own line, not at one the summary quotes", () => {
+      const quoting = [
+        "<!-- CURSOR_SUMMARY -->",
+        "> The gate now strips text up to `<!-- /CURSOR_SUMMARY -->` before reading claims,",
+        "> so corpus work that cannot complete no longer trips it.",
+        "<!-- /CURSOR_SUMMARY -->",
+      ].join("\n")
+      const result = run([...FLAGS, "", "Not a COMPLETE / product-done claim.", "", quoting].join("\n"))
+      expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      expect(result.status).toBe(0)
+    })
+
+    it("recognises the markers with CRLF line endings, as GitHub stores PR bodies", () => {
+      const body = [...FLAGS, "", "Not a COMPLETE / product-done claim.", "", summary("Work that cannot complete now fails.")].join("\r\n")
+      const result = run(body)
+      expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      expect(result.status).toBe(0)
+    })
+
+    it("does not strip markers written inline in the author's own text", () => {
+      const body = [...FLAGS, "", "Status: <!-- CURSOR_SUMMARY --> Phase complete. <!-- /CURSOR_SUMMARY -->"].join("\n")
+      const result = run(body)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("PR claims COMPLETE/product-done while frontend_real=false.")
+    })
+
     it("reads an unterminated summary marker as ordinary text (fails closed)", () => {
       const body = [...FLAGS, "", "Not a COMPLETE / product-done claim.", "", "<!-- CURSOR_SUMMARY -->", "> Phase complete."].join("\n")
       const result = run(body)
