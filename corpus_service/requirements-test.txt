@@ -1,11 +1,13 @@
 # Minimal, pinned set for the corpus_service pytest suite in CI (Gate G-0 workflow, job
 # "corpus-service"). requirements.txt is the service's runtime set; it pulls in Playwright,
-# WeasyPrint and others the tests never import, and it omits pgvector, which
-# scraper/models.py imports. Celery/kombu/redis are here because tests/test_store_tls_config.py
+# WeasyPrint and others the tests never import. This file never stands in for it: audit F31's
+# tests/test_f31_import_contract.py requires every runtime import to be declared in
+# requirements.txt, and job "corpus-runtime" runs tests/e2e/runtime_smoke.sh in a venv built from
+# requirements.txt alone. Celery/kombu/redis are here because tests/test_store_tls_config.py
 # imports the real Celery app to check that its broker and result backend verify the Redis TLS
 # certificate (audit F30). pydantic validates the F19 publication batch format. Verified on Python
 # 3.12 with node 22 and CORPUS_TEST_DATABASE_URL set (pgvector/pgvector:pg16, audit F20 and F19
-# tests): 221 passed, 0 skipped.
+# tests): 814 passed, 0 skipped.
 fastapi==0.142.2
 httpx==0.28.1
 sqlalchemy[asyncio]==2.1.3
