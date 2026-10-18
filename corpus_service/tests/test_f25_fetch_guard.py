@@ -37,7 +37,7 @@ FORBIDDEN_MODULES = (
     "treq", "tornado.httpclient", "tornado.simple_httpclient", "tornado.tcpclient", "websockets", "websocket",
     "httpcore", "anyio", "h11", "h2", "trio", "socket", "ftplib", "smtplib", "poplib", "imaplib", "nntplib",
     "telnetlib", "xmlrpc", "webbrowser", "subprocess", "pty", "asyncssh", "paramiko", "pexpect", "curl_cffi",
-    "pyppeteer", "selenium", "mechanize", "scrapy", "grpc",
+    "pyppeteer", "selenium", "mechanize", "scrapy", "grpc", "ctypes", "cffi",
 )
 # Names inside otherwise-allowed modules that open a network path, run a program, or widen the boundary.
 FORBIDDEN_NAMES = (
@@ -67,6 +67,9 @@ NETWORK_ROOTS = (
     "aiohttp", "urllib3", "lxml", "webbrowser", "pty", BOUNDARY,
 )
 DYNAMIC_IMPORTS = {"importlib.import_module", "importlib.__import__", "builtins.__import__", "__import__"}
+# Code or module lookups an AST scan cannot read: refused outright (no corpus module uses them).
+OPAQUE_CALLS = {"exec", "eval", "compile", "builtins.exec", "builtins.eval", "builtins.compile"}
+OPAQUE_NAMES = ("sys.modules", "__builtins__")
 # The one reviewed dynamic import by variable: the dispatcher's ROUTES (every routed module is
 # checked by test_every_fetching_harvester_uses_one_registered_policy).
 DYNAMIC_IMPORT_ALLOWLIST = {"scraper/tasks/dispatcher.py"}
@@ -176,6 +179,8 @@ def scan_source(source, where="<snippet>"):
                 why = _forbidden(dotted)
                 if why:
                     flag(node, f"references {dotted} ({why})")
+                elif dotted and _under(dotted, OPAQUE_NAMES):
+                    flag(node, f"references {dotted} (a module or builtin lookup the guard cannot follow)")
         # Writes to the boundary or a network module (monkeypatching a factory, widening the registry).
         if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
             target = _dotted(node if isinstance(node, ast.Attribute) else node.value, aliases)
@@ -184,6 +189,8 @@ def scan_source(source, where="<snippet>"):
         if not isinstance(node, ast.Call):
             continue
         dotted = _dotted(node.func, aliases)
+        if dotted in OPAQUE_CALLS:
+            flag(node, f"calls {dotted} (code the guard cannot read)")
         if dotted in DYNAMIC_IMPORTS:
             name = _const_str(node.args[0]) if node.args else None
             if name is None:
