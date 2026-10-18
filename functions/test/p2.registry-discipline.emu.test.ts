@@ -2,7 +2,8 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { FieldPath, type DocumentReference, type Firestore } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { loadRegistry } from "../src/d1/conflict/engine"
-import { bumpRegistryVersion, REGISTRY_SCOPE } from "../src/d1/registryVersion"
+import { nameIndexChunkRef, stageRegistryWrite } from "../src/d1/conflict/nameIndex"
+import { bumpRegistryVersion, readRegistryStateTx, REGISTRY_SCOPE } from "../src/d1/registryVersion"
 import { EMULATORS, uniq } from "./emu"
 import { registryRecorder } from "./setup/registryWriteRecorder"
 
@@ -131,6 +132,78 @@ describe.skipIf(!EMULATORS)("Registry-version recorder rules (P3-20)", () => {
     expect(await asProduct(() => batch.update(matterRef, { title: "B" }).commit())).toEqual(["matters:outside_transaction"])
     expect(
       await asProduct(() => db.runTransaction(async (tx) => { tx.update(matterRef, { title: "C" }); bumpRegistryVersion(tx, firmId) }))
+    ).toEqual([])
+  })
+})
+
+// Audit F37: the conflict name index rules of the recorder (not gate-selected).
+describe.skipIf(!EMULATORS)("Registry recorder: the F37 conflict name index", () => {
+  let db: Firestore
+  let firmId: string
+
+  beforeAll(async () => {
+    db = adminDb()
+    firmId = uniq("firm")
+    await db.collection("firms").doc(firmId).set({ name: "F", plan: "internal" })
+  })
+
+  const asProduct = async (fn: () => Promise<unknown>) => {
+    registryRecorder.attributeTo("functions/src/fake/product.ts:9")
+    try {
+      await fn()
+      return registryRecorder.take().map((v) => `${v.collection}:${v.reason}`)
+    } finally {
+      registryRecorder.attributeTo(null)
+    }
+  }
+
+  it("creating a named client or opposing party needs stageRegistryWrite (an index-aware bump); a bare bump is no_name_index", async () => {
+    const client = () => db.collection("clients").doc(uniq("client"))
+    const party = () => db.collection("matter_parties").doc(uniq("party"))
+    expect(
+      await asProduct(() => db.runTransaction(async (tx) => { tx.create(client(), { firmId, canonicalName: "Haris Qalbani" }); bumpRegistryVersion(tx, firmId) }))
+    ).toEqual(["clients:no_name_index"])
+    expect(
+      await asProduct(() => db.runTransaction(async (tx) => { tx.create(party(), { firmId, role: "opposing", name: "Haris Qalbani" }); bumpRegistryVersion(tx, firmId) }))
+    ).toEqual(["matter_parties:no_name_index"])
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, firmId)
+          tx.create(client(), { firmId, canonicalName: "Haris Qalbani" })
+          tx.create(party(), { firmId, role: "opposing", name: "Omer Daryani" })
+          stageRegistryWrite(tx, firmId, state, ["Haris Qalbani", "Omer Daryani"])
+        })
+      )
+    ).toEqual([])
+    // A client-role party row is not a name the screen can hit: a bare bump is enough.
+    expect(
+      await asProduct(() => db.runTransaction(async (tx) => { tx.create(party(), { firmId, role: "client", name: "Omer Daryani" }); bumpRegistryVersion(tx, firmId) }))
+    ).toEqual([])
+    // The index-aware bump must be for the row's firm.
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, "other-firm")
+          tx.create(client(), { firmId, canonicalName: "X Y" })
+          bumpRegistryVersion(tx, firmId)
+          stageRegistryWrite(tx, "other-firm", state, [])
+        })
+      )
+    ).toEqual(["clients:no_name_index"])
+  })
+
+  it("a write to the name index's chunks is a registry write: it needs a bump in its transaction", async () => {
+    expect(
+      await asProduct(() => db.runTransaction(async (tx) => tx.set(nameIndexChunkRef(firmId, 0), { firmId, names: ["A"] }, { merge: true })))
+    ).toEqual(["conflict_name_index:no_bump"])
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          tx.set(nameIndexChunkRef(firmId, 0), { firmId, names: ["A"] }, { merge: true })
+          bumpRegistryVersion(tx, firmId)
+        })
+      )
     ).toEqual([])
   })
 })

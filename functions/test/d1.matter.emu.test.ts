@@ -469,7 +469,9 @@ describe.skipIf(!EMULATORS)("openMatter re-screen vs the registry version", () =
     const err = await withSeam(
       async (r) => {
         rounds.push(r)
-        await versionRef(firmId).set({ firmId, version: FieldValue.increment(1) }, { merge: true })
+        // A registry write as every functions/src writer stages it (bumpRegistryVersion moves the F37 name index mirror
+        // with the version); a bare version increment would read as a writer that skipped the index (503, spec ruling 5).
+        await versionRef(firmId).set({ firmId, version: FieldValue.increment(1), nameIndex: { version: FieldValue.increment(1) } }, { merge: true })
       },
       () => apiErrorOf(open(partner.token, firmId, checkId))
     )

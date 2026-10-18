@@ -5,6 +5,7 @@ import { adminDb } from "../src/admin"
 import { discloseFor, type StoredCheck } from "../src/d1/conflict/disclosure"
 import { secondsToKarachiMidnight } from "../src/d1/dailyLimit"
 import { checkClassification, unseenHits } from "../src/d1/conflict/engine"
+import { reconcileNameIndex } from "../src/d1/conflict/nameIndex"
 import { RateLimitedError } from "../src/http/errors"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -543,6 +544,8 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
         firmId, matterId, role: "opposing", name: "Haris Qalbani", names: ["haris qalbani"], keys: {},
         matterClassification: "confidential", matterStatus: "live", classification: "privileged",
       })
+      // F37: a row seeded out of band reaches the name tier through the reconciliation (the daily d1.conflict.reindex run).
+      await reconcileNameIndex(firmId)
       const out = await runCheck({ token, data: { firmId, client: { name: "Haris Qalbani" }, opposingParties: [opposing("Zzz Qqq")] } } as never)
       expect(out.hits).toEqual([expect.objectContaining({ hitRole: "opposing", type: "adverse_history", outcome: "POSSIBLE_CANDIDATE_REVIEW" })])
       return (await adminDb().collection("conflict_checks").doc(out.checkId).get()).data()
@@ -602,6 +605,8 @@ describe.skipIf(!EMULATORS)("runConflictCheck", () => {
     })
     await adminDb().collection("matter_parties").add(party("opposing", "Haris Qalbani"))
     await adminDb().collection("matter_parties").add(party("client", "Omer Daryani"))
+    // F37: rows seeded out of band reach the name tier through the reconciliation (the daily d1.conflict.reindex run).
+    await reconcileNameIndex(firmId)
     const out = await runCheck({
       token: partner.token,
       data: { firmId, client: { name: "Haris Qalbani" }, opposingParties: [opposing("Omer Daryani")] },

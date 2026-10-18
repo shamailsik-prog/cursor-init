@@ -3,29 +3,40 @@ import { adminDb } from "../admin"
 
 /**
  * The firm's conflict-registry version (Bugbot PR #8; spec P2-6, P2-30). `openMatter` re-screens a
- * check against `loadRegistry` before its transaction; this counter makes that screen consistent with
- * the transaction. Every write that changes what `loadRegistry` reads (and the screen consumes) bumps
- * it in that write's own transaction:
+ * check before its transaction; this counter makes that screen consistent with the transaction. Every
+ * write that changes what the screen consumes (what `loadRegistry` reads, and since F37 the conflict name
+ * index) bumps it in that write's own transaction:
  *
- * - registerClient: `clients` (+ `entities`) and candidate `entity_links`;
- * - openMatter: `matters` and `matter_parties`;
+ * - registerClient: `clients` (+ `entities`), candidate `entity_links`, and the client's name in the index;
+ * - openMatter: `matters` and `matter_parties`, and the opposing names the index lacks;
  * - closeMatter: `matters.status` and `matter_parties.matterStatus`;
  * - confirmMerge, disputeLink, rejectLink: `entity_links` state;
- * - unmergeEntity and the un-merge saga jobs (`d1.unmerge.links`, `d1.unmerge.checks`): `entity_links` state.
+ * - unmergeEntity and the un-merge saga jobs (`d1.unmerge.links`, `d1.unmerge.checks`): `entity_links` state;
+ * - the auto-confirm job (`d1.autoconfirm`): `entity_links` state;
+ * - the name index reconciliation (`d1.conflict.reindex`): the index's chunks and state.
+ *
+ * Audit F37: the doc also holds the name index state (`nameIndex = { schema, version, chunk, bytes }`,
+ * `conflict/nameIndex.ts`). Every bump moves `nameIndex.version` with `version`, so the index reads current
+ * exactly while every registry write goes through `bumpRegistryVersion`; a write that bumps the version
+ * alone (an older instance during a deploy, a manual edit) leaves the index stale and the screen refuses.
+ * One read of this doc gives the screen its version and the index state together.
  *
  * Not bumped: advanceStage (writes `matters.stage`, which the screen never reads); the `firms` doc
  * writers (prefixes, MFA policy, onboarding: fields the screen never reads; `featureFlags.L17_2_ENABLED`
  * has no writer in functions/src); `transliteration_map` (no writer in functions/src).
  *
- * Enforced at test time (spec P3-20): `REGISTRY_SCOPE` below names what `loadRegistry` reads, and the
- * vitest setup file `functions/test/setup/registryWriteRecorder.ts` fails any functions test in which
- * code under functions/src writes an in-scope field of those collections in a transaction that stages
- * no bump (or writes one outside a transaction). `p2.registry-discipline.emu.test.ts` proves the
- * recorder reports a missing bump and that `loadRegistry` reads exactly these collections.
+ * Enforced at test time (spec P3-20): `REGISTRY_SCOPE` below names what `loadRegistry` reads (with
+ * `PROJECTION_SCOPE`, the name index chunks), and the vitest setup file
+ * `functions/test/setup/registryWriteRecorder.ts` fails any functions test in which code under
+ * functions/src writes an in-scope field of those collections in a transaction that stages no bump (or
+ * writes one outside a transaction), or creates a named client or opposing party without the index-aware
+ * bump of `stageRegistryWrite`. `p2.registry-discipline.emu.test.ts` proves the recorder reports both and
+ * that `loadRegistry` reads exactly `REGISTRY_SCOPE`.
  *
  * The doc lives with the other per-firm counters, `counters/{firmId}_registry` (server-only under
  * firestore.rules: `counters` denies every client read and write). The bump is a blind
- * `FieldValue.increment` write, so it needs no read and may sit anywhere among a transaction's writes.
+ * `FieldValue.increment` write, so it needs no read and may sit anywhere among a transaction's writes;
+ * the writers that add names read the doc first (`readRegistryStateTx`) for the index's open chunk.
  */
 
 /** A collection's registry scope: every field, every field but some, or only some (top-level names). */
@@ -49,7 +60,67 @@ export const REGISTRY_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Obje
 
 export const registryVersionRef = (firmId: string) => adminDb().collection("counters").doc(`${firmId}_registry`)
 
+/**
+ * The screen's own projection (F37): the firm's packed name index (`conflict/nameIndex.ts`), whose chunks
+ * `loadScreeningRegistry` reads and whose state lives on this counter doc. A write to it changes what a
+ * screen sees, so it is a registry write like the others: the recorder requires a bump in its transaction.
+ */
+export const PROJECTION_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Object.freeze({
+  conflict_name_index: Object.freeze({ all: true as const }),
+})
+
+/**
+ * The name index state kept on the counter doc (F37, `nameIndex`): `schema` (null until the firm is born fresh
+ * or reconciled), `version` (equal to the registry version while the index is complete; null when absent) and
+ * the open chunk (`chunk`, with `bytes` counted into it). `valid` is false when the stored map is not whole
+ * (`registryStateOf`): a field the writers always write together is missing, or a field is malformed.
+ */
+export type NameIndexState = { schema: number | null; version: number | null; chunk: number; bytes: number; valid: boolean }
+
+/** The counter doc as one consistent read: whether it exists, the registry version and the name index state. */
+export type RegistryState = { exists: boolean; version: number; nameIndex: NameIndexState }
+
 const versionOf = (data: DocumentData | undefined): number => (typeof data?.version === "number" ? data.version : 0)
+
+const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0
+
+const ABSENT_INDEX: NameIndexState = { schema: null, version: null, chunk: 0, bytes: 0, valid: true }
+
+const absent = (v: unknown): boolean => v === undefined || v === null
+
+/**
+ * The stored `nameIndex` map, read strictly (PR #80 review): a screen must never take a partial state for a whole
+ * one. Every writer of the map writes `version` (the bump's mirror increment), and every write that sets `schema`
+ * also writes `chunk` and `bytes` (`stageRegistryWrite`). So, once the map exists:
+ *
+ * - `version` is required;
+ * - `chunk` and `bytes` are required whenever `schema` is set, and otherwise come together or not at all. Both are
+ *   absent only on an index never placed (a pre-F37 firm whose non-indexing writers bumped the mirror alone); that
+ *   state has no schema, so it reads `missing` and the screen refuses it anyway;
+ * - every present field is a non-negative integer.
+ *
+ * Anything else is `valid: false`, which the screen refuses as `corrupt` and the reconciliation rebuilds.
+ */
+function nameIndexOf(raw: unknown): NameIndexState {
+  if (raw === undefined) return ABSENT_INDEX
+  const invalid = { ...ABSENT_INDEX, valid: false }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return invalid
+  const r = raw as Record<string, unknown>
+  const schema = absent(r.schema) ? null : r.schema
+  if (schema !== null && !isCount(schema)) return invalid
+  if (!isCount(r.version)) return invalid
+  const placed = !absent(r.chunk) || !absent(r.bytes)
+  if (schema !== null || placed) {
+    if (!isCount(r.chunk) || !isCount(r.bytes)) return invalid
+    return { schema: schema as number | null, version: r.version, chunk: r.chunk, bytes: r.bytes, valid: true }
+  }
+  return { schema: null, version: r.version, chunk: 0, bytes: 0, valid: true }
+}
+
+/** The counter doc's state from its data (pure; `exists` is whether the doc exists). */
+export function registryStateOf(exists: boolean, data: DocumentData | undefined): RegistryState {
+  return { exists, version: versionOf(data), nameIndex: nameIndexOf(data?.nameIndex) }
+}
 
 /** The current version (0 before the first registry write), read outside any transaction. */
 export async function readRegistryVersion(firmId: string): Promise<number> {
@@ -61,7 +132,43 @@ export async function readRegistryVersionTx(tx: Transaction, firmId: string): Pr
   return versionOf((await tx.get(registryVersionRef(firmId))).data())
 }
 
-/** Stages the version bump in the caller's transaction (no read). */
-export function bumpRegistryVersion(tx: Transaction, firmId: string): void {
-  tx.set(registryVersionRef(firmId), { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal" }, { merge: true })
+/** The registry version and the name index state in one read, outside any transaction. */
+export async function readRegistryState(firmId: string): Promise<RegistryState> {
+  const snap = await registryVersionRef(firmId).get()
+  return registryStateOf(snap.exists, snap.data())
+}
+
+/** The registry version and the name index state read in `tx`. A read: call it before `tx`'s writes. */
+export async function readRegistryStateTx(tx: Transaction, firmId: string): Promise<RegistryState> {
+  const snap = await tx.get(registryVersionRef(firmId))
+  return registryStateOf(snap.exists, snap.data())
+}
+
+/** Name index fields a writer sets with its bump (absolute values; `version` replaces the mirror increment). */
+export type NameIndexPatch = { schema?: number; version?: number; chunk?: number; bytes?: number }
+
+/**
+ * Stages the version bump in the caller's transaction (no read). The name index mirror (`nameIndex.version`)
+ * moves with it (F37), so the index reads current exactly while every registry write goes through here;
+ * `nameIndex` sets other index fields in the same write (`conflict/nameIndex.ts` stageRegistryWrite).
+ */
+export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: NameIndexPatch = {}): void {
+  tx.set(
+    registryVersionRef(firmId),
+    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: FieldValue.increment(1), ...nameIndex } },
+    { merge: true }
+  )
+}
+
+/**
+ * The bump that resets the name index state (the reconciliation rebuilding a damaged index, F37): the whole
+ * `nameIndex` map is replaced by an unplaced, schema-less one (it reads `missing` until the rebuild marks it) with
+ * its mirror at the new version. `version` is the registry version read in `tx`.
+ */
+export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number): void {
+  tx.set(
+    registryVersionRef(firmId),
+    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: version + 1, chunk: 0, bytes: 0 } },
+    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex"] }
+  )
 }

@@ -68,9 +68,11 @@ const ROWS: Record<string, Record<string, unknown>> = {
   counters: { kind: "matter", year: 2026, next: 7 },
   transliteration_map: { script: "محمد", roman: ["muhammad"] },
   events: { type: "matter.created", matterId: MATTER },
+  // Audit F37: the packed conflict name index, server-only like the counter that holds its state.
+  conflict_name_index: { chunk: 0, kind: "conflict_name_index", names: ["Muhammad Ali", "Acme Traders"] },
 }
 const COLLECTIONS = Object.keys(ROWS)
-const SERVER_ONLY = ["counters", "transliteration_map", "events"]
+const SERVER_ONLY = ["counters", "transliteration_map", "events", "conflict_name_index"]
 
 function row(name: string, classification: string | null, firmId = FIRM) {
   return { firmId, ...ROWS[name], ...(classification === null ? {} : { classification }), createdAt: Timestamp.now() }

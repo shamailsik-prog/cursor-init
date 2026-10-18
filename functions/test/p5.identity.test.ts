@@ -1107,7 +1107,7 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 describe("index exports", () => {
   it("U-1: deploys only the HTTP api (and the health probe) as HTTP functions, plus the job runtime's non-HTTP functions, in asia-south1 — no onCall callables", async () => {
     const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
-    expect(Object.keys(mod).sort()).toEqual(["api", "d1AutoConfirmTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(mod).sort()).toEqual(["api", "d1AutoConfirmTick", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
     for (const name of Object.keys(mod)) {
       expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
     }
@@ -1115,6 +1115,6 @@ describe("index exports", () => {
     // trigger, a Cloud Tasks queue and a schedule, none of them an HTTP endpoint.
     expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual(["api", "health"])
     expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
-    for (const name of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper", "d1AutoConfirmTick", "p1ReservationReconciler"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
+    for (const name of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper", "d1AutoConfirmTick", "d1ConflictReindexTick", "p1ReservationReconciler"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
   })
 })
