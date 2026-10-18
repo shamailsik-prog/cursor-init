@@ -35,7 +35,7 @@ BOUNDARY = "scraper.net.fetch_policy"
 FORBIDDEN_MODULES = (
     "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "httplib2", "pycurl", "playwright",
     "treq", "tornado.httpclient", "tornado.simple_httpclient", "tornado.tcpclient", "websockets", "websocket",
-    "httpcore", "anyio", "h11", "h2", "trio", "socket", "ftplib", "smtplib", "poplib", "imaplib", "nntplib",
+    "httpcore", "h11", "h2", "trio", "socket", "anyio.streams", "ftplib", "smtplib", "poplib", "imaplib", "nntplib",
     "telnetlib", "xmlrpc", "webbrowser", "subprocess", "pty", "asyncssh", "paramiko", "pexpect", "curl_cffi",
     "pyppeteer", "selenium", "mechanize", "scrapy", "grpc", "ctypes", "cffi",
 )
@@ -49,6 +49,15 @@ FORBIDDEN_NAMES = (
     "os.system", "os.popen", "os.posix_spawn", "os.posix_spawnp", "os.startfile",
     "ssl.get_server_certificate", "ssl.wrap_socket", "ssl.SSLSocket",
     "lxml.etree.parse", "lxml.etree.iterparse", "lxml.html.parse",
+    # anyio itself is allowed for its cancel scopes (move_on_after, fail_after, CancelScope: F24's
+    # export router uses one); its network, DNS and process APIs are not.
+    "anyio.connect_tcp", "anyio.connect_unix", "anyio.create_tcp_listener", "anyio.create_unix_listener",
+    "anyio.create_udp_socket", "anyio.create_connected_udp_socket", "anyio.create_unix_datagram_socket",
+    "anyio.create_connected_unix_datagram_socket", "anyio.open_process", "anyio.run_process",
+    "anyio.getaddrinfo", "anyio.getnameinfo", "anyio.wait_socket_readable", "anyio.wait_socket_writable",
+    "anyio.abc.SocketStream", "anyio.abc.SocketListener", "anyio.abc.UNIXSocketStream", "anyio.abc.UDPSocket",
+    "anyio.abc.ConnectedUDPSocket", "anyio.abc.UNIXDatagramSocket", "anyio.abc.ConnectedUNIXDatagramSocket",
+    "anyio.abc.Process",
     f"{BOUNDARY}.FetchPolicy", f"{BOUNDARY}.PolicyFetcher",
 )
 FORBIDDEN_PREFIXES = ("os.exec", "os.spawn")
