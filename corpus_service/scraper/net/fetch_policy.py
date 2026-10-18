@@ -506,14 +506,29 @@ def _content_coding(headers: httpx.Headers) -> tuple[str | None, str]:
     return None, f"unsupported content coding {codings[0][:40]!r}"
 
 
+_ZLIB_HEADER_BYTES = 2
+
+
+def _is_zlib_header(head: bytes) -> bool:
+    """The RFC 1950 header test zlib's inflate applies to the first two bytes: compression method
+    8 (deflate), window bits <= 15 (CINFO <= 7), and (CMF * 256 + FLG) % 31 == 0."""
+    cmf, flg = head[0], head[1]
+    return (cmf & 0x0F) == 8 and (cmf >> 4) <= 7 and ((cmf << 8) | flg) % 31 == 0
+
+
 class _BoundedDecoder:
     """Turns raw body chunks into the body, never holding more than ``limit`` decoded bytes (R17).
 
     identity: chunks are kept as they come. gzip / deflate: ``zlib.decompressobj`` inflates each
     chunk in steps of at most ``_DECODE_STEP`` bytes (``decompress(data, max_length)`` plus
-    ``unconsumed_tail``), so a 1 KB bomb can never expand past the cap in one call. deflate is the
-    zlib format; a raw deflate stream (no zlib header) is accepted too, as httpx does. Data after
-    the end of the compressed stream, and a stream that never ends, are refused."""
+    ``unconsumed_tail``), so a 1 KB bomb can never expand past the cap in one call. Data after the
+    end of the compressed stream, and a stream that never ends, are refused.
+
+    deflate is the zlib format; a raw deflate stream (no zlib header) is accepted too, as httpx
+    does. Which one it is gets decided on the first two bytes, with zlib's own header test, before
+    anything is inflated: until two bytes have arrived, the (at most one byte) prefix is held and
+    then replayed into the chosen decoder. So the decision never depends on how the server split
+    its chunks (Codex P2 on #67: a one-byte first chunk used to lock in the zlib decoder)."""
 
     def __init__(self, coding: str, limit: int, refuse: typing.Callable[[str, str], FetchRefused]):
         self._coding = coding
@@ -521,12 +536,9 @@ class _BoundedDecoder:
         self._refuse = refuse
         self._out = io.BytesIO()
         self.size = 0
-        self._started = False
-        self._raw_tried = coding != "deflate"
-        if coding == "identity":
-            self._z = None
-        else:
-            self._z = zlib.decompressobj(16 + zlib.MAX_WBITS if coding == "gzip" else zlib.MAX_WBITS)
+        self._identity = coding == "identity"
+        self._prefix = b"" if coding == "deflate" else None  # deflate only: format not yet decided
+        self._z = zlib.decompressobj(16 + zlib.MAX_WBITS) if coding == "gzip" else None
 
     def _emit(self, data: bytes) -> None:
         if self.size + len(data) > self._limit:
@@ -537,8 +549,17 @@ class _BoundedDecoder:
     def feed(self, chunk: bytes) -> None:
         if not chunk:
             return
-        if self._z is None:
+        if self._identity:
             self._emit(chunk)
+            return
+        if self._prefix is not None:
+            data = self._prefix + chunk
+            if len(data) < _ZLIB_HEADER_BYTES:
+                self._prefix = data  # never more than one byte
+                return
+            self._prefix = None
+            self._z = zlib.decompressobj(zlib.MAX_WBITS if _is_zlib_header(data) else -zlib.MAX_WBITS)
+            self._inflate(data)
             return
         if self._z.eof:
             raise self._refuse(CONTENT_ENCODING, f"data after the end of the {self._coding} stream")
@@ -549,12 +570,7 @@ class _BoundedDecoder:
             try:
                 piece = self._z.decompress(data, _DECODE_STEP)
             except zlib.error as exc:
-                if not self._started and not self._raw_tried:
-                    self._raw_tried = True
-                    self._z = zlib.decompressobj(-zlib.MAX_WBITS)  # deflate sent without the zlib header
-                    continue
                 raise self._refuse(CONTENT_ENCODING, f"corrupt {self._coding} stream: {exc}") from None
-            self._started = True
             if piece:
                 self._emit(piece)
             if self._z.eof:
@@ -566,7 +582,9 @@ class _BoundedDecoder:
                 return
 
     def finish(self) -> bytes:
-        if self._z is not None:
+        if not self._identity:
+            if self._prefix is not None:  # a deflate body shorter than any deflate stream
+                raise self._refuse(CONTENT_ENCODING, f"truncated {self._coding} stream")
             if not self._z.eof:
                 self._inflate(b"")  # pending output, still in bounded steps
             if not self._z.eof:
