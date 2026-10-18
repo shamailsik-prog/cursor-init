@@ -19,6 +19,7 @@ import contextlib
 import logging
 import signal
 import socket
+import sys
 
 import httpx
 import pytest
@@ -224,14 +225,14 @@ def test_r26_an_interrupted_embedding_batch_is_recorded_and_its_item_is_untouche
     assert_migrated(corpus_db.migrate(), corpus_db)
     statute_id = _queue_one_statute()
     install_provider(monkeypatch, fail=False)
-    import openai  # the in-process provider module installed above
+    provider = sys.modules["openai"]  # install_provider's in-process stand-in, not the SDK
 
     async def slow_create(self, model, input):
         signal.setitimer(signal.ITIMER_REAL, 0.3)  # the soft limit lands while this call awaits
         await REAL_SLEEP(3)
         raise AssertionError("the time limit should have cut this call off")
 
-    monkeypatch.setattr(type(openai.AsyncOpenAI(api_key="x").embeddings), "create", slow_create)
+    monkeypatch.setattr(type(provider.AsyncOpenAI(api_key="x").embeddings), "create", slow_create)
 
     with soft_limit_on_sigalrm():
         result = fire("process-embeddings")
