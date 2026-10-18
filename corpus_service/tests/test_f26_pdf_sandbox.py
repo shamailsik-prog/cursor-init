@@ -1288,3 +1288,87 @@ def test_r23_a_killed_pool_process_s_scratch_directory_is_swept_by_the_next_pars
         assert remaining == sorted([live.name, fresh_legacy.name]), (left_by_pool, remaining)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# PR #81 review round 1 (Codex P2, thread 4306593931): the pid in a scratch name is parsed strictly.
+def _kernel_pid_max():
+    """The kernel's pid_max, read here independently of the code under test (4,194,304, the 64-bit
+    ceiling, if it cannot be read)."""
+    try:
+        return int(Path("/proc/sys/kernel/pid_max").read_text().strip())
+    except (OSError, ValueError):
+        return 4194304
+
+
+def _a_dead_pid():
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return pid
+
+
+def test_r23_a_scratch_name_without_a_usable_pid_never_stops_a_parse(tmp_path, monkeypatch):
+    """Young directories whose name carries no usable worker pid: one past any C long (os.kill raises
+    OverflowError), a non-ASCII digit ('²'.isdigit() is true and int('²') raises ValueError), 0, a
+    zero-padded pid, and one above the kernel's pid_max (no process can have it, so os.kill says
+    'no such process'). Each is left to the age rule: the parse runs and they stay. A control
+    directory of a dead worker is still swept. On the head before this round the first two stopped
+    every parse, and the last was swept although it was young."""
+    from scraper.parsers import pdf_sandbox
+
+    root = Path(tempfile.mkdtemp(prefix="f26fu-scratch-"))
+    root.chmod(0o711)
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    try:
+        malformed = ["f26-pdf-999999999999999999999-x", "f26-pdf-²-x", "f26-pdf-0-x", "f26-pdf-007-x",
+                     f"f26-pdf-{_kernel_pid_max() + 1}-x"]
+        for name in malformed:
+            (root / name).mkdir()
+        control = root / f"f26-pdf-{_a_dead_pid()}-control"
+        control.mkdir()
+        try:
+            result = sandbox_parse(tmp_path, golden_pdf("golden-one-page"))
+        except (OverflowError, ValueError) as exc:
+            pytest.fail(f"a scratch directory's name stopped the parse: {type(exc).__name__}: {exc}")
+        assert result.text == golden_text("golden-one-page")
+        assert sorted(p.name for p in root.iterdir()) == sorted(malformed), sorted(p.name for p in root.iterdir())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_r23_the_owner_of_a_scratch_name_is_parsed_strictly(tmp_path, monkeypatch):
+    """The pid is ASCII digits in canonical form, above 0 and at most pid_max (read from the kernel,
+    4,194,304 when it cannot be); anything else is no owner. Checking a value that is not a pid never
+    raises, never counts as a dead worker, and never signals a process group (0 or a negative pid)."""
+    from scraper.parsers import pdf_sandbox
+
+    signalled = []
+    real_kill = os.kill
+
+    def _recording_kill(pid, sig):
+        signalled.append(pid)
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(pdf_sandbox.os, "kill", _recording_kill)
+    assert (pdf_sandbox._worker_gone(0), pdf_sandbox._worker_gone(-1), signalled) == (False, False, [])
+    monkeypatch.undo()
+
+    pid_max = _kernel_pid_max()
+    owners = {name: pdf_sandbox._scratch_owner(name) for name in (
+        "f26-pdf-1234-abcd", f"f26-pdf-{pid_max}-x", f"f26-pdf-{pid_max + 1}-x", "f26-pdf-0-x", "f26-pdf-007-x",
+        "f26-pdf-²-x", "f26-pdf-٣-x", "f26-pdf-999999999999999999999-x", "f26-pdf-12", "f26-pdf--x",
+        "f26-pdf-ab12cd34",
+    )}
+    assert owners == {
+        "f26-pdf-1234-abcd": 1234, f"f26-pdf-{pid_max}-x": pid_max, f"f26-pdf-{pid_max + 1}-x": None,
+        "f26-pdf-0-x": None, "f26-pdf-007-x": None, "f26-pdf-²-x": None, "f26-pdf-٣-x": None,
+        "f26-pdf-999999999999999999999-x": None, "f26-pdf-12": None, "f26-pdf--x": None, "f26-pdf-ab12cd34": None,
+    }, owners
+    assert (pdf_sandbox._worker_gone(10 ** 21), pdf_sandbox._worker_gone(-1), pdf_sandbox._worker_gone(os.getpid()),
+            pdf_sandbox._worker_gone(_a_dead_pid())) == (False, False, False, True)
+    for text, want in (("32768\n", 32768), ("not a number\n", 4194304), ("0\n", 4194304)):
+        source = tmp_path / "pid_max"
+        source.write_text(text)
+        assert pdf_sandbox._pid_max(str(source)) == want, text
+    assert pdf_sandbox._pid_max(str(tmp_path / "missing")) == 4194304
