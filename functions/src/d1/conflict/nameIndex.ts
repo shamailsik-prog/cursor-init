@@ -1,6 +1,17 @@
-import { FieldPath, FieldValue, type DocumentData, type Query, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, type DocumentData, type DocumentReference, type Query, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../../admin"
-import { bumpRegistryVersion, bumpResettingNameIndex, readRegistryStateTx, registryStateOf, registryVersionRef, type NameIndexPatch, type NameIndexState, type RegistryState } from "../registryVersion"
+import {
+  bumpRegistryVersion,
+  bumpResettingNameIndex,
+  nextNameIndexGen,
+  readRegistryStateTx,
+  registryStateOf,
+  registryVersionRef,
+  type CounterPatch,
+  type NameIndexPatch,
+  type NameIndexState,
+  type RegistryState,
+} from "../registryVersion"
 
 /**
  * The firm's conflict name index (audit F37; spec 2026-10-18-f37 rulings 3 to 7): every distinct client
@@ -52,6 +63,8 @@ const RECONCILE_APPEND_BYTES = 256 * 1024
  */
 export const RECONCILE_ROUNDS = 4
 const SCAN_PAGE = 500
+/** Chunk documents one reset deletes at most (the cap on a sound index, with room for strays); more take more rounds. */
+const RESET_CHUNKS = NAME_INDEX_MAX_CHUNKS + 50
 
 export const nameIndexChunkRef = (firmId: string, chunk: number) => adminDb().collection(NAME_INDEX_COLLECTION).doc(`${firmId}_${chunk}`)
 
@@ -119,7 +132,14 @@ export function placeNames(open: { chunk: number; bytes: number }, names: readon
  * `state` is the counter doc read in `tx`. With a malformed state nothing is appended (the index already reads
  * corrupt and only a rebuild repairs it); the bump still happens.
  */
-export function stageRegistryWrite(tx: Transaction, firmId: string, state: RegistryState, names: readonly string[], patch: NameIndexPatch = {}): void {
+export function stageRegistryWrite(
+  tx: Transaction,
+  firmId: string,
+  state: RegistryState,
+  names: readonly string[],
+  patch: NameIndexPatch = {},
+  counter: CounterPatch = {}
+): void {
   const ix = state.nameIndex
   const place = nameIndexStateCorrupt(ix) ? { byChunk: new Map<number, string[]>(), chunk: ix.chunk, bytes: ix.bytes } : placeNames(ix, names)
   for (const [n, list] of place.byChunk) {
@@ -129,7 +149,7 @@ export function stageRegistryWrite(tx: Transaction, firmId: string, state: Regis
       { merge: true }
     )
   }
-  bumpRegistryVersion(tx, firmId, { chunk: place.chunk, bytes: place.bytes, ...patch })
+  bumpRegistryVersion(tx, firmId, { chunk: place.chunk, bytes: place.bytes, ...patch }, counter)
 }
 
 /**
@@ -160,25 +180,41 @@ export async function bornFreshPatch(tx: Transaction, firmId: string, state: Reg
 /** A chunk document as read: its id and data. */
 export type ChunkDoc = { id: string; data: DocumentData | undefined }
 
-/** True when `id` is one of the firm's chunk document ids (`{firmId}_{n}`), not a longer firm id's. */
-export const isChunkIdOf = (firmId: string, id: string): boolean => id.startsWith(`${firmId}_`) && /^\d+$/.test(id.slice(firmId.length + 1))
+/**
+ * True when `id` is one of the firm's chunk document ids, `{firmId}_{n}` with `n` written as `nameIndexChunkRef`
+ * writes it (no leading zero), and not a longer firm id's. A non-canonical `{firmId}_01` is no chunk of any firm.
+ */
+export const isChunkIdOf = (firmId: string, id: string): boolean => id.startsWith(`${firmId}_`) && /^(0|[1-9]\d*)$/.test(id.slice(firmId.length + 1))
 
-/** One page of documents whose ids start with `{firmId}_` (the firm's chunks and longer firm ids that share the prefix). */
-const firmChunksPage = (firmId: string, limit: number, startAfter?: string): Query => {
-  let q = adminDb().collection(NAME_INDEX_COLLECTION).orderBy(FieldPath.documentId()).startAt(`${firmId}_`).endAt(`${firmId}_\uf8ff`).limit(limit)
-  return startAfter === undefined ? q : q.startAfter(startAfter)
+/** One page of the documents whose ids start with `{firmId}_`: the firm's chunks, and the chunks of any firm whose id extends this one. */
+const firmChunksPage = (firmId: string, startAfter: string | undefined, idsOnly: boolean): Query => {
+  const range = adminDb().collection(NAME_INDEX_COLLECTION).orderBy(FieldPath.documentId()).startAt(`${firmId}_`).endAt(`${firmId}_\uf8ff`).limit(SCAN_PAGE)
+  const page = startAfter === undefined ? range : range.startAfter(startAfter)
+  return idsOnly ? page.select() : page
 }
 
-/** Every chunk document of the firm in `tx`, paging the prefix scan so another firm's id cannot crowd out this firm's later chunks. */
-async function firmChunkDocsTx(tx: Transaction, firmId: string): Promise<ChunkDoc[]> {
-  const out: ChunkDoc[] = []
+/**
+ * The firm's chunk documents, read in `tx` (PR #89 review, Bugbot 4307596183). The id range `{firmId}_…` also holds the
+ * chunks of a firm whose id extends this one (`{firmId}_1_0`, …, sorting between this firm's `_1` and `_2`), so a
+ * limit applied before `isChunkIdOf` could fill with them and leave this firm's later chunks unread: a valid index
+ * refused, or a chunk beyond the pointer missed (CLEAR). The range is therefore paged to its end, keeping this firm's
+ * chunks page by page; another firm's documents cost reads but can never displace one. The scan stops early only when
+ * `stopAfter` of this firm's own chunks are in hand: more than a sound index holds, so it is refused or reset anyway
+ * (any `NAME_INDEX_MAX_CHUNKS + 2` distinct chunk numbers include one beyond every valid pointer).
+ */
+async function firmChunkDocsTx(
+  tx: Transaction,
+  firmId: string,
+  opts: { stopAfter: number; idsOnly?: boolean }
+): Promise<Array<ChunkDoc & { ref: DocumentReference }>> {
+  const out: Array<ChunkDoc & { ref: DocumentReference }> = []
   let last: string | undefined
   for (;;) {
-    const page = await tx.get(firmChunksPage(firmId, SCAN_PAGE, last))
+    const page = await tx.get(firmChunksPage(firmId, last, opts.idsOnly === true))
     for (const d of page.docs) {
-      if (isChunkIdOf(firmId, d.id)) out.push({ id: d.id, data: d.data() })
+      if (isChunkIdOf(firmId, d.id) && out.length < opts.stopAfter) out.push({ id: d.id, ref: d.ref, data: opts.idsOnly === true ? undefined : d.data() })
     }
-    if (page.size < SCAN_PAGE) break
+    if (page.size < SCAN_PAGE || out.length >= opts.stopAfter) break
     last = page.docs[page.size - 1].id
   }
   return out
@@ -234,7 +270,7 @@ export async function readNameIndex(firmId: string, opts: { probeEmpty?: boolean
     async (tx) => {
       const counter = await tx.get(registryVersionRef(firmId))
       const state = registryStateOf(counter.exists, counter.data())
-      const chunks = await firmChunkDocsTx(tx, firmId)
+      const chunks = (await firmChunkDocsTx(tx, firmId, { stopAfter: NAME_INDEX_MAX_CHUNKS + 2 })).map(({ id, data }) => ({ id, data }))
       const registryEmpty = opts.probeEmpty && !counter.exists ? await firmRegistryEmpty(firmId, tx) : null
       return { state, chunks, registryEmpty }
     },
@@ -300,8 +336,9 @@ async function resetNameIndex(firmId: string, start: RegistryState): Promise<boo
   return db.runTransaction(async (tx) => {
     const state = await readRegistryStateTx(tx, firmId)
     if (state.version !== start.version) return false
-    for (const c of await firmChunkDocsTx(tx, firmId)) tx.delete(nameIndexChunkRef(firmId, Number(c.id.slice(firmId.length + 1))))
-    bumpResettingNameIndex(tx, firmId, state.version, state.nameIndexGen + 1)
+    // Ids only (a chunk holds up to 512 KiB of names); a firm with more strays than RESET_CHUNKS takes more rounds.
+    for (const c of await firmChunkDocsTx(tx, firmId, { stopAfter: RESET_CHUNKS, idsOnly: true })) tx.delete(c.ref)
+    bumpResettingNameIndex(tx, firmId, state.version, nextNameIndexGen(state))
     return true
   })
 }
@@ -361,7 +398,13 @@ export async function reconcileNameIndex(firmId: string): Promise<ReconcileResul
     const marked = await db.runTransaction(async (tx): Promise<boolean | null> => {
       const state = await readRegistryStateTx(tx, firmId)
       if (nameIndexStateCorrupt(state.nameIndex)) return null
-      if (nameIndexProblem(state) === null) return false
+      // The run confirms the index current here, by marking it or by finding it so: the confirmation count moves in
+      // the same transaction, so a break after this point reads the new count and gets a reindex run of its own.
+      const confirmed: CounterPatch = { nameIndexEpoch: state.nameIndexEpoch + 1 }
+      if (nameIndexProblem(state) === null) {
+        tx.set(registryVersionRef(firmId), confirmed, { merge: true })
+        return false
+      }
       const writes = state.version - start.version
       const mirrored = (state.nameIndex.version ?? 0) - (start.nameIndex.version ?? 0)
       if (writes !== mirrored) return null
@@ -372,7 +415,7 @@ export async function reconcileNameIndex(firmId: string): Promise<ReconcileResul
           tx.set(open, { firmId, chunk: state.nameIndex.chunk, kind: NAME_INDEX_COLLECTION, classification: "privileged-restricted", names: [] })
         }
       }
-      stageRegistryWrite(tx, firmId, state, [], { schema: NAME_INDEX_SCHEMA, version: state.version + 1 })
+      stageRegistryWrite(tx, firmId, state, [], { schema: NAME_INDEX_SCHEMA, version: state.version + 1 }, confirmed)
       return true
     })
     if (marked !== null) return { names: names.size, added: missing.length, marked, rebuilt, rounds: round }

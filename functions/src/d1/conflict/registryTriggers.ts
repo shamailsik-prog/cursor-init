@@ -1,11 +1,12 @@
-import { FieldValue, type DocumentData } from "firebase-admin/firestore"
+import { createHash } from "node:crypto"
+import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onDocumentWritten } from "firebase-functions/v2/firestore"
 import { REGION } from "../../health"
 import { adminDb } from "../../admin"
-import { nameIndexGenOf, registryStateOf, registryVersionRef } from "../registryVersion"
+import { nameIndexGenOf, nextNameIndexGen, registryStateOf, registryVersionRef } from "../registryVersion"
 import { sameKey, screenedKeyOf, stampOf } from "./screenedName"
-import { requestReindex } from "./screening"
+import { enqueueReindexTx } from "./screening"
 
 /**
  * The conflict name index's guard against writes made outside functions/src (audit F37 re-audit FA-D1C-002 and
@@ -72,53 +73,95 @@ export function chunkWriteVerdict(before: DocumentData | undefined, after: Docum
   return "ok"
 }
 
+/** The collection of break markers: one per trigger event that broke an index, kept past the platform's 7-day retries. */
+export const BREAK_MARKERS_COLLECTION = "conflict_index_breaks"
+/** How long a break marker is kept (`expiresAt`, Firestore TTL): longer than the 7 days a failed event is redelivered. */
+export const BREAK_MARKER_TTL_MS = 8 * 24 * 3_600_000
+
+/** The marker of one trigger event (its CloudEvent id, hashed into a safe document id). */
+export const breakMarkerRef = (eventId: string) =>
+  adminDb().collection(BREAK_MARKERS_COLLECTION).doc(createHash("sha256").update(eventId).digest("hex"))
+
 /**
- * Breaks the firm's index mirror: a blind increment of the registry version (no read, so no contention retry, and no
- * write to a watched collection, so no trigger loop), then the on-demand reindex. Every screen refuses until the
- * reconciliation marks a rebuilt index current. The generation moves with it, so no stamp written before the break is
- * trusted again (a name removed from a chunk may be missing, and its row may come back later with an old stamp). A
- * redelivered event bumps again, which only breaks the mirror again.
+ * Breaks the firm's index mirror, once per trigger event, in one transaction that reads the counter (and the event's
+ * marker) and then:
+ *
+ * - moves the registry version while `nameIndex.version` stays, so every screen refuses until a reconciliation marks
+ *   a rebuilt index current (a write to `counters`, which no trigger watches: no loop);
+ * - writes the generation absolutely (`nextNameIndexGen`), so no stamp written before the break is trusted again and a
+ *   malformed stored value is replaced, never incremented into one that can equal an older stamp (PR #89 review,
+ *   Bugbot 4307596177);
+ * - stages the reindex run keyed by the counter's confirmation count read here (`enqueueReindexTx`), so the break and
+ *   a run that confirms after it commit together (PR #89 review, Codex 4307586920);
+ * - creates the event's marker. A redelivered event (at-least-once delivery, or a retry after a failure) finds its
+ *   marker and changes nothing: its break and its run committed with the marker.
+ *
+ * The transaction contends with registry writes on the counter document; a failed attempt throws, and the platform
+ * redelivers the event (`retry: true`). Returns whether this call broke the index. Without an event id (a direct call)
+ * there is no marker and every call breaks.
  */
-export async function breakNameIndex(firmId: string, nowMs: number, cause: Record<string, string>): Promise<void> {
-  const ref = registryVersionRef(firmId)
-  await adminDb().runTransaction(async (tx) => {
-    const snap = await tx.get(ref)
-    const state = registryStateOf(snap.exists, snap.data())
+export async function breakNameIndex(firmId: string, nowMs: number, cause: Record<string, string>, eventId?: string): Promise<boolean> {
+  const counterRef = registryVersionRef(firmId)
+  const marker = eventId === undefined ? null : breakMarkerRef(eventId)
+  const broke = await adminDb().runTransaction(async (tx) => {
+    if (marker !== null && (await tx.get(marker)).exists) return false
+    const counter = await tx.get(counterRef)
+    const state = registryStateOf(counter.exists, counter.data())
+    await enqueueReindexTx(tx, firmId, nowMs, state)
     tx.set(
-      ref,
-      { firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1), nameIndexGen: state.nameIndexGen + 1 },
+      counterRef,
+      { firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1), nameIndexGen: nextNameIndexGen(state) },
       { merge: true }
     )
+    if (marker !== null) {
+      tx.create(marker, {
+        firmId,
+        kind: "conflict_index_break",
+        classification: "internal",
+        ...cause,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(nowMs + BREAK_MARKER_TTL_MS),
+      })
+    }
+    return true
   })
-  logger.warn("conflict.name_index_broken", { firmId, ...cause })
-  await requestReindex(firmId, nowMs)
+  if (broke) logger.warn("conflict.name_index_broken", { firmId, ...cause })
+  else logger.info("conflict.name_index_break_repeated", { firmId, ...cause })
+  return broke
 }
 
 /**
- * The handler of a client or opposing-party write (the event's before and after data). Returns the verdict. A new,
- * stamped screened name costs one read: the firm's counter, for its current generation.
+ * The handler of a client or opposing-party write (the event's before and after data, its time and its id). Returns
+ * the verdict. A new, stamped screened name costs one read: the firm's counter, for its current generation.
  */
 export async function registryRowWritten(
   collection: string,
   docId: string,
   before: DocumentData | undefined,
   after: DocumentData | undefined,
-  nowMs: number
+  nowMs: number,
+  eventId?: string
 ): Promise<"unchanged" | "indexed" | "unindexed"> {
   const firmOfStamp = needsGen(collection, before, after)
   const gen = firmOfStamp === null ? null : nameIndexGenOf((await registryVersionRef(firmOfStamp).get()).data())
   const verdict = rowWriteVerdict(collection, before, after, gen)
   const key = screenedKeyOf(collection, after)
-  if (verdict === "unindexed" && key !== null) await breakNameIndex(key.firmId, nowMs, { collection, docId, reason: "unindexed_name" })
+  if (verdict === "unindexed" && key !== null) await breakNameIndex(key.firmId, nowMs, { collection, docId, reason: "unindexed_name" }, eventId)
   return verdict
 }
 
-/** The handler of a name index chunk write. Returns the verdict. */
-export async function nameIndexChunkWritten(chunkId: string, before: DocumentData | undefined, after: DocumentData | undefined, nowMs: number): Promise<"ok" | "names_removed"> {
+/** The handler of a name index chunk write (the event's data, time and id). Returns the verdict. */
+export async function nameIndexChunkWritten(
+  chunkId: string,
+  before: DocumentData | undefined,
+  after: DocumentData | undefined,
+  nowMs: number,
+  eventId?: string
+): Promise<"ok" | "names_removed"> {
   const verdict = chunkWriteVerdict(before, after)
   if (verdict === "names_removed") {
     const firmId = typeof before?.firmId === "string" ? before.firmId : chunkId.replace(/_\d+$/, "")
-    await breakNameIndex(firmId, nowMs, { collection: "conflict_name_index", docId: chunkId, reason: "names_removed" })
+    await breakNameIndex(firmId, nowMs, { collection: "conflict_name_index", docId: chunkId, reason: "names_removed" }, eventId)
   }
   return verdict
 }
@@ -126,13 +169,13 @@ export async function nameIndexChunkWritten(chunkId: string, before: DocumentDat
 // O-33: a Firestore trigger runs in the database's region (asia-south1, as onJobCreated). `retry: true`: a thrown
 // (transient store) error is redelivered by the platform for up to 7 days; the handlers are safe to repeat.
 export const d1ConflictClientWritten = onDocumentWritten({ document: "clients/{clientId}", region: REGION, retry: true }, (event) =>
-  registryRowWritten("clients", event.params.clientId, event.data?.before.data(), event.data?.after.data(), Date.now())
+  registryRowWritten("clients", event.params.clientId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )
 
 export const d1ConflictPartyWritten = onDocumentWritten({ document: "matter_parties/{partyId}", region: REGION, retry: true }, (event) =>
-  registryRowWritten("matter_parties", event.params.partyId, event.data?.before.data(), event.data?.after.data(), Date.now())
+  registryRowWritten("matter_parties", event.params.partyId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )
 
 export const d1ConflictIndexChunkWritten = onDocumentWritten({ document: "conflict_name_index/{chunkId}", region: REGION, retry: true }, (event) =>
-  nameIndexChunkWritten(event.params.chunkId, event.data?.before.data(), event.data?.after.data(), Date.now())
+  nameIndexChunkWritten(event.params.chunkId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )

@@ -4,6 +4,7 @@ import { adminDb } from "../src/admin"
 import { loadScreeningRegistry } from "../src/d1/conflict/candidates"
 import { nameIndexChunkRef, readIndexedNames, reconcileNameIndex, NAME_INDEX_SCHEMA } from "../src/d1/conflict/nameIndex"
 import { NAME_REINDEX_JOB_TYPE, nameReindexHandler, pktHourKey, pktMinuteKey } from "../src/d1/conflict/reindexJob"
+import { reindexRunKey } from "../src/d1/conflict/screening"
 import { openMatterTestSeam } from "../src/d1/matter/ops"
 import { readRegistryState, registryVersionRef } from "../src/d1/registryVersion"
 import { jobIdFor } from "../src/p2/enqueue"
@@ -78,7 +79,9 @@ describe.skipIf(!EMULATORS)("F37: an index that cannot be trusted refuses the sc
     expect(await rows("conflict_checks", firmId)).toHaveLength(0)
     expect((await denyRows(partner.uid, "conflict.run")).map((r) => r.reason)).toEqual(["screening_unavailable", "screening_unavailable", "screening_unavailable"])
     const jobs = await reindexJobs(firmId)
-    expect(jobs.map((d) => d.id)).toEqual([jobIdFor(firmId, NAME_REINDEX_JOB_TYPE, `${NAME_REINDEX_JOB_TYPE}:stale:${pktMinuteKey(at)}`)])
+    // Keyed by the minute and the counter's confirmation count (PR #89 review): none confirmed yet for this firm.
+    expect(jobs.map((d) => d.id)).toEqual([jobIdFor(firmId, NAME_REINDEX_JOB_TYPE, reindexRunKey(pktMinuteKey(at), (await readRegistryState(firmId)).nameIndexEpoch))])
+    expect((await readRegistryState(firmId)).nameIndexEpoch).toBe(0)
     expect(jobs[0].data()).toMatchObject({ createdBy: "system", classification: "internal", matterId: null, status: "queued" })
 
     expect(await runReindexJob(firmId)).toBe("done")
@@ -241,11 +244,13 @@ describe.skipIf(!EMULATORS)("F37: what the candidate loader reads", () => {
 })
 
 describe.skipIf(!EMULATORS)("F37: the reconciliation", () => {
-  it("is read-only on a current index with nothing missing; repairs drift and bumps; refuses to mark over a write that skipped the index", async () => {
+  it("leaves a current index with nothing missing as it is (only its confirmation counts); repairs drift and bumps; refuses to mark over a write that skipped the index", async () => {
     const { firmId, partner } = await setup()
     const before = await readRegistryState(firmId)
     expect(await reconcileNameIndex(firmId)).toEqual({ names: 1, added: 0, marked: false, rebuilt: false, rounds: 1 })
-    expect(await readRegistryState(firmId)).toEqual(before)
+    // Nothing a screen or openMatter reads moves (no bump, no index change); the run records its confirmation (PR #89
+    // review: a later break must get a reindex run of its own).
+    expect(await readRegistryState(firmId)).toEqual({ ...before, nameIndexEpoch: before.nameIndexEpoch + 1 })
 
     // Drift: a party written out of band while the index reads current.
     await adminDb().collection("matter_parties").add({ firmId, matterId: null, role: "opposing", name: "Haris Qalbani", keys: {}, classification: "internal" })

@@ -12,6 +12,7 @@ const state = (over: Omit<Partial<RegistryState>, "nameIndex"> & { nameIndex?: P
   exists: true,
   version: 7,
   nameIndexGen: 0,
+  nameIndexEpoch: 0,
   ...over,
   nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: 10, valid: true, ...over.nameIndex },
 })
