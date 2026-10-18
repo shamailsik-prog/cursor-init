@@ -13,6 +13,7 @@ in every pytest run. Spec: docs/superpowers/specs/2026-10-18-f31-corpus-runtime-
 from __future__ import annotations
 
 import importlib.metadata
+import re
 import textwrap
 from pathlib import Path
 
@@ -172,6 +173,127 @@ def test_missing_root_and_unreadable_source_fail_closed(tmp_path):
     root = _tree(tmp_path, {"scraper/a.py": "def broken(:\n"}, "fastapi\n")
     with pytest.raises(SyntaxError):
         _check(root)
+
+
+# -- dynamic imports are classified by the loader's identity, not its spelling ---------------------
+# Review round (Copilot thread 4305672214): `from importlib import
+# import_module as load` then `load("missing_dep")` used to record neither the dependency nor a
+# dynamic import. A literal target must be recorded as an import; anything else must count as an
+# unreviewed dynamic import; a loader reference the checker cannot follow fails closed the same way.
+
+
+def _summary(problems):
+    """(kind, what, where) per problem: ("import", module, "file:line") or ("dynamic", file, lines)."""
+    out = []
+    for p in problems:
+        m = re.match(r"unknown import: (\S+) is imported at (.+?) and maps to", p)
+        if m:
+            out.append(("import", m.group(1), m.group(2)))
+            continue
+        m = re.match(r"unreviewed dynamic import at (\S+?):([\d,]+): ", p)
+        if m:
+            out.append(("dynamic", m.group(1), m.group(2)))
+            continue
+        out.append(("other", p, ""))
+    return sorted(out)
+
+
+_LOADER_CASES = {
+    "from-import alias, literal": (
+        {"scraper/a.py": 'from importlib import import_module as load\nload("missing_dep")\n'},
+        [("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "from-import alias, computed": (
+        {"scraper/a.py": "from importlib import import_module as load\ndef f(name):\n    return load(name)\n"},
+        [("dynamic", "scraper/a.py", "3")],
+    ),
+    "module alias": (
+        {"scraper/a.py": 'import importlib as il\nil.import_module("missing_dep")\nil.import_module(name)\n'},
+        [("dynamic", "scraper/a.py", "3"), ("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "keyword and missing arguments": (
+        {"scraper/a.py": 'import importlib\nimportlib.import_module(name="missing_dep")\n'
+                         'importlib.import_module(package="scraper", name=other)\nimportlib.import_module()\n'},
+        [("dynamic", "scraper/a.py", "3,4"), ("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "star import from importlib": (
+        {"scraper/a.py": 'from importlib import *\nimport_module("missing_dep")\n__import__(name)\n'},
+        [("dynamic", "scraper/a.py", "3"), ("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "__import__ through importlib and builtins": (
+        {"scraper/a.py": 'import importlib, builtins as b\nimportlib.__import__("missing_dep")\n'
+                         'b.__import__("missing_dep2")\nfrom builtins import __import__ as imp\nimp(name)\n'
+                         '__builtins__.__import__("missing_dep3")\n'},
+        [("dynamic", "scraper/a.py", "5"), ("import", "missing_dep", "scraper/a.py:2"),
+         ("import", "missing_dep2", "scraper/a.py:3"), ("import", "missing_dep3", "scraper/a.py:6")],
+    ),
+    "importlib.util.find_spec forms": (
+        {"scraper/a.py": "import importlib.util\nfrom importlib import util as u\nfrom importlib.util import find_spec as fs\n"
+                         'importlib.util.find_spec("missing_dep")\nu.find_spec("missing_dep2")\nfs(name)\n'
+                         'from importlib.util import *\nfind_spec("missing_dep3")\n'},
+        [("dynamic", "scraper/a.py", "6"), ("import", "missing_dep", "scraper/a.py:4"),
+         ("import", "missing_dep2", "scraper/a.py:5"), ("import", "missing_dep3", "scraper/a.py:8")],
+    ),
+    "assignment aliases: plain, chained, annotated, tuple, walrus": (
+        {"scraper/a.py": "import importlib\nh = importlib.import_module\nm = importlib\nk = m.import_module\n"
+                         'a: object = k\nb, c = h, 1\nh("missing_dep")\na("missing_dep2")\nb(name)\n'
+                         '(w := importlib.import_module)("missing_dep3")\nw(name)\n'},
+        [("dynamic", "scraper/a.py", "9,11"), ("import", "missing_dep", "scraper/a.py:7"),
+         ("import", "missing_dep2", "scraper/a.py:8"), ("import", "missing_dep3", "scraper/a.py:10")],
+    ),
+    "alias bound after its use": (
+        {"scraper/a.py": 'def f():\n    return late("missing_dep")\nlate = __import__\n'},
+        [("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "getattr and globals()": (
+        {"scraper/a.py": 'import importlib\ngetattr(importlib, "import_module")("missing_dep")\n'
+                         'globals()["__import__"]("missing_dep2")\ngetattr(importlib, name)\nglobals()[name]("x")\n'
+                         'vars(importlib)["import_module"]("missing_dep3")\nimportlib.__dict__[name]\n'},
+        [("dynamic", "scraper/a.py", "4,5,7"), ("import", "missing_dep", "scraper/a.py:2"),
+         ("import", "missing_dep2", "scraper/a.py:3"), ("import", "missing_dep3", "scraper/a.py:6")],
+    ),
+    "references that escape fail closed": (
+        {"scraper/a.py": "import importlib\nloaders = [importlib.import_module]\n"
+                         "found = list(map(importlib.import_module, names))\nregistry = {'mod': importlib}\n"},
+        [("dynamic", "scraper/a.py", "2,3,4")],
+    ),
+    "exec and eval": (
+        {"scraper/a.py": "exec(source)\neval(\"__import__('missing_dep')\")\n"},
+        [("dynamic", "scraper/a.py", "1,2")],
+    ),
+    "re-exported across first-party modules": (
+        {"scraper/util.py": "from importlib import import_module as load\nimport importlib as lib\n",
+         "scraper/a.py": "from scraper.util import load\nfrom .util import lib\nfrom scraper import util\n"
+                         "import scraper.util as u2\nimport scraper.util\n"
+                         'load("missing_dep")\nlib.import_module("missing_dep2")\nutil.load("missing_dep3")\n'
+                         'u2.load(name)\nscraper.util.lib.import_module("missing_dep4")\n'},
+        [("dynamic", "scraper/a.py", "9"), ("import", "missing_dep", "scraper/a.py:6"),
+         ("import", "missing_dep2", "scraper/a.py:7"), ("import", "missing_dep3", "scraper/a.py:8"),
+         ("import", "missing_dep4", "scraper/a.py:10")],
+    ),
+    "star import from a first-party module": (
+        {"scraper/util.py": "from importlib import import_module as load\n",
+         "scraper/a.py": 'from scraper.util import *\nload("missing_dep")\n'},
+        [("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "star import from a module the checker cannot enumerate": (
+        {"scraper/a.py": 'from os.path import *\nimport_module("missing_dep")\nfind_spec(name)\n'},
+        [("dynamic", "scraper/a.py", "3"), ("import", "missing_dep", "scraper/a.py:2")],
+    ),
+    "no false positives": (
+        {"scraper/a.py": "import importlib\nimport re\nimportlib.reload(re)\nre.compile('x')\n"
+                         "getattr(settings, 'X')\ndef load(name):\n    return name\nload('not_an_import')\n"
+                         "import_module = 3\nimportlib.invalidate_caches()\n"},
+        [],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_LOADER_CASES))
+def test_dynamic_imports_are_classified_by_loader_identity(tmp_path, case):
+    files, expected = _LOADER_CASES[case]
+    root = _tree(tmp_path, files, "fastapi\n")
+    assert _summary(_check(root)) == sorted(expected)
 
 
 # -- requirements parsing ------------------------------------------------------------------------
