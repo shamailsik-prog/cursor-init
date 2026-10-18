@@ -349,7 +349,8 @@ async function handlePost(request: Request, session: HandlerSession | null) {
     await repos.committeeOutputs.create(output)
     store.committeeOutputs.set(output.id, output)
     // Audit F11 review round 1 (spec ruling 18): the call's own action row. Its flush is what lets the request release
-    // the audit-outbox entries its output write and provider dispatch staged; ids and codes only, never the text.
+    // the audit-outbox entries its output write and provider dispatch staged; ids and codes only, never the text. Only
+    // the local pipeline writes here: the F18 forward path above writes nothing in Next (R6), so it stages no entry.
     store.audit.push({
       action: "committee_brain_output_create",
       actorId: actor.id,

@@ -1,7 +1,7 @@
 # F11 plan: atomic request audit (outbox staged in the effect commit, drained by a reconciler)
 
 Spec: `docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md`.
-Branch: `claude/remediate-f11` from `origin/main` a9b0e06; main 957fe26 merged in a0802a5, main c02ebbc in f43e936.
+Branch: `claude/remediate-f11` from `origin/main` a9b0e06; main 957fe26 merged in a0802a5, main c02ebbc in f43e936, main ac69873 (F18) in 5e24c50.
 
 ## Tasks
 
@@ -131,3 +131,8 @@ Follow-ups (LOW, open, not fixed in this PR; the code stays as at f43e936):
 - O2. The auditor's surviving mutants M02, M03, M05, M25, M30 and M44 (their numbering) need tests that kill them.
 - O3. `tests/f11-audit-outbox.firestore.test.ts` leaves 5 `audit_log` documents per run in the emulator; its clean-up should delete them.
 
+Merge of main ac69873 (F18 #88) in 5e24c50 (spec A9):
+- **Conflicts.** `package.json` `test:rules` and `vitest.config.ts` conflicted; both sides' test entries were kept.
+- **The committee-brain route** merged automatically and was reviewed by hand. On F18's forward path Next writes nothing, so it stages no entry. A forward failure stages none either. The local pipeline stages its output entry and releases it through `committee_brain_output_create`.
+- **Tests.** A new F18 e2e case pins all three paths (no outbox entry, one action row, no recovered row). It passes on the merge, and dropping the route's row fails it.
+- **Verification after the merge.** See the PR body's Review round 1 section.
