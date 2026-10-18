@@ -34,7 +34,13 @@ import type { SpineRepositories } from "@/platform/persistence/spineRepositories
 import { rollbackDocumentIngest, uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
-
+/**
+ * Audit F03: an upload can wait on the document vault for at most DOCUMENT_OBJECT_S3_WORST_CASE_MS
+ * (52 s: every S3 call has its own deadline and the ambiguous-PUT settle reads share one budget;
+ * platform/documents/documentObjectS3.ts). The platform limit sits above that so the vault's own
+ * deadlines, not a platform kill, end a hanging call. A literal: Next reads it statically.
+ */
+export const maxDuration = 60
 
 type Body = z.infer<typeof BodySchema>
 
@@ -138,7 +144,13 @@ async function handleGet(request: Request) {
         byteSize: bytes.length,
         contentHash: doc.contentHash,
       })
-    } catch {
+    } catch (err) {
+      // A tampered, missing or unreachable original is an operator event, not only a 500. The
+      // vault's errors carry no endpoint text or request headers (DocumentObjectStoreError).
+      console.error(
+        `[api] document bytes unavailable for ${doc.id}:`,
+        err instanceof Error ? `${err.name}: ${err.message}` : "unknown error"
+      )
       return NextResponse.json({ error: "document bytes unavailable" }, { status: 500 })
     }
   }

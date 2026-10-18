@@ -311,10 +311,18 @@ jobs:
         run: npm run build
 
   document-object-s3:
-    name: Document object store S3 (FA-D16-001/002)
+    name: Document vault on S3 (F03, FA-D16-001/002/003)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      # MinIO stands in for Cloudflare R2. MinIO no longer publishes binaries or images (dl.min.io answers
+      # 410 Gone; the quay.io/minio/minio and Docker Hub minio/minio repositories are gone), so the job builds
+      # the server from its upstream source at the commit of tag RELEASE.2025-09-07T16-13-09Z, the release
+      # it used to pull as a digest-pinned image. `go install` checks every module against the Go checksum
+      # database; the binary is cached per commit, so only the first run pays for the build.
+      MINIO_COMMIT: 07c3a429bfed433e49018cb0f78a52145d4bedeb
+      MINIO_GO_VERSION: "1.24.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -322,53 +330,63 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: package-lock.json
+      # The end-to-end suite keeps document rows in Admin Firestore (the emulator, a Java process).
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      - name: Cache the MinIO build
+        id: minio-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sikander-minio
+          key: minio-${{ runner.os }}-${{ env.MINIO_COMMIT }}-go${{ env.MINIO_GO_VERSION }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        with:
+          go-version: ${{ env.MINIO_GO_VERSION }}
+          cache: false
+      - name: Build MinIO from its pinned upstream source
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          GOBIN="$HOME/.cache/sikander-minio" GOTOOLCHAIN=local go install "github.com/minio/minio@${MINIO_COMMIT}"
+          "$HOME/.cache/sikander-minio/minio" --version
       - run: npm ci
-      - name: Pull official MinIO image (quay.io, digest-pinned)
+      - name: F03 vault suites (MinIO + Firestore emulator)
         run: |
           set -euo pipefail
-          # Official quay.io/minio/minio RELEASE.2025-09-07T16-13-09Z (linux/amd64 manifest digest).
-          MINIO_IMAGE="quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
-          set +e
-          pull_log="$(docker pull "${MINIO_IMAGE}" 2>&1)"
-          pull_status=$?
-          set -e
-          if [ "${pull_status}" -ne 0 ]; then
-            echo "::error::Failed to pull official MinIO image ${MINIO_IMAGE}"
-            echo "docker pull exited with status ${pull_status}. Output:"
-            echo "${pull_log}"
-            exit 1
-          fi
-          echo "${pull_log}"
-          echo "MINIO_IMAGE=${MINIO_IMAGE}" >> "$GITHUB_ENV"
-          docker image inspect "${MINIO_IMAGE}" >/dev/null
-          echo "Pulled and verified official MinIO image (digest-pinned)."
-      - name: F03 integrity tests (MinIO via docker run)
-        env:
-          SIKANDER_DOCUMENT_OBJECT_BACKEND: s3
-          SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT: http://127.0.0.1:9000
-          SIKANDER_DOCUMENT_OBJECT_S3_BUCKET: sikander-documents-ci
-          SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID: minioadmin
-          SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY: minioadmin
-          SIKANDER_DOCUMENT_OBJECT_S3_FORCE_PATH_STYLE: "true"
-          SIKANDER_DOCUMENT_OBJECT_S3_SSE: none
-        run: |
-          set -euo pipefail
-          export SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-          docker rm -f minio-ci 2>/dev/null || true
-          docker run -d --name minio-ci -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin \
-            "$MINIO_IMAGE" server /data --address :9000
+          # Credentials and the document key are made for this run: none is stored in the repository.
+          MINIO_ROOT_USER="ci$(openssl rand -hex 8)"
+          MINIO_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          echo "::add-mask::${MINIO_ROOT_PASSWORD}"
+          echo "::add-mask::${SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY}"
+          export MINIO_ROOT_USER MINIO_ROOT_PASSWORD SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY
+          MINIO_BROWSER=off "$HOME/.cache/sikander-minio/minio" server "$(mktemp -d)" \
+            --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 > "$RUNNER_TEMP/minio.log" 2>&1 &
           for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
-              echo "MinIO healthy"
-              break
-            fi
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
             sleep 1
           done
           curl -sf http://127.0.0.1:9000/minio/health/live
+          export SIKANDER_DOCUMENT_OBJECT_BACKEND=s3
+          export SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT=http://127.0.0.1:9000
+          export SIKANDER_DOCUMENT_OBJECT_S3_BUCKET=sikander-documents-ci
+          export SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID="${MINIO_ROOT_USER}"
+          export SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}"
+          export SIKANDER_DOCUMENT_OBJECT_S3_FORCE_PATH_STYLE=true
+          export SIKANDER_DOCUMENT_OBJECT_S3_SSE=none
           npm run test:document-object-s3
-          docker rm -f minio-ci
+      - name: MinIO log
+        if: failure()
+        run: tail -n 100 "$RUNNER_TEMP/minio.log" || true
 
   postgres-ddl:
     name: Postgres DDL integration (FA-CI-002)

@@ -3,15 +3,19 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { SpineStore } from "@/platform/spine/store"
 import {
+  assertDocumentObjectS3Configuration,
   deleteS3Payload,
   isDocumentObjectS3Configured,
   readS3Payload,
   resetDocumentObjectS3ClientForTests,
   writeS3Payload,
 } from "@/platform/documents/documentObjectS3"
-import { DocumentObjectConfigurationError } from "@/platform/documents/documentObjectStoreTypes"
+import {
+  DocumentObjectConfigurationError,
+  DocumentObjectStoreError,
+} from "@/platform/documents/documentObjectStoreTypes"
 
-export { DocumentObjectConfigurationError }
+export { DocumentObjectConfigurationError, DocumentObjectStoreError }
 
 const OBJECT_FORMAT_VERSION = 1
 const NONCE_BYTES = 12
@@ -89,15 +93,23 @@ function activeStorageScheme(): string {
   return resolveDocumentObjectBackendKind() === "s3" ? S3_STORAGE_SCHEME : FS_STORAGE_SCHEME
 }
 
+/** Exactly 64 hex characters. Buffer.from(hex) stops at the first bad pair, so it cannot be the check. */
+const ENCRYPTION_KEY_HEX = /^[0-9a-fA-F]{64}$/
+
 function encryptionKey(): Buffer {
   const raw = process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()
   if (!raw) {
     throw new DocumentObjectConfigurationError("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY is not set")
   }
-  const key = Buffer.from(raw, "hex")
-  if (key.length !== 32) {
+  if (!ENCRYPTION_KEY_HEX.test(raw)) {
     throw new DocumentObjectConfigurationError(
       "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+    )
+  }
+  const key = Buffer.from(raw, "hex")
+  if (key.every((byte) => byte === key[0])) {
+    throw new DocumentObjectConfigurationError(
+      "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must not be one byte repeated (all-zero, all-ff and the like)"
     )
   }
   return key
@@ -109,6 +121,8 @@ export function assertDocumentObjectIngestAllowed(): void {
       "document object encryption key is required before ingest is accepted"
     )
   }
+  // A malformed key refuses the upload here (503), before anything is written.
+  encryptionKey()
   const kind = resolveDocumentObjectBackendKind()
   if (process.env.NODE_ENV === "production" && kind !== "s3") {
     throw new DocumentObjectConfigurationError(
@@ -125,6 +139,7 @@ export function assertDocumentObjectIngestAllowed(): void {
       "S3-compatible document storage is not fully configured"
     )
   }
+  if (kind === "s3") assertDocumentObjectS3Configuration()
 }
 
 export function validateDocumentObjectIdentity(firmId: string, docId: string): void {
