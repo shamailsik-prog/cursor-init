@@ -46,6 +46,8 @@ Re-audit round 2 (spec section 7):
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -106,6 +108,21 @@ def publication_key(quarantine_id: uuid.UUID) -> str:
 def publication_id(quarantine_id: uuid.UUID) -> uuid.UUID:
     """The case_law_master id a promotion of this quarantine record publishes under (ruling 4)."""
     return uuid.uuid5(PUBLICATION_NAMESPACE, PUBLICATION_NAME_PREFIX + publication_key(quarantine_id))
+
+
+def request_fingerprint(decision: str, reviewer: str, reason: str) -> str:
+    """Ruling 20: SHA-256 (hex) of the canonical JSON of the decision and the validated reviewer and
+    reason (keys sorted, no whitespace, non-ASCII escaped). Stored on every decision; an
+    Idempotency-Key replays a decision only for a request with the same fingerprint."""
+    canonical = json.dumps({"decision": decision, "reason": reason, "reviewer": reviewer},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _fingerprint_of(decision: QuarantineDecision) -> str:
+    """The stored fingerprint, or, for a row written before migration 003, the same formula over the
+    row's own decision, reviewer and reason (exactly the values a fingerprint is made from)."""
+    return decision.request_fingerprint or request_fingerprint(decision.decision, decision.reviewer, decision.reason)
 
 
 # -- ruling 12: bounded inputs ----------------------------------------------------------------------
@@ -388,6 +405,7 @@ async def _publish(db: AsyncSession, qq: QuarantineQueue, st: Optional[ScraperSt
 async def _transition(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body: ReviewDecisionIn,
                       request_key: Optional[str]) -> Dict[str, Any]:
     decision = _DECISION_FOR[action]
+    fingerprint = request_fingerprint(decision, body.reviewer, body.reason)
     qq = await _locked(db, QuarantineQueue, quarantine_id)
     if qq is None:
         raise _Refused(404, {"error": "not_found"})
@@ -395,6 +413,10 @@ async def _transition(db: AsyncSession, quarantine_id: uuid.UUID, action: str, b
         existing = await _decision_for(db, quarantine_id)
         if (existing is not None and request_key is not None and existing.request_key == request_key
                 and existing.decision == decision):
+            # Ruling 20: the key replays only the request it was sent with (IETF idempotency-key draft: 422).
+            if _fingerprint_of(existing) != fingerprint:
+                raise _Refused(422, {"error": "idempotency_key_reused",
+                                     "rule": "an Idempotency-Key replays only a request with the same body"})
             return _result(existing, replayed=True)
         raise _Refused(409, {"error": "already_resolved", "reviewed": qq.reviewed, "resolution": qq.resolution,
                              "decision": _summary(existing)})
@@ -428,6 +450,7 @@ async def _transition(db: AsyncSession, quarantine_id: uuid.UUID, action: str, b
         source_trust_level=src.trust_level if src is not None else None,
         source_resolved_by=resolved_by,
         request_key=request_key,
+        request_fingerprint=fingerprint,
         decided_at=decided_at,
         **publication,
     )

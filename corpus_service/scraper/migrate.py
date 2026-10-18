@@ -39,8 +39,9 @@ from scraper import database
 logger = logging.getLogger("scraper.migrate")
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
-# Audit F23: 002 makes quarantine_decisions append-only. Append later migrations in order.
-NUMBERED_MIGRATIONS = ("002_quarantine_decisions",)
+# Audit F23: 002 makes quarantine_decisions append-only; 003 (re-audit round 2) adds its
+# request_fingerprint. Append later migrations in order.
+NUMBERED_MIGRATIONS = ("002_quarantine_decisions", "003_quarantine_decision_fingerprint")
 
 
 def load_migration(name: str):
