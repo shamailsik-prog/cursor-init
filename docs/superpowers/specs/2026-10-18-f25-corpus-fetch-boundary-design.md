@@ -317,4 +317,12 @@ Positive controls: each of the 20 probe forms (p17, an attribute-only reference,
   - *Ruling:* only bare type references in annotations are exempt from the guard. Calls inside annotations (parameter, return, module, class body, a calling subscript), defaults and string annotations are checked like other code, including under PEP 563.
   - *Evidence:* RED 9a13709 (10 failed); GREEN 9331dba.
 - **Counts at 9331dba:** `test_f25_reaudit.py` 150 passed; `test_f25_fetch_guard.py` 105 passed; full suite 616 passed; G-0 PASSED.
+- **Found while verifying the merge with main** (origin/main moved to 9ee7854, F24 #64). F24's `routers/export.py` bounds a query with `anyio.move_on_after`, and R21's guard banned the whole anyio module, so this branch merged with main failed the guard although a cancel scope opens nothing.
+  - *Ruling:* anyio is allowed. Its network, DNS and process APIs are banned by name: `connect_tcp` / `connect_unix`, listeners, UDP and UNIX datagram sockets, `open_process` / `run_process`, `getaddrinfo` / `getnameinfo`, the `anyio.abc` socket and process types, and `anyio.streams`. F24's router was not edited.
+  - *Evidence:* RED a827f88 (2 failed: the cancel-scope negatives); GREEN 647398d (`test_f25_fetch_guard.py` 116 passed on the branch and on the merge).
+- **Declared-length test.** It now proves the Content-Length precheck by its reason alone, with wide time margins, because this machine ran at load average 15-20 on 4 CPUs (f9c9de6; M32 is still killed).
+- **Final counts.**
+  - **Branch at f9c9de6:** `test_f25_reaudit.py` 150 passed, `test_f25_fetch_guard.py` 116 passed; full suite 627 passed, 3 warnings, 131 subtests.
+  - **Merged with origin/main 9ee7854 (F24),** a full-tree export of `git merge-tree`, which is what PR CI runs: 793 passed, 3 warnings, 157 subtests.
+  - **Run conditions:** the private PG16 ran with fsync, full_page_writes and synchronous_commit off. That speeds up per-test database creation on the loaded box; it changes no test.
 

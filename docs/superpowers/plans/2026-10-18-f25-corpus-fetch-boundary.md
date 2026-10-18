@@ -167,6 +167,11 @@ The auditor's `bomb_case.py` (process RSS), against this branch:
 | Codex 4305386005 and Copilot 4305395619 | 245a08e: 5 failed | 84b5ddb | raw deflate decided on its first two bytes, prefix replayed |
 | Copilot 4305395602 | 9a13709: 12 failed | fcee71a | hooks gated by identity; `upgrade_http` must be a bool |
 | Copilot 4305395582 | 9a13709: 10 failed | 9331dba | the guard checks calls in annotations, defaults and string annotations |
+| (merge with main 9ee7854: F24's `anyio.move_on_after`) | a827f88: 2 failed | 647398d | anyio allowed; its network and process APIs banned by name |
+| (load-independent declared-length test) | n/a | f9c9de6 | M32 re-checked: killed |
 
 At 9331dba: `test_f25_reaudit.py` 150 passed, `test_f25_fetch_guard.py` 105, `test_f25_fetch_policy.py` 139, e2e 1, F20 3; full suite 616 passed, 3 warnings; G-0 PASSED.
+- **Final counts:**
+  - **f9c9de6:** full suite 627 passed (3 warnings, 131 subtests).
+  - **This branch merged with origin/main 9ee7854 (F24, #64):** 793 passed (3 warnings, 157 subtests). That run is on a full-tree export of the merge, since the golden-citation tests read `tests/fixtures/corpus/` at the repo root.
 
