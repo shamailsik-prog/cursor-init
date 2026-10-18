@@ -27,7 +27,13 @@ async def cross_reference_citations():
 
 def cross_reference_citations_sync():
     import asyncio
-    return asyncio.run(cross_reference_citations())
+
+    from scraper.tasks import job_record
+
+    # Audit F28 R27 (F28-FU1): dispose the pooled engine before this task's event loop closes, as
+    # the source and embedding tasks do (R12); otherwise the next task in the worker child gets a
+    # connection bound to this closed loop and fails with InterfaceError.
+    return asyncio.run(job_record.in_task_loop(cross_reference_citations()))
 
 
 @shared_task(name="scraper.tasks.cross_reference.cross_reference_citations")
