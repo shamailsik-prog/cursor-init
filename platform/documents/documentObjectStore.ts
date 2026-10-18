@@ -53,20 +53,10 @@ function explicitBackendFromEnv(): DocumentObjectBackendKind | null {
   )
 }
 
-function assertProductionObjectBackend(kind: DocumentObjectBackendKind): void {
-  if (process.env.NODE_ENV !== "production") return
-  if (kind !== "s3") {
-    throw new DocumentObjectConfigurationError(
-      "production requires S3-compatible document object storage (R2); fs and memory backends are forbidden"
-    )
-  }
-  if (!isDocumentObjectS3Configured()) {
-    throw new DocumentObjectConfigurationError(
-      "production requires S3-compatible document object storage (configure Cloudflare R2 / S3 env vars)"
-    )
-  }
-}
-
+/**
+ * The vault backend for this call. Every object-store operation starts here, and in production it
+ * returns "s3" (with the four S3 settings present) or throws: fs and memory never run in production.
+ */
 export function resolveDocumentObjectBackendKind(): DocumentObjectBackendKind {
   const explicit = explicitBackendFromEnv()
   if (process.env.NODE_ENV === "production") {
@@ -124,21 +114,12 @@ export function assertDocumentObjectIngestAllowed(): void {
   // A malformed key refuses the upload here (503), before anything is written.
   encryptionKey()
   const kind = resolveDocumentObjectBackendKind()
-  if (process.env.NODE_ENV === "production" && kind !== "s3") {
-    throw new DocumentObjectConfigurationError(
-      "production requires S3-compatible document object storage (R2); local filesystem backend is not allowed"
-    )
-  }
   if (kind === "fs" && !process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
     throw new DocumentObjectConfigurationError(
       "SIKANDER_DOCUMENT_OBJECT_ROOT is required before ingest is accepted"
     )
   }
-  if (kind === "s3" && !isDocumentObjectS3Configured()) {
-    throw new DocumentObjectConfigurationError(
-      "S3-compatible document storage is not fully configured"
-    )
-  }
+  // Every S3 setting, not only their presence: a bad one is a 503 here, before the upload is read.
   if (kind === "s3") assertDocumentObjectS3Configuration()
 }
 
@@ -231,7 +212,8 @@ export function filesystemPathForStoragePath(storagePath: string): string {
   const relative = storagePath.slice(FS_STORAGE_SCHEME.length)
   const segments = relative.split("/").filter(Boolean)
   for (const segment of segments) {
-    if (!SAFE_SEGMENT.test(segment) && !/^v[0-9]+$/.test(segment)) {
+    // SAFE_SEGMENT already admits the "v1" version segment.
+    if (!SAFE_SEGMENT.test(segment)) {
       throw new Error("document object path segment failed safety validation")
     }
   }
@@ -246,7 +228,6 @@ export function filesystemPathForStoragePath(storagePath: string): string {
 
 async function writePayload(storagePath: string, payload: Buffer): Promise<void> {
   const kind = resolveDocumentObjectBackendKind()
-  assertProductionObjectBackend(kind)
   if (kind === "memory") {
     if (memoryObjects.has(storagePath)) {
       throw new Error("document object already exists (immutable)")
@@ -269,7 +250,6 @@ async function readPayload(storagePath: string): Promise<Buffer> {
     throw new Error("forced round-trip failure")
   }
   const kind = resolveDocumentObjectBackendKind()
-  assertProductionObjectBackend(kind)
   if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
     if (kind !== "s3") {
       throw new DocumentObjectConfigurationError(
@@ -293,7 +273,6 @@ async function readPayload(storagePath: string): Promise<Buffer> {
 
 async function deleteDocumentObjectStrict(storagePath: string): Promise<void> {
   const kind = resolveDocumentObjectBackendKind()
-  assertProductionObjectBackend(kind)
   if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
     await deleteS3Payload(storagePath, { strict: true })
     return
@@ -316,7 +295,6 @@ async function deleteDocumentObjectStrict(storagePath: string): Promise<void> {
 
 export async function deleteDocumentObject(storagePath: string): Promise<void> {
   const kind = resolveDocumentObjectBackendKind()
-  assertProductionObjectBackend(kind)
   if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
     await deleteS3Payload(storagePath)
     return
@@ -340,8 +318,8 @@ export async function deleteDocumentObject(storagePath: string): Promise<void> {
 export async function putImmutableDocumentObject(
   input: DocumentObjectPutInput
 ): Promise<DocumentObjectPutResult> {
-  validateDocumentObjectIdentity(input.firmId, input.docId)
   const objectVersion = 1
+  // buildDocumentStoragePath validates the identity (path safety) first.
   const storagePath = buildDocumentStoragePath(input.firmId, input.docId, objectVersion)
   assertExpectedHash(input.store, input.firmId, input.bytes, input.contentHash)
   const payload = encryptPlaintext(input.bytes)
@@ -374,7 +352,6 @@ export async function getImmutableDocumentObject(
   storagePath: string,
   expectedContentHash: string
 ): Promise<Buffer> {
-  resolveDocumentObjectBackendKind()
   const plaintext = decryptDocumentObjectPayload(await readPayload(storagePath))
   assertExpectedHash(store, firmId, plaintext, expectedContentHash)
   return plaintext
@@ -391,7 +368,6 @@ export async function restoreDocumentObjectFile(
   backupFilePath: string
 ): Promise<void> {
   const kind = resolveDocumentObjectBackendKind()
-  assertProductionObjectBackend(kind)
   const payload = await readFile(path.resolve(backupFilePath))
   if (kind === "memory") {
     if (memoryObjects.has(storagePath)) {

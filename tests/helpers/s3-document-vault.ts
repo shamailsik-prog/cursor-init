@@ -110,12 +110,29 @@ export type FaultMode =
    * or with `thenFailDelete` answer every DELETE with a 500.
    */
   | { kind: "corrupt-next-get"; thenFailDelete?: boolean }
+  /** Answer a GET with 200 and a declared Content-Length of `bytes`, then close without a body. */
+  | { kind: "declare-huge-get"; bytes: number }
+  /** Answer a GET with 200, no Content-Length, and stream exactly `bytes` zero bytes. */
+  | { kind: "stream-huge-get"; bytes: number }
+  /** Answer a GET with 200, a Content-Length of `bytes`, half of them, then stall (no upstream needed). */
+  | { kind: "stall-body"; bytes: number }
+  /** Answer a GET with 200 and this exact body (no checksum headers). */
+  | { kind: "serve-get"; body: Buffer }
+  /**
+   * A minimal in-memory S3 (no MinIO, no signature check): PUT honours If-None-Match: *, GET and
+   * DELETE by path. With `dropNextPutResponse` the next PUT is stored and its connection dropped.
+   */
+  | { kind: "memory-s3"; dropNextPutResponse?: boolean; failDelete?: boolean }
+
+export type SeenRequest = { method: string; path: string; headers: http.IncomingHttpHeaders }
 
 export type FaultProxy = {
   endpoint: string
   setMode(mode: FaultMode): void
-  /** Method and path of every request the proxy saw. */
-  seen: Array<{ method: string; path: string }>
+  /** Method, path and headers of every request the proxy saw. */
+  seen: SeenRequest[]
+  /** Objects held by the memory-s3 mode, by request path (/bucket/key). */
+  memory: Map<string, Buffer>
   /** Resolves once every delayed forward (put-lands-late) has reached MinIO. */
   settled(): Promise<void>
   close(): Promise<void>
@@ -163,13 +180,18 @@ function forward(
 export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Promise<FaultProxy> {
   const target = new URL(targetEndpoint)
   let mode: FaultMode = { kind: "pass" }
-  const seen: Array<{ method: string; path: string }> = []
+  const seen: SeenRequest[] = []
   const pending = new Set<Promise<unknown>>()
   const hanging = new Set<http.ServerResponse>()
+  const memory = new Map<string, Buffer>()
+  const s3Error = (res: http.ServerResponse, status: number, code: string) => {
+    res.writeHead(status, { "Content-Type": "application/xml" })
+    res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>${code}</Code><Message>${code}</Message></Error>`)
+  }
 
   const server = http.createServer(async (req, res) => {
     const method = req.method ?? "GET"
-    seen.push({ method, path: req.url ?? "" })
+    seen.push({ method, path: req.url ?? "", headers: req.headers })
     const current = mode
     try {
       if (current.kind === "hang") {
@@ -189,6 +211,74 @@ export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Prom
         )
         pending.add(late)
         late.catch(() => undefined).finally(() => pending.delete(late))
+        return
+      }
+      if (current.kind === "memory-s3") {
+        const key = (req.url ?? "").split("?")[0]
+        if (method === "PUT") {
+          if (req.headers["if-none-match"] === "*" && memory.has(key)) return s3Error(res, 412, "PreconditionFailed")
+          memory.set(key, body)
+          if (current.dropNextPutResponse) {
+            mode = { kind: "memory-s3", failDelete: current.failDelete }
+            req.socket.destroy()
+            return
+          }
+          res.writeHead(200, { ETag: '"memory"', "Content-Length": "0" })
+          res.end()
+          return
+        }
+        if (method === "GET") {
+          const found = memory.get(key)
+          if (!found) return s3Error(res, 404, "NoSuchKey")
+          res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(found.length) })
+          res.end(found)
+          return
+        }
+        if (method === "DELETE") {
+          if (current.failDelete) return s3Error(res, 500, "InternalError")
+          memory.delete(key)
+          res.writeHead(204)
+          res.end()
+          return
+        }
+        return s3Error(res, 405, "MethodNotAllowed")
+      }
+      if (current.kind === "declare-huge-get" && method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(current.bytes) })
+        res.flushHeaders()
+        setTimeout(() => res.socket?.destroy(), 200)
+        return
+      }
+      if (current.kind === "stream-huge-get" && method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/octet-stream" })
+        const chunk = Buffer.alloc(1024 * 1024)
+        let sent = 0
+        const pump = () => {
+          while (sent < current.bytes) {
+            const piece = chunk.subarray(0, Math.min(chunk.length, current.bytes - sent))
+            sent += piece.length
+            if (!res.write(piece)) {
+              res.once("drain", pump)
+              return
+            }
+          }
+          res.end()
+        }
+        res.on("close", () => {
+          sent = current.bytes
+        })
+        pump()
+        return
+      }
+      if (current.kind === "stall-body" && method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(current.bytes) })
+        res.write(Buffer.alloc(Math.floor(current.bytes / 2)))
+        hanging.add(res)
+        return
+      }
+      if (current.kind === "serve-get" && method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": String(current.body.length) })
+        res.end(current.body)
         return
       }
       if (current.kind === "error" && method === current.method) {
@@ -232,6 +322,7 @@ export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Prom
       mode = next
     },
     seen,
+    memory,
     async settled() {
       await Promise.allSettled([...pending])
     },

@@ -209,11 +209,10 @@ export function documentObjectS3UsesServerSideEncryptionHeader(): boolean {
   return resolveDocumentObjectS3SseMode() === "AES256"
 }
 
+/** Callers validate the settings they use (s3ConfigFromEnv and the timeouts) before asking for it. */
 function documentObjectS3Client(): S3Client {
   if (cachedClient) return cachedClient
-  assertDocumentObjectS3Configuration()
   const cfg = s3ConfigFromEnv()
-  const timeout = documentObjectS3RequestTimeoutMs()
   cachedClient = new S3Client({
     region: cfg.region,
     endpoint: cfg.endpoint,
@@ -223,13 +222,9 @@ function documentObjectS3Client(): S3Client {
       secretAccessKey: cfg.secretAccessKey,
     },
     // One attempt per call. An SDK retry of a PUT that already landed would meet its own object
-    // and answer 412; writeS3Payload settles an ambiguous PUT itself instead.
+    // and answer 412; writeS3Payload settles an ambiguous PUT itself instead. Deadlines are not set
+    // here: withDeadline aborts every call, the body read included.
     maxAttempts: 1,
-    requestHandler: {
-      connectionTimeout: timeout,
-      requestTimeout: timeout,
-      throwOnRequestTimeout: true,
-    },
   })
   return cachedClient
 }
@@ -271,8 +266,11 @@ function isTransportChecksumMismatch(err: unknown): boolean {
   return err instanceof Error && /^Checksum mismatch/.test(err.message)
 }
 
-/** Reduce any SDK or socket error to a DocumentObjectStoreError that carries no foreign text. */
-function storeError(
+/**
+ * Reduce any SDK or socket error to a DocumentObjectStoreError that carries no foreign text.
+ * Exported for its unit tests only.
+ */
+export function toDocumentObjectStoreError(
   operation: DocumentObjectStoreOperation,
   err: unknown,
   timedOut: boolean,
@@ -315,7 +313,7 @@ async function withDeadline<T>(
   try {
     return await call(controller.signal)
   } catch (err) {
-    throw storeError(operation, err, controller.signal.aborted, timeoutMs)
+    throw toDocumentObjectStoreError(operation, err, controller.signal.aborted, timeoutMs)
   } finally {
     clearTimeout(timer)
   }

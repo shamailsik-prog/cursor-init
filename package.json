@@ -36,6 +36,7 @@
     "gate:g4:phase4a": "bash ci_gates/gate_g4_phase4a.sh",
     "mutation": "stryker run stryker.config.mjs",
     "mutation:functions": "npm --prefix functions run mutation",
+    "mutation:documents": "stryker run stryker.documents.config.mjs",
     "eve:dev": "eve dev",
     "eve:info": "eve info"
   },
