@@ -417,6 +417,84 @@ describe.skipIf(!EMULATORS)("F38 auto-confirm progress (audit F38)", () => {
     expect(await firmCount("audit_log", firmId, "action", "entity.confirm")).toBe(30)
   }, 300_000)
 
+  // PR #84 review round 1 (Codex P1): the checkpoint is fenced like a step (spec R7 amendment).
+  it("F38 checkpoint fence: an attempt whose claim another delivery took before its checkpoint writes no progress and enqueues no continuation", async () => {
+    const firmId = await newFirm()
+    await seedPairs(firmId, many("entity_missing", RUN_PAIRS + 1), HEAD_AT, "h")
+    clock.set(T)
+    const period = periodOf(T)
+    const run = runIdOf(firmId, period, 0)
+    await enqueueAt(runSpec(firmId, period), T)
+    seam.beforeCheckpoint = async ({ attempt }) => {
+      // Another delivery holds the claim now (its own lease), while this attempt is about to checkpoint.
+      if (attempt === 1) await jobs().doc(run).update({ attempts: 2, totalAttempts: 2, lease: { owner: "newer-claim", expiresAt: Timestamp.fromMillis(T + 2 * JOB_LEASE_MS) } })
+    }
+    expect(await runJobTask({ jobId: run, seq: 0 }, testDeps(clock))).toBe("lease_lost")
+    expect((await jobs().doc(runIdOf(firmId, period, 1)).get()).exists).toBe(false)
+    const p = await progress(firmId)
+    // The steps committed under the fence (480 records, the cursor); the stale checkpoint wrote nothing.
+    expect(await deferralsOf(firmId)).toHaveLength(RUN_PAIRS)
+    expect(p!.cursor).toBeDefined()
+    expect(p!.lastRun).toBeUndefined()
+    expect(p!.backlog).toBeUndefined()
+  }, 300_000)
+
+  it("F38 checkpoint fence: an attempt reclaimed and finished by a newer attempt neither overwrites its progress nor enqueues a continuation", async () => {
+    const firmId = await newFirm()
+    const head = await seedPairs(firmId, many("entity_missing", RUN_PAIRS + 1), HEAD_AT, "h")
+    clock.set(T)
+    const period = periodOf(T)
+    const run = runIdOf(firmId, period, 0)
+    await enqueueAt(runSpec(firmId, period), T)
+    const deps = testDeps(clock)
+    let newer: string | undefined
+    seam.beforeCheckpoint = async ({ attempt }) => {
+      if (attempt !== 1) return
+      // The attempt stalls past its lease before its checkpoint. Meanwhile the last waiting pair leaves the backlog,
+      // and a redelivery reclaims the job and finishes it: the frontier is drained, so no continuation.
+      await links().doc(head[RUN_PAIRS].scanLinkId).update({ disputed: true })
+      clock.advance(JOB_LEASE_MS + 1000)
+      newer = await runJobTask({ jobId: run, seq: 0 }, deps)
+    }
+    expect(await runJobTask({ jobId: run, seq: 0 }, deps)).toBe("lease_lost")
+    expect(newer).toBe("done")
+    expect(await readJob(run)).toMatchObject({ status: "done", attempts: 2 })
+    expect((await jobs().doc(runIdOf(firmId, period, 1)).get()).exists).toBe(false)
+    // The newer attempt's record stands: drained, at its own clock.
+    const p = await progress(firmId)
+    expect(p!.lastRun).toMatchObject({ outcome: "drained", at: Timestamp.fromMillis(T + JOB_LEASE_MS + 1000) })
+    expect(p!.backlog).toMatchObject({ alert: null, pendingSince: null })
+  }, 300_000)
+
+  it("F38 checkpoint fence: an attempt whose job was dead-lettered meanwhile writes nothing at its checkpoint", async () => {
+    const firmId = await newFirm()
+    await seedPairs(firmId, many("entity_missing", RUN_PAIRS + 1), HEAD_AT, "h")
+    clock.set(T)
+    const period = periodOf(T)
+    const run = runIdOf(firmId, period, 0)
+    await enqueueAt(runSpec(firmId, period), T)
+    const deps = testDeps(clock)
+    let reclaim: string | undefined
+    seam.beforeCheckpoint = async ({ attempt }) => {
+      // Attempts 1 to 3 fail just before their checkpoint, so each is retried.
+      if (attempt < 4) throw new Error("seam: the checkpoint's store call fails")
+      // The fourth and last attempt stalls past its lease; a redelivery finds the lease expired at attempt 4 and dead-letters the job.
+      clock.advance(JOB_LEASE_MS + 1000)
+      reclaim = await runJobTask({ jobId: run, seq: (await readJob(run)).dispatchSeq }, deps)
+    }
+    expect(await runJobTask({ jobId: run, seq: 0 }, deps)).toBe("failed")
+    const [r1, r2, r3] = RETRY_DELAYS_MS
+    expect(await deps.dispatcher.drainDue(T + r1)).toEqual(["failed"])
+    expect(await deps.dispatcher.drainDue(T + r1 + r2)).toEqual(["failed"])
+    expect(await deps.dispatcher.drainDue(T + r1 + r2 + r3)).toEqual(["lease_lost"])
+    expect(reclaim).toBe("dead_lettered")
+    expect(await readJob(run)).toMatchObject({ status: "dead_lettered", attempts: 4 })
+    expect((await jobs().doc(runIdOf(firmId, period, 1)).get()).exists).toBe(false)
+    const p = await progress(firmId)
+    expect(p!.lastRun).toBeUndefined()
+    expect(p!.backlog).toBeUndefined()
+  }, 300_000)
+
   it("F38 flag off mid-continuation: that step and the rest write nothing, no further continuation, and the next run resumes after the last committed step", async () => {
     const firmId = await newFirm()
     await seedPairs(firmId, many("entity_missing", RUN_PAIRS), HEAD_AT, "h")

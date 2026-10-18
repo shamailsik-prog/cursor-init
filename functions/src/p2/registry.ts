@@ -35,6 +35,13 @@ export type JobContext<P> = {
    * `invalid_fenced_step`); at most 50 distinct step ids per job (else the permanent `fenced_step_limit`).
    */
   runFenced<T>(stepId: string, fn: (tx: Transaction) => Promise<T>): Promise<T | undefined>
+  /**
+   * Re-reads the job in the caller's transaction `tx` and throws `LeaseLostError` unless the claim's
+   * fence still holds: the check `runFenced` makes, recording no step id. A read: call it before
+   * `tx`'s writes. Use it for an effect that must not commit once the claim is lost but needs no step
+   * of its own: a write that is safe to repeat, so exactly-once is not wanted (audit F38, PR #84 review).
+   */
+  checkFence(tx: Transaction): Promise<void>
 }
 
 export type JobResult = { apply?: (tx: Transaction) => void; outputRefs?: string[] }

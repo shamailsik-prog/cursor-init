@@ -4,7 +4,7 @@
 
 **Goal:** The daily auto-confirm job reaches every eligible pair in a bounded number of runs, however many ineligible pairs sit ahead of it, and records why it passes a pair over.
 
-**Architecture:** A per-firm frontier cursor over `(createdAt, linkId)` replaces the fixed 2,000-row window. Pairs the frontier finds ineligible get deferral records with a due time, which a recheck query brings back. A run that leaves work continues through the P2 engine (up to 23 continuations per period). An unfenced checkpoint records progress and the backlog age that drives the stale alert.
+**Architecture:** A per-firm frontier cursor over `(createdAt, linkId)` replaces the fixed 2,000-row window. Pairs the frontier finds ineligible get deferral records with a due time, which a recheck query brings back. A run that leaves work continues through the P2 engine (up to 23 continuations per period). A checkpoint records progress and the backlog age that drives the stale alert. It is a transaction rather than a step, and it checks the claim's fence first (R7a, PR #84 review round 1).
 
 **Tech Stack:** TypeScript, Firebase Admin SDK (Firestore), firebase-functions logger, vitest, Firestore and Auth emulators.
 

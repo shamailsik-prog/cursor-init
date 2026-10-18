@@ -5,7 +5,7 @@
 # 1. route coverage by domain (check_route_coverage.py): 21 /api/d1 routes and 4 /api/platform/jobs routes,
 #    each exercised by a viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed)
-# 3. forty-two tests selected by exact full name (the gate counts them from the name arrays below), under
+# 3. forty-five tests selected by exact full name (the gate counts them from the name arrays below), under
 #    the Auth and Firestore emulators: the four saga invariants and the two O-46 openMatter refusals of
 #    d1.entity-unmerge.emu.test.ts, the five "P2 invariant"
 #    tests of p2.jobs-invariants.emu.test.ts, the two registry-discipline tests of p2.registry-discipline.emu.test.ts,
@@ -13,8 +13,9 @@
 #    test of p2.jobs-load.emu.test.ts (P3-37), the thirteen auto-confirm tests of d1.entity-autoconfirm.emu.test.ts
 #    (P3-42..P3-50: four; P3-53..P3-58: nine, among them the four cases of the in-transaction re-check, the retry that
 #    never reaches fenced_step_limit, the audit row, the deterministic event id and the two flag tests), and the
-#    thirteen progress tests of f38-autoconfirm-progress.e2e.emu.test.ts (audit F38: more than 2,000 ineligible head
-#    pairs never starve the eligible ones, the backlog alert, crash and retry, fencing, the flag mid-continuation and
+#    sixteen progress tests of f38-autoconfirm-progress.e2e.emu.test.ts (audit F38: more than 2,000 ineligible head
+#    pairs never starve the eligible ones, the backlog alert, crash and retry, fencing of the steps and of the
+#    checkpoint (a claim taken, a job finished by a newer attempt, a job dead-lettered), the flag mid-continuation and
 #    at the checkpoint, rechecks, cross-firm isolation, and the straddling, unnameable-row and concurrent cases)
 # 4. functions lint at zero warnings (npx eslint --max-warnings 0 functions)
 # 5. Gate G-2, cross-firm isolation over all routes (ci_gates/gate_g2.sh; starts its own emulators)
@@ -64,6 +65,9 @@ F38_TESTS=(
   "F38 the period's last continuation leaves the rest to the next day and says so (autoconfirm.backlog_remaining)"
   'F38 crash and retry: a failed checkpoint and a continuation failing mid-run are retried; one continuation each; duplicates are dropped; every pair confirmed once'
   'F38 fencing: a continuation attempt whose lease is reclaimed mid-run commits nothing after it loses the fence'
+  'F38 checkpoint fence: an attempt whose claim another delivery took before its checkpoint writes no progress and enqueues no continuation'
+  'F38 checkpoint fence: an attempt reclaimed and finished by a newer attempt neither overwrites its progress nor enqueues a continuation'
+  'F38 checkpoint fence: an attempt whose job was dead-lettered meanwhile writes nothing at its checkpoint'
   'F38 flag off mid-continuation: that step and the rest write nothing, no further continuation, and the next run resumes after the last committed step'
   'F38 flag off at the checkpoint: nothing is checkpointed and no continuation is enqueued'
   'F38 rechecks: a repaired pair is confirmed when its recheck falls due, a pair that left the backlog loses its record, a record not yet due is not re-read'

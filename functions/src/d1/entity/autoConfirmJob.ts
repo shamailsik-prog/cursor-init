@@ -40,7 +40,7 @@ import { entityKeys, type EntityKeys } from "./summary"
  * - a pair it cannot confirm gets a deferral record with its reason and due time
  *   (`autoConfirmDeferral.ts`); once the frontier is drained, the run re-checks the records that are due;
  * - a position an earlier attempt recorded is spent, and its chunk goes to the next position (R8);
- * - after its steps the run checkpoints (one transaction, flag re-read): it enqueues the next continuation
+ * - after its steps the run checkpoints (one transaction, the claim's fence and the flag re-read): it enqueues the next continuation
  *   while work remains (at most `AUTO_CONFIRM_MAX_CONTINUATIONS` per period) and records the cursor, the
  *   run and the backlog age, which raises `autoconfirm.backlog_stale` past `AUTO_CONFIRM_STALE_MS`.
  */
@@ -321,14 +321,19 @@ type CheckpointInput = {
   frontier: FrontierScan
   frontierNext: Timestamp | null
   totals: RunTotals
+  /** The claim's fence check (`ctx.checkFence`), made first in the checkpoint's transaction (R7 amendment). */
+  checkFence: (tx: Transaction) => Promise<void>
 }
 
 /**
- * The run's checkpoint (F38 R6, R7, R10, R11), one transaction that is not a fenced step: it writes nothing when
- * the flag reads off (P3-56); otherwise it enqueues the next continuation while work remains and the period has
- * one left, and records the cursor, the run and the backlog. The stale alert and its clearing are logged after it
- * commits. Nothing here needs exactly-once: the enqueue is idempotent by key, a cursor that moves back only
- * re-scans, and the record describes the latest run.
+ * The run's checkpoint (F38 R6, R7, R10, R11), one transaction that is not a fenced step (so it costs no step id):
+ * it first checks the claim's fence with the engine's own check (`ctx.checkFence`, R7 amendment, PR #84 review),
+ * so an attempt whose claim was taken, finished or dead-lettered meanwhile writes nothing and the run fails as
+ * `LeaseLostError` (the worker then records nothing, `lease_lost`); it writes nothing either when the flag reads off
+ * (P3-56); otherwise it enqueues the next continuation while work remains and the period has one left, and records
+ * the cursor, the run and the backlog. The stale alert and its clearing are logged after it commits. Nothing here
+ * needs exactly-once: the enqueue is idempotent by key, a cursor that moves back only re-scans, and the record
+ * describes the latest run.
  */
 async function checkpoint(c: CheckpointInput): Promise<void> {
   const db = adminDb()
@@ -349,6 +354,8 @@ async function checkpoint(c: CheckpointInput): Promise<void> {
   const progressRef = autoConfirmProgressRef(c.firmId)
 
   const result = await db.runTransaction(async (tx) => {
+    // R7 amendment: only while this attempt still holds the claim, read in this transaction (throws LeaseLostError).
+    await c.checkFence(tx)
     if (!l17_2Enabled((await tx.get(c.firmRef)).data())) return null
     const previous = (await tx.get(progressRef)).data()
     const wasStale = previous?.firmId === c.firmId && previous.backlog?.alert === "stale"
@@ -447,7 +454,7 @@ async function run(ctx: JobContext<Payload>): Promise<JobResult> {
   }
 
   await autoConfirmTestSeam.beforeCheckpoint?.({ attempt, continuation })
-  await checkpoint({ firmId, jobId, period, continuation, nowMs, firmRef, frontier, frontierNext, totals })
+  await checkpoint({ firmId, jobId, period, continuation, nowMs, firmRef, frontier, frontierNext, totals, checkFence: (tx) => ctx.checkFence(tx) })
   return {}
 }
 
