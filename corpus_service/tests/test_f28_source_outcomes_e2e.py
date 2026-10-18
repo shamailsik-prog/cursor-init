@@ -537,3 +537,324 @@ def test_r12_two_runs_in_one_worker_process_both_succeed_on_the_pooled_engine(co
     failures = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Job failed for")]
     assert failures == [], failures
     assert [(r.status, r.retry_count) for r in jobs("PakistanLawSite")] == [("completed", 0), ("completed", 0)]
+
+
+# ---------------------------------------------------------------------------------------------
+# Review round (PR #72): Codex P1 (an unreadable PDF counted as a success), Codex P2 (IHC feed
+# failures never counted), Cursor Bugbot (a skip's record-write failure handled as a harvest
+# failure). Spec R16-R18.
+#
+# These need pages on the courts' real hostnames, which a local server cannot serve (it would need
+# port 443 and a certificate for the court's name), so the network edge is the F20 harness's seam:
+# ``fetch_policy.fetcher_for`` returns a client that answers from canned routes. Every URL is still
+# checked against the source's real registered policy first (a refusal raises FetchRefused, as the
+# boundary does). Discovery, the harvesters, the PDF extractor, the dispatcher and Postgres are real.
+# ---------------------------------------------------------------------------------------------
+UNREADABLE_PDF = b"%PDF-1.4\n%synthetic F28 fixture: no text layer, no image\n" + b"\x00" * 2048
+WHITESPACE_PDF = b"%PDF-1.4\n%F28-WHITESPACE synthetic fixture\n" + b"\x00" * 2048
+READABLE_PDF = b"%PDF-1.4\n%F28-READABLE synthetic fixture\n" + b"\x00" * 2048
+READABLE_TEXT = "Synthetic F28 fixture judgment. 2099 SCMR 901. Not a real judgment. " * 4
+
+
+class CannedNetwork:
+    """Canned answers keyed by (method, url) or url: (status, body bytes) or an exception to raise.
+    Unknown URLs answer 404. Records every request."""
+
+    def __init__(self, routes):
+        self.routes = dict(routes)
+        self.requests = []
+
+    def factory(self, name, *args, **kwargs):
+        return _CannedFetcher(self, name)
+
+
+class _CannedFetcher:
+    def __init__(self, network, name):
+        from scraper.net import fetch_policy
+
+        self.network = network
+        self.policy = fetch_policy.policy_for(name)
+
+    def allows(self, url):
+        return self.policy.allows(url)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, *args, **kwargs):
+        return self._answer("GET", str(url))
+
+    async def post(self, url, *args, **kwargs):
+        return self._answer("POST", str(url))
+
+    def _answer(self, method, url):
+        self.network.requests.append((method, url))
+        self.policy.check_url(url)  # the source's real policy: a refusal raises FetchRefused
+        answer = self.network.routes.get((method, url), self.network.routes.get(url, (404, b"not found")))
+        if isinstance(answer, BaseException):
+            raise answer
+        status, body = answer
+        return types.SimpleNamespace(
+            url=url, status_code=status, headers={}, content=body, text=body.decode("latin-1")
+        )
+
+
+def canned_network(monkeypatch, routes):
+    from scraper.net import fetch_policy
+
+    network = CannedNetwork(routes)
+    monkeypatch.setattr(fetch_policy, "fetcher_for", network.factory)
+    return network
+
+
+def text_layer_for_fixtures(monkeypatch):
+    """The real extract_pdf_text for every fixture except two markers the test environment cannot
+    produce for real (it has no PDF library): a readable judgment and a whitespace-only text layer.
+    The unreadable fixture goes through the real extractor, which returns ""."""
+    import scraper.parsers.pdf_extractor as pdf_extractor
+
+    real = pdf_extractor.extract_pdf_text
+
+    def _extract(content, *args, **kwargs):
+        if b"F28-READABLE" in content:
+            return READABLE_TEXT
+        if b"F28-WHITESPACE" in content:
+            return "  \n\t \n"
+        return real(content, *args, **kwargs)
+
+    monkeypatch.setattr(pdf_extractor, "extract_pdf_text", _extract)
+
+
+SHC_LISTING = "https://sindhhighcourt.gov.pk/Imp_Judgement_Orders.php"
+SHC_PDF = "https://sindhhighcourt.gov.pk/news_notifications/source_files/Judgement_2099_{n}.pdf"
+
+
+def _shc_routes(pdfs):
+    anchors = "".join(
+        f'<a href="/news_notifications/source_files/Judgement_2099_{n}.pdf">Judgement dated 2099 in appeal {n}</a>'
+        for n in pdfs
+    )
+    routes = {SHC_LISTING: (200, f"<html><body>{anchors}</body></html>".encode())}
+    routes.update({SHC_PDF.format(n=n): (200, body) for n, body in pdfs.items()})
+    return routes
+
+
+def test_p1_a_court_run_whose_every_pdf_is_unreadable_fails_and_stages_nothing(corpus_db, monkeypatch):
+    """Codex P1 (thread 4305694221): both PDFs carry the magic bytes but have no text (one empty, one
+    whitespace only). On the reviewed head each counted as a success: the run ended ok, two empty
+    staging rows were written and the failure streak was reset. Spec R16."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: UNREADABLE_PDF, 2: WHITESPACE_PDF}))
+    run(execute("UPDATE scraper_sources SET consecutive_failures = 2 WHERE source_name = 'SindhHighCourtPublic'"))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "FAILURE", f"a run whose every PDF was unreadable was recorded as {result.state}"
+    assert type(result.result).__name__ == "SourceRunFailed", repr(result.result)
+    assert count("scraper_staging") == 0, "an empty extraction was staged"
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("failed", 0, 2)], rows
+    summary = rows[0].result_summary
+    assert summary["reason"] == "every document request failed", summary
+    assert summary["errors"] == {"pdf_text_empty": 2} and summary["retryable"] is False, summary
+    assert source_row("SindhHighCourtPublic").consecutive_failures == 3, "the failure streak was reset"
+    assert source_row("SindhHighCourtPublic").last_success_at is None
+
+
+def test_p1_a_mix_of_readable_and_unreadable_pdfs_is_partial(corpus_db, monkeypatch):
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: READABLE_PDF, 2: UNREADABLE_PDF}))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    staged = run(fetch("SELECT source_url, raw_text FROM scraper_staging"))
+    assert [u for u, _ in staged] == [SHC_PDF.format(n=1)], staged
+    assert staged[0][1].startswith("Synthetic F28 fixture judgment"), staged
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 1)], rows
+    summary = rows[0].result_summary
+    assert summary["outcome"] == "partial" and summary["errors"] == {"pdf_text_empty": 1}, summary
+
+
+COURT_PDF_SOURCES = {
+    "scrape-shc-public": ("SindhHighCourtPublic", "shc", "https://sindhhighcourt.gov.pk/f28/judgement-2099-1.pdf"),
+    "scrape-supremecourt-public": ("SupremeCourtPublic", "supremecourt", "https://www.supremecourt.gov.pk/downloads_judgements/f28-2099-1.pdf"),
+    "scrape-lahorehighcourt": ("LahoreHighCourt", "lahorehighcourt", "https://lhc.gov.pk/f28/judgment-2099-1.pdf"),
+    "scrape-peshawarhighcourt-public": ("PeshawarHighCourtPublic", "peshawarhighcourt", "https://peshawarhighcourt.gov.pk/PHCCMS/judgments/f28-2099-1.pdf"),
+    "scrape-balochistanhighcourt-public": ("BalochistanHighCourtPublic", "balochistanhighcourt", "https://bhc.gov.pk/f28/judgment-2099-1.pdf"),
+    "scrape-islamabadhighcourt-public": ("IslamabadHighCourtPublic", "islamabadhighcourt", "https://mis.ihc.gov.pk/attachments/judgements/2099/1/f28.pdf"),
+}
+
+
+@pytest.mark.parametrize("entry", sorted(COURT_PDF_SOURCES))
+def test_p1_every_pdf_extracting_court_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypatch, entry):
+    """The same rule in every court harvester that extracts PDFs (discovery returns the one PDF, as
+    in the F20 harness; the fetch, the extraction and the tally are the harvester's own)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    source, module, pdf_url = COURT_PDF_SOURCES[entry]
+    canned_network(monkeypatch, {pdf_url: (200, UNREADABLE_PDF)})
+    mod = __import__(f"scraper.tasks.{module}", fromlist=["_discover_pdf_urls"])
+    provenance = {"listing_url": "https://f28.example.invalid/list", "feed_url": None, "discovery_method": "f28"}
+
+    async def _discover(*args, **kwargs):
+        return [pdf_url], {pdf_url: provenance if module == "islamabadhighcourt" else provenance["listing_url"]}
+
+    monkeypatch.setattr(mod, "_discover_pdf_urls", _discover)
+
+    result = fire(entry)
+
+    assert result.state == "FAILURE", f"{source}: a run of unreadable PDFs was recorded as {result.state}"
+    assert count("scraper_staging") == 0, f"{source}: an empty extraction was staged"
+    rows = jobs(source)
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"pdf_text_empty": 1})], rows
+
+
+def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypatch):
+    """National Assembly extracts PDFs too: on the reviewed head an empty extraction was an empty
+    success (no section written, streak reset)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    canned_network(monkeypatch, {
+        "https://na.gov.pk/en/legis.php": (200, b"<html><a href='/uploads/f28-act-2099.pdf'>Test Act 2099</a></html>"),
+        "https://na.gov.pk/uploads/f28-act-2099.pdf": (200, UNREADABLE_PDF),
+    })
+
+    result = fire("scrape-na")
+
+    assert result.state == "FAILURE", f"an unreadable NA PDF was recorded as {result.state}"
+    rows = jobs("NationalAssembly")
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"pdf_text_empty": 1})], rows
+    assert count("statutes_master") == 0
+    assert source_row("NationalAssembly").consecutive_failures == 1
+
+
+IHC_JGS1 = "https://mis.ihc.gov.pk/frmJgmnt.aspx?jgs=1"
+IHC_HOME = "https://ihc.gov.pk/"
+IHC_MIS_FEED = "https://mis.ihc.gov.pk/ihc.asmx/GetLatestJgmntsNew"
+IHC_HOME_FEED = "https://ihc.gov.pk/ihc.asmx/GetLatestJgmntsNew"
+IHC_FEED_PAGE = b'<html><body><script>const feed = "ihc.asmx/GetLatestJgmntsNew";</script></body></html>'
+IHC_PDF = "https://mis.ihc.gov.pk/attachments/judgements/2099/1/F28_WP_1_2099.pdf"
+IHC_FEED_JSON = (
+    b'{"d": "[{\\"ATTACHMENTS\\": \\"/attachments/judgements/2099/1/F28_WP_1_2099.pdf\\", '
+    b'\\"CASENO\\": \\"W.P. 1/2099\\"}]"}'
+)
+
+
+def test_p2_an_ihc_run_whose_every_feed_fails_is_a_failure(corpus_db, monkeypatch):
+    """Codex P2 (thread 4305694225): the listing page loads and names its AJAX feed; the feed answers
+    500. On the reviewed head the feed failure was never counted, discovery returned nothing and the
+    run was an empty success. Spec R17."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    network = canned_network(monkeypatch, {
+        IHC_JGS1: (200, IHC_FEED_PAGE),
+        ("POST", IHC_MIS_FEED): (500, b"Internal Server Error"),
+    })
+
+    result = fire("scrape-islamabadhighcourt-public")
+
+    assert result.state == "FAILURE", f"an IHC run whose every feed failed was recorded as {result.state}"
+    assert type(result.result).__name__ == "SourceRunFailed", repr(result.result)
+    rows = jobs("IslamabadHighCourtPublic")
+    assert len(rows) == 4 and {r.status for r in rows} == {"failed"}, rows  # 500 is transient: retried to the bound
+    summary = rows[-1].result_summary
+    assert summary["reason"] == "every feed request failed" and summary["errors"] == {"http_500": 1}, summary
+    assert [m for m, u in network.requests if u == IHC_MIS_FEED] == ["POST"] * 4
+
+
+def test_p2_an_ihc_run_with_one_failed_feed_and_one_working_feed_is_partial(corpus_db, monkeypatch):
+    """Two feeds: the home page's answers with an unparseable payload, the judgments page's answers
+    with one judgment, which is harvested. The run is a success, partial, with the feed failure
+    counted."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, {
+        IHC_HOME: (200, IHC_FEED_PAGE),
+        IHC_JGS1: (200, IHC_FEED_PAGE),
+        ("POST", IHC_HOME_FEED): (200, b"<html>Runtime Error</html>"),
+        ("POST", IHC_MIS_FEED): (200, IHC_FEED_JSON),
+        IHC_PDF: (200, READABLE_PDF),
+    })
+
+    result = fire("scrape-islamabadhighcourt-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    assert [u for (u,) in run(fetch("SELECT source_url FROM scraper_staging"))] == [IHC_PDF]
+    rows = jobs("IslamabadHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 0)], rows
+    summary = rows[0].result_summary
+    assert summary["outcome"] == "partial", summary
+    assert (summary["discovery_failed"], summary["discovery_errors"]) == (1, {"feed_unparseable": 1}), summary
+
+
+# Bugbot (thread 4305696998): a run's record write fails. The database refuses the closing UPDATE
+# (or the embed INSERT) with SQLSTATE 40001, a transient code the retry classifier would retry.
+def _refuse_record_writes(corpus_db, condition):
+    corpus_db.admin(
+        "CREATE FUNCTION f28_refuse_record() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"IF {condition} THEN RAISE EXCEPTION 'synthetic F28 record-write failure' USING ERRCODE = '40001'; END IF; "
+        "RETURN NEW; END $$",
+        "CREATE TRIGGER f28_refuse_record BEFORE INSERT OR UPDATE ON scraper_jobs "
+        "FOR EACH ROW EXECUTE FUNCTION f28_refuse_record()",
+    )
+
+
+def test_bugbot_a_skip_whose_record_cannot_be_written_is_not_a_harvest_failure(corpus_db, monkeypatch, caplog):
+    """An inactive source is skipped; writing the skip's record fails. Before c6af66d the failure
+    went through finish_failed: the skip was recorded failed, the failure streak grew and the 40001
+    was retried 3 times. Now: RunRecordFailed, one attempt, no streak change, an ERROR line. Spec R18."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    run(execute("UPDATE scraper_sources SET is_active = false WHERE source_name = 'NasirLawSite'"))
+    _refuse_record_writes(corpus_db, "TG_OP = 'UPDATE' AND NEW.status = 'cancelled'")
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("scrape-nasirlawsite")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "RunRecordFailed", repr(result.result)
+    rows = jobs("NasirLawSite")
+    assert [(r.status, r.retry_count) for r in rows] == [("running", 0)], f"one attempt, never closed as failed: {rows}"
+    src = source_row("NasirLawSite")
+    assert (src.consecutive_failures, src.last_failure_reason, src.last_scraped_at) == (0, None, None), src
+    logged = [r.getMessage() for r in caplog.records if r.getMessage().startswith("F28 run record failed: NasirLawSite")]
+    assert logged and "skipped" in logged[0] and "40001" in logged[0], logged
+
+
+def test_bugbot_a_completed_run_whose_record_cannot_be_written_is_not_retried(corpus_db, monkeypatch, tmp_path, caplog):
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    idle_import_folder(monkeypatch, tmp_path)
+    _refuse_record_writes(corpus_db, "TG_OP = 'UPDATE' AND NEW.status = 'completed'")
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("scrape-pakistanlawsite")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "RunRecordFailed", repr(result.result)
+    assert [(r.status, r.retry_count) for r in jobs("PakistanLawSite")] == [("running", 0)]
+    assert source_row("PakistanLawSite").consecutive_failures == 0
+    assert any(r.getMessage().startswith("F28 run record failed: PakistanLawSite") for r in caplog.records)
+
+
+def test_bugbot_an_embedding_batch_whose_record_cannot_be_written_raises_run_record_failed(corpus_db, monkeypatch, caplog):
+    """The batch completed its item; only the embed record failed. It surfaces as RunRecordFailed,
+    the same mechanism as a source run, not as the database error of a failed batch."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    statute_id = _queue_one_statute()
+    install_provider(monkeypatch, fail=False)
+    no_sleep(monkeypatch)
+    _refuse_record_writes(corpus_db, "TG_OP = 'INSERT' AND NEW.job_type = 'embed'")
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("process-embeddings")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "RunRecordFailed", repr(result.result)
+    assert queue_state(statute_id) == [("completed", 0, True)], "the batch's own work stands"
+    assert any(r.getMessage().startswith("F28 run record failed: embedding_queue") for r in caplog.records)

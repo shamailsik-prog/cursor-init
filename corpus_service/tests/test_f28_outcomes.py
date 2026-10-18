@@ -145,6 +145,42 @@ def test_listing_stage_fails_only_when_every_listing_request_failed():
     outcomes.Tally().raise_if_all_failed("every listing request failed")  # nothing tried: nothing failed
 
 
+def test_an_empty_text_layer_is_a_failed_document_never_progress():
+    """Review round, Codex P1 (spec R16): a PDF whose extraction is empty is a failed item."""
+    assert outcomes.has_text("Short title. 1") is True
+    assert [outcomes.has_text(t) for t in ("", "   \n\t ", None)] == [False, False, False]
+    unreadable = outcomes.Tally()
+    unreadable.item_failed(outcomes.ERROR_PDF_TEXT_EMPTY)
+    with pytest.raises(outcomes.SourceRunFailed) as caught:
+        unreadable.finish()
+    assert caught.value.errors == {"pdf_text_empty": 1} and caught.value.retryable is False
+
+
+def test_failed_discovery_requests_make_a_run_partial_and_all_failing_fails_it():
+    """Review round, Codex P2 (spec R17): secondary discovery requests (the IHC feeds) are counted."""
+    feeds = outcomes.Tally()
+    feeds.item_failed("http_503")
+    feeds.item_failed(outcomes.ERROR_FEED_UNPARSEABLE)
+    with pytest.raises(outcomes.SourceRunFailed) as caught:
+        feeds.raise_if_all_failed(outcomes.REASON_FEEDS_FAILED)
+    assert caught.value.reason == "every feed request failed" and caught.value.retryable is False
+
+    run = outcomes.Tally()
+    some = outcomes.Tally()
+    some.item_ok()
+    some.item_failed("http_503")
+    run.add_discovery_failures(some)
+    run.item_ok(1)
+    result = run.finish()
+    assert (result.outcome, result.discovery_failed, result.discovery_errors) == ("partial", 1, {"http_503": 1})
+    summary = result.summary()
+    assert (summary["discovery_failed"], summary["discovery_errors"]) == (1, {"http_503": 1})
+    nothing_found = outcomes.Tally()
+    nothing_found.add_discovery_failures(some)
+    assert nothing_found.finish().outcome == "partial"  # a feed failed and nothing else was found
+    assert outcomes.Tally().finish().summary()["discovery_failed"] == 0
+
+
 def test_the_bound_run_tally_is_the_one_harvesters_count_into():
     bound = outcomes.Tally()
     assert outcomes.run_tally() is not outcomes.run_tally()  # unbound: a fresh tally each time
