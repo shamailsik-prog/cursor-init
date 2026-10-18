@@ -207,3 +207,96 @@ describe.skipIf(!EMULATORS)("Registry recorder: the F37 conflict name index", ()
     ).toEqual([])
   })
 })
+
+// F37 re-audit FA-D1C-005: every product write that sets a screened name (a client's canonicalName, an opposing party's
+// name, a role flip to opposing, a move between firms; by create, set or update) must stage that exact name for that
+// firm in the same transaction and stamp the row's `nameIndexed` with it.
+describe.skipIf(!EMULATORS)("Registry recorder: every screened name a product write sets is staged and stamped (F37 re-audit)", () => {
+  let db: Firestore
+  let firmId: string
+
+  beforeAll(async () => {
+    db = adminDb()
+    firmId = uniq("firm")
+    await db.collection("firms").doc(firmId).set({ name: "F", plan: "internal" })
+  })
+
+  const asProduct = async (fn: () => Promise<unknown>) => {
+    registryRecorder.attributeTo("functions/src/fake/product.ts:9")
+    try {
+      await fn()
+      return registryRecorder.take().map((v) => `${v.collection}:${v.reason}`)
+    } finally {
+      registryRecorder.attributeTo(null)
+    }
+  }
+  const stamp = (name: string) => ({ nameIndexed: { firmId, name } })
+
+  it("a rename by update, a create by non-merge set, a role flip and a move between firms, each with a bare bump, are no_name_index", async () => {
+    const client = db.collection("clients").doc(uniq("client"))
+    await client.set({ firmId, canonicalName: "Zubair Hashmi", ...stamp("Zubair Hashmi") })
+    const party = db.collection("matter_parties").doc(uniq("party"))
+    await party.set({ firmId, role: "client", name: "Haris Qalbani" })
+    const elsewhere = db.collection("clients").doc(uniq("client"))
+    await elsewhere.set({ firmId: "other-firm", canonicalName: "Omer Daryani" })
+
+    expect(await asProduct(() => db.runTransaction(async (tx) => { tx.update(client, { canonicalName: "Haris Qalbani" }); bumpRegistryVersion(tx, firmId) }))).toEqual(["clients:no_name_index"])
+    expect(
+      await asProduct(() => db.runTransaction(async (tx) => { tx.set(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") }); bumpRegistryVersion(tx, firmId) }))
+    ).toEqual(["clients:no_name_index"])
+    expect(await asProduct(() => db.runTransaction(async (tx) => { tx.update(party, { role: "opposing" }); bumpRegistryVersion(tx, firmId) }))).toEqual(["matter_parties:no_name_index"])
+    expect(await asProduct(() => db.runTransaction(async (tx) => { tx.update(elsewhere, { firmId }); bumpRegistryVersion(tx, firmId) }))).toEqual(["clients:no_name_index"])
+  })
+
+  it("a create staged with an empty or another name list is no_name_index; a staged, stamped create passes; an unstamped one is no_name_stamp", async () => {
+    const created = (name: string, extra: Record<string, unknown> = {}) =>
+      db.runTransaction(async (tx) => {
+        const state = await readRegistryStateTx(tx, firmId)
+        tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: name, ...extra })
+        return state
+      })
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, firmId)
+          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })
+          stageRegistryWrite(tx, firmId, state, [])
+        })
+      )
+    ).toEqual(["clients:no_name_index"])
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, firmId)
+          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })
+          stageRegistryWrite(tx, firmId, state, ["Zubair Hashmi"])
+        })
+      )
+    ).toEqual(["clients:no_name_index"])
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, firmId)
+          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani" })
+          stageRegistryWrite(tx, firmId, state, ["Haris Qalbani"])
+        })
+      )
+    ).toEqual(["clients:no_name_stamp"])
+    expect(
+      await asProduct(() =>
+        db.runTransaction(async (tx) => {
+          const state = await readRegistryStateTx(tx, firmId)
+          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })
+          tx.create(db.collection("matter_parties").doc(uniq("party")), { firmId, role: "opposing", name: "Omer Daryani", ...stamp("Omer Daryani") })
+          stageRegistryWrite(tx, firmId, state, ["Haris Qalbani", "Omer Daryani"])
+        })
+      )
+    ).toEqual([])
+    // Updates that leave every screened field alone (closeMatter's matterStatus) need nothing.
+    const party = db.collection("matter_parties").doc(uniq("party"))
+    await party.set({ firmId, role: "opposing", name: "Omer Daryani", matterStatus: "live" })
+    expect(await asProduct(() => db.runTransaction(async (tx) => { tx.update(party, { matterStatus: "closed" }); bumpRegistryVersion(tx, firmId) }))).toEqual([])
+    expect(created).toBeTruthy()
+  })
+})
+

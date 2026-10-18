@@ -1,0 +1,48 @@
+import type { DocumentReference } from "firebase-admin/firestore"
+import { FieldPath } from "firebase-admin/firestore"
+import { adminAuth, adminDb } from "../src/admin"
+
+/**
+ * Deletes what a test created for `firmIds` (and the auth users `uids`) from the shared emulator: every document of
+ * every top-level collection whose `firmId` is one of them, every document whose id is the firm id or starts with
+ * `{firmId}_` (the firm doc, its counters, its name index chunks), and the subcollections of the job rows. Returns
+ * the number of documents deleted.
+ */
+export async function deleteFirmData(firmIds: readonly string[], uids: readonly string[] = []): Promise<number> {
+  const db = adminDb()
+  const refs = new Map<string, DocumentReference>()
+  const collections = await db.listCollections()
+  for (const firmId of new Set(firmIds)) {
+    for (const col of collections) {
+      for (;;) {
+        const page = await col.where("firmId", "==", firmId).select().limit(400).get()
+        const fresh = page.docs.filter((d) => !refs.has(d.ref.path))
+        for (const d of fresh) refs.set(d.ref.path, d.ref)
+        if (page.size < 400 || fresh.length === 0) break
+        await deleteAll([...refs.values()])
+        refs.clear()
+      }
+      const byId = await col.orderBy(FieldPath.documentId()).startAt(firmId).endAt(`${firmId}_`).select().get()
+      for (const d of byId.docs) if (d.id === firmId || d.id.startsWith(`${firmId}_`)) refs.set(d.ref.path, d.ref)
+    }
+  }
+  const all = [...refs.values()]
+  for (const ref of all.filter((r) => r.parent.id === "jobs")) {
+    for (const sub of await ref.listCollections()) {
+      const docs = await sub.select().get()
+      await deleteAll(docs.docs.map((d) => d.ref))
+    }
+  }
+  await deleteAll(all)
+  if (uids.length > 0) await adminAuth().deleteUsers([...uids])
+  return all.length
+}
+
+async function deleteAll(refs: readonly DocumentReference[]): Promise<void> {
+  const db = adminDb()
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = db.batch()
+    for (const ref of refs.slice(i, i + 400)) batch.delete(ref)
+    await batch.commit()
+  }
+}
