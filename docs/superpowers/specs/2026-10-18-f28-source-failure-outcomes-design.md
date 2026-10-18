@@ -181,10 +181,11 @@ A database error stays class and SQLSTATE only. *Reason:* 7 of the auditor's 13 
 - a `SoftTimeLimitExceeded` raised in the intake's synchronous code reaches `except Exception`, and the tally re-raises it (R23);
 - while the sandbox parses (`asyncio.to_thread`), the limit lands in the event loop's wait, so the run is recorded through R21's `CancelledError` path.
 
-Neither change edits the other's lines. This branch merges origin/main with a merge commit once #76 lands.
+Neither change edits the other's lines. #76 landed as 53f4450 and was merged into this branch with a merge commit (921297f), with no conflicts. Two in-process tests pin the combination on SHC: a limit while the sandbox parses, and a limit in the intake's own code. Both fail on 53f4450 alone and pass after the merge (plan ledger).
 
 **Residual risks (this round).**
-- A library that catches `Exception` itself turns the limit into an ordinary failure (R23's limit). Examples: the statute parser; the fetch boundary; before F26, the PDF extractor.
+- A library that catches `Exception` itself turns the limit into an ordinary failure (R23's limit). Examples: the statute parser; the fetch boundary. With F26 the PDF parse runs in a thread and a sandbox process, so the limit lands in the loop's wait instead.
+- After R21 records a run cut off during a sandbox parse, `asyncio.run` still waits for the parse thread to finish, for at most its default-executor timeout of 300 s, or less if F26's sandbox wall limit ends the parse first. The hard limit, 300 s after the soft one, can kill the child in that wait, but the record is already written.
 - A hard kill is recorded only by the next attempt's sweep, up to the source's frequency plus 2 hours later, and not at all if beat stops (F28-FU2).
 - The concurrent-sweep guarantee rests on the lock order and `UPDATE … RETURNING`; no concurrency test.
 - A `partial` run raises no alert (R30's devil's advocate).
@@ -198,5 +199,5 @@ Neither change edits the other's lines. This branch merges origin/main with a me
   - the limit lands while a statute fetch awaits, twice, on a source 30 days stale;
   - the limit lands inside harvester code (a blocking call in the per-item `try`);
   - `cross_reference` and then a source job in the same child.
-- `tests/test_f28_fu_e2e.py` runs in process through the beat entry and `Task.apply`. It covers the sweep (R24), the refused-run stale control, the interrupted embedding batch (the soft-limit signal emulated on `SIGALRM`, as in the re-audit probe), L1, the L4 database DNS blip, L3 on the pooled engine, and the L6 pins.
+- `tests/test_f28_fu_e2e.py` runs in process through the beat entry and `Task.apply`. It covers the sweep (R24), the refused-run stale control, the interrupted embedding batch (the soft-limit signal emulated on `SIGALRM`, as in the re-audit probe), L1, the L4 database DNS blip, L3 on the pooled engine, the L6 pins and, after #76, the two F26 compatibility cases.
 - `tests/test_f28_fu_outcomes.py` holds the unit tests: interruption classification and reasons, the tally re-raise, the transient set and the 13-case redaction table.
