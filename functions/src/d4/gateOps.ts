@@ -888,7 +888,9 @@ export const approveDraftOp: FirmOperation<ApprovalResult> = {
       const summary = summaryOf(version, text.bodySha256, fresh.status, at, decision.overrideUsed, doc.resultId)
       tx.set(resultRef, doc)
       if (!decision.pass) {
-        await audit.stage(tx, "deny", "gate_blocked")
+        // The refusal commits the fresh gate result (R1), so it is the operation's effect (audit F09): its marker
+        // commits with it, and a same-key retry after a lost answer never re-gates.
+        await audit.stage(tx, "deny", "gate_blocked", { effect: true })
         tx.update(ref, { gateResult: summary, lastGatedVersion: version, updatedAt: at })
         return { pass: false as const }
       }

@@ -4,8 +4,9 @@ import re
 from collections import deque
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
+
+from scraper.net import fetch_policy
 
 logger = logging.getLogger(__name__)
 
@@ -157,16 +158,18 @@ def _extract_listing_and_pdf_links(html: str, base_url: str) -> tuple[list[str],
 
 
 async def _request_with_retries(
-    client: httpx.AsyncClient,
+    client: fetch_policy.PolicyFetcher,
     url: str,
     *,
     attempts: int = 3,
     pause_seconds: float = 1.0,
-) -> httpx.Response:
+) -> fetch_policy.FetchedResponse:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             return await client.get(url)
+        except fetch_policy.FetchRefused:
+            raise  # Audit F25: a refused URL is never retried
         except Exception as exc:  # pragma: no cover - depends on network path.
             last_error = exc
             if attempt < attempts:
@@ -180,10 +183,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
     visited_listing_urls: set[str] = set()
     listing_queue = deque(PHC_LISTING_SEED_URLS)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        follow_redirects=True,
-    ) as client:
+    # Audit F25: listing pages are external input. Every request (and every redirect hop)
+    # goes through the PeshawarHighCourt fetch policy: https, its hosts on 443, public addresses only.
+    async with fetch_policy.fetcher_for("PeshawarHighCourt") as client:
         while listing_queue and len(visited_listing_urls) < 30:
             listing_url = listing_queue.popleft()
             if listing_url in visited_listing_urls:
@@ -229,6 +231,7 @@ async def scrape_peshawarhighcourt(source, db):
     try:
         from scraper.models import ScraperStaging
         from scraper.parsers.pdf_extractor import extract_pdf_text
+        from scraper.source_identity import stamp_metadata
 
         pdf_urls, pdf_sources = await _discover_pdf_urls()
         if not pdf_urls:
@@ -237,7 +240,7 @@ async def scrape_peshawarhighcourt(source, db):
             )
             return
 
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with fetch_policy.fetcher_for("PeshawarHighCourt") as client:
             for pdf_url in pdf_urls[:40]:
                 try:
                     response = await _request_with_retries(client, pdf_url)
@@ -247,16 +250,14 @@ async def scrape_peshawarhighcourt(source, db):
                         continue
                     text = extract_pdf_text(response.content)
                     staging = ScraperStaging(
+                        source_id=source.id,
                         source_site="PeshawarHighCourt",
                         source_url=pdf_url,
                         raw_text=text[:50000],
                         confidence_score=0.6,
                         quarantined=True,
                         quarantine_reason="review source",
-                        parsing_metadata={
-                            "listing_url": pdf_sources.get(pdf_url),
-                            "source_name": source.source_name,
-                        },
+                        parsing_metadata=stamp_metadata(source, {"listing_url": pdf_sources.get(pdf_url)}),
                     )
                     db.add(staging)
                     await db.commit()

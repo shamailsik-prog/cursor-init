@@ -2,6 +2,11 @@
  * AI SDK LanguageModel used by the eve Committee Brain agent.
  * Every generate/stream call goes through `callCommitteeBrain` (mask + policy).
  * A Gateway model string is never passed to eve — that would bypass P1.
+ *
+ * Audit F16: the prompt keeps its roles. `promptToTurns` turns it into P1 turns (tool calls and tool results in
+ * envelopes); the system message is the registry policy and, when the prompt carries them, agent/instructions.md as
+ * pinned by its digest, never anything else from the prompt's system text (review round, R3a). A part P1 cannot carry safely blocks the call
+ * with its reason, and nothing is sent.
  */
 
 import type {
@@ -18,7 +23,7 @@ import {
 import {
   classificationFromProviderOptions,
   partyNamesFromProviderOptions,
-  promptToOutboundBody,
+  promptToTurns,
 } from "@/platform/p1/promptText"
 
 const EMPTY_USAGE: LanguageModelV3Usage = {
@@ -42,7 +47,6 @@ function blockedAssistantText(reason: string): string {
 async function runP1(
   options: LanguageModelV3CallOptions
 ): Promise<LanguageModelV3GenerateResult> {
-  const body = promptToOutboundBody(options.prompt)
   const classification = classificationFromProviderOptions(options.providerOptions)
   if (!classification) {
     return {
@@ -60,8 +64,19 @@ async function runP1(
     }
   }
 
+  const converted = promptToTurns(options.prompt)
+  if (!converted.ok) {
+    return {
+      content: [{ type: "text", text: blockedAssistantText(converted.reason) }],
+      finishReason: { unified: "error", raw: "unsupported prompt part" },
+      usage: EMPTY_USAGE,
+      warnings: [],
+    }
+  }
+
   const result = await callCommitteeBrain({
-    body,
+    turns: converted.turns,
+    agentInstructions: converted.agentInstructions,
     classification,
     provider: "ai-gateway",
     purpose: "committee-brain",
@@ -80,7 +95,7 @@ async function runP1(
     },
     usage: EMPTY_USAGE,
     warnings: [],
-    request: { body: result.outbound.body },
+    request: { body: { messages: result.messages } },
   }
 }
 

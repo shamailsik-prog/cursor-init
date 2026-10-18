@@ -15,11 +15,11 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 import { type Classification } from "@/platform/p1/types"
-import { type DocumentRecord, type SpineStore } from "@/platform/spine/store"
+import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import {
   applyReviewDecision,
@@ -91,14 +91,26 @@ async function handleGet(request: Request) {
       const user = store.users.get(userId)
       if (!user) throw new PublicError("unknown user")
       await syncFirmMembers(store, repos, user.firmId)
+      await syncFirmMatters(store, repos, user.firmId)
       const matter = store.matters.get(matterId)
       if (!matter) throw new PublicError("unknown matter")
       if (matter.firmId !== user.firmId) throw new PublicError("cross-firm matter denied")
       if (!store.members.has(store.memberKey(matterId, user.id))) {
         throw new PublicError("not a matter member")
       }
+      // Audit F14 / O-76: the timeline names the matter's documents, so it needs clearance for the matter's current label.
+      if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(matter.classification)) {
+        throw new PublicError("clearance below matter classification")
+      }
+      // Audit F14 R2-D4: an event names its document (and carries its reason), so it is shown only to a caller who
+      // may read that document: its own label as well as the matter's. An event whose document is unknown is left out.
+      const docsById = new Map((await repos.documents.listByFirm(user.firmId)).map((d) => [d.id, d]))
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
+        .filter((event) => {
+          const eventDoc = docsById.get(event.documentId) ?? store.documents.get(event.documentId)
+          return eventDoc !== undefined && canViewWorkflowDocument(store, userId, eventDoc)
+        })
         .sort((a, b) => a.at - b.at)
       const paged = timelineRows.slice(cursor, cursor + limit)
       const nextCursor =
@@ -127,6 +139,8 @@ async function handleGet(request: Request) {
     const user = store.users.get(userId)
     if (!user) throw new PublicError("unknown user")
     await syncFirmMembers(store, repos, user.firmId)
+    // Audit F14 / O-76: the queue is judged at each matter's current label (canReadDocument).
+    await syncFirmMatters(store, repos, user.firmId)
     const docs = await repos.documents.listByFirm(user.firmId)
     const rows = await repos.workflow.listByFirm(user.firmId)
     const rowsByDocId = new Map(rows.map((row) => [row.documentId, row]))
@@ -201,7 +215,7 @@ async function handlePost(request: Request) {
     body: parsed,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
 
@@ -216,6 +230,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = transitionWorkflowStatus(store, {
         actorId: parsed.actorId,
@@ -240,6 +255,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = assignReviewer(store, {
         actorId: parsed.actorId,
@@ -263,6 +279,7 @@ async function handlePost(request: Request) {
       const actor = store.users.get(parsed.actorId)
       if (!actor) throw new PublicError("unknown actor")
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const priorEvents = store.workflowEvents.length
       const row = applyReviewDecision(store, {
         actorId: parsed.actorId,

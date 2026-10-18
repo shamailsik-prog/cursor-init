@@ -37,7 +37,7 @@ const FN7: Array<[string, string, Expect, AnalyseOptions?]> = [
   ["period: days later", "See 2015 SCMR 100.  12 days later the order was passed.", "2015 SCMR 100"],
   ["period: of the", "See PLD 2010 SC 1. 3 of the 5 grounds fail.", "PLD 2010 SC 1"],
   ["symbol: × as versus", "The parties are ABC × XYZ in this matter.", "none"],
-  ["symbol: ® ™", "Engro® PLC and PTCL™ services", "none"],
+  ["symbol: ® ™", "Qalvo® PLC and PTCL™ services", "none"],
   ["symbol: №", "№ 12 of the register", "none"],
   ["symbol: ∑", "Total = PKR 5,000 ∑ of all heads", "none"],
   ["symbol: ⊤ beside SECP", "Item ⊤ SECP filing", "refused"],

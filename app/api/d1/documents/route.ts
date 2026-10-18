@@ -24,7 +24,7 @@ import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from 
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import {
   assertDocumentObjectIngestAllowed,
   DocumentObjectConfigurationError,
@@ -113,6 +113,8 @@ async function handleGet(request: Request) {
     return NextResponse.json({ error: "unknown user" }, { status: 404 })
   }
   await syncFirmMembers(store, repos, user.firmId)
+  // Audit F14 / O-76: the read, the download and the list (with its OCR job counts) are judged at each matter's current label.
+  await syncFirmMatters(store, repos, user.firmId)
 
   if (docId) {
     const doc = (await repos.documents.get(docId)) ?? store.documents.get(docId) ?? null
@@ -213,13 +215,15 @@ async function handlePost(request: Request) {
     body: parsed,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
 
   try {
     const actor = requireActor(parsed.actorId, parsed.firmId)
     await syncFirmMembers(store, repos, actor.firmId)
+    // Audit F14 R2-D1: the matter checks below (member, floor) and the ingest default use its current label.
+    await syncFirmMatters(store, repos, actor.firmId)
     const matterId = parsed.matterId ?? null
     const matterForDefault = matterId ? store.matters.get(matterId) : undefined
     // L17.3 Human control: "Initial classification set at ingest (default privileged for

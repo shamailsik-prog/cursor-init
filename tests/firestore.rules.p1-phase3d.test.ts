@@ -19,8 +19,8 @@ import {
 } from "firebase/firestore"
 
 /**
- * Phase 3d P1 (spec P3-72): the AI cost log, the month totals, the budget alerts and the firm's AI
- * config are server-only collections, and `platform/p1` (the platform kill switch) is a server-only
+ * Phase 3d P1 (spec P3-72): the AI cost log, the month totals, the budget alerts, the firm's AI config and
+ * (audit F07, F08) the AI spend reservations are server-only collections, and `platform/p1` (the platform kill switch) is a server-only
  * document. Cloud Functions (Admin SDK) is the only reader and writer; partners read through
  * `getAiUsage`. No client of any firm or role can read, list, create, update or delete any of them.
  */
@@ -50,7 +50,7 @@ const FIRM_B_PARTNER = caller("p3d-b-partner", OTHER_FIRM, "partner")
 const FIRM_B_ADMIN = caller("p3d-b-admin", OTHER_FIRM, "partner", { platformAdmin: true })
 const EVERYONE = [PARTNER, PARTNER_ADMIN, ASSOC, CLERK, INTERN, CLIENT, ACCOUNTS, FIRM_B_PARTNER, FIRM_B_ADMIN]
 
-const COLLECTIONS = ["ai_usage_logs", "ai_usage_months", "ai_budget_alerts", "ai_config"] as const
+const COLLECTIONS = ["ai_usage_logs", "ai_usage_months", "ai_budget_alerts", "ai_config", "ai_reservations"] as const
 
 /** A live, second-factor signed-in caller whose users/{uid} record matches its token (SEC-3). */
 async function as(c: Caller) {
@@ -73,6 +73,7 @@ beforeAll(async () => {
     await setDoc(doc(db, "ai_usage_months", `${FIRM}_2026-10`), row({ spentMicroUsd: 14000 }))
     await setDoc(doc(db, "ai_budget_alerts", `${FIRM}_2026-10_70`), row({ threshold: 70 }))
     await setDoc(doc(db, "ai_config", FIRM), row({ monthlyBudgetMicroUsd: 1_500_000, pkrPerUsd: 280 }))
+    await setDoc(doc(db, "ai_reservations", "res1"), row({ state: "reserved", reservedMicroUsd: 81_960, usageLogId: "res1" }))
     await setDoc(doc(db, "platform", "p1"), { killSwitch: { disableAll: true, disabledModels: [], reason: "seed", setBy: "admin" } })
   })
 })
@@ -98,7 +99,8 @@ describe("firestore.rules names the P1 collections explicitly (P3-72)", () => {
 })
 
 describe.each(COLLECTIONS)("%s is server-only", (name) => {
-  const id = (n: string) => (n === "ai_usage_logs" ? "log1" : n === "ai_usage_months" ? `${FIRM}_2026-10` : n === "ai_budget_alerts" ? `${FIRM}_2026-10_70` : FIRM)
+  const id = (n: string) =>
+    n === "ai_usage_logs" ? "log1" : n === "ai_usage_months" ? `${FIRM}_2026-10` : n === "ai_budget_alerts" ? `${FIRM}_2026-10_70` : n === "ai_reservations" ? "res1" : FIRM
 
   it("no role of the same firm, with or without the platformAdmin claim, reads, lists, writes or deletes it", async () => {
     for (const c of EVERYONE) {
@@ -139,5 +141,70 @@ describe("platform/p1 is server-only", () => {
   it("platform/gates stays server-only beside it", async () => {
     const db = await as(PARTNER_ADMIN)
     await assertFails(getDoc(doc(db, "platform", "gates")))
+  })
+})
+
+describe("idempotency_keys and idempotency_effects are server-only (audit F09)", () => {
+  // The operation record holds the stored answer, and the effect marker of a committeeBrain operation holds its attempt
+  // receipt: the masked text and the masked outbound body. A client that could write either could forge an answer or
+  // fence an operation; one that could read either could read another user's answer.
+  const KEY_DOC = `${FIRM}_6f1c1e9e-4d0b-4b8a-9a52-0c3d4e5f6a7b`
+
+  it("no role of either firm, with or without the platformAdmin claim, reads, lists, writes or deletes either", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "idempotency_keys", KEY_DOC), { firmId: FIRM, status: "done", response: { status: 200, body: { text: "masked answer" } } })
+      await setDoc(doc(db, "idempotency_effects", KEY_DOC), { firmId: FIRM, kind: "p1_dispatch", result: { outcome: "ok", text: "masked answer" } })
+    })
+    for (const c of EVERYONE) {
+      const db = await as(c)
+      for (const name of ["idempotency_keys", "idempotency_effects"]) {
+        const who = `${c.uid} on ${name}`
+        await assertFails(getDoc(doc(db, name, KEY_DOC))).catch((e: unknown) => Promise.reject(new Error(`${who} get: ${String(e)}`)))
+        await assertFails(getDocs(query(collection(db, name), where("firmId", "==", FIRM)))).catch((e: unknown) => Promise.reject(new Error(`${who} list: ${String(e)}`)))
+        await assertFails(setDoc(doc(db, name, `${FIRM}_forged`), { firmId: FIRM, status: "done" })).catch((e: unknown) => Promise.reject(new Error(`${who} create: ${String(e)}`)))
+        await assertFails(updateDoc(doc(db, name, KEY_DOC), { status: "in_progress" })).catch((e: unknown) => Promise.reject(new Error(`${who} update: ${String(e)}`)))
+        await assertFails(deleteDoc(doc(db, name, KEY_DOC))).catch((e: unknown) => Promise.reject(new Error(`${who} delete: ${String(e)}`)))
+      }
+    }
+  })
+
+  it("an unauthenticated client is denied", async () => {
+    const db = testEnv.unauthenticatedContext().firestore()
+    for (const name of ["idempotency_keys", "idempotency_effects"]) {
+      await assertFails(getDoc(doc(db, name, KEY_DOC)))
+      await assertFails(setDoc(doc(db, name, `${FIRM}_forged`), { firmId: FIRM }))
+    }
+  })
+})
+
+describe("platform/p1Overhead and platform/p1ReconcileCursor are server-only (Copilot finding and re-audit R2-D2 on PR #40)", () => {
+  // The learned request overhead raises every later reservation of a model: a client that could lower it could make
+  // reservations smaller than the provider bills. The sweep cursor decides which records the reconciler reads.
+  const DOCS = ["p1Overhead", "p1ReconcileCursor"] as const
+
+  it("no role of either firm, with or without the platformAdmin claim, reads, writes or deletes either", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "platform", "p1Overhead"), { models: { "anthropic_claude-opus-5_5": { model: "anthropic/claude-opus-5.5", inputTokens: 2_000 } } })
+      await setDoc(doc(db, "platform", "p1ReconcileCursor"), { after: "res1" })
+    })
+    for (const c of EVERYONE) {
+      const db = await as(c)
+      for (const name of DOCS) {
+        await assertFails(getDoc(doc(db, "platform", name)))
+        await assertFails(setDoc(doc(db, "platform", name), { models: {}, after: "" }))
+        await assertFails(updateDoc(doc(db, "platform", name), { "models.anthropic_claude-opus-5_5.inputTokens": 0, after: "" }))
+        await assertFails(deleteDoc(doc(db, "platform", name)))
+      }
+    }
+  })
+
+  it("an unauthenticated client is denied", async () => {
+    const db = testEnv.unauthenticatedContext().firestore()
+    for (const name of DOCS) {
+      await assertFails(getDoc(doc(db, "platform", name)))
+      await assertFails(setDoc(doc(db, "platform", name), { models: {} }))
+    }
   })
 })

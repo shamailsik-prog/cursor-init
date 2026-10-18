@@ -12,9 +12,9 @@ import { seedJudgment } from "@/services/d4-2/draftingIntelligence"
 import { getDocumentTypes } from "@/lib/foundation-data"
 
 const PASSAGES: Array<[string, string]> = [
-  ["plaint heading", "IN THE COURT OF SENIOR CIVIL JUDGE, KARACHI (SOUTH)\nSuit No. 812 of 2025\nMuhammad Aslam son of Abdul Rasheed, Muslim, adult, resident of House No. 45, Block 7, Gulshan-e-Iqbal, Karachi ........ Plaintiff\nVERSUS\nM/s Engro Fertilizers PLC and others ........ Defendants"],
+  ["plaint heading", "IN THE COURT OF SENIOR CIVIL JUDGE, KARACHI (SOUTH)\nSuit No. 812 of 2025\nMuhammad Aslam son of Abdul Rasheed, Muslim, adult, resident of House No. 45, Block 7, Gulshan-e-Iqbal, Karachi ........ Plaintiff\nVERSUS\nM/s Qalvo Fertilizers PLC and others ........ Defendants"],
   ["plaint para money", "3. That on 15.03.2023 the Plaintiff paid a sum of Rs. 1,250,000/- (Rupees Twelve Lac Fifty Thousand only) to the Defendant No. 1 through Cheque No. 00412345 dated 15.03.2023 drawn on Habib Bank Limited, Saddar Branch."],
-  ["plaint para company year", "4. That in 2019 Engro Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons of urea at Rs. 3,850 per bag."],
+  ["plaint para company year", "4. That in 2019 Qalvo Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons of urea at Rs. 3,850 per bag."],
   ["plaint prayer", "PRAYER\nIt is, therefore, most respectfully prayed that this Honourable Court may graciously be pleased to:\n(a) pass a decree for recovery of Rs. 2,500,000/- with markup at 12% per annum from 01.01.2024 till realisation;\n(b) grant costs of the suit;\n(c) grant any other relief deemed just and proper."],
   ["O.39 application", "APPLICATION UNDER ORDER XXXIX RULES 1 & 2 READ WITH SECTION 151 CPC\nIt is respectfully submitted that the Plaintiff has a prima facie case, the balance of convenience lies in his favour and he will suffer irreparable loss if the Defendants are not restrained from alienating Plot No. 12, Sector F-7/2, Islamabad."],
   ["CPC O.39 R.1&2 abbreviated", "The applicant seeks relief under O.39 R.1&2 CPC and S.151 CPC against the respondents."],
@@ -27,8 +27,8 @@ const PASSAGES: Array<[string, string]> = [
   ["bail FIR spelled", "That FIR No. 45 of 2024 was registered at Police Station Gulberg on the complaint of one Zahid Mehmood with a delay of 3 days which is unexplained."],
   ["bail 497 + 498", "The learned trial court has wrongly declined bail under Section 497 and Section 498 CrPC vide order dated 20.02.2025."],
   ["legal notice", "LEGAL NOTICE\nUnder instructions from and on behalf of my client Mr. Imran Ali, CNIC No. 42101-1234567-1, I hereby serve upon you this legal notice that you are liable to pay Rs. 750,000/- within 15 days of receipt hereof, failing which my client shall initiate proceedings under Section 489-F PPC and Order XXXVII CPC."],
-  ["legal notice company", "To: The Chief Executive Officer, Engro Fertilizers PLC, 7th Floor, The Harbour Front, Karachi. Your company's letter No. EFL/LEG/2024/118 dated 05.07.2024 has been perused."],
-  ["company PLC year number", "Engro Fertilizers PLC reported revenue of Rs. 5 billion in its 2023 annual report, page 45."],
+  ["legal notice company", "To: The Chief Executive Officer, Qalvo Fertilizers PLC, 3rd Floor, Qalvo House, Karachi. Your company's letter No. QFL/LEG/2024/118 dated 05.07.2024 has been perused."],
+  ["company PLC year number", "Qalvo Fertilizers PLC reported revenue of Rs. 5 billion in its 2023 annual report, page 45."],
   ["company CLC", "The CLC committee of the Board met on 5 May 2024 and approved 3 resolutions."],
   ["numbered paras", "5. That the Defendant No. 2 is a necessary party.\n6. That the cause of action arose on 01.01.2024 and lastly on 15.06.2024 within the jurisdiction of this Court.\n7. That the suit is valued at Rs. 10,000,000/- for the purposes of court fee and jurisdiction."],
   ["dates mixed", "The hearing was adjourned from 5th May, 2023 to 12th June, 2023 and again to 3rd July 2023."],
@@ -96,11 +96,11 @@ const PASTES: Array<[string, string]> = [
   ["Turkish/Polish name", "Witness Şahin and Łukasz Nowak"],
   ["Greek legal term", "the doctrine of λόγος is irrelevant"],
   ["Latin maxim with æ", "Ex turpi causa non oritur actio; Æquitas sequitur legem."],
-  ["Trademark symbols", "Engro® and Sona™ urea"],
+  ["Trademark symbols", "Qalvo® and Nura™ urea"],
   ["Emoji in WhatsApp quote", "The accused wrote on WhatsApp: \"pay now 😡\""],
   ["Bullet list", "• First ground\n• Second ground\n▪ Third ground"],
   ["Checkmark", "Documents verified ✓"],
-  ["Copyright line", "© 2024 Engro Fertilizers PLC"],
+  ["Copyright line", "© 2024 Qalvo Fertilizers PLC"],
   ["Ellipsis quote", "“The court… shall not”"],
 ]
 

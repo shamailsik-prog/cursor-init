@@ -1,16 +1,35 @@
-import { FieldValue, Timestamp, type DocumentReference } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
+import type { SystemRecord } from "@/platform/p1/outboundPrompt"
+import { RESIDUAL_KINDS } from "@/platform/p1/residualPII"
+import { isKnownSystemPolicy } from "@/platform/p1/systemPolicy"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
+import { activeAuthorityStore } from "../d4/authority"
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { HttpError } from "../http/errors"
+import { CLAIM_LOST, EFFECT_COMMITTED, idempotencyDocId, isUuidV4, type IdempotentOperation } from "../http/idempotency"
+import { errorCode } from "../log"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
-import type { CallAudit, Data, FirmOperation, FirmlessOperation } from "../p5/common"
+import { isSafeDocId, type CallAudit, type Data, type FirmOperation, type FirmlessOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, spentOf } from "./config"
+import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, reservationRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
-import { callP1, isAlreadyExists } from "./gateway"
+import {
+  CALL_PHASES_AFTER_ANSWER_MS,
+  CALL_WORST_CASE_MS,
+  P1PreCallDeadlineError,
+  assertOperationTimeBudget,
+  callP1,
+  isAlreadyExists,
+  type P1Receipt,
+  type P1Result,
+} from "./gateway"
+import { GROUNDING_BUDGET_MS, groundAnswer, isAdvisory, unverifiableGrounding, type Grounding, type GroundingPolicy } from "./grounding"
 import { isMonthKey, monthKeyPkt } from "./month"
-import { TRANSPORT_ERROR } from "./types"
+import { modelId } from "./transport"
+import { TRANSPORT_ERROR, type P1Accounting } from "./types"
 
 /**
  * The five P1 operations behind `/api/platform/brain/` (spec P3-60, P3-66, P3-70..P3-72): `committeeBrain`,
@@ -40,15 +59,75 @@ const badRequest = (code: string) => new HttpError(400, code)
 /** Attempts at the `committee_outputs` write; after a failed attempt the wait is 100 ms, then 200 ms (doubling). */
 const OUTPUT_WRITE_ATTEMPTS = 3
 const OUTPUT_WRITE_BACKOFF_MS = 100
+/**
+ * The output write's deadline (Codex P1 on PR #40), from its first attempt: no attempt, and no wait, starts once it
+ * would run past it. Each attempt is one SDK transaction attempt (`maxAttempts: 1`), so the SDK adds no retries or
+ * back-off of its own: the write takes at most this plus one attempt in flight.
+ */
+export const OUTPUT_WRITE_DEADLINE_MS = 3_000
+
+/**
+ * The time committeeBrain allows before paid work starts (re-audit R3-D2): eight store or Auth round trips at 1 s each
+ * (the ID token's verification and the session binding, the rate limit, the Idempotency-Key claim, the `ai.call`
+ * permission check, the matter read, the party-name query and the call's first reads), measured on the real clock from
+ * when the router received the request (`session.startedAtMs`). It is enforced: once the call's first reads are done,
+ * `callP1` reserves nothing and sends nothing if this has passed, and the request answers 503 `precall_deadline`
+ * (retryable; the Idempotency-Key is released). A read that hangs is still not cut off, but it costs nothing, and no
+ * paid work starts that could outlive the request's timeout.
+ */
+export const PRE_CALL_ALLOWANCE_MS = 8_000
+/**
+ * The time committeeBrain allows after the call: the `committee_outputs` write with the route's audit row
+ * (OUTPUT_WRITE_DEADLINE_MS, 3 s, plus 2 s for the one attempt in flight) and the Idempotency-Key completion (3 s: up
+ * to four short transactions with 0.7 s of back-off between them, `settle` in http/idempotency.ts).
+ */
+export const POST_CALL_ALLOWANCE_MS = 8_000
+/**
+ * committeeBrain's own work around `callP1`, as a share of the api function's timeout (Codex P1 on PR #40): the
+ * pre-call allowance (enforced, re-audit R3-D2) and the post-call allowance (the output write is bounded by its
+ * deadline). The import-time check below keeps the call's phases (CALL_WORST_CASE_MS, 99 s), this share (16 s) and
+ * REQUEST_TIMEOUT_MARGIN_MS within the 120 s timeout.
+ */
+export const COMMITTEE_HANDLER_OVERHEAD_MS = PRE_CALL_ALLOWANCE_MS + POST_CALL_ALLOWANCE_MS
+/** Kept free at the end of the request: the response itself, and the clock drift between the shares. */
+export const REQUEST_TIMEOUT_MARGIN_MS = 5_000
+
+assertOperationTimeBudget({
+  callMs: CALL_WORST_CASE_MS,
+  handlerMs: COMMITTEE_HANDLER_OVERHEAD_MS,
+  marginMs: REQUEST_TIMEOUT_MARGIN_MS,
+  timeoutMs: FUNCTION_TIMEOUT_SECONDS * 1000,
+})
+
+/**
+ * Audit F17 (spec ruling 6, refinement R6a): grounding starts from `callP1`'s `onAnswer`, the moment the masked answer
+ * exists, and runs beside the call's attempt outcome, trace and commit (CALL_PHASES_AFTER_ANSWER_MS, 29 s). Its budget
+ * must fit inside them, so it adds nothing to the worst case above; checked at import like the budget itself.
+ */
+if (!(GROUNDING_BUDGET_MS <= CALL_PHASES_AFTER_ANSWER_MS)) {
+  throw new Error(`the grounding budget (${GROUNDING_BUDGET_MS} ms) must fit in the call's phases after the answer (${CALL_PHASES_AFTER_ANSWER_MS} ms)`)
+}
 
 /**
  * Test seam only; production code never sets it, and it is inert when `NODE_ENV` is "production".
  * `outputWriteFailures` is a queue: each attempt at the `committee_outputs` write takes the next error from it
  * and throws it instead of writing. `lostCommitAnswers` is a queue too: each attempt whose write committed takes
  * the next error from it and throws it, as if the commit had landed but its answer was lost (an ambiguous
- * commit). `sleep` replaces the back-off wait.
+ * commit). `sleep` replaces the back-off wait. `wallClock` replaces `Date.now` as the output write's deadline clock.
+ * `preCallClock` replaces `Date.now` as the clock the pre-call deadline is checked on (re-audit R3-D2). `beforePublish`
+ * runs after the call and before the publication transaction (audit F09): a test holds it to stand for an instance
+ * that died between the provider call and output persistence. `groundingBudgetMs` replaces GROUNDING_BUDGET_MS (audit
+ * F17), so a test can show a store that hangs past the budget without waiting 20 s.
  */
-export const p1OpsTestSeam: { outputWriteFailures?: Error[]; lostCommitAnswers?: Error[]; sleep?: (ms: number) => Promise<void> } = {}
+export const p1OpsTestSeam: {
+  outputWriteFailures?: Error[]
+  lostCommitAnswers?: Error[]
+  sleep?: (ms: number) => Promise<void>
+  wallClock?: () => number
+  preCallClock?: () => number
+  beforePublish?: () => Promise<void>
+  groundingBudgetMs?: number
+} = {}
 
 function seam(): typeof p1OpsTestSeam {
   return process.env.NODE_ENV === "production" ? {} : p1OpsTestSeam
@@ -71,10 +150,13 @@ async function outputCommitted(outputRef: DocumentReference, usageLogId: string)
  * fails with ALREADY_EXISTS after an earlier attempt's commit was lost (an ambiguous commit) finds the row:
  * when `outputRef` exists with this call's `usageLogId` the write is done, and it returns normally, so the
  * route's allow row (committed with that row) stands and no deny row is written. Any other ALREADY_EXISTS is
- * handled like any other failure. The last failure is rethrown as it was.
+ * handled like any other failure. No wait or attempt starts once it would end past OUTPUT_WRITE_DEADLINE_MS from the
+ * first attempt (Codex P1 on PR #40). The last failure is rethrown as it was.
  */
 async function withOutputWriteRetry(write: () => Promise<void>, row: { outputRef: DocumentReference; usageLogId: string }): Promise<void> {
   const t = seam()
+  const clock = t.wallClock ?? Date.now
+  const started = clock()
   for (let attempt = 1; ; attempt++) {
     try {
       const injected = t.outputWriteFailures?.shift()
@@ -88,6 +170,7 @@ async function withOutputWriteRetry(write: () => Promise<void>, row: { outputRef
       if (isAlreadyExists(err) && (await outputCommitted(row.outputRef, row.usageLogId))) return
       if (attempt >= OUTPUT_WRITE_ATTEMPTS) throw err
       const wait = OUTPUT_WRITE_BACKOFF_MS * 2 ** (attempt - 1)
+      if (clock() - started + wait >= OUTPUT_WRITE_DEADLINE_MS) throw err
       await (t.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(wait)
     }
   }
@@ -148,12 +231,22 @@ function strictest(labels: Classification[]): Classification {
   return labels.reduce((a, b) => (rankOf(b) > rankOf(a) ? b : a))
 }
 
+/** The client record's names the mask uses (audit F15, spec ruling 4). Its identifiers are not used as literals. */
+const CLIENT_NAME_FIELDS = ["canonicalName", "companyName", "concernedPersonName"] as const
+
 /**
- * Every `name` and `names` entry of this firm's `matter_parties` rows for the matter, plus the supplied names,
- * de-duplicated. Longest first, so "Ali Raza Khan" is masked whole before "Ali Raza" can leave "Khan" behind.
+ * Every `name` and `names` entry of this firm's `matter_parties` rows for the matter, the matter's client record's
+ * names (`clients/{matter.clientId}`: `canonicalName`, `companyName`, `concernedPersonName`, only when the record is
+ * this firm's; audit F15), plus the supplied names, de-duplicated. The client read runs beside the party query, so it
+ * adds no sequential round trip before the call. Longest first, so "Ali Raza Khan" is masked whole before "Ali Raza"
+ * can leave "Khan" behind (the mask also orders the names it is given).
  */
-async function partyNamesFor(firmId: string, matterId: string, supplied: string[]): Promise<string[]> {
-  const rows = await adminDb().collection("matter_parties").where("firmId", "==", firmId).where("matterId", "==", matterId).get()
+async function partyNamesFor(firmId: string, matterId: string, clientId: unknown, supplied: string[]): Promise<string[]> {
+  const db = adminDb()
+  const [rows, client] = await Promise.all([
+    db.collection("matter_parties").where("firmId", "==", firmId).where("matterId", "==", matterId).get(),
+    isSafeDocId(clientId) ? db.collection("clients").doc(clientId).get() : Promise.resolve(null),
+  ])
   const names = new Set<string>()
   const add = (value: unknown) => {
     if (typeof value === "string" && value.trim() !== "") names.add(value.trim())
@@ -163,6 +256,8 @@ async function partyNamesFor(firmId: string, matterId: string, supplied: string[
     add(party.name)
     if (Array.isArray(party.names)) party.names.forEach(add)
   }
+  const record = client?.data()
+  if (record !== undefined && record.firmId === firmId) for (const field of CLIENT_NAME_FIELDS) add(record[field])
   supplied.forEach(add)
   return [...names].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))
 }
@@ -175,6 +270,326 @@ export type CommitteeBrainResponse = {
   classification: Classification
   usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
   traceId: string
+  /** Whether the call's books are complete, apart from whether its text is available (audit F08; see P1Accounting). */
+  accounting: P1Accounting
+  /**
+   * Audit F17 (spec ruling 3): whether the answer's authorities are independently verified against the firm's corpus
+   * (functions/src/p1/grounding.ts). `blocked: false` says the provider call succeeded; this says whether its content can
+   * be relied on. `advisory` is true unless `grounding.status` is `grounded`.
+   */
+  grounding: Grounding
+  advisory: boolean
+  /** Audit F17 (ruling 4): the configured model, the model the provider reported (null when none) and whether they match. */
+  model: string
+  modelReported: string | null
+  modelMatch: boolean
+}
+
+/**
+ * Whether the provider's reported model is the configured one (audit F17, ruling 4): the same id, or the same id without
+ * its `provider/` prefix (the Gateway may report `claude-...` for `anthropic/claude-...`). False when none was reported.
+ * Recorded, never a block.
+ */
+export function modelMatches(configured: string, reported: string | null): boolean {
+  if (reported === null) return false
+  if (reported === configured) return true
+  const slash = configured.indexOf("/")
+  return slash > 0 && configured.slice(slash + 1) === reported
+}
+
+/** The system record's policy reference for the grounding record (F16: id and version only). */
+function policyOf(system: SystemRecord | undefined): GroundingPolicy | null {
+  return system === undefined ? null : { policyId: system.policyId, version: system.version }
+}
+
+/**
+ * The grounding of a masked answer against the store the D4 gate uses (audit F17, rulings 2 and 6): never rejects, so a
+ * resolution failure never loses the answer. `text` undefined (a blocked or failed call) is `not_assessed`.
+ */
+async function groundingOf(text: string | undefined, policy: GroundingPolicy | null, partyNames: string[]): Promise<Grounding> {
+  try {
+    return await groundAnswer({ text, policy, partyNames }, activeAuthorityStore(), { budgetMs: seam().groundingBudgetMs ?? GROUNDING_BUDGET_MS })
+  } catch (err) {
+    logger.warn("p1.grounding_failed", { code: errorCode(err) })
+    return unverifiableGrounding(policy)
+  }
+}
+
+type CommitteeOutputRow = Record<string, unknown>
+
+/**
+ * The publication (audit F09): one transaction writes the route's allow row, the `committee_outputs` row and, for an
+ * HTTP operation, the request's stored answer, so the answer commits with the output and no window lies between them.
+ * The operation's fence is read first: this attempt must still hold the claim (else 409 idempotency_claim_lost), and its
+ * effect marker must be this call's dispatch (else another attempt of the operation holds its effect: 409
+ * idempotency_claim_lost too); a call that never dispatched (blocked) creates the marker here. An attempt that finds
+ * its answer already stored is an earlier attempt of this transaction whose commit landed and whose reply was lost: done.
+ * Retried by withOutputWriteRetry like the output write before it.
+ */
+async function publish(a: {
+  operation: IdempotentOperation | undefined
+  audit: CallAudit
+  outputRef: DocumentReference
+  row: CommitteeOutputRow
+  response: CommitteeBrainResponse
+  usageLogId: string
+  traceId: string
+}): Promise<void> {
+  await seam().beforePublish?.()
+  // One SDK attempt per try (Codex P1 on PR #40): the retries and their deadline are withOutputWriteRetry's alone.
+  await withOutputWriteRetry(
+    () =>
+      adminDb().runTransaction(
+        async (tx) => {
+          let effect = true
+          if (a.operation !== undefined) {
+            const { answered, marker } = await a.operation.read(tx)
+            if (answered) return
+            if (marker !== null) {
+              if (marker.kind !== "p1_dispatch" || marker.traceId !== a.traceId) throw new HttpError(409, CLAIM_LOST)
+              effect = false
+            }
+          }
+          await a.audit.stage(tx, "allow", "ok", { effect })
+          tx.create(a.outputRef, a.row)
+          a.operation?.stageAnswer(tx, { status: 200, body: a.response })
+        },
+        { maxAttempts: 1 }
+      ),
+    { outputRef: a.outputRef, usageLogId: a.usageLogId }
+  )
+  a.audit.committed()
+}
+
+/** The output row in the Next.js shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock. */
+function outputRow(o: {
+  outputRef: DocumentReference
+  caller: Caller
+  matterId: string
+  classification: Classification
+  purpose: string
+  blocked: boolean
+  reason: string | undefined
+  text: string | undefined
+  outbound: P1Result["outbound"]
+  usageLogId: string
+  traceId: string
+  accounting: P1Accounting
+  createdAt: number
+  grounding: Grounding
+  model: string
+  modelReported: string | null
+}): CommitteeOutputRow {
+  return {
+    id: o.outputRef.id,
+    firmId: o.caller.firmId,
+    actorId: o.caller.uid,
+    matterId: o.matterId,
+    documentIds: [],
+    classification: o.classification,
+    purpose: o.purpose,
+    blocked: o.blocked,
+    ...(o.reason === undefined ? {} : { reason: o.reason }),
+    ...(o.text === undefined ? {} : { text: o.text }),
+    outbound: {
+      body: o.outbound.body,
+      // Audit F16: which registry policy the system message sent with the body was, by id and version, never its text
+      // (review round R4a; absent only when the row is published from an attempt receipt recorded before F16, which
+      // resumes as a single user turn).
+      ...(o.outbound.system === undefined ? {} : { system: o.outbound.system }),
+      metadata: {
+        classification: o.classification,
+        provider: PROVIDER_ID,
+        purpose: o.outbound.purpose,
+        redactionCounts: o.outbound.redactionCounts,
+        // Audit F15: the residual detector's counts on the masked body, beside the mask's own (absent only when the row
+        // is published from an attempt receipt recorded before F15).
+        ...(o.outbound.residualCounts === undefined ? {} : { residualCounts: o.outbound.residualCounts }),
+      },
+    },
+    usageLogId: o.usageLogId,
+    traceId: o.traceId,
+    // The accounting state when the call returned; the lease reconciler sets it to settled when it settles or
+    // releases the call's reservation (Codex P2 on PR #40), and the usage row (usageLogId) is the authority.
+    accounting: o.accounting,
+    createdAt: o.createdAt,
+    // Audit F17 (rulings 3 and 4): whether the content is grounded, and which model the provider said answered.
+    grounding: o.grounding,
+    advisory: isAdvisory(o.grounding),
+    model: o.model,
+    modelReported: o.modelReported,
+    modelMatch: modelMatches(o.model, o.modelReported),
+  }
+}
+
+/** A count, when it is a non-negative integer. */
+const countOf = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/**
+ * Residual counts (audit F15), when they are exactly the detector's four kinds, each a count; null otherwise. An
+ * object-shaped value with a non-count, a missing kind or an unknown kind is malformed too (Codex P2 on #61).
+ */
+function residualCountsOf(value: unknown): Record<string, number> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const entries = value as Record<string, unknown>
+  if (Object.keys(entries).length !== RESIDUAL_KINDS.length) return null
+  const out: Record<string, number> = {}
+  for (const kind of RESIDUAL_KINDS) {
+    const n = Object.hasOwn(entries, kind) ? countOf(entries[kind]) : null
+    if (n === null) return null
+    out[kind] = n
+  }
+  return out
+}
+
+const SYSTEM_RECORD_KEYS = ["policyId", "version"]
+
+/**
+ * A system record (audit F16, spec ruling 4, review round R4a), when it is exactly `{ policyId, version }` and the
+ * registry knows that policy at that version (own keys only), so the text that was sent can be re-derived
+ * (`systemPolicyText`); null otherwise. The Functions request never carries the eve agent's instructions, so a record
+ * with their hash, or with a `text`, is malformed here. The registry keeps every version's texts
+ * (platform/p1/systemPolicy.ts), so a version it has since replaced still resolves.
+ */
+function systemRecordOf(value: unknown): SystemRecord | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  if (Object.keys(r).sort().join() !== SYSTEM_RECORD_KEYS.join()) return null
+  if (!isKnownSystemPolicy(r.policyId, r.version)) return null
+  return { policyId: r.policyId, version: r.version as string }
+}
+
+/** The attempt receipt on a marker, when it is complete and well formed; null otherwise (then the answer is lost). */
+function receiptOf(value: unknown): P1Receipt | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const r = value as Record<string, unknown>
+  const outbound = r.outbound as Record<string, unknown> | undefined
+  const inputTokens = countOf(r.inputTokens)
+  const outputTokens = countOf(r.outputTokens)
+  const costMicroUsd = countOf(r.costMicroUsd)
+  if (r.outcome !== "ok" && r.outcome !== "failed") return null
+  if (r.outcome === "ok" && typeof r.text !== "string") return null
+  if (inputTokens === null || outputTokens === null || costMicroUsd === null || typeof r.tokensEstimated !== "boolean") return null
+  if (typeof r.model !== "string" || !isKnownClassification(r.classification)) return null
+  if (outbound === null || typeof outbound !== "object" || typeof outbound.body !== "string" || typeof outbound.purpose !== "string") return null
+  const isCounts = (value: unknown): value is Record<string, number> => value !== null && typeof value === "object" && !Array.isArray(value)
+  const counts = outbound.redactionCounts
+  if (!isCounts(counts)) return null
+  // Audit F15: when present, exactly the four kinds, each a count; a receipt recorded before F15 has none.
+  const residual = outbound.residualCounts === undefined ? undefined : residualCountsOf(outbound.residualCounts)
+  if (residual === null) return null
+  // Audit F16: when present, exactly a system record; a receipt recorded before F16 has none and resumes as a single user
+  // turn. A malformed one makes the receipt unreadable (fail closed: 409, never a row that misstates what was sent).
+  const system = outbound.system === undefined ? undefined : systemRecordOf(outbound.system)
+  if (system === null) return null
+  // Audit F17 (spec ruling 3, refinement R3a): grounding is computed when the answer is published, never recorded on a
+  // receipt. A receipt that carries one was not written by callP1; it is refused (fail closed: 409), so a forged
+  // verification claim is never published. A reported model, when present, must be a model id; a receipt recorded before
+  // F17 has none and still resumes.
+  if (Object.hasOwn(r, "grounding")) return null
+  const modelReported = r.modelReported === undefined ? undefined : modelId(r.modelReported)
+  if (r.modelReported !== undefined && modelReported === undefined) return null
+  return {
+    outcome: r.outcome,
+    ...(r.outcome === "ok" ? { text: r.text as string } : {}),
+    inputTokens,
+    outputTokens,
+    tokensEstimated: r.tokensEstimated,
+    costMicroUsd,
+    model: r.model,
+    ...(modelReported === undefined ? {} : { modelReported }),
+    classification: r.classification,
+    outbound: {
+      body: outbound.body,
+      purpose: outbound.purpose,
+      redactionCounts: counts,
+      ...(residual === undefined ? {} : { residualCounts: residual }),
+      ...(system === undefined ? {} : { system }),
+    },
+  }
+}
+
+/**
+ * The resume path (audit F09): an earlier attempt of this operation dispatched its one provider call (the marker,
+ * `prior`) and never stored its answer. The answer is published from the attempt receipt, with the call's own usage
+ * row id and trace id, and no provider call. The caller must still be cleared for the label the call was made at, and
+ * the row takes the stricter of that and the current one. `accounting` is `settled` once the call's reservation is
+ * closed, else `pending` (the lease reconciler later settles it and refreshes the row and the stored answer by
+ * `usageLogId` and trace id). With no receipt the answer is gone: 409 idempotency_effect_committed, stored for the key.
+ *
+ * Audit F17 (spec ruling 3, R3a): the receipt's masked text is grounded here, against the corpus as it stands now, with
+ * the matter's party names (`partyNames`, read only when there is text to ground); the receipt never carries grounding.
+ */
+async function resumeCommittee(a: {
+  operation: IdempotentOperation
+  prior: DocumentData
+  audit: CallAudit
+  caller: Caller
+  matterId: string
+  purpose: string
+  classification: Classification
+  createdAt: number
+  partyNames: () => Promise<string[]>
+}): Promise<CommitteeBrainResponse> {
+  if (a.prior.kind !== "p1_dispatch") throw new HttpError(409, EFFECT_COMMITTED)
+  // The freshest marker: its receipt may have landed after the claim read it.
+  const marker = (await a.operation.markerRef.get()).data()
+  // Re-audit MEDIUM-1: a receipt is published only to the request that made it, on its own matter. The claim admits only
+  // that request already; this holds it here too, where the answer is about to leave: the same user, route and body, and
+  // the matter the call was made on, which is the request's matter, the one gateAiCall has just cleared this caller for.
+  // A marker missing any of these (fail closed) publishes nothing.
+  if (marker !== undefined && (!a.operation.answersThisRequest(marker) || marker.matterId !== a.matterId)) {
+    throw new HttpError(422, "idempotency_key_reused")
+  }
+  const usageLogId = marker?.usageLogId
+  const traceId = marker?.traceId
+  const receipt = marker?.kind === "p1_dispatch" && marker.operationId === a.operation.operationId ? receiptOf(marker.result) : null
+  if (receipt === null || typeof usageLogId !== "string" || typeof traceId !== "string") throw new HttpError(409, EFFECT_COMMITTED)
+  if (rankOf(a.caller.clearanceLevel) < rankOf(receipt.classification)) throw new HttpError(403, "clearance")
+  const classification = strictest([a.classification, receipt.classification])
+  const state = (await reservationRef(usageLogId).get()).get("state")
+  const accounting: P1Accounting = state === "settled" || state === "released" ? "settled" : "pending"
+  const blocked = receipt.outcome !== "ok"
+  const reason = blocked ? TRANSPORT_ERROR : undefined
+  const policy = policyOf(receipt.outbound.system)
+  const grounding = await groundingOf(receipt.text, policy, receipt.text === undefined ? [] : await a.partyNames())
+  const modelReported = receipt.modelReported ?? null
+  const outputRef = adminDb().collection("committee_outputs").doc()
+  const response: CommitteeBrainResponse = {
+    outputId: outputRef.id,
+    blocked,
+    ...(reason === undefined ? {} : { reason }),
+    ...(receipt.text === undefined ? {} : { text: receipt.text }),
+    classification,
+    usage: { inputTokens: receipt.inputTokens, outputTokens: receipt.outputTokens, costMicroUsd: receipt.costMicroUsd },
+    traceId,
+    accounting,
+    grounding,
+    advisory: isAdvisory(grounding),
+    model: receipt.model,
+    modelReported,
+    modelMatch: modelMatches(receipt.model, modelReported),
+  }
+  const row = outputRow({
+    outputRef,
+    caller: a.caller,
+    matterId: a.matterId,
+    classification,
+    purpose: a.purpose,
+    blocked,
+    reason,
+    text: receipt.text,
+    outbound: receipt.outbound,
+    usageLogId,
+    traceId,
+    accounting,
+    createdAt: a.createdAt,
+    grounding,
+    model: receipt.model,
+    modelReported,
+  })
+  await publish({ operation: a.operation, audit: a.audit, outputRef, row, response, usageLogId, traceId })
+  return response
 }
 
 /**
@@ -182,14 +597,24 @@ export type CommitteeBrainResponse = {
  * request, then `ai.call` on the matter (same firm, member, cleared; partner, associate, clerk), derives the
  * classification (the strictest of the matter's label, the caller's label and the `internal` floor; the caller's
  * clearance must reach it), masks with the matter's party names, calls `callP1` and writes one `committee_outputs`
- * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text.
+ * row. A blocked or failed call is stored and returned like an ok one, with its reason and no text. The response
+ * and the row carry `accounting` (audit F08): `pending` when the call's usage could not be committed, so its spend
+ * is still held by its reservation until the lease reconciler settles it.
+ *
+ * Audit F09: for an HTTP operation (`session.operation`, route mode `resume`) the call records the operation's effect
+ * marker with its provider attempt and its receipt when the provider answers (callP1), and the output row commits with
+ * the request's stored answer (publish). A same-key request after a dispatch whose answer was never stored resumes
+ * from the receipt (resumeCommittee): at most one provider call per operation.
  */
 export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
   auth: "firm",
   kind: "p1",
   action: "ai.call",
   target: "matters",
-  run: async ({ caller, now: routerNow }, data, audit) => {
+  run: async ({ caller, now: routerNow, idempotencyKey, startedAtMs, operation }, data, audit) => {
+    // The pre-call deadline (re-audit R3-D2), on the real clock from when the router received the request.
+    const preCallClock = seam().preCallClock ?? Date.now
+    const preCallDeadline = { atMs: (startedAtMs ?? Date.now()) + PRE_CALL_ALLOWANCE_MS, clock: preCallClock }
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const input = parseCommitteeInput(data)
@@ -206,53 +631,100 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const classification = strictest(labels)
     if (rankOf(caller.clearanceLevel) < rankOf(classification)) throw new HttpError(403, "clearance")
 
-    const partyNames = await partyNamesFor(caller.firmId, matterId, input.partyNames)
+    // Audit F09: an earlier attempt of this operation dispatched its one provider call; publish its answer, call nothing.
+    if (operation?.prior != null) {
+      return resumeCommittee({
+        operation,
+        prior: operation.prior,
+        audit,
+        caller,
+        matterId,
+        purpose: input.purpose,
+        classification,
+        createdAt: Math.floor(routerNow ?? Date.now()),
+        partyNames: () => partyNamesFor(caller.firmId, matterId, matter.clientId, input.partyNames),
+      })
+    }
+
+    const partyNames = await partyNamesFor(caller.firmId, matterId, matter.clientId, input.partyNames)
+    // Audit F17 (ruling 6, R6a): grounding starts the moment the masked answer exists and runs beside the call's own
+    // remaining phases; it never rejects (groundingOf), and the policy reference is filled in from the call's record.
+    let grounding: Promise<Grounding> | undefined
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
     const t0 = Date.now()
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)
-    const result = await callP1(
-      { firmId: caller.firmId, actorId: caller.uid, matterId, jobId: null, taskType: "committee", classification, body: input.body, purpose: input.purpose, partyNames },
-      { now: clock }
-    )
+    // The request's stored answer goes on the reservation, so the lease reconciler can mark it settled (Codex P2 on PR #40).
+    const idempotencyDoc = isUuidV4(idempotencyKey) ? idempotencyDocId(caller.firmId, idempotencyKey) : null
+    let result: P1Result
+    try {
+      result = await callP1(
+        {
+          firmId: caller.firmId,
+          actorId: caller.uid,
+          matterId,
+          jobId: null,
+          taskType: "committee",
+          classification,
+          body: input.body,
+          purpose: input.purpose,
+          partyNames,
+          idempotencyDoc,
+          // Audit F09: the operation's marker is created with the provider attempt, and the receipt recorded on it.
+          // Its matter too (re-audit MEDIUM-1): resumeCommittee publishes the receipt only on that matter.
+          ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: { ...operation.markerFields(), matterId } } }),
+          onAnswer: (masked) => {
+            grounding = groundingOf(masked, null, partyNames)
+          },
+        },
+        { now: clock, preCallDeadline }
+      )
+    } catch (err) {
+      // Nothing was reserved, sent or written: a 503 releases the Idempotency-Key, so the same request may be retried.
+      if (err instanceof P1PreCallDeadlineError) throw new HttpError(503, err.code)
+      throw err
+    }
 
     const blocked = result.outcome !== "ok"
     const reason = result.blockReason ?? (result.outcome === "failed" ? TRANSPORT_ERROR : undefined)
     const outputRef = adminDb().collection("committee_outputs").doc()
-    // The Next.js row shape (CommitteeBrainOutput): `id` in the row, `createdAt` in epoch milliseconds from the op's clock.
-    const createdAt = Math.floor(clock())
-    await withOutputWriteRetry(() => adminDb().runTransaction(async (tx) => {
-      await audit.stage(tx, "allow", "ok")
-      tx.create(outputRef, {
-        id: outputRef.id,
-        firmId: caller.firmId,
-        actorId: caller.uid,
-        matterId,
-        documentIds: [],
-        classification,
-        purpose: input.purpose,
-        blocked,
-        ...(reason === undefined ? {} : { reason }),
-        ...(result.outcome === "ok" ? { text: result.text } : {}),
-        outbound: {
-          body: result.outbound.body,
-          metadata: { classification, provider: PROVIDER_ID, purpose: result.outbound.purpose, redactionCounts: result.outbound.redactionCounts },
-        },
-        usageLogId: result.usageLogId,
-        traceId: result.traceId,
-        createdAt,
-      })
-    }), { outputRef, usageLogId: result.usageLogId })
-    audit.committed()
-
-    return {
+    const text = result.outcome === "ok" ? result.text : undefined
+    // An ok answer was handed over by onAnswer; anything else (no text) is not_assessed at once.
+    const graded: Grounding = { ...(await (grounding ?? groundingOf(text, null, partyNames))), policy: policyOf(result.outbound.system) }
+    const response: CommitteeBrainResponse = {
       outputId: outputRef.id,
       blocked,
       ...(reason === undefined ? {} : { reason }),
-      ...(result.outcome === "ok" ? { text: result.text } : {}),
+      ...(text === undefined ? {} : { text }),
       classification,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, costMicroUsd: result.costMicroUsd },
       traceId: result.traceId,
+      accounting: result.accounting,
+      grounding: graded,
+      advisory: isAdvisory(graded),
+      model: result.model,
+      modelReported: result.modelReported,
+      modelMatch: modelMatches(result.model, result.modelReported),
     }
+    const row = outputRow({
+      outputRef,
+      caller,
+      matterId,
+      classification,
+      purpose: input.purpose,
+      blocked,
+      reason,
+      text,
+      outbound: result.outbound,
+      usageLogId: result.usageLogId,
+      traceId: result.traceId,
+      accounting: result.accounting,
+      createdAt: Math.floor(clock()),
+      grounding: graded,
+      model: result.model,
+      modelReported: result.modelReported,
+    })
+    await publish({ operation, audit, outputRef, row, response, usageLogId: result.usageLogId, traceId: result.traceId })
+    return response
   },
 }
 
@@ -270,7 +742,8 @@ export type AiUsageResponse = {
   spentPkr: number | null
   pkrPerUsd: number | null
   percentUsed: number | null
-  calls: { ok: number; failed: number; blocked: number }
+  /** `reconciled`: calls whose usage the lease reconciler recorded because the call's own commit never did (Codex P2 on PR #40). */
+  calls: { ok: number; failed: number; blocked: number; reconciled: number }
   inputTokens: number
   outputTokens: number
   alerts: Array<{ threshold: number; at: string }>
@@ -332,7 +805,12 @@ export const getAiUsageOp: FirmOperation<AiUsageResponse> = {
       spentPkr: rate === null ? null : Math.round((spent * rate) / 10_000) / 100,
       pkrPerUsd: rate,
       percentUsed: budget === null ? null : Math.round((spent * 10_000) / budget) / 100,
-      calls: { ok: count(total.get("calls.ok")), failed: count(total.get("calls.failed")), blocked: count(total.get("calls.blocked")) },
+      calls: {
+        ok: count(total.get("calls.ok")),
+        failed: count(total.get("calls.failed")),
+        blocked: count(total.get("calls.blocked")),
+        reconciled: count(total.get("calls.reconciled")),
+      },
       inputTokens: count(total.get("inputTokens")),
       outputTokens: count(total.get("outputTokens")),
       alerts: alertSnaps.flatMap((snap, i) => {

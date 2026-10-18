@@ -23,8 +23,12 @@
 # server options rather than stored in PGDATA. Then, over the container's local socket as OS user
 # postgres (peer auth; no old password needed, nothing on argv):
 #   - re-hashes the bootstrap superuser's password as SCRAM from the postgres_password secret file;
+#   - runs docker/postgres/apply-annex-a.sh: applies the Annex A corpus contract (postgres/ddl 001 +
+#     003, audit F19) as the superuser, so a volume created before F19 gets it and an existing one is
+#     brought up to date (idempotent);
 #   - runs docker/postgres/provision-roles.sh: creates or updates the app and migration roles,
-#     moves existing application tables to the migration role and grants the app role DML only.
+#     moves existing application tables to the migration role and grants the app role DML only;
+#     Annex A stays the superuser's, and the app role becomes a corpus_writer member (SET ROLE only).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -60,6 +64,7 @@ docker compose exec -T -u postgres postgres \
 SET password_encryption = 'scram-sha-256';
 ALTER ROLE :"role" WITH PASSWORD :'newpw';
 SQL
+docker compose exec -T -u postgres postgres /docker-entrypoint-initdb.d/15-apply-annex-a.sh
 docker compose exec -T -u postgres postgres /docker-entrypoint-initdb.d/20-provision-roles.sh
 docker compose down
-echo "Rotated password for role $POSTGRES_USER; provisioned $MIGRATE_DB_USER and $APP_DB_USER; TLS on."
+echo "Rotated password for role $POSTGRES_USER; Annex A applied; provisioned $MIGRATE_DB_USER and $APP_DB_USER; TLS on."

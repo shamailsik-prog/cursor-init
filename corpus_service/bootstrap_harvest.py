@@ -5,6 +5,9 @@ No Docker/Postgres required. Writes JSONL + PDFs under ./live/.
   - public government / open sites only
   - PakistanLawSite is NOT fetched here (licensed_api / import_folder only)
   - login scraping is never used
+  - audit F25: every request goes through scraper.net.fetch_policy, one policy per source (https,
+    that source's hosts on 443, public addresses only, each redirect re-checked). A URL the policy
+    refuses is recorded as "boundary_refused" and never requested, robots.txt included.
 """
 
 from __future__ import annotations
@@ -19,8 +22,9 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
-import httpx
 from bs4 import BeautifulSoup
+
+from scraper.net import fetch_policy
 
 ROOT = Path(__file__).resolve().parent
 LIVE = ROOT / "live"
@@ -52,18 +56,20 @@ def ensure_dirs() -> None:
 
 
 class RobotsGate:
-    def __init__(self, client: httpx.Client) -> None:
-        self.client = client
+    """robots.txt per origin. Only asked about a URL the source's fetch policy already allows, and
+    it fetches robots.txt through that same policy-bound client."""
+
+    def __init__(self) -> None:
         self._parsers: dict[str, RobotFileParser | None] = {}
 
-    def allowed(self, url: str) -> bool:
+    def allowed(self, url: str, client: fetch_policy.SyncPolicyFetcher) -> bool:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if origin not in self._parsers:
             rp = RobotFileParser()
             robots_url = urljoin(origin + "/", "robots.txt")
             try:
-                r = self.client.get(robots_url, timeout=20)
+                r = client.get(robots_url)
                 if r.status_code >= 400:
                     self._parsers[origin] = None
                 else:
@@ -80,12 +86,14 @@ class RobotsGate:
 class Harvester:
     def __init__(self) -> None:
         ensure_dirs()
-        self.client = httpx.Client(
-            headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*"},
-            follow_redirects=True,
-            timeout=60.0,
-        )
-        self.robots = RobotsGate(self.client)
+        headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*"}
+        # One fetch-policy client per source (audit F25); never a client of our own.
+        self.fetchers = {
+            "PakistanCode": fetch_policy.sync_fetcher_for("PakistanCode", headers=headers),
+            "NasirLawSite": fetch_policy.sync_fetcher_for("NasirLawSite", headers=headers),
+            "NationalAssembly": fetch_policy.sync_fetcher_for("NationalAssembly", headers=headers),
+        }
+        self.robots = RobotsGate()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.prov_path = LIVE / "provenance" / f"harvest_{stamp}.jsonl"
         self.counts = {
@@ -94,25 +102,40 @@ class Harvester:
             "errors": 0,
             "pdfs": 0,
             "pages": 0,
+            "refused": 0,
         }
 
     def close(self) -> None:
-        self.client.close()
+        for fetcher in self.fetchers.values():
+            fetcher.close()
 
     def record(self, row: dict) -> None:
         with self.prov_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    def get(self, url: str) -> httpx.Response | None:
-        if not self.robots.allowed(url):
+    def get(self, url: str, source: str) -> fetch_policy.FetchedResponse | None:
+        client = self.fetchers[source]
+        if not client.allows(url):  # logged by the boundary; never requested
+            self.counts["refused"] += 1
+            self.record(
+                {"event": "boundary_refused", "source": source, "url": fetch_policy.redact_url(url), "fetched_at": now_iso()}
+            )
+            return None
+        if not self.robots.allowed(url, client):
             self.counts["skipped_robots"] += 1
             self.record({"event": "robots_skip", "url": url, "fetched_at": now_iso()})
             return None
         try:
             time.sleep(RATE_SECONDS)
-            r = self.client.get(url)
+            r = client.get(url)
             self.counts["fetched"] += 1
             return r
+        except fetch_policy.FetchRefused as e:  # a redirect hop, an address, the size or the deadline
+            self.counts["refused"] += 1
+            self.record(
+                {"event": "boundary_refused", "source": source, "url": e.url, "reason": e.reason, "fetched_at": now_iso()}
+            )
+            return None
         except Exception as e:
             self.counts["errors"] += 1
             self.record(
@@ -124,7 +147,7 @@ class Harvester:
         index = (
             "https://pakistancode.gov.pk/english/LGu0xAD.php?alp=A&page=1&action=active"
         )
-        r = self.get(index)
+        r = self.get(index, "PakistanCode")
         if r is None or r.status_code != 200:
             self.counts["errors"] += 1
             self.record(
@@ -166,7 +189,7 @@ class Harvester:
         )
 
         for title, detail_url in acts[:MAX_PC_STATUTES]:
-            dr = self.get(detail_url)
+            dr = self.get(detail_url, "PakistanCode")
             if dr is None or dr.status_code != 200:
                 continue
             dsoup = BeautifulSoup(dr.text, "lxml")
@@ -203,7 +226,7 @@ class Harvester:
                 "trust_level": "trusted",
             }
             if pdf:
-                pr = self.get(pdf)
+                pr = self.get(pdf, "PakistanCode")
                 if pr is not None and pr.status_code == 200 and pr.content[:4] == b"%PDF":
                     pdf_path = LIVE / "PakistanCode" / "pdfs" / f"{safe}.pdf"
                     pdf_path.write_bytes(pr.content)
@@ -227,7 +250,7 @@ class Harvester:
             if url in seen:
                 continue
             seen.add(url)
-            r = self.get(url)
+            r = self.get(url, "NasirLawSite")
             if r is None or r.status_code != 200:
                 continue
             soup = BeautifulSoup(r.text, "lxml")
@@ -266,7 +289,7 @@ class Harvester:
 
     def harvest_national_assembly(self) -> None:
         index = "https://na.gov.pk/en/acts-tenure.php"
-        r = self.get(index)
+        r = self.get(index, "NationalAssembly")
         if r is None or r.status_code != 200:
             self.counts["errors"] += 1
             self.record(
@@ -306,7 +329,7 @@ class Harvester:
         )
 
         for title, pdf_url in pdfs[:MAX_NA_PDFS]:
-            pr = self.get(pdf_url)
+            pr = self.get(pdf_url, "NationalAssembly")
             if pr is None or pr.status_code != 200:
                 continue
             if pr.content[:4] != b"%PDF":

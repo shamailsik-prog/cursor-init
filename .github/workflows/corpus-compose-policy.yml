@@ -1,8 +1,14 @@
 name: corpus compose policy (F30)
+# Cost: a draft PR does not run this job; marking it ready for review does (when these paths changed). A PR converted
+# to draft starts a run whose job skips, and that run cancels the one in flight (concurrency below).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "corpus_service/**"
+      # Annex A DDL: postgres init applies it (docker/postgres/apply-annex-a.sh), so a change re-runs
+      # the compose e2e (audit F19, PR 2b).
+      - "postgres/ddl/**"
       - "ci_gates/check_compose_policy.py"
       - "ci_gates/test_check_compose_policy.py"
       - "ci_gates/fixtures/**"
@@ -11,8 +17,13 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A newer event on a PR (a push, or conversion to draft) supersedes the older run; pushes to main run to the end.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   policy-e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -63,7 +74,7 @@ jobs:
           done
           docker compose down --remove-orphans >/dev/null 2>&1 || true
           echo "OK: compose refuses to start without any one of: $vars"
-      - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials (real stores + the app's own code path)
+      - name: E2E - store TLS, Redis ACLs, least-privilege roles, per-service credentials, Annex A at init and publishing as corpus_writer (real stores + the app's own code path)
         run: bash corpus_service/tests/e2e/store_security_e2e.sh
-      - name: E2E - upgrade a pre-F30 legal/legal volume in place (TLS on, credentials rotated, roles provisioned, data kept)
+      - name: E2E - upgrade a pre-F30 legal/legal volume in place (TLS on, credentials rotated, roles provisioned, Annex A applied, data kept)
         run: bash corpus_service/tests/e2e/upgrade_e2e.sh

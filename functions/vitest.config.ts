@@ -8,7 +8,12 @@ export default defineConfig({
     // Spec P3-20: fails any test in which functions/src writes a registry collection without bumping the registry version.
     setupFiles: ["test/setup/registryWriteRecorder.ts"],
     // The Gate G-2 suite runs once, inside `npm run gate:g2` (ci_gates/gate_g2.sh sets G2_GATE=1), not again in test:emu.
-    exclude: process.env.G2_GATE === "1" ? [] : ["test/g2.cross-firm.test.ts"],
+    // The F05 authority suites need real Postgres and run only in `npm run test:f05-authority` (F05_AUTHORITY_SUITE=1,
+    // plan D14); there a missing SIKANDER_POSTGRES_URL fails the run (test/corpusPg.ts), it never skips.
+    exclude: [
+      ...(process.env.G2_GATE === "1" ? [] : ["test/g2.cross-firm.test.ts"]),
+      ...(process.env.F05_AUTHORITY_SUITE === "1" ? [] : ["test/**/*.pg.test.ts", "test/f05-*.e2e.emu.test.ts"]),
+    ],
     // firebase-tools' and the client SDK's punycode import warns on every worker start (DEP0040); nothing here uses it.
     poolOptions: { forks: { execArgv: ["--disable-warning=DEP0040"] } },
     // Emulator round-trips (first gRPC connect, 1s revocation wait) exceed the 5s default on cold start.

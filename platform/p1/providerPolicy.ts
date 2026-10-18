@@ -1,5 +1,6 @@
 import dpaSeed from "@/data/provider_dpa.json"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { residualPII, residualTotal } from "@/platform/p1/residualPII"
 import {
   classificationRank,
   isClassification,
@@ -126,16 +127,27 @@ export function providerAllowedFor(
 }
 
 /**
- * Rank >= 3 obligation check: the outbound body and the trace metadata that is
- * returned and persisted (purpose) carry no PII the mask would still redact.
+ * Rank >= 3 obligation check (audit F15, spec ruling 6): the outbound body and the trace metadata that is returned and
+ * persisted (purpose) carry no PII the mask would still redact, AND the independent residual detector (`residualPII`:
+ * identifier-length digit runs, labelled identifiers, addresses, parentage) finds nothing in them. Passing is a
+ * minimisation check, not proof of anonymity (see maskOutboundPII.ts).
+ *
+ * Audit F16 (spec ruling 3): when the request carries role-separated `messages`, every user and assistant message's
+ * content is checked the same way. The leading system message is not (review round, R3a): it is immutable platform text,
+ * not user data, and the caller verifies it against the registry before dispatch (`verifySystemMessage`); checking it
+ * would let a party name equal to one of its words block every privileged call. Any other system message is checked
+ * like a turn (the send-time check refuses one anyway).
  */
 export function assertMinimised(
-  request: { body: string; metadata: { purpose: string } },
+  request: { body?: string; messages?: readonly { role?: string; content: string }[]; metadata: { purpose: string } },
   partyNames: string[] | undefined
 ): boolean {
-  for (const text of [request.body, request.metadata.purpose]) {
+  const turns = (request.messages ?? []).filter((m, i) => !(i === 0 && m.role === "system"))
+  const texts = [...(request.body === undefined ? [] : [request.body]), ...turns.map((m) => m.content), request.metadata.purpose]
+  for (const text of texts) {
     const again = maskOutboundPII(text, { partyNames })
     if (again.redactions.some((r) => r.count > 0)) return false
+    if (residualTotal(residualPII(text)) > 0) return false
   }
   return true
 }

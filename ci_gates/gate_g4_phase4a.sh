@@ -8,8 +8,9 @@
 #    viaApi test
 # 2. disable-every-layer boot checks (functions/test/d1.boot.test.ts and p2.boot.test.ts; no emulator needed).
 #    D4 has no layer flag in Cloud Functions (like P1, P3-60), so nothing of D4 can be switched off at boot; the D4
-#    boot assertion (functions/test/d4.boot.test.ts: the twelve D4 routes, the production EMPTY_AUTHORITY_STORE and
-#    the index exemptions) is a named test in step 3
+#    boot assertion (functions/test/d4.boot.test.ts: the twelve D4 routes, the production EMPTY_AUTHORITY_STORE when
+#    no corpus reader is configured, the store selection of audit F05, and the index exemptions) is a named test in
+#    step 3
 # 3. the named Phase 4a tests, selected by exact full name (the gate counts them from the name arrays below), under
 #    the Auth and Firestore emulators:
 #    a. functions/test: d4.boot.test.ts, d4.gate.test.ts, d4.doctypes.test.ts, d4.drafts.emu.test.ts, d4.gate.emu.test.ts
@@ -17,8 +18,9 @@
 #        cores (an overruling by a larger bench is OVERRULED; a 2015 check against a 2018 amendment is
 #        TEMPORAL_MISMATCH with the text in force; no history is TEMPORAL_UNAVAILABLE, never a silent pass), the
 #        jurisdiction on the section lookup (E-39(1)), NOT_ASSESSED (never OK) when no citation and no temporal check
-#        ran (audit F06), the empty production authority store (P4-3) and the test seam refused when NODE_ENV is
-#        production
+#        ran (audit F06), the empty production authority store (P4-3), the test seam refused when NODE_ENV is
+#        production, and an authority that cannot answer read as UNVERIFIED / TEMPORAL_UNAVAILABLE, never OK (audit
+#        F05; the corpus adapter itself runs in the gate-g0 authority-f05 job, against real Postgres)
 #      - the document types (E-15, R2): only VERIFIED rows are selectable, the court rule, a NON_FORUM type allowed
 #        on any matter, a family court entry
 #      - the draft store (P4-4, P4-5, P4-12): create (the court check, the classification that only rises, the
@@ -60,6 +62,12 @@ D4_BOOT_TESTS=(
   'D4 boot (P4-3, P4-10) the entry point exports api, and the router built with every layer flag off serves exactly the twelve D4 routes, each kind general'
   "D4 boot (P4-3, P4-10) the production authority store is EMPTY_AUTHORITY_STORE: a fresh load of the gate's modules runs on it"
   'D4 boot (P4-3, P4-10) firestore.indexes.json exempts the stored text and findings from single-field indexing'
+  # F05: which authority store the gate runs on (the configured corpus reader, else the empty store)
+  'F05 authority store selection (plan Task 8, D8, D16) with a valid loopback config the active store is a PgAuthorityStore, memoised per config'
+  'F05 authority store selection (plan Task 8, D8, D16) an invalid config falls back to the empty store and logs d4.authority_not_configured once per reason'
+  'F05 authority store selection (plan Task 8, D8, D16) in production a plaintext URL is the empty store'
+  'F05 authority store selection (plan Task 8, D8, D16) a test store wins over the environment'
+  'F05 authority store selection (plan Task 8, D8, D16) resetCorpusAuthorityStoreForTests refuses in production'
 )
 
 # --- functions/test/d4.gate.test.ts (the pure gate and the authority port; no emulator) --------------------
@@ -124,6 +132,24 @@ GATE_UNIT_TESTS=(
   'the test seam (P4-3) activeAuthorityStore is the empty store until a test sets one'
   'the test seam (P4-3) returns the store a test set, and the empty store again after null'
   'the test seam (P4-3) throws when NODE_ENV is production, and leaves the active store alone'
+  # F05: an authority that cannot answer reads as not proven, never OK
+  'runGate: an unavailable authority fails closed (F05) AuthorityUnavailableError carries its reason, a fixed name and a message with no driver text'
+  'runGate: an unavailable authority fails closed (F05) runGate: a store that throws AuthorityUnavailableError on findJudgment gives UNVERIFIED with judgmentId null'
+  'runGate: an unavailable authority fails closed (F05) runGate: a store that throws AuthorityUnavailableError on listTreatments gives UNVERIFIED with the found judgmentId'
+  'runGate: an unavailable authority fails closed (F05) runGate: a store that throws AuthorityUnavailableError on getSectionAsAt gives TEMPORAL_UNAVAILABLE with inForceText null'
+  'runGate: an unavailable authority fails closed (F05) runGate: an unavailable lookup keeps the dedup: the same unreachable citation written twice is one finding'
+  'runGate: an unavailable authority fails closed (F05) runGate: any other error from the store rejects (it is not swallowed)'
+  'runGate: an unavailable authority fails closed (F05) runGate: unavailable lookups never give OK, and a run with nothing to check stays NOT_ASSESSED'
+  # F05 (#51 R1 D-1, plan D22): an overruling still pending review is reported, never hidden, and never hides another
+  'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling alone leaves the found judgment UNVERIFIED, never VERIFIED (ruling 3)'
+  'runGate: a pending overruling (F05, #51 R1 D-1) a pending overruling never hides a qualifying one: a larger-bench overruling stays OVERRULED (P4-2)'
+  'runGate: a pending overruling (F05, #51 R1 D-1) PENDING_OVERRULING is an overruling whose bench cannot be relied on, and is frozen'
+  # F05 (#51 R1 D-7, plan D24): a gate run's authority lookups share a 60 s budget, then fail closed
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) AUTHORITY_BUDGET_MS is 60 s, at most half the function timeout'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) a lookup still running when the budget runs out is cut off: the citation is UNVERIFIED, and every later citation and check is UNVERIFIED / TEMPORAL_UNAVAILABLE without a lookup'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) a store that never answers: a run with 25 citations and 3 checks settles at the budget, every finding unproven'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) the budget is per run: the next run starts with all of it'
+  'runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24) spending the budget logs d4.authority_unavailable {reason: budget} once per run, and a store error still propagates unchanged'
 )
 
 # --- functions/test/d4.doctypes.test.ts (the verified document-type catalogue and the court rule; no emulator) ---

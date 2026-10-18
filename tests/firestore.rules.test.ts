@@ -965,6 +965,111 @@ describe("R-2 gaps — matter-derived collections require membership (L17 §1.5 
   })
 })
 
+describe("Audit F14 — a job row follows its matter's current label, not only the label it was written with", () => {
+  const CLERK = { firmId: "firmA", role: "clerk", clearanceLevel: "confidential" }
+  const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
+
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore()
+      await setDoc(doc(db, "matters", "f14m"), { firmId: "firmA", title: "F14", classification: "internal" })
+      for (const uid of ["f14-clerk", "f14-assoc"]) {
+        await setDoc(doc(db, "matter_members", `f14m_${uid}`), { firmId: "firmA", matterId: "f14m", userId: uid })
+      }
+      // The transitional Next.js writer's shape (services/d1-6/uploadDocument.ts -> repos.jobs.create), at the matter's label.
+      const job = { firmId: "firmA", jobType: "ocr", documentId: "d", idempotencyKey: "k", matterId: "f14m", classification: "internal" }
+      await setDoc(doc(db, "jobs", "f14job"), { ...job, id: "f14job" })
+      await setDoc(doc(db, "jobs", "f14jobOrphan"), { ...job, id: "f14jobOrphan", matterId: "f14mMissing" })
+      await setDoc(doc(db, "matter_members", "f14mMissing_f14-clerk"), { firmId: "firmA", matterId: "f14mMissing", userId: "f14-clerk" })
+      await setDoc(doc(db, "jobs", "f14jobLoose"), { ...job, id: "f14jobLoose", matterId: null, classification: "confidential" })
+      // R1-D6: a row naming another firm's matter, with a membership forged on it (only the Admin SDK can write one).
+      await setDoc(doc(db, "matters", "f14mOtherFirm"), { firmId: "firmB", title: "F14 other firm", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14mOtherFirm_f14-clerk"), { firmId: "firmA", matterId: "f14mOtherFirm", userId: "f14-clerk" })
+      await setDoc(doc(db, "jobs", "f14jobCrossFirmMatter"), { ...job, id: "f14jobCrossFirmMatter", matterId: "f14mOtherFirm" })
+      // O-76 (the download door): a matter document and its version, at the matter's label, on a matter of their own.
+      await setDoc(doc(db, "matters", "f14docm"), { firmId: "firmA", title: "F14 documents", classification: "internal" })
+      for (const uid of ["f14-clerk", "f14-assoc"]) {
+        await setDoc(doc(db, "matter_members", `f14docm_${uid}`), { firmId: "firmA", matterId: "f14docm", userId: uid })
+      }
+      const document = { firmId: "firmA", matterId: "f14docm", classification: "internal", storagePath: "r2://f14", contentHash: "f14", isImmutable: true }
+      await setDoc(doc(db, "documents", "f14doc"), document)
+      await setDoc(doc(db, "document_versions", "f14doc_1"), { firmId: "firmA", matterId: "f14docm", documentId: "f14doc", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      await setDoc(doc(db, "documents", "f14docOrphan"), { ...document, matterId: "f14docmMissing" })
+      await setDoc(doc(db, "document_versions", "f14docOrphan_1"), { firmId: "firmA", matterId: "f14docmMissing", documentId: "f14docOrphan", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14docmMissing_f14-clerk"), { firmId: "firmA", matterId: "f14docmMissing", userId: "f14-clerk" })
+      // C1: a firm-A document and its version naming firm B's matter, which the forged membership above makes "member".
+      await setDoc(doc(db, "documents", "f14docCrossFirm"), { ...document, matterId: "f14mOtherFirm" })
+      await setDoc(doc(db, "document_versions", "f14docCrossFirm_1"), { firmId: "firmA", matterId: "f14mOtherFirm", documentId: "f14docCrossFirm", version: 1, storagePath: "r2://f14", createdBy: "f14-assoc", classification: "internal" })
+      // R5-D2: a firm-A draft and its version on firm B's matter (the forged membership above), and an own-firm control.
+      await setDoc(doc(db, "matters", "f14draftm"), { firmId: "firmA", title: "F14 drafts", classification: "internal" })
+      await setDoc(doc(db, "matter_members", "f14draftm_f14-clerk"), { firmId: "firmA", matterId: "f14draftm", userId: "f14-clerk" })
+      const draft = { firmId: "firmA", classification: "internal", title: "F14 draft", status: "draft", createdBy: "f14-assoc" }
+      await setDoc(doc(db, "drafts", "f14draftOwn"), { ...draft, matterId: "f14draftm" })
+      await setDoc(doc(db, "draft_versions", "f14draftOwn_1"), { firmId: "firmA", matterId: "f14draftm", draftId: "f14draftOwn", version: 1, classification: "internal" })
+      await setDoc(doc(db, "drafts", "f14draftCrossFirm"), { ...draft, matterId: "f14mOtherFirm" })
+      await setDoc(doc(db, "draft_versions", "f14draftCrossFirm_1"), { firmId: "firmA", matterId: "f14mOtherFirm", draftId: "f14draftCrossFirm", version: 1, classification: "internal" })
+      // Unchanged semantics: a draft whose matter cannot be read (with a forged membership), and one naming no matter.
+      await setDoc(doc(db, "drafts", "f14draftOrphan"), { ...draft, matterId: "f14docmMissing" })
+      await setDoc(doc(db, "draft_versions", "f14draftOrphan_1"), { firmId: "firmA", matterId: "f14docmMissing", draftId: "f14draftOrphan", version: 1, classification: "internal" })
+      await setDoc(doc(db, "drafts", "f14draftNoMatter"), { ...draft, matterId: null })
+      await setDoc(doc(db, "draft_versions", "f14draftNoMatter_1"), { firmId: "firmA", matterId: null, draftId: "f14draftNoMatter", version: 1, classification: "internal" })
+    })
+  })
+
+  it("drafts and draft_versions naming another firm's matter are denied even with a (forged) membership of that matter; the own-firm draft reads (R5-D2)", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "drafts", "f14draftOwn")))
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "draft_versions", "f14draftOwn_1")))
+    // Otherwise unchanged: a matter that cannot be read still denies, and so does a draft naming no matter.
+    for (const [collection, id] of [["drafts", "f14draftOrphan"], ["draft_versions", "f14draftOrphan_1"], ["drafts", "f14draftNoMatter"], ["draft_versions", "f14draftNoMatter_1"]]) {
+      await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), collection, id)))
+    }
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "drafts", "f14draftCrossFirm")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "draft_versions", "f14draftCrossFirm_1")))
+  })
+
+  it("documents and document_versions naming another firm's matter are denied even with a (forged) membership of that matter (C1)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14docCrossFirm")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14docCrossFirm_1")))
+  })
+
+  it("a row naming another firm's matter is denied even with a (forged) membership of that matter (R1-D6)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobCrossFirmMatter")))
+  })
+
+  it("documents and document_versions: a member cleared for the row reads it until the matter is raised above their clearance (O-76)", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14doc")))
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14doc_1")))
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "matters", "f14docm"), { classification: "privileged" })
+    })
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14doc")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14doc_1")))
+    // A member cleared for the raised label still reads both.
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "documents", "f14doc")))
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "document_versions", "f14doc_1")))
+  })
+
+  it("documents and document_versions whose matter cannot be read are denied, even to a member cleared for the row (O-76)", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "documents", "f14docOrphan")))
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "document_versions", "f14docOrphan_1")))
+  })
+
+  it("a member cleared for the row's label reads it until the matter is raised above their clearance; a member cleared for the raised label still reads it", async () => {
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14job")))
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "matters", "f14m"), { classification: "privileged" })
+    })
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14job")))
+    await assertSucceeds(getDoc(doc(await authed("f14-assoc", ASSOC), "jobs", "f14job")))
+    // A loose-vault row (matterId null) names no matter: its rule is unchanged.
+    await assertSucceeds(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobLoose")))
+  })
+
+  it("a matter-bound row whose matter cannot be read is denied, even to a member cleared for the row", async () => {
+    await assertFails(getDoc(doc(await authed("f14-clerk", CLERK), "jobs", "f14jobOrphan")))
+  })
+})
+
 describe("L17.6 #41 — accounts reads the intimation register only", () => {
   const ACCOUNTS = { firmId: "firmA", role: "accounts", clearanceLevel: "privileged-restricted" }
   const ASSOC = { firmId: "firmA", role: "associate", clearanceLevel: "privileged" }
