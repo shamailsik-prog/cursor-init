@@ -365,8 +365,9 @@ class _Batch:
         try:
             await self._run()
         except (Exception, *outcomes.INTERRUPTIONS) as exc:
-            await self._alerts_after_failure(exc)  # R11: a failed batch alerts too (review round 1)
+            await self._evaluate_alerts(exc)  # R11: a failed batch alerts too (review round 1)
             raise
+        await self._evaluate_alerts(None)
 
     async def _run(self) -> None:
         async with SessionLocal() as db:
@@ -387,7 +388,6 @@ class _Batch:
                     self.counts.tally.item_failed(exc)
                 await self._give_back(exc)
                 raise
-            await self._alerts(db)
 
     # -- R3 ------------------------------------------------------------------------------------
     async def _reclaim(self) -> None:
@@ -648,10 +648,12 @@ class _Batch:
             logger.warning("F27: dropping the failed embedding batch's connection: %s", outcomes.describe_error(exc))
 
     # -- R11 -----------------------------------------------------------------------------------
-    async def _alerts_after_failure(self, exc: BaseException) -> None:
-        """R11 for a batch that failed (review round 1, Bugbot 4307214725): evaluated in a fresh session
-        (the batch's own may be broken). An alert that cannot be evaluated is logged and never replaces
-        the batch's own exception; only a new interruption propagates (F28 R23)."""
+    async def _evaluate_alerts(self, exc: Optional[BaseException]) -> None:
+        """R11 on every keyed batch, failed ones included (review round 1, Bugbot 4307214725 and
+        4307237211), in a fresh session (a failed batch's own may be rolled back or invalidated). An
+        alert that cannot be evaluated is logged at ERROR: it never fails a batch whose work stands and
+        never replaces a failed batch's own exception (``exc``); only a new interruption propagates
+        (F28 R23)."""
         try:
             async with SessionLocal() as db:
                 await self._alerts(db)
@@ -659,8 +661,8 @@ class _Batch:
             if outcomes.is_interruption(alert_exc):
                 raise
             logger.error(
-                "F27: could not evaluate the embedding alerts after the batch failed (%s); the batch's own error: %s",
-                outcomes.describe_error(alert_exc), outcomes.describe_error(exc),
+                "F27: could not evaluate the embedding alerts (%s)%s", outcomes.describe_error(alert_exc),
+                "" if exc is None else f"; the batch failed with its own error: {outcomes.describe_error(exc)}",
             )
 
     async def _alerts(self, db) -> None:

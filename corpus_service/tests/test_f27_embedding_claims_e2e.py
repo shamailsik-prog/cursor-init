@@ -718,6 +718,29 @@ def test_r11_alerts_that_cannot_be_evaluated_never_replace_a_failed_batchs_own_e
         [(r.status, r.error_message) for r in record])
     assert any("could not evaluate the embedding alerts" in r.getMessage() and "22012" in r.getMessage()
                for r in caplog.records), [r.getMessage() for r in caplog.records][-5:]
+
+
+def test_r11_alerts_that_cannot_be_evaluated_never_fail_a_batch_whose_work_succeeded(corpus_db, monkeypatch, caplog):
+    """Review round 1 (adopted from Autofix 6cbed24): the batch embeds its row, then the alert query
+    fails (22012). The row's vector and the batch's `embed` record stand and Celery records SUCCESS;
+    the alert failure is logged at ERROR. At bb02611 the alert error failed a batch whose work had
+    already committed."""
+    from scraper.tasks import embeddings
+
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    monkeypatch.setattr(embeddings, "ALERT_STATE_SQL", "SELECT now(), now(), 1 / (CAST(:cap_plus_one AS int) * 0)")
+    Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("process-embeddings")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    assert queue_by_row()[1] == ("completed", 0, None, True), queue_by_row()
+    assert [r.status for r in jobs("embedding_queue", job_type="embed")] == ["completed"]
+    assert any("could not evaluate the embedding alerts" in r.getMessage() and "22012" in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records][-5:]
 def test_r11_a_stale_backlog_and_new_dead_letters_raise_the_corpus_alert(corpus_db, monkeypatch, caplog):
     """A row queued two days ago is waiting for its retry, and a row whose record is gone is next.
     On main nothing alerted (and the waiting row was retried at once). Here the batch dead-letters
