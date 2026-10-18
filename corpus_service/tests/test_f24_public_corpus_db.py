@@ -473,3 +473,58 @@ def test_e_statement_timeout_cancels_a_slow_query(client, corpus, corpus_db, mon
     # The timeout is transaction-local: the next request runs normally.
     items, _ = page_of(client.get("/search", params={"q": MARKER, "limit": 5}), CASE_SUMMARY_KEYS)
     assert len(items) == 5
+
+
+def test_e2_public_transaction_is_read_only_and_its_timeout_never_stays_on_a_pooled_connection(corpus):
+    """Spec ruling 6, review focus. Added at GREEN as a regression guard (not part of the RED
+    record: main has no public_corpus helper, so on main this fails at the import below).
+
+    The test engines are NullPool, so a timeout leaked onto a connection could never be seen
+    through them. Production pools connections (database.py, pool_size=20). Here the app's sessions
+    are bound to a pooled engine with exactly one connection, so the connection checked after a
+    public read is the one that ran it: a session-level SET (set_config(..., false)) would still be
+    on it, a transaction-local one is gone. Inside the public transaction, writes are refused."""
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from scraper import database
+    from scraper import public_corpus as pc
+    from scraper.config import asyncpg_engine_args
+
+    async def go():
+        clean_url, connect_args = asyncpg_engine_args(database.engine.url.render_as_string(hide_password=False))
+        pooled = create_async_engine(clean_url, pool_size=1, max_overflow=0, connect_args=connect_args)
+        database.SessionLocal.configure(bind=pooled)
+        try:
+            async with database.SessionLocal() as session:
+                baseline = (await session.execute(text("SHOW statement_timeout"))).scalar_one()
+                backend = (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+            assert baseline != "1234ms"
+
+            async with pc.public_read_session(1234) as session:
+                assert (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one() == backend
+                assert (await session.execute(text("SHOW statement_timeout"))).scalar_one() == "1234ms"
+                assert (await session.execute(text("SHOW transaction_read_only"))).scalar_one() == "on"
+
+            rows = await pc.fetch_rows(pc.search_cases_stmt(MARKER, None, 5), timeout_ms=1234)
+            assert len(rows) == 6  # limit + 1
+
+            async with database.SessionLocal() as session:
+                assert (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one() == backend
+                after = (await session.execute(text("SHOW statement_timeout"))).scalar_one()
+                read_only = (await session.execute(text("SHOW transaction_read_only"))).scalar_one()
+            assert after == baseline, f"statement_timeout {after!r} outlived the public transaction"
+            assert read_only == "off"
+
+            with pytest.raises(DBAPIError) as refused:
+                async with pc.public_read_session(1234) as session:
+                    await session.execute(
+                        text("UPDATE case_law_master SET view_count = view_count + 1 WHERE citation = :c"),
+                        {"c": "2099 SCMR 101"},
+                    )
+            assert "read-only transaction" in str(refused.value)
+        finally:
+            database.SessionLocal.configure(bind=database.engine)
+            await pooled.dispose()
+
+    asyncio.run(go())

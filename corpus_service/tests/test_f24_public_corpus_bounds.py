@@ -238,7 +238,10 @@ def test_detail_sql_reads_text_but_never_the_embedding():
 
 def test_search_sql_escapes_and_filters_published():
     sql = compiled(pc.search_cases_stmt("100%", None, 10))
-    assert "ILIKE '%%100\\%%%%' ESCAPE '\\'" in sql or "ILIKE '%100\\%%' ESCAPE '\\'" in sql, sql
+    assert sql.count("ILIKE '%100\\%%' ESCAPE '\\'") == 2, sql  # citation and title
+    # As sent to asyncpg, the pattern is a bind parameter, never spliced into the SQL text.
+    bound = str(pc.search_cases_stmt("100%", None, 10).compile(dialect=pg_asyncpg.dialect()))
+    assert "ILIKE $1::VARCHAR ESCAPE '\\'" in bound and "100" not in bound, bound
     assert "is_promoted IS true" in sql
     assert "trust_level IN ('trusted', 'review')" in sql
     statute_sql = compiled(pc.list_statutes_stmt("ab", None, 10))

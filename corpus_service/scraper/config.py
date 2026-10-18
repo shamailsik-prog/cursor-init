@@ -247,6 +247,17 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------------
+    # Public corpus API bounds (audit F24; scraper/public_corpus.py, scraper/rate_limit.py)
+    # ---------------------------------------------------------------------
+    PUBLIC_QUERY_TIMEOUT_MS: int = Field(default=3000, ge=100, le=60000, description="statement_timeout for each public request (SET LOCAL)")
+    PUBLIC_RATE_LIMIT_REQUESTS: int = Field(default=60, ge=1, le=100000, description="Requests per client address per window (token bucket capacity)")
+    PUBLIC_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, ge=1, le=86400, description="Seconds to refill a full bucket")
+    PUBLIC_RATE_LIMIT_MAX_CLIENTS: int = Field(default=10000, ge=100, le=1000000, description="Client addresses tracked at once (LRU)")
+    EXPORT_MAX_ROWS: int = Field(default=50000, ge=1, le=1000000, description="Hard row cap for /export/cases")
+    EXPORT_CHUNK_ROWS: int = Field(default=500, ge=10, le=10000, description="Rows fetched and encoded per export chunk")
+    EXPORT_QUERY_TIMEOUT_MS: int = Field(default=60000, ge=1000, le=600000, description="statement_timeout for an export")
+
+    # ---------------------------------------------------------------------
     # Blackletter / Pakistan Law Site - Dual Credential Failover
     # ---------------------------------------------------------------------
     # Seat A - Primary
