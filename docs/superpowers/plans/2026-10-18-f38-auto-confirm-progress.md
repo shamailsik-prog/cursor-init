@@ -116,4 +116,16 @@ The machine is shared; its load average ran 9 to 32 on 4 cores. Every failure be
 | Rules (`test:rules` file list) | 6/6 rules files; D1 2a 110/110 (7 new) | — |
 | Static | typecheck 0; eslint `--max-warnings 0 functions` 0; G-0 PASSED | — |
 
+### Review round 1: PR #84, Codex P1, fencing the checkpoint (spec R7a)
+
+| Test | Head `7249c25` (RED) | Fix `312d611` (GREEN) | Mutant: `checkFence` call deleted |
+| --- | --- | --- | --- |
+| Claim taken by another delivery before the checkpoint | stale attempt enqueued `c1` | no `c1`, no `lastRun`/`backlog` | fails |
+| Reclaimed and finished by a newer attempt | stale attempt enqueued `c1`, overwrote the newer attempt's record | no `c1`; the newer attempt's `drained` record stands | fails |
+| Dead-lettered at attempt 4 | stale attempt enqueued `c1` | no `c1`, no `lastRun`/`backlog` | fails |
+| F38 e2e and unit; auto-confirm; unmerge; every P2 file | — | 22 files, 212/212 | — |
+| `gate:g4:phase3c` steps 1–4 | — | routes 21 + 4, boot 4/4, **45 named passed, 0 failed**, lint | — |
+
+G-2 at load ~17, run side by side: the setup hooks time out (10 s) on branch and main alike, and the root file fails at import on both.
+
 The borrowed `node_modules` predates F03 and lacks `@aws-sdk/client-s3`. Every root test that imports `platform/documents` fails at import on branch and main alike.
