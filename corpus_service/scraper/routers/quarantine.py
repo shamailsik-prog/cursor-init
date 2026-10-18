@@ -134,7 +134,7 @@ def _fingerprint_of(decision: QuarantineDecision) -> str:
 # -- ruling 12: bounded inputs ----------------------------------------------------------------------
 # Ruling 22 (re-audit round 2, L7): the only letters or digits that are Default_Ignorable_Code_Point
 # (Unicode 15.0) are the Hangul fillers; they render as nothing, so they are not visible.
-_INVISIBLE_LETTERS: Final = frozenset("ᅟᅠㅤﾠ")
+_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0")
 _SEPARATORS: Final = ("Zl", "Zp")  # U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR
 
 

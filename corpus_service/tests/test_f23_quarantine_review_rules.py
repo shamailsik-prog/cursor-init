@@ -207,15 +207,15 @@ BAD_BODIES = {
     "unknown field": {**GOOD, "trust_level": "trusted"},
     "a list": [GOOD],
     # Re-audit round 2, L7 (spec ruling 22): no visible letter or digit, or a line/paragraph separator.
-    "reviewer a Hangul filler": {**GOOD, "reviewer": "ㅤ"},
-    "reviewer a halfwidth Hangul filler": {**GOOD, "reviewer": "ﾠ"},
-    "reviewer Hangul choseong and jungseong fillers": {**GOOD, "reviewer": "ᅟᅠ"},
-    "reviewer a braille blank": {**GOOD, "reviewer": "⠀"},
-    "reviewer combining marks only": {**GOOD, "reviewer": "́"},
+    "reviewer a Hangul filler": {**GOOD, "reviewer": "\u3164"},
+    "reviewer a halfwidth Hangul filler": {**GOOD, "reviewer": "\uffa0"},
+    "reviewer Hangul choseong and jungseong fillers": {**GOOD, "reviewer": "\u115f\u1160"},
+    "reviewer a braille blank": {**GOOD, "reviewer": "\u2800"},
+    "reviewer combining marks only": {**GOOD, "reviewer": "\u0301"},
     "reviewer punctuation only": {**GOOD, "reviewer": "-.-"},
-    "reviewer with a line separator": {**GOOD, "reviewer": "Reviewer F23"},
-    "reason with a paragraph separator": {**GOOD, "reason": "synthetic reason"},
-    "reason a braille blank": {**GOOD, "reason": "⠀⠀"},
+    "reviewer with a line separator": {**GOOD, "reviewer": "Reviewer\u2028F23"},
+    "reason with a paragraph separator": {**GOOD, "reason": "synthetic\u2029reason"},
+    "reason a braille blank": {**GOOD, "reason": "\u2800\u2800"},
     "reason punctuation only": {**GOOD, "reason": "..."},
 }
 BAD_KEYS = {"space": "has space", "too long": "k" * 129, "empty": "", "non-ascii": "clé".encode("utf-8"),
@@ -411,6 +411,39 @@ def test_validation_errors_are_bounded_and_never_echo_the_input(api, action):
 
 
 # ---------------------------------------------------------------------------------------------
+# re-audit round 2, L8 (spec ruling 25): invisible characters are written as escapes
+# ---------------------------------------------------------------------------------------------
+F23_FILES = (
+    "scraper/routers/quarantine.py", "scraper/quarantine_ledger.py", "migrations/002_quarantine_decisions.py",
+    "migrations/003_quarantine_decision_fingerprint.py", "tests/test_f23_quarantine_review_db.py",
+    "tests/test_f23_quarantine_review_rules.py", "tests/test_f23_review_hardening_db.py",
+    "tests/test_f23_review_body_guard_e2e.py",
+)
+_INVISIBLE_SO = {"\u2800"}  # braille pattern blank: category So, renders as nothing
+_INVISIBLE_LO = {"\u115f", "\u1160", "\u3164", "\uffa0"}  # Hangul fillers
+
+
+def test_f23_files_write_invisible_characters_as_escapes():
+    """A reader of the source must see every character it contains: no format, control, separator,
+    combining, private-use or unassigned character, and no blank-rendering letter or symbol, is
+    written literally in F23's code or tests (the re-audit found U+202E and U+200B in this file)."""
+    import unicodedata
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    found = []
+    for name in F23_FILES:
+        for number, line in enumerate((root / name).read_text(encoding="utf-8").splitlines(), 1):
+            for ch in line:
+                if ch.isascii() and (ch.isprintable() or ch == "\t"):
+                    continue
+                category = unicodedata.category(ch)
+                if category[0] not in "LNPS" or ch in _INVISIBLE_SO or ch in _INVISIBLE_LO:
+                    found.append(f"{name}:{number}: U+{ord(ch):04X} ({category})")
+    assert found == []
+
+
+# ---------------------------------------------------------------------------------------------
 # re-audit round 2, L6 (spec ruling 20): the request fingerprint
 # ---------------------------------------------------------------------------------------------
 def test_the_request_fingerprint_is_sha256_of_the_canonical_values():
@@ -420,7 +453,7 @@ def test_the_request_fingerprint_is_sha256_of_the_canonical_values():
     from scraper.routers.quarantine import request_fingerprint
 
     cases = [("promoted", "Reviewer F23-U (synthetic)", "Synthetic reason"),
-             ("rejected", "شمائل", "line one\nline two\t\"quoted\"")]
+             ("rejected", "\u0634\u0645\u0627\u0626\u0644", "line one\nline two\t\"quoted\"")]
     for decision, reviewer, reason in cases:
         canonical = json.dumps({"decision": decision, "reason": reason, "reviewer": reviewer},
                                sort_keys=True, separators=(",", ":"), ensure_ascii=True)

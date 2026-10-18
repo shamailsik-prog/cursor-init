@@ -509,24 +509,24 @@ def test_l6_migration_003_adds_the_fingerprint_and_a_row_without_one_replays_by_
 # L7: visually blank names and reasons
 # ---------------------------------------------------------------------------------------------
 BLANK_REVIEWERS = {
-    "Hangul filler U+3164": "ㅤ",
-    "halfwidth Hangul filler U+FFA0": "ﾠ",
-    "Hangul choseong and jungseong fillers": "ᅟᅠ",
-    "braille blank U+2800": "⠀",
-    "combining marks only": "́̈",
-    "line separator U+2028 inside": "Reviewer F23",
-    "paragraph separator U+2029 inside": "Reviewer F23",
-    "ideographic space and a filler": "　ㅤ　",
+    "Hangul filler U+3164": "\u3164",
+    "halfwidth Hangul filler U+FFA0": "\uffa0",
+    "Hangul choseong and jungseong fillers": "\u115f\u1160",
+    "braille blank U+2800": "\u2800",
+    "combining marks only": "\u0301\u0308",
+    "line separator U+2028 inside": "Reviewer\u2028F23",
+    "paragraph separator U+2029 inside": "Reviewer\u2029F23",
+    "ideographic space and a filler": "\u3000\u3164\u3000",
     "punctuation only": "...",
 }
 BLANK_REASONS = {
-    "braille blank U+2800": "⠀",
+    "braille blank U+2800": "\u2800",
     "punctuation only": "-- . --",
-    "paragraph separator U+2029 inside": "Checked again",
+    "paragraph separator U+2029 inside": "Checked\u2029again",
 }
 VISIBLE_REVIEWERS = {
-    "Urdu": "شمائل سکندر",
-    "decomposed accent": "Zaïd",
+    "Urdu": "\u0634\u0645\u0627\u0626\u0644 \u0633\u06a9\u0646\u062f\u0631",
+    "decomposed accent": "Zai\u0308d",
     "digits": "007",
 }
 
