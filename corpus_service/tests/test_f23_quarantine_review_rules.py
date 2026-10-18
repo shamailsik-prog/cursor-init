@@ -414,6 +414,25 @@ def test_validation_errors_are_bounded_and_never_echo_the_input(api, action):
     assert touched == []
 
 
+def test_the_422_renderer_encodes_and_bounds_whatever_an_error_carries():
+    """The body parser refuses a lone surrogate itself (json_invalid), so none reaches the renderer
+    through the body; the renderer still never fails on one (FastAPI's did: L4) and never grows with
+    its input, whichever error source hands it one."""
+    import json
+
+    from scraper.routers.quarantine import validation_response
+
+    lone = chr(0xD800)
+    response = validation_response([{"type": "value_error" + lone, "loc": ("body", lone + "k" * 500, 3),
+                                     "msg": "m" * 500 + chr(0xDFFF), "input": "x" * 10_000, "ctx": {"a": 1}}])
+    [entry] = json.loads(response.body)["detail"]
+    assert response.status_code == 422
+    assert set(entry) == {"type", "loc", "msg"}
+    assert entry["type"] == "value_error\\ud800"
+    assert entry["loc"][0] == "body" and entry["loc"][1].startswith("\\ud800k") and len(entry["loc"][1]) == 64
+    assert entry["loc"][2] == 3 and len(entry["msg"]) == 200 and len(response.body) < 600
+
+
 # ---------------------------------------------------------------------------------------------
 # re-audit round 2, L8 (spec ruling 25): invisible characters are written as escapes
 # ---------------------------------------------------------------------------------------------
