@@ -131,6 +131,88 @@ def test_guard_positive_controls(snippet):
     assert scan_source(snippet), snippet
 
 
+# The independent re-audit's probe (scratchpad reaudit-f25/zz_audit_probe.py), one form per case: the
+# guard of PR #65 caught only the control (p18). Each must now fail the guard on its own.
+REAUDIT_PROBE_FORMS = {
+    "p01 importlib.import_module('requests')": "import importlib\ndef p01(u):\n    return importlib.import_module('requests').get(u)",
+    "p02 __import__('urllib.request')": "def p02(u):\n    return __import__('urllib.request').request.urlopen(u)",
+    "p03 urllib.request after import urllib.parse": "import urllib.parse\ndef p03(u):\n    return urllib.request.urlopen(u)",
+    "p04 subprocess curl": "import subprocess\ndef p04(u):\n    return subprocess.run(['curl', '-s', u])",
+    "p05 os.system curl": "import os\ndef p05(u):\n    return os.system('curl -s ' + u)",
+    "p06 getattr(httpx, ...)": "import httpx\ndef p06():\n    return getattr(httpx, 'Async' + 'Client')()",
+    "p07 subclass httpx.AsyncClient": "import httpx\nclass Sneaky(httpx.AsyncClient):\n    pass\ndef p07():\n    return Sneaky()",
+    "p08 httpx._client": "from httpx import _client as hc\ndef p08():\n    return hc.AsyncClient()",
+    "p09 loop.create_connection": "import asyncio\nasync def p09(h):\n    return await asyncio.get_running_loop().create_connection(asyncio.Protocol, h, 80)",
+    "p10 anyio.connect_tcp": "import anyio\nasync def p10(h):\n    return await anyio.connect_tcp(h, 80)",
+    "p11 httpcore backend": "import httpcore\nasync def p11(h):\n    return await httpcore.AnyIOBackend().connect_tcp(h, 80)",
+    "p12 FetchPolicy/PolicyFetcher outside the registry": (
+        "from scraper.net import fetch_policy\ndef p12():\n"
+        "    wide = fetch_policy.FetchPolicy(name='Wide', hosts=frozenset({'169.254.169.254.nip.io'}), ports=frozenset({80, 443}))\n"
+        "    return fetch_policy.PolicyFetcher(wide)"
+    ),
+    "p13 ftplib": "import ftplib\ndef p13(h):\n    return ftplib.FTP(h)",
+    "p14 smtplib": "import smtplib\ndef p14(h):\n    return smtplib.SMTP(h)",
+    "p15 xmlrpc.client": "import xmlrpc.client\ndef p15(u):\n    return xmlrpc.client.ServerProxy(u).system.listMethods()",
+    "p16 ssl.get_server_certificate": "import ssl\ndef p16(h):\n    return ssl.get_server_certificate((h, 443))",
+    "p17 httpx.Client attribute": "import httpx\ndef p17(u):\n    return httpx.Client.__call__",
+    "p18 control": "import httpx\ndef p18():\n    return httpx.AsyncClient(follow_redirects=True)",
+    "p19 httpx._transports": "import httpx\ndef p19():\n    return httpx._transports.default.AsyncHTTPTransport()",
+    "p20 os.popen wget": "import os\ndef p20(u):\n    return os.popen('wget -qO- ' + u).read()",
+}
+MORE_BYPASS_FORMS = {
+    "backend loopback hook keyword": "from scraper.net import fetch_policy\nfetch_policy._GuardedBackend('x', loopback_origins={('h', 1)})",
+    "loopback_origins keyword alone": "make(loopback_origins={('h', 1)})",
+    "private boundary member": "from scraper.net import fetch_policy\nfetch_policy._GuardedTransport",
+    "registry mutation": "from scraper.net import fetch_policy\nfetch_policy.SOURCE_POLICIES['Wide'] = None",
+    "factory monkeypatch": "from scraper.net import fetch_policy\nfetch_policy.fetcher_for = lambda *a, **k: None",
+    "setattr on the boundary": "from scraper.net import fetch_policy\nsetattr(fetch_policy, 'fetcher_for', None)",
+    "string-built dynamic import": "import importlib\nimportlib.import_module('req' + 'uests')",
+    "dynamic import by variable": "import importlib\nname = 'requests'\nimportlib.import_module(name)",
+    "builtins.__import__": "import builtins\nbuiltins.__import__('socket')",
+    "vars(httpx)": "import httpx\nvars(httpx)['AsyncClient']()",
+    "httpx.__dict__": "import httpx\nhttpx.__dict__['AsyncClient']()",
+    "socket import": "import socket",
+    "asyncio.open_connection alias": "from asyncio import open_connection\nopen_connection('h', 1)",
+    "asyncio subprocess": "import asyncio\nasyncio.create_subprocess_exec('curl', 'http://h')",
+    "robots.txt fetch by urllib": "from urllib.robotparser import RobotFileParser\nRobotFileParser('http://h/robots.txt').read()",
+    "lxml fetches a URL": "from lxml import etree\netree.parse('http://h/x.xml')",
+    "webbrowser": "import webbrowser\nwebbrowser.open('http://h')",
+    "ssl wrap_socket": "import ssl\nssl.create_default_context().wrap_socket(s, server_hostname='h')",
+}
+
+
+@pytest.mark.parametrize("snippet", list(REAUDIT_PROBE_FORMS.values()) + list(MORE_BYPASS_FORMS.values()),
+                         ids=list(REAUDIT_PROBE_FORMS) + list(MORE_BYPASS_FORMS))
+def test_guard_catches_every_reaudit_probe_form(snippet):
+    assert scan_source(snippet, "scraper/tasks/zz_probe.py"), snippet
+
+
+@pytest.mark.parametrize(
+    "snippet, where",
+    [
+        ("import importlib\nharvest = getattr(importlib.import_module(module_name), function_name)", "scraper/tasks/dispatcher.py"),
+        ("import ssl\nctx = ssl.create_default_context(cafile=path)", "scraper/config.py"),
+        ("import asyncio\nasyncio.run(main())\nasyncio.sleep(1)", "scraper/tasks/x.py"),
+        ("import os\nos.getenv('X')\nos.environ.get('Y')\nos.replace(a, b)", "scraper/tasks/x.py"),
+        ("from urllib.robotparser import RobotFileParser\nrp = RobotFileParser()\nrp.parse(lines)", "bootstrap_harvest.py"),
+        ("x = getattr(settings, 'CORS_ALLOW_ORIGINS', '')", "scraper/main.py"),
+        ("from scraper.net import fetch_policy\ndef f(c: fetch_policy.PolicyFetcher) -> fetch_policy.FetchedResponse: ...", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\ntry:\n    pass\nexcept fetch_policy.FetchRefused:\n    raise", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\np = fetch_policy.SOURCE_POLICIES['NasirLawSite']\nq = fetch_policy.policy_for('X')", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\nwith fetch_policy.sync_fetcher_for('PakistanCode', headers=h) as c:\n    c.get(u)", "bootstrap_harvest.py"),
+    ],
+)
+def test_guard_round_two_negative_controls(snippet, where):
+    assert scan_source(snippet, where) == [], (where, snippet)
+
+
+def test_source_policies_are_read_only():
+    from scraper.net import fetch_policy
+
+    with pytest.raises(TypeError):
+        fetch_policy.SOURCE_POLICIES["Wide"] = fetch_policy.policy_for("NasirLawSite")
+
+
 @pytest.mark.parametrize(
     "snippet",
     [
