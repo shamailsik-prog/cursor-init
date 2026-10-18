@@ -1,7 +1,7 @@
 # F11 plan: atomic request audit (outbox staged in the effect commit, drained by a reconciler)
 
 Spec: `docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md`.
-Branch: `claude/remediate-f11` from `origin/main` a9b0e06; main 957fe26 merged in a0802a5.
+Branch: `claude/remediate-f11` from `origin/main` a9b0e06; main 957fe26 merged in a0802a5, main c02ebbc in f43e936.
 
 ## Tasks
 
@@ -64,3 +64,70 @@ Debugging record (systematic debugging): two staging tests first failed on the b
 | `python3 ci_gates/gate_g1.py` | 10/10 |
 | `bash ci_gates/gate_g2.sh` | PASS: 413 tested, 0 allowed (Next 138/138, Functions 8/8; the rules sweep now includes `audit_outbox`) |
 | Secret scan before each push | gitleaks v8.30.1 `detect --source <worktree> --config .gitleaks.toml --redact --exit-code 1 --log-opts=origin/main..HEAD`: no leaks. The brief's equivalent subcommand form is refused by the worktree sandbox, so its v8 alias was used. |
+
+## Review round 1 (PR #86)
+
+Threads:
+- Codex P1 4307160231 and P2 4307160234;
+- Bugbot 4307209436 and 4307209440 (the same two);
+- Bugbot 4307237669, 4307237674 and 4307255060 (on Autofix code);
+- Bugbot 4307293100 (P1, filed on the revert).
+
+Spec rulings 18 and 19, §4 survey, amendments A6 and A7.
+
+Tasks:
+1. RED tests (3665687):
+   - the e2e "later write fails after the entity commits";
+   - the ruling-18 cases in `tests/f11-audit-outbox.firestore.test.ts`;
+   - the stagedAt-sweep cases;
+   - the sweep cursor clean-up in every F11 file.
+2. Review and revert the three Autofix commits (9ad5482; spec A7).
+3. Ruling 18 (`withSession.reachedAuditedEnd`, `idempotency.requestClaimsCompleted`). Then survey every handler that writes more than once with temporary, uncommitted instrumentation over the `test:rules` suites. Fix the one gap found (`p1/committee-brain` action row), with its RED test in `tests/f16-next-output-size.firestore.test.ts`.
+4. Ruling 19 (the sweep in `functions/src/p5/auditOutbox.ts`). The extended tests cover:
+   - number, map, null and far-future values;
+   - the cursor walk;
+   - full then empty page;
+   - a budget stop;
+   - a full pending list;
+   - the null sort;
+   - the Functions-SDK walk.
+5. Fix commit 72a3dce; merge main c02ebbc (f43e936).
+6. Mutants, verification, PR body section, claim gate, thread replies.
+
+| Step | Code | Command | Result |
+| --- | --- | --- | --- |
+| RED | 35e093e + 3665687 tests | both F11 emulator files | 9 failed (the 9 new tests), 22 passed. e2e: entity committed 1, outbox entries after the response 0, audit rows naming it 0 before and after a reconciler run |
+| Autofix check | 1e141d3 + my round-1 tests | both F11 emulator files | 18 failed, 15 passed of 33: every reconciler run threw on the v13 `FieldPath` value import |
+| RED | 9ad5482 sources (= 3665687) + the extended round-1 tests | both F11 emulator files | 15 failed (every round-1 test but the P1 control), 22 passed |
+| RED | same | Functions F11 file | 1 failed, 2 passed (the sweep test; the cursor constant inlined for the old module) |
+| RED | 72a3dce sources without the route row | F16 Firestore file | 1 failed (no `committee_brain_output_create` row), 2 passed |
+| GREEN | 72a3dce | both F11 emulator files; Functions F11 file; F16 Firestore file | 37/37; 3/3; 3/3 |
+| GREEN | 72a3dce | memory-mode committee-brain files (15) | 869/869 |
+| Mutants | f43e936 | both F11 emulator files, one mutant at a time | 11 of 11 killed (unconditional release; no action-row, claims or 2xx condition; no sweep; cursor to the page end on a budget stop; no wrap on an empty page; number readable; full pending list advances; unrestricted oldest-age query; unreadable not alerting). A first no-sweep mutant was a syntax error; its run was discarded and the mutant rerun |
+
+Verification at f43e936 (main c02ebbc merged):
+
+| Check | Result |
+| --- | --- |
+| F11, F10, F01, F12 and F16 unit files, and the committee-brain unit files (9 files) | 312/312 |
+| `test:rules` set (18 files: F11, F10, F01/F12, F16 Firestore and the rest) | 18/18 files, 744/744 |
+| Functions suite, local (`npm --prefix functions test` on a private emulator, load 4-10) | Ran to the end: 87 of 89 files, 2389 passed, 10 failed. `p2.jobs-sweeper` (9): each whole-collection sweep saw one extra `jobs` row left in the shared emulator by another file. `p2.jobs-invariants` (1): a 15 s test timeout. This branch changes neither file nor the code they test, and F11's three Functions tests passed in the run. Not rerun alone (stopped on the coordinator's ruling), so a clean local run is NOT DEMONSTRATED |
+| Functions suite, CI on f43e936 | "Cloud Functions" check: success (read from the GitHub check runs) |
+| `npm run typecheck`, `typecheck:tests`, functions typecheck | exit 0 |
+| `npm run lint` | 0 errors, 89 warnings (unchanged) |
+| G-0 (`BASE=origin/main bash ci_gates/gate_g0.sh`) | PASSED (static) |
+| G-2 (`bash ci_gates/gate_g2.sh`), local | Stopped after 25 s on the coordinator's ruling: NOT DEMONSTRATED locally |
+| G-2, CI on f43e936 and the independent auditor | CI "Gates G-0, G-1, G-2": success. The auditor's run (their numbers, not run here): PASS, 414 tested, 0 allowed; a 15 s timeout on their first run under load passed alone |
+| gitleaks before each push | no leaks |
+
+Independent re-audit at f43e936 (the coordinator's report, not run here): **PASS 8/10**.
+- The ruling-18 fix (Codex P1 4307160231, Bugbot 4307293100) was checked by 32 fault-injection route runs: 10 of 32 failed on the pre-fix code, and none fails now.
+- The ruling-19 fix (Codex P2 4307160234) was checked by sweep attacks E1-E5.
+- The Autofix revert is confirmed.
+- No HIGH or MEDIUM finding is open.
+
+Follow-ups (LOW, open, not fixed in this PR; the code stays as at f43e936):
+- O1. `stageableRows` (platform/persistence/auditOutbox.ts) measures the 512 KiB row cap in JSON string length (UTF-16 code units), not UTF-8 bytes. Non-ASCII text takes up to 3 UTF-8 bytes per code unit, so a row set under the cap can exceed 512 KiB in bytes. Past Firestore's 1 MiB document limit, the entry would be refused, and the effect's commit with it.
+- O2. The auditor's surviving mutants M02, M03, M05, M25, M30 and M44 (their numbering) need tests that kill them.
+- O3. `tests/f11-audit-outbox.firestore.test.ts` leaves 5 `audit_log` documents per run in the emulator; its clean-up should delete them.
+
