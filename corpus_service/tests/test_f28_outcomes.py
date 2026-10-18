@@ -1,6 +1,6 @@
 """Audit F28 unit tests: the job outcome vocabulary, the retry classifier, the backoff bound and the
 error text a run record may hold (spec docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md,
-rulings R1-R4, R7, R8). No database, no network: the end-to-end flow is test_f28_source_outcomes_e2e.py."""
+rulings R1-R4, R7, R8, R15). No database, no network: the end-to-end flow is test_f28_source_outcomes_e2e.py."""
 
 import httpx
 import pytest

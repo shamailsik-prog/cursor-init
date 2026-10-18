@@ -17,7 +17,7 @@ The OpenAI package is the one stub, an in-process module, because the provider A
 edge of the embedding job.
 
 Expected values are written out from the spec (docs/superpowers/specs/
-2026-10-18-f28-source-failure-outcomes-design.md, rulings R1-R13), not imported from the code under
+2026-10-18-f28-source-failure-outcomes-design.md, rulings R1-R15), not imported from the code under
 test. Synthetic fixtures only; nothing leaves the machine.
 """
 

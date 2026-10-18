@@ -1,6 +1,6 @@
 """Audit F28: what a corpus job run ended as, and whether Celery may retry it.
 
-Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R1-R13).
+Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R1-R15).
 
 A run ends in one of five outcomes (R1): ``ok`` (rows written, no item failed), ``partial`` (some items
 failed, at least one succeeded), ``empty`` (it worked and found nothing to write), ``skipped`` (a
