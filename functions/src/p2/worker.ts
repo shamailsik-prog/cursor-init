@@ -212,6 +212,27 @@ export function isValidStepId(stepId: unknown): stepId is string {
 }
 
 /**
+ * The claim's fence check in `tx`, shared by `runFenced` and `checkFence`: re-reads the job and throws
+ * `LeaseLostError` unless it is still `running` under this claim's lease owner. Returns the row it read.
+ */
+async function readFenced(tx: Transaction, ref: DocumentReference, owner: string): Promise<JobRow> {
+  const snap = await tx.get(ref)
+  const row = snap.exists ? (snap.data() as JobRow) : undefined
+  if (!fenceHolds(row, owner)) throw new LeaseLostError()
+  return row
+}
+
+/**
+ * `checkFence(tx)` for this claim: the same fence check in the caller's transaction, recording no step,
+ * so an effect that needs no step of its own still commits only while the claim holds (audit F38).
+ */
+function checkFenceFor(ref: DocumentReference, owner: string) {
+  return async (tx: Transaction): Promise<void> => {
+    await readFenced(tx, ref, owner)
+  }
+}
+
+/**
  * `runFenced(stepId, fn)` for this claim: one transaction that re-reads the job, checks the fence,
  * then skips `fn` if `stepId` is already in `fencedSteps` (committed by an earlier attempt, before a
  * crash or a failure), or runs `fn(tx)` and records `stepId` in the same commit. So a fenced effect
@@ -222,9 +243,7 @@ function runFencedFor(ref: DocumentReference, owner: string, attempt: number, no
   return async <T>(stepId: string, fn: (tx: Transaction) => Promise<T>): Promise<T | undefined> => {
     if (!isValidStepId(stepId)) throw new JobError("invalid_fenced_step", { permanent: true })
     return adminDb().runTransaction(async (tx) => {
-      const snap = await tx.get(ref)
-      const row = snap.exists ? (snap.data() as JobRow) : undefined
-      if (!fenceHolds(row, owner)) throw new LeaseLostError()
+      const row = await readFenced(tx, ref, owner)
       const steps: Record<string, FencedStepRecord> = row.fencedSteps && typeof row.fencedSteps === "object" ? row.fencedSteps : {}
       if (Object.hasOwn(steps, stepId)) return undefined
       if (Object.keys(steps).length >= MAX_FENCED_STEPS) throw new JobError("fenced_step_limit", { permanent: true })
@@ -278,6 +297,7 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
         payload,
         now: deps.clock,
         runFenced: runFencedFor(ref, owner, row.attempts, deps.clock),
+        checkFence: checkFenceFor(ref, owner),
       }),
       deps.handlerBudgetMs
     )

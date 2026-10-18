@@ -70,9 +70,11 @@ const ROWS: Record<string, Record<string, unknown>> = {
   events: { type: "matter.created", matterId: MATTER },
   // Audit F37: the packed conflict name index, server-only like the counter that holds its state.
   conflict_name_index: { chunk: 0, kind: "conflict_name_index", names: ["Muhammad Ali", "Acme Traders"] },
+  // Audit F38: why the auto-confirm job passed a pair over (codes and ids only), server-only.
+  autoconfirm_deferrals: { pairId: "e1_e2", leftId: "e1", rightId: "e2", reason: "entity_missing", recheckAt: Timestamp.now() },
 }
 const COLLECTIONS = Object.keys(ROWS)
-const SERVER_ONLY = ["counters", "transliteration_map", "events", "conflict_name_index"]
+const SERVER_ONLY = ["counters", "transliteration_map", "events", "conflict_name_index", "autoconfirm_deferrals"]
 
 function row(name: string, classification: string | null, firmId = FIRM) {
   return { firmId, ...ROWS[name], ...(classification === null ? {} : { classification }), createdAt: Timestamp.now() }
