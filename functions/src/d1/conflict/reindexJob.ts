@@ -5,7 +5,7 @@ import { reconcileNameIndex, ReconcileError } from "./nameIndex"
 /**
  * `d1.conflict.reindex` (audit F37; spec 2026-10-18-f37 ruling 7): the firm's name index reconciliation, off
  * the request path. Runs daily per firm (a scheduled run, `NAME_REINDEX_SPEC`), on demand when a screen finds
- * the index unavailable or a registry trigger breaks it (`screening.ts`, `registryTriggers.ts`, keyed per PKT minute), and as
+ * the index unavailable or a registry trigger breaks it (`screening.ts`, `registryTriggers.ts`, keyed per PKT minute and confirmation count), and as
  * the deploy backfill
  * (`jobs:backfill d1.conflict.reindex <day> <day>`). The work is `reconcileNameIndex`: derived from Firestore state
  * (append-only, or a reset and rebuild of a damaged index), so it is idempotent under at-least-once delivery and

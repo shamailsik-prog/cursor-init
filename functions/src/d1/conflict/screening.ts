@@ -14,7 +14,7 @@ import { registryStateOf, registryVersionRef, type RegistryState } from "../regi
  * The screening registry for runConflictCheck and openMatter (audit F37; spec 2026-10-18-f37 ruling 5). When the
  * firm's name index cannot be trusted (missing, another schema, behind the registry, unreadable) the screen is
  * refused with 503 `screening_unavailable`: no check is written and no matter is opened. A reconciliation job is
- * enqueued for the firm (one per PKT minute, however many calls are refused), so the refusal clears itself once it
+ * enqueued for the firm (one per PKT minute and confirmation count, `reindexRunKey`), so the refusal clears itself once it
  * runs. Never a silent CLEAR, and never the old O(registry) read on the request path.
  */
 export async function screeningRegistry(
