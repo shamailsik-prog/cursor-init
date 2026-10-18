@@ -12,6 +12,7 @@ Tables:
 - statutes_staging
 - scraper_jobs
 - quarantine_queue
+- quarantine_decisions (audit F23, append-only)
 - embedding_queue
 
 FINAL_2: no limitation_periods table (legal rules are not held here).
@@ -52,6 +53,7 @@ from sqlalchemy import (
     CheckConstraint,
     text,
     JSON,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
@@ -59,6 +61,7 @@ from pgvector.sqlalchemy import Vector
 
 # Share the single DeclarativeBase used by init_db.create_all
 from scraper.database import Base
+from scraper import quarantine_ledger
 from scraper.trust import DEFAULT_TRUST_LEVEL, trust_check_sql
 
 
@@ -652,6 +655,70 @@ class QuarantineQueue(Base):
 
     def __repr__(self) -> str:
         return f"<QuarantineQueue id={self.id} reason={self.reason} reviewed={self.reviewed}>"
+
+
+# ---------------------------------------------------------------------------
+# 8b. QuarantineDecision - append-only evidence of each reviewer decision (audit F23)
+# ---------------------------------------------------------------------------
+class QuarantineDecision(Base):
+    """One row per resolving decision on a quarantine_queue record (promoted | rejected), written in
+    the same transaction as the decision itself by scraper.routers.quarantine.
+
+    Append-only: triggers refuse UPDATE, DELETE and TRUNCATE (scraper.quarantine_ledger: created
+    with the table, repaired by migrations/002_quarantine_decisions.py). quarantine_id is unique (one resolving decision per record) and deliberately has no
+    foreign key: quarantine_queue rows cascade away with their staging row, and the evidence must
+    outlive its subject. The reviewer is the name a holder of the shared admin key gave
+    (reviewer_auth says so) until named identities exist (audit F47).
+    Spec: docs/superpowers/specs/2026-10-18-f23-auditable-quarantine-promotion-design.md.
+    """
+
+    __tablename__ = "quarantine_decisions"
+    __table_args__ = (
+        UniqueConstraint("quarantine_id", name="uq_quarantine_decisions_quarantine_id"),
+        Index("ix_quarantine_decisions_staging_id", "staging_id"),
+        Index("ix_quarantine_decisions_decided_at", "decided_at"),
+        CheckConstraint("decision IN ('promoted','rejected')", name="ck_quarantine_decisions_decision"),
+        CheckConstraint("btrim(reviewer) <> ''", name="ck_quarantine_decisions_reviewer"),
+        CheckConstraint("btrim(reason) <> ''", name="ck_quarantine_decisions_reason"),
+        CheckConstraint(
+            "(decision = 'promoted' AND publication_key IS NOT NULL AND published_table IS NOT NULL "
+            "AND published_id IS NOT NULL AND embedding_outbox_id IS NOT NULL) OR "
+            "(decision = 'rejected' AND publication_key IS NULL AND published_table IS NULL "
+            "AND published_id IS NULL AND embedding_outbox_id IS NULL)",
+            name="ck_quarantine_decisions_publication",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    quarantine_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    staging_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(255), nullable=False)
+    reviewer_auth: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    prior_state: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    new_state: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # The source as resolved and read at decision time (scraper.tasks.promotion's rule).
+    source_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_trust_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    source_resolved_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # The publication (promoted only): stable key, the row it wrote, and its embedding outbox row.
+    publication_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    published_table: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    published_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    embedding_outbox_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    request_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="Idempotency-Key")
+    decided_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<QuarantineDecision id={self.id} quarantine_id={self.quarantine_id} decision={self.decision}>"
+
+
+# The table never exists without its append-only triggers: create_all makes them in the same
+# transaction (scraper.quarantine_ledger; migration 002 repairs them on every migrate).
+event.listen(QuarantineDecision.__table__, "after_create", quarantine_ledger.make_append_only)
 
 
 # ---------------------------------------------------------------------------
