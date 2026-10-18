@@ -347,6 +347,14 @@
         { "fieldPath": "version", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "autoconfirm_deferrals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "recheckAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
