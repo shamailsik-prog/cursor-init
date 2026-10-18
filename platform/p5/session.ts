@@ -214,9 +214,11 @@ export async function loadUserRecord(
   let fromRepo: User | null = null
   try {
     const repos = await getRuntimeRepositories(store)
-    const firmScope = options.firmId ?? cached?.firmId
-    fromRepo =
-      firmScope !== undefined ? ((await repos.users.get(userId, firmScope)) ?? null) : null
+    // The identity read (identityPolicy step 2) is users/{uid} by the uid itself, whatever firm the record names: the
+    // policy then compares the record's firm with the token's claim (firm_mismatch, as Cloud Functions answers). A
+    // firm-scoped read would turn another firm's record into "no record" (inactive_user) and evict the cache. Only an
+    // explicit `firmId` (the insecure-dev claim) scopes the read; "" is the repositories' by-id identity read.
+    fromRepo = (await repos.users.get(userId, options.firmId ?? "")) ?? null
   } catch (err) {
     console.error("[auth] user lookup failed", err)
     if (options.preferRepository) {
@@ -302,10 +304,7 @@ export async function resolveSession(request: Request): Promise<Session | Insecu
   }
 
   // Step 2 (identityPolicy.bindRecords): the authoritative users/{uid} and firms/{firmId}.
-  const record = await loadUserRecord(decoded.uid, {
-    preferRepository: true,
-    firmId: claimed.firmId,
-  })
+  const record = await loadUserRecord(decoded.uid, { preferRepository: true })
   const firm = await loadFirmRecord(claimed.firmId)
   const decision = bindRecords(
     claimed,

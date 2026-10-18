@@ -196,6 +196,18 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F01: production identity and persi
     expect(listed.body.items?.map((row) => row.id)).toEqual([shared])
   })
 
+  it("a users record that names another firm than the token is refused as firm_mismatch, as Cloud Functions answers", async () => {
+    const firmA = await provisionFirm()
+    const firmB = await provisionFirm()
+    const partner = await provisionUser(firmA, "partner", "privileged-restricted")
+    // An operator moved the record to firm B; the token still carries firm A's claims.
+    await adminDb().collection("users").doc(partner.uid).update({ firmId: firmB })
+
+    const listed = await listMatters(partner)
+    expect(listed.status, JSON.stringify(listed.body)).toBe(403)
+    expect(JSON.stringify(listed.body)).toContain("FIRM_MISMATCH")
+  })
+
   it("another firm's partner never sees this firm's matter", async () => {
     const firmA = await provisionFirm()
     const firmB = await provisionFirm()

@@ -1876,22 +1876,27 @@ export type SpineRepositories = {
   workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542: WorkflowOpsLatticeViewRepository<WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationAcknowledgementSealVerificationPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementRow>
 }
 
+/**
+ * F12 parity (takeover of #44): the memory repositories answer a firm-scoped read as the Firestore adapter does, so
+ * the unit suite, which runs in memory mode, exercises the same contract: only a row of the caller's firm is returned.
+ */
+function firmScoped<T extends { firmId: string }>(row: T | null | undefined, firmId: string): T | null {
+  return row && row.firmId === firmId ? row : null
+}
+
 export function createMemoryRepositories(store: SpineStore): SpineRepositories {
   return {
     matters: {
       async create(row) {
         store.matters.set(row.id, row)
       },
-      async get(id, firmId?: string) {
-        const row = store.matters.get(id) ?? null
-        if (!row) return null
-        if (firmId !== undefined && row.firmId !== firmId) return null
-        return row
+      async get(id, firmId) {
+        return firmScoped(store.matters.get(id), firmId)
       },
       async update(id, firmId, patch) {
-        const current = store.matters.get(id)
+        const current = firmScoped(store.matters.get(id), firmId)
         if (!current) return null
-        if (typeof patch.firmId === "string" && patch.firmId !== current.firmId) return null
+        if (patch.firmId !== undefined && patch.firmId !== firmId) return null
         const next = { ...current, ...patch }
         store.matters.set(id, next)
         return next
@@ -1907,7 +1912,9 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       // The repository returns provisioned records, never a request-scoped
       // clearance ceiling (callers write repository rows back into the store).
       async get(id, firmId) {
-        return storedUserRecord(store, id) ?? null
+        // As the Firestore adapter: an empty firm is the actor bootstrap read, before the route binds a firm.
+        const row = storedUserRecord(store, id) ?? null
+        return firmId.trim() ? firmScoped(row, firmId) : row
       },
       async listByFirm(firmId) {
         return [...store.users.keys()]
@@ -1925,7 +1932,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.entities.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.entities.get(id) ?? null
+        return firmScoped(store.entities.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.entities.values()].filter((row) => row.firmId === firmId)
@@ -1955,7 +1962,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.members.set(store.memberKey(row.matterId, row.userId), row)
       },
       async get(matterId, userId, firmId) {
-        return store.members.get(store.memberKey(matterId, userId)) ?? null
+        return firmScoped(store.members.get(store.memberKey(matterId, userId)), firmId)
       },
       async listByFirm(firmId) {
         return [...store.members.values()].filter((row) => row.firmId === firmId)
@@ -1969,11 +1976,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.documents.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.documents.get(id) ?? null
+        return firmScoped(store.documents.get(id), firmId)
       },
       async update(id, firmId, patch) {
-        const current = store.documents.get(id)
+        const current = firmScoped(store.documents.get(id), firmId)
         if (!current) return null
+        if (patch.firmId !== undefined && patch.firmId !== firmId) return null
         const next = { ...current, ...patch }
         store.documents.set(id, next)
         return next
@@ -1990,13 +1998,13 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.drafts.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.drafts.get(id) ?? null
+        return firmScoped(store.drafts.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.drafts.values()].filter((row) => row.firmId === firmId)
       },
       async setLocked(id, firmId, locked) {
-        const current = store.drafts.get(id)
+        const current = firmScoped(store.drafts.get(id), firmId)
         if (current) store.drafts.set(id, { ...current, locked })
       },
     },
@@ -2005,7 +2013,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.documentWorkflow.set(row.documentId, row)
       },
       async get(documentId, firmId) {
-        return store.documentWorkflow.get(documentId) ?? null
+        return firmScoped(store.documentWorkflow.get(documentId), firmId)
       },
       async listByFirm(firmId) {
         return [...store.documentWorkflow.values()].filter((row) => row.firmId === firmId)
@@ -2016,11 +2024,12 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingPackages.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingPackages.get(id) ?? null
+        return firmScoped(store.filingPackages.get(id), firmId)
       },
       async update(id, firmId, patch) {
-        const current = store.filingPackages.get(id)
+        const current = firmScoped(store.filingPackages.get(id), firmId)
         if (!current) return null
+        if (patch.firmId !== undefined && patch.firmId !== firmId) return null
         const next = { ...current, ...patch }
         store.filingPackages.set(id, next)
         return next
@@ -2043,7 +2052,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingPacketArtifacts.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingPacketArtifacts.get(id) ?? null
+        return firmScoped(store.filingPacketArtifacts.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingPacketArtifacts.values()].filter((row) => row.firmId === firmId)
@@ -2057,7 +2066,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingDispatchQueue.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingDispatchQueue.get(id) ?? null
+        return firmScoped(store.filingDispatchQueue.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingDispatchQueue.values()].filter((row) => row.firmId === firmId)
@@ -2071,7 +2080,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingAnnexures.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingAnnexures.get(id) ?? null
+        return firmScoped(store.filingAnnexures.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingAnnexures.values()].filter((row) => row.firmId === firmId)
@@ -2085,7 +2094,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingSubmissionReceipts.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingSubmissionReceipts.get(id) ?? null
+        return firmScoped(store.filingSubmissionReceipts.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionReceipts.values()].filter((row) => row.firmId === firmId)
@@ -2099,7 +2108,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingSubmissionReconciliation.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingSubmissionReconciliation.get(id) ?? null
+        return firmScoped(store.filingSubmissionReconciliation.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionReconciliation.values()].filter((row) => row.firmId === firmId)
@@ -2113,7 +2122,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingSubmissionExceptions.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingSubmissionExceptions.get(id) ?? null
+        return firmScoped(store.filingSubmissionExceptions.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionExceptions.values()].filter((row) => row.firmId === firmId)
@@ -2127,7 +2136,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingTransportExecutionEvidence.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingTransportExecutionEvidence.get(id) ?? null
+        return firmScoped(store.filingTransportExecutionEvidence.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingTransportExecutionEvidence.values()].filter((row) => row.firmId === firmId)
@@ -2143,7 +2152,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingSubmissionSlaDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingSubmissionSlaDigests.get(id) ?? null
+        return firmScoped(store.filingSubmissionSlaDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingSubmissionSlaDigests.values()].filter((row) => row.firmId === firmId)
@@ -2157,7 +2166,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationOwnerRota.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationOwnerRota.get(id) ?? null
+        return firmScoped(store.filingEscalationOwnerRota.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationOwnerRota.values()].filter((row) => row.firmId === firmId)
@@ -2171,7 +2180,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationWorkloadDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationWorkloadDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationWorkloadDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationWorkloadDigests.values()].filter((row) => row.firmId === firmId)
@@ -2185,7 +2194,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationPolicyBaselines.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationPolicyBaselines.get(id) ?? null
+        return firmScoped(store.filingEscalationPolicyBaselines.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationPolicyBaselines.values()].filter(
@@ -2203,7 +2212,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationBreachWaivers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationBreachWaivers.get(id) ?? null
+        return firmScoped(store.filingEscalationBreachWaivers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationBreachWaivers.values()].filter((row) => row.firmId === firmId)
@@ -2219,7 +2228,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationPolicyVarianceDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationPolicyVarianceDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationPolicyVarianceDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationPolicyVarianceDigests.values()].filter(
@@ -2237,7 +2246,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationWaiverExpiryDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationWaiverExpiryDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationWaiverExpiryDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationWaiverExpiryDigests.values()].filter(
@@ -2255,7 +2264,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationVarianceRemediations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationVarianceRemediations.get(id) ?? null
+        return firmScoped(store.filingEscalationVarianceRemediations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationVarianceRemediations.values()].filter(
@@ -2273,7 +2282,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationWaiverRolloverAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationWaiverRolloverAttestations.get(id) ?? null
+        return firmScoped(store.filingEscalationWaiverRolloverAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationWaiverRolloverAttestations.values()].filter(
@@ -2291,7 +2300,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationRemediationExpiryDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationRemediationExpiryDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationRemediationExpiryDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationRemediationExpiryDigests.values()].filter(
@@ -2309,7 +2318,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationRolloverBreachWatches.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationRolloverBreachWatches.get(id) ?? null
+        return firmScoped(store.filingEscalationRolloverBreachWatches.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationRolloverBreachWatches.values()].filter(
@@ -2327,7 +2336,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationRemediationLifecycles.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationRemediationLifecycles.get(id) ?? null
+        return firmScoped(store.filingEscalationRemediationLifecycles.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationRemediationLifecycles.values()].filter(
@@ -2345,7 +2354,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationRolloverReaffirmationSlas.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationRolloverReaffirmationSlas.get(id) ?? null
+        return firmScoped(store.filingEscalationRolloverReaffirmationSlas.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationRolloverReaffirmationSlas.values()].filter(
@@ -2363,7 +2372,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureComplianceDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureComplianceDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureComplianceDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureComplianceDigests.values()].filter(
@@ -2381,7 +2390,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureFollowupQueues.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureFollowupQueues.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureFollowupQueues.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureFollowupQueues.values()].filter(
@@ -2399,7 +2408,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSlaWindowConfigs.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSlaWindowConfigs.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSlaWindowConfigs.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSlaWindowConfigs.values()].filter(
@@ -2417,7 +2426,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAutoAssignmentRules.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAutoAssignmentRules.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAutoAssignmentRules.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAutoAssignmentRules.values()].filter(
@@ -2435,7 +2444,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSlaWindows.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSlaWindows.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSlaWindows.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSlaWindows.values()].filter(
@@ -2453,7 +2462,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAttestations.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAttestations.values()].filter(
@@ -2476,7 +2485,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSlaExceptionDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSlaExceptionDigests.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSlaExceptionDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSlaExceptionDigests.values()].filter(
@@ -2499,7 +2508,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAttestationDisputes.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAttestationDisputes.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAttestationDisputes.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAttestationDisputes.values()].filter(
@@ -2527,7 +2536,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSlaExceptionEnforcement.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSlaExceptionEnforcement.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSlaExceptionEnforcement.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSlaExceptionEnforcement.values()].filter(
@@ -2550,7 +2559,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAdjudicationQueue.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAdjudicationQueue.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAdjudicationQueue.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAdjudicationQueue.values()].filter(
@@ -2578,7 +2587,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureEnforcementRebalance.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureEnforcementRebalance.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureEnforcementRebalance.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureEnforcementRebalance.values()].filter(
@@ -2601,7 +2610,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAdjudicationQuorum.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAdjudicationQuorum.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAdjudicationQuorum.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAdjudicationQuorum.values()].filter(
@@ -2629,7 +2638,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureRebalanceExecution.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureRebalanceExecution.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureRebalanceExecution.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureRebalanceExecution.values()].filter(
@@ -2657,7 +2666,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAdjudicationSlo.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAdjudicationSlo.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAdjudicationSlo.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAdjudicationSlo.values()].filter(
@@ -2685,7 +2694,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureRebalanceSafeguards.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureRebalanceSafeguards.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureRebalanceSafeguards.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureRebalanceSafeguards.values()].filter(
@@ -2713,7 +2722,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAdjudicationSloDebtRemediation.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAdjudicationSloDebtRemediation.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAdjudicationSloDebtRemediation.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAdjudicationSloDebtRemediation.values()].filter(
@@ -2741,7 +2750,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureRebalanceSafeguardExpiry.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureRebalanceSafeguardExpiry.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureRebalanceSafeguardExpiry.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureRebalanceSafeguardExpiry.values()].filter(
@@ -2769,7 +2778,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureAdjudicationDebtBurndown.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureAdjudicationDebtBurndown.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureAdjudicationDebtBurndown.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureAdjudicationDebtBurndown.values()].filter(
@@ -2797,7 +2806,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSafeguardExpiryAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSafeguardExpiryAttestations.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSafeguardExpiryAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSafeguardExpiryAttestations.values()].filter(
@@ -2825,7 +2834,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureBurndownRecalibration.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureBurndownRecalibration.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureBurndownRecalibration.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureBurndownRecalibration.values()].filter(
@@ -2853,7 +2862,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureExpiryAttestationQueue.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureExpiryAttestationQueue.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureExpiryAttestationQueue.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureExpiryAttestationQueue.values()].filter(
@@ -2881,7 +2890,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureBurndownSettlement.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureBurndownSettlement.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureBurndownSettlement.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureBurndownSettlement.values()].filter(
@@ -2909,7 +2918,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureExpiryAttestationQueueDrain.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureExpiryAttestationQueueDrain.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureExpiryAttestationQueueDrain.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureExpiryAttestationQueueDrain.values()].filter(
@@ -2937,7 +2946,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSettlementAttestation.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSettlementAttestation.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSettlementAttestation.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSettlementAttestation.values()].filter(
@@ -2965,7 +2974,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureQueueDrainReconciliation.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureQueueDrainReconciliation.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureQueueDrainReconciliation.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureQueueDrainReconciliation.values()].filter(
@@ -2993,7 +3002,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureSettlementArbitration.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureSettlementArbitration.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureSettlementArbitration.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureSettlementArbitration.values()].filter(
@@ -3021,7 +3030,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.filingEscalationClosureQueueReentryCompliance.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.filingEscalationClosureQueueReentryCompliance.get(id) ?? null
+        return firmScoped(store.filingEscalationClosureQueueReentryCompliance.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.filingEscalationClosureQueueReentryCompliance.values()].filter(
@@ -3079,7 +3088,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.followUps.push(row)
       },
       async get(id, firmId) {
-        return store.followUps.find((row) => row.id === id) ?? null
+        return firmScoped(store.followUps.find((row) => row.id === id), firmId)
       },
       async listByFirm(firmId) {
         return store.followUps.filter((row) => row.firmId === firmId)
@@ -3095,7 +3104,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.intimations.push(row)
       },
       async get(id, firmId) {
-        return store.intimations.find((row) => row.id === id) ?? null
+        return firmScoped(store.intimations.find((row) => row.id === id), firmId)
       },
       async listByFirm(firmId) {
         return store.intimations.filter((row) => row.firmId === firmId)
@@ -3141,7 +3150,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.committeeOutputs.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.committeeOutputs.get(id) ?? null
+        return firmScoped(store.committeeOutputs.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.committeeOutputs.values()].filter((row) => row.firmId === firmId)
@@ -3152,7 +3161,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.matterClientSearchIndex.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.matterClientSearchIndex.get(id) ?? null
+        return firmScoped(store.matterClientSearchIndex.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.matterClientSearchIndex.values()].filter((row) => row.firmId === firmId)
@@ -3163,7 +3172,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.draftTemplateAnalytics.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.draftTemplateAnalytics.get(id) ?? null
+        return firmScoped(store.draftTemplateAnalytics.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.draftTemplateAnalytics.values()].filter((row) => row.firmId === firmId)
@@ -3174,7 +3183,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.matterReportExportAnalytics.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.matterReportExportAnalytics.get(id) ?? null
+        return firmScoped(store.matterReportExportAnalytics.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.matterReportExportAnalytics.values()].filter((row) => row.firmId === firmId)
@@ -3188,7 +3197,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.matterReportRelevanceSnapshots.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.matterReportRelevanceSnapshots.get(id) ?? null
+        return firmScoped(store.matterReportRelevanceSnapshots.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.matterReportRelevanceSnapshots.values()].filter((row) => row.firmId === firmId)
@@ -3202,7 +3211,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsActivity.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsActivity.get(id) ?? null
+        return firmScoped(store.workflowOpsActivity.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
@@ -3213,7 +3222,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertDigests.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertDigests.values()].filter((row) => row.firmId === firmId)
@@ -3227,7 +3236,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertAttestations.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertAttestations.values()].filter((row) => row.firmId === firmId)
@@ -3241,7 +3250,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertEscalationLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertEscalationLedgers.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertEscalationLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertEscalationLedgers.values()].filter((row) => row.firmId === firmId)
@@ -3257,7 +3266,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertAttestationDisputes.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertAttestationDisputes.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertAttestationDisputes.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertAttestationDisputes.values()].filter(
@@ -3275,7 +3284,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertEscalationClosures.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertEscalationClosures.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertEscalationClosures.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertEscalationClosures.values()].filter(
@@ -3293,7 +3302,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertDisputeEnforcementLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertDisputeEnforcementLedgers.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertDisputeEnforcementLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertDisputeEnforcementLedgers.values()].filter(
@@ -3311,7 +3320,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertClosureDebtReconciliationDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertClosureDebtReconciliationDigests.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertClosureDebtReconciliationDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertClosureDebtReconciliationDigests.values()].filter(
@@ -3329,7 +3338,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertEnforcementAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertEnforcementAttestations.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertEnforcementAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertEnforcementAttestations.values()].filter(
@@ -3347,7 +3356,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertClosureDebtVarianceDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertClosureDebtVarianceDigests.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertClosureDebtVarianceDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertClosureDebtVarianceDigests.values()].filter(
@@ -3365,7 +3374,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertEnforcementWaiverLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertEnforcementWaiverLedgers.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertEnforcementWaiverLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertEnforcementWaiverLedgers.values()].filter(
@@ -3383,7 +3392,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertVarianceRemediationQueues.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertVarianceRemediationQueues.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertVarianceRemediationQueues.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertVarianceRemediationQueues.values()].filter(
@@ -3401,7 +3410,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDigests.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDigests.values()].filter(
@@ -3419,7 +3428,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertVarianceRemediationSlaLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertVarianceRemediationSlaLedgers.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertVarianceRemediationSlaLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaLedgers.values()].filter(
@@ -3437,7 +3446,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputes.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputes.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputes.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputes.values()].filter(
@@ -3455,7 +3464,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaBreachEscalations.values()].filter(
@@ -3473,7 +3482,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudications.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputeAdjudications.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudications.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudications.values()].filter(
@@ -3491,7 +3500,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpoints.values()].filter(
@@ -3509,7 +3518,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloStewardships.values()].filter(
@@ -3530,11 +3539,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         )
       },
       async get(id, firmId) {
-        return (
-          store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(
-            id
-          ) ?? null
-        )
+        return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [
@@ -3552,7 +3557,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtRemediations.values()].filter(
@@ -3574,11 +3579,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationExceptionReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3596,7 +3597,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndowns.values()].filter(
@@ -3618,11 +3619,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueOrchestrations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3640,7 +3637,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(id) ?? null
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlements.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [
@@ -3661,11 +3658,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         )
       },
       async get(id, firmId) {
-        return (
-          store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(
-            id
-          ) ?? null
-        )
+        return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrains.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [
@@ -3686,11 +3679,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         )
       },
       async get(id, firmId) {
-        return (
-          store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.get(
-            id
-          ) ?? null
-        )
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [
@@ -3712,11 +3701,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueDrainReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3737,11 +3722,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         )
       },
       async get(id, firmId) {
-        return (
-          store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get(
-            id
-          ) ?? null
-        )
+        return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [
@@ -3763,11 +3744,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryCompliances.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3789,11 +3766,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionFinalizations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3815,11 +3788,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirements.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3841,11 +3810,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernances.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3867,11 +3832,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3893,11 +3854,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3919,11 +3876,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3945,11 +3898,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3971,11 +3920,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExports.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -3997,11 +3942,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4023,11 +3964,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryReceipts.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4049,11 +3986,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4075,11 +4008,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4101,11 +4030,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffs.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4127,11 +4052,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4153,11 +4074,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4179,11 +4096,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4205,11 +4118,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4231,11 +4140,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4257,11 +4162,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4283,11 +4184,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4309,11 +4206,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4335,11 +4228,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4361,11 +4250,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4387,11 +4272,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4413,11 +4294,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4439,11 +4316,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4465,11 +4338,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4491,11 +4360,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4517,11 +4382,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4544,11 +4405,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4570,11 +4427,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4596,11 +4449,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4622,11 +4471,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4648,11 +4493,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4674,11 +4515,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4700,11 +4537,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView501.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4726,11 +4559,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4752,11 +4581,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView502.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4778,11 +4603,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4804,11 +4625,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4830,11 +4647,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4856,11 +4669,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4882,11 +4691,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView505.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4908,11 +4713,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView517.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4934,11 +4735,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView519.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4960,11 +4757,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -4986,11 +4779,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView507.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5012,11 +4801,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView509.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5038,11 +4823,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5064,11 +4845,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5090,11 +4867,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5116,11 +4889,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView506.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5142,11 +4911,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView518.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5168,11 +4933,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView520.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5194,11 +4955,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5220,11 +4977,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5246,11 +4999,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerifications.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5272,11 +5021,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView508.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5298,11 +5043,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView521.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5324,11 +5065,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView510.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5350,11 +5087,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTbAckReconPdFreezeSealView522.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5376,11 +5109,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView523.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5402,11 +5131,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView511.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5428,11 +5153,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView524.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5454,11 +5175,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView526.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5480,11 +5197,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView525.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5506,11 +5219,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsExternalTransportReceiptAcknowledgmentsTbAckReconPdFreezeSealView512.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5532,11 +5241,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView513.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5558,11 +5263,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView515.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5584,11 +5285,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView527.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5610,11 +5307,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView529.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5636,11 +5329,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView514.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5662,11 +5351,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView528.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5688,11 +5373,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView530.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5714,11 +5395,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsTbAckReconPdFreezeSealView531.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5740,11 +5417,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsTbAckReconPdFreezeSealView532.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5766,11 +5439,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView533.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5792,11 +5461,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView535.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5818,11 +5483,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView537.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5844,11 +5505,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView539.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5871,11 +5528,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView534.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersTbAckReconPdFreezeSealView534.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5897,11 +5550,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView536.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5923,11 +5572,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView538.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5949,11 +5594,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView540.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -5975,11 +5616,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView541.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6001,11 +5638,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView542.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6028,11 +5661,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView543.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView543.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6054,11 +5683,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView545.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6080,11 +5705,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView547.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6107,11 +5728,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView549.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsExternalDistributionAuditLedgerReconciliationClosureSealVerificationsReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationsTbAckReconPdFreezeSealView549.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6133,11 +5750,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView544.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6159,11 +5772,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView546.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6185,11 +5794,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView548.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6211,11 +5816,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsPartnerHandoffAttestationAcknowledgementSealVerificationsPartnerHandoffAttestationAcknowledgementSealVerificationOutboundRegistryAttestationLedgersPartnerHandoffAttestationAcknowledgementsTbAckReconPdFreezeSealView550.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6238,11 +5839,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationsTbAckReconPdFreezeSealView516.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6264,11 +5861,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6290,11 +5883,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationsOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgments.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6316,11 +5905,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           )
         },
         async get(id, firmId) {
-          return (
-            store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(
-              id
-            ) ?? null
-          )
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [
@@ -6339,7 +5924,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.set(row.id, row)
         },
         async get(id, firmId) {
-          return store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(id) ?? null
+          return firmScoped(store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [...store.workflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestations.values()].filter((row) => row.firmId === firmId)
@@ -6354,7 +5939,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
           store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.set(row.id, row)
         },
         async get(id, firmId) {
-          return store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(id) ?? null
+          return firmScoped(store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.get(id), firmId)
         },
         async listByFirm(firmId) {
           return [...store.workflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationTransportBoundaryReceiptReconciliationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgers.values()].filter((row) => row.firmId === firmId)
@@ -6389,7 +5974,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageDisputeAttestations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageDisputeAttestations.get(id) ?? null
+        return firmScoped(store.tenancyLineageDisputeAttestations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageDisputeAttestations.values()].filter(
@@ -6407,7 +5992,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageReconciliationDigests.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageReconciliationDigests.get(id) ?? null
+        return firmScoped(store.tenancyLineageReconciliationDigests.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageReconciliationDigests.values()].filter(
@@ -6420,7 +6005,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageReconciliationQueueArbitrations.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageReconciliationQueueArbitrations.get(id) ?? null
+        return firmScoped(store.tenancyLineageReconciliationQueueArbitrations.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageReconciliationQueueArbitrations.values()].filter(
@@ -6438,7 +6023,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageDigestClosureCheckpoints.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageDigestClosureCheckpoints.get(id) ?? null
+        return firmScoped(store.tenancyLineageDigestClosureCheckpoints.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageDigestClosureCheckpoints.values()].filter(
@@ -6456,7 +6041,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageClosureAdjudications.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageClosureAdjudications.get(id) ?? null
+        return firmScoped(store.tenancyLineageClosureAdjudications.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageClosureAdjudications.values()].filter(
@@ -6474,7 +6059,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageArbitrationDebtRetirementLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageArbitrationDebtRetirementLedgers.get(id) ?? null
+        return firmScoped(store.tenancyLineageArbitrationDebtRetirementLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageArbitrationDebtRetirementLedgers.values()].filter(
@@ -6492,7 +6077,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageClosureAdjudicationSettlements.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageClosureAdjudicationSettlements.get(id) ?? null
+        return firmScoped(store.tenancyLineageClosureAdjudicationSettlements.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageClosureAdjudicationSettlements.values()].filter(
@@ -6510,7 +6095,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(id) ?? null
+        return firmScoped(store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyLineageArbitrationDebtRetirementDisputeLedgers.values()].filter(
@@ -6528,7 +6113,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.tenancyExternalSessionIdentityBridges.set(row.id, row)
       },
       async get(id, firmId) {
-        return store.tenancyExternalSessionIdentityBridges.get(id) ?? null
+        return firmScoped(store.tenancyExternalSessionIdentityBridges.get(id), firmId)
       },
       async listByFirm(firmId) {
         return [...store.tenancyExternalSessionIdentityBridges.values()].filter(
