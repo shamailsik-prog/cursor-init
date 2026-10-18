@@ -315,20 +315,26 @@ describe("Gate G-1 forensic spine", () => {
 
   it("G1-10 corpus_metadata.embedding_model changed while embeddings exist -> search refuses; reembedCorpus keeps old vectors until confirmed", () => {
     const store = newStore()
-    store.embeddings.push({
-      entityId: "j1",
-      model: "text-embedding-3-small",
-      vector: new Array(1536).fill(0),
-    })
-    changeEmbeddingModel(store, "text-embedding-3-large")
-    expect(() => searchCorpus(store, "text-embedding-3-large")).toThrow(/refuses/)
-    expect(() => searchCorpus(store, "text-embedding-3-small")).toThrow(/refuses/)
+    // Search ranks judgments (FA-D5-001), so the embedded entity is one, with a non-zero vector to score.
+    seedJudgment(store, "j1", "Synthetic authority on bail", "single", "2099 SCMR 1")
+    const vector = new Array(1536).fill(0)
+    vector[0] = 1
+    store.embeddings.push({ entityId: "j1", model: "text-embedding-3-small", vector })
+    // FA-D5-002: the in-app switch refuses while the stored vectors are under the old model (re-embed first) ...
+    expect(() => changeEmbeddingModel(store, "text-embedding-3-large", { confirmed: true })).toThrow(/re-embed first/)
+    expect(store.corpusMetadata.embedding_model).toBe("text-embedding-3-small")
+    // ... so the change this test describes arrives out of band: corpus_metadata lives in the corpus database (Annex A).
+    store.corpusMetadata.embedding_model = "text-embedding-3-large"
+    const query = (model: string) => ({ text: "bail", embedding: { model, vector } })
+    expect(() => searchCorpus(store, query("text-embedding-3-large"))).toThrow(/refuses/)
+    expect(() => searchCorpus(store, query("text-embedding-3-small"))).toThrow(/refuses/)
+    expect(() => searchCorpus(store, { text: "bail" })).toThrow(/refuses/)
     const held = reembedCorpus(store, "text-embedding-3-large", false)
     expect(held.keptOld).toBe(true)
     expect(store.embeddings[0]?.model).toBe("text-embedding-3-small")
     const done = reembedCorpus(store, "text-embedding-3-large", true)
     expect(done.keptOld).toBe(false)
     expect(store.embeddings[0]?.model).toBe("text-embedding-3-large")
-    expect(searchCorpus(store, "text-embedding-3-large").items).toHaveLength(1)
+    expect(searchCorpus(store, query("text-embedding-3-large")).items.map((h) => h.entityId)).toEqual(["j1"])
   })
 })
