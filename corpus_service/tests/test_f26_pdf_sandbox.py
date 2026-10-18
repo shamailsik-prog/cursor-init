@@ -9,13 +9,18 @@ OCR is exercised with a stand-in for pytesseract: the pinned test set has no tes
 
 import ast
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
+import json
 import os
 import pickle
+import shutil
+import signal
 import socket
 import stat
 import sys
+import tempfile
 import time
 import types
 from pathlib import Path
@@ -753,3 +758,617 @@ def test_r5_a_document_that_cannot_be_kept_is_not_parsed(monkeypatch, tmp_path):
     result, parsed = _intake(object(), _fetch, monkeypatch, tmp_path)
     assert isinstance(result, outcomes.DocumentRejected) and result.code == "raw_store_full", result
     assert parsed == []
+
+
+# =============================================================================================
+# F26-FU: the independent re-audit (FAIL 7/10). Spec section 7, rulings R16-R25. Expected values
+# come from the spec; every test below was run on 53f4450 (the F26 merge) first (plan ledger).
+# =============================================================================================
+def _alive(pid):
+    """True while ``pid`` is a running (not zombie) process."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state != "Z"
+
+
+@pytest.fixture(scope="module")
+def golden_isolation(tmp_path_factory):
+    """The isolation record of one real sandbox parse of a golden judgment, with default limits."""
+    from scraper.parsers import pdf_sandbox, raw_store
+
+    obj = raw_store.put(golden_pdf("golden-one-page"), root=tmp_path_factory.mktemp("f26fu-isolation"))
+    result = pdf_sandbox.parse(obj.path, obj.sha256, obj.size)
+    assert result.text == golden_text("golden-one-page")
+    return result.isolation
+
+
+# ---------------------------------------------------------------------------------------------
+# R16 (FA-corpus-009): the child never writes to the worker's stdout or stderr
+# ---------------------------------------------------------------------------------------------
+def test_r16_the_child_is_detached_from_the_worker_s_output(golden_isolation):
+    """Read back inside the child: fds 0-2 are /dev/null and logging is disabled (the e2e flood test,
+    tests/test_f26_pdf_intake_e2e.py, measures the bytes)."""
+    iso = golden_isolation
+    assert iso.get("stdio") == {"0": "/dev/null", "1": "/dev/null", "2": "/dev/null"}, iso
+    assert iso.get("logging_disabled") is True, iso
+
+
+def test_r16_a_child_that_cannot_detach_from_the_worker_s_output_never_reads_the_pdf(tmp_path):
+    """If /dev/null cannot be opened the child answers pdf_parse_failed (stdio) at once: it never
+    parses while attached to the worker's log. Run in a forked copy of this process (the child's own
+    set-up must not touch the test process); the input path does not exist, so a child that went on
+    would answer FileNotFoundError instead."""
+    import billiard
+
+    from scraper.parsers import pdf_sandbox
+
+    reader, writer = billiard.Pipe(duplex=False)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            reader.close()
+            real_open = os.open
+
+            def _no_devnull(path, *args, **kwargs):
+                if path == os.devnull:
+                    raise PermissionError(13, "F26 synthetic: /dev/null refused")
+                return real_open(path, *args, **kwargs)
+
+            pdf_sandbox.os.open = _no_devnull
+            pdf_sandbox._child(writer, str(tmp_path / "never-read.pdf"), "0" * 64, 1, str(tmp_path),
+                               dataclasses.asdict(pdf_sandbox.LIMITS))
+        finally:
+            os._exit(0)
+    writer.close()
+    try:
+        assert reader.poll(60), "the child did not answer"
+        answer = json.loads(reader.recv_bytes())
+    finally:
+        reader.close()
+        os.waitpid(pid, 0)
+    assert (answer.get("ok"), answer.get("code"), answer.get("detail")) == (False, "pdf_parse_failed", "stdio"), answer
+
+
+# ---------------------------------------------------------------------------------------------
+# R24 (L6): what the tests can see, one test per surviving mutant
+# ---------------------------------------------------------------------------------------------
+def test_r24_the_worker_s_read_bound_refuses_an_answer_the_child_did_not_cap(tmp_path):
+    """M14. A bound below even the child's own refusal answer (which carries the isolation record):
+    only the worker's read bound can refuse it, and says so."""
+    exc = refused(tmp_path, golden_pdf("golden-one-page"), max_result_bytes=64)
+    assert (exc.code, exc.detail) == ("pdf_text_limit", "answer over max_result_bytes (worker bound)"), exc
+
+
+def test_r24_the_child_caps_its_own_answer(tmp_path):
+    """M15. About 13 KB of text against an 8 KiB bound: the child answers with its own short
+    refusal, which the worker reads whole."""
+    big = F.text_pdf(F.pages_of(F.judgment_lines(120, seed="CAP"), 40))
+    exc = refused(tmp_path, big, max_result_bytes=8192)
+    assert (exc.code, exc.detail) == ("pdf_text_limit", "answer over max_result_bytes"), exc
+
+
+def _network_namespace_refused():
+    """Can a process here enter a new network namespace the way the sandbox tries (as root:
+    CLONE_NEWNET, then as uid 65534: CLONE_NEWUSER | CLONE_NEWNET; as anyone else: the latter)?
+    Probed in a forked child. Returns None when it can, else the errors."""
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(read_fd)
+            errors = []
+            if os.geteuid() == 0:
+                try:
+                    os.unshare(os.CLONE_NEWNET)
+                    os.write(write_fd, b"ok")
+                    os._exit(0)
+                except OSError as exc:
+                    errors.append(f"CLONE_NEWNET as root: {exc.strerror}")
+                os.setgroups([])
+                os.setgid(65534)
+                os.setuid(65534)
+            try:
+                os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNET)
+                os.write(write_fd, b"ok")
+            except OSError as exc:
+                errors.append(f"CLONE_NEWUSER|CLONE_NEWNET as uid {os.getuid()}: {exc.strerror}")
+                os.write(write_fd, "; ".join(errors).encode())
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    out = b""
+    while True:
+        chunk = os.read(read_fd, 4096)
+        if not chunk:
+            break
+        out += chunk
+    os.close(read_fd)
+    os.waitpid(pid, 0)
+    return None if out == b"ok" else out.decode()
+
+
+def test_r24_the_child_is_in_a_network_namespace_of_its_own_where_the_kernel_allows(golden_isolation):
+    """M37. Compared from outside: the child's network namespace (read back inside it after
+    isolation) is not the worker's, and it sees only the loopback interface. Where this kernel or
+    container refuses every route the sandbox tries, the child must say net=none and share the
+    worker's namespace, and the test is skipped with the probe's errors."""
+    iso = golden_isolation
+    ours = os.readlink("/proc/self/ns/net")
+    refused_here = _network_namespace_refused()
+    if refused_here:
+        assert iso.get("net") == "none" and iso.get("netns") == ours, iso
+        pytest.skip(f"this kernel refuses a new network namespace here ({refused_here}); the child reports net=none")
+    assert iso.get("net") in {"netns", "userns+netns"}, iso
+    assert iso.get("netns") not in (None, ours), (iso.get("netns"), ours)
+    assert iso.get("interfaces") == ["lo"], iso
+
+
+def test_r24_the_child_leads_its_own_session_and_process_group(golden_isolation):
+    assert golden_isolation.get("session_leader") is True, golden_isolation
+
+
+def test_r24_the_kill_reaches_the_child_s_whole_process_group():
+    """M38. A real session leader with a grandchild (tesseract stands in the child's group the same
+    way): the worker's kill ends both."""
+    from scraper.parsers import pdf_sandbox
+
+    read_fd, write_fd = os.pipe()
+    leader = os.fork()
+    if leader == 0:
+        try:
+            os.close(read_fd)
+            os.setsid()
+            grandchild = os.fork()
+            if grandchild == 0:
+                time.sleep(120)
+                os._exit(0)
+            os.write(write_fd, str(grandchild).encode())
+            time.sleep(120)
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    grandchild = int(os.read(read_fd, 64))
+    os.close(read_fd)
+    try:
+        pdf_sandbox._kill_group(types.SimpleNamespace(pid=leader))
+        deadline = time.monotonic() + 10
+        status = None
+        while status is None and time.monotonic() < deadline:
+            done, status = os.waitpid(leader, os.WNOHANG)
+            status = status if done else None
+            time.sleep(0.02)
+        assert status is not None and os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL, status
+        while _alive(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not _alive(grandchild), "the grandchild outlived the kill of its process group"
+    finally:
+        for pid in (grandchild, leader):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(ChildProcessError):
+            os.waitpid(leader, os.WNOHANG)
+
+
+def test_r24_the_child_bounds_image_decoding_at_the_pixel_cap(golden_isolation):
+    """M44. PIL's bound as it holds inside the child: the configured cap, and the bomb warning raised
+    as an error (tests/test_f26_pdf_sandbox.py::test_r8_image_decoding_is_bounded shows what that
+    refuses)."""
+    from scraper.parsers import pdf_sandbox
+
+    iso = golden_isolation
+    assert (iso.get("image_pixels"), iso.get("image_bomb_error")) == (pdf_sandbox.LIMITS.max_image_pixels, True), iso
+
+
+def test_r24_one_page_whose_size_cannot_be_read_does_not_stop_ocr_of_the_others(monkeypatch):
+    """M48 (the Bugbot commit 5121394): the second of three scanned pages fails when its size is
+    read; the first and third are still OCRed."""
+    from scraper.parsers import pdf_extractor
+
+    calls = []
+    fake_tesseract(monkeypatch, calls)
+    real = pdf_extractor._render_pixels
+    seen = []
+
+    def _second_page_breaks(page, dpi):
+        seen.append(page)
+        if len(seen) == 2:
+            raise ValueError("F26 synthetic: an unreadable page size")
+        return real(page, dpi)
+
+    monkeypatch.setattr(pdf_extractor, "_render_pixels", _second_page_breaks)
+    result = pdf_extractor.extract_pdf(F.blank_pdf(3))
+    assert len(calls) == 2, calls
+    assert (result.ocr_applied, result.ocr_pages, result.pages) == (True, 2, 3), result
+    assert result.text.count("Synthetic F26 OCR text") == 4
+
+
+# Spec R4 (the first six) and R20 (the rest), written out from the spec.
+R4_R20_NAMES = ("Launch", "EmbeddedFile", "EmbeddedFiles", "EF", "FileAttachment", "RichMedia",
+                "OnInstantiate", "3DD", "GoToR", "GoToE", "SubmitForm", "ImportData")
+
+
+@pytest.mark.parametrize("name", R4_R20_NAMES)
+def test_r20_each_active_content_name_is_refused_on_its_own(name, monkeypatch):
+    """M19-M24 and R20: a document whose only listed name is ``name`` is refused for it, and (the
+    fixture's own check) nothing else in the policy would refuse it."""
+    from scraper.parsers import pdf_extractor
+
+    data = F.active_pdf(name, F.judgment_lines(4, seed=f"AC-{name}"))
+    assert pdf_extractor.find_active_content(data) == name
+    monkeypatch.setattr(pdf_extractor, "ACTIVE_CONTENT_NAMES", frozenset(pdf_extractor.ACTIVE_CONTENT_NAMES) - {name})
+    assert pdf_extractor.find_active_content(data) is None
+
+
+def test_r20_a_judgment_with_a_web_link_is_accepted():
+    """R20: URI actions stay accepted (judgments link to statutes and reports)."""
+    from scraper.parsers import pdf_extractor
+
+    lines = F.judgment_lines(6, seed="URI")
+    data = F.uri_link_pdf(lines)
+    assert pdf_extractor.find_active_content(data) is None
+    assert "C.A. 1/2099" in pdf_extractor.extract_pdf_text(data)
+
+
+# ---------------------------------------------------------------------------------------------
+# R17 / R18 (L1-L3): the raw store, with real processes and real SIGKILLs
+# ---------------------------------------------------------------------------------------------
+def _killed_writer(root, data, *, pid=None):
+    """A forked writer that SIGKILLs itself inside ``raw_store.put``, at the fsync of its temporary
+    object: the object's bytes are written, the ledger is not. ``pid``: what it reports as its
+    process id (the re-audit's pid-reuse case)."""
+    digest = hashlib.sha256(data).hexdigest()
+    child = os.fork()
+    if child == 0:
+        try:
+            from scraper.parsers import raw_store
+
+            me, real_fsync = os.getpid(), os.fsync
+
+            def _fsync(fd):
+                if os.path.basename(os.readlink(f"/proc/self/fd/{fd}")).startswith("." + digest):
+                    os.kill(me, signal.SIGKILL)
+                return real_fsync(fd)
+
+            if pid is not None:
+                raw_store.os.getpid = lambda: pid
+            raw_store.os.fsync = _fsync
+            raw_store.put(data, root=root)
+        finally:
+            os._exit(3)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL, status
+    return sorted((Path(root) / "raw-pdf").rglob("*.tmp"))
+
+
+def _objects_bytes(root):
+    return sum(p.stat().st_size for p in (Path(root) / "raw-pdf" / "sha256").rglob("*.pdf"))
+
+
+def test_r17_a_stale_temporary_object_and_a_reused_pid_never_block_its_document(tmp_path, monkeypatch):
+    """L1 (the re-audit's pid_reuse_probe.py): a writer reporting pid 4242 is killed after writing its
+    temporary object; the same document, put three times by a process reporting pid 4242, is stored
+    once and then found. The dirty marker is removed first, so only the temporary name (R17), not a
+    recount (R18), can let the put through."""
+    from scraper.parsers import raw_store
+
+    one, three = golden_pdf("golden-one-page"), golden_pdf("golden-three-pages")
+    raw_store.put(three, root=tmp_path)  # the ledger exists: no recount for a missing one
+    assert _killed_writer(tmp_path, one, pid=4242), "the killed writer left no temporary object"
+    with contextlib.suppress(FileNotFoundError):
+        (tmp_path / "raw-pdf" / ".dirty").unlink()
+    monkeypatch.setattr(raw_store.os, "getpid", lambda: 4242)
+    outcomes = []
+    for _ in range(3):
+        try:
+            outcomes.append(raw_store.put(one, root=tmp_path).created)
+        except raw_store.StoreRefused as exc:
+            outcomes.append(f"refused: {exc.reason}")
+    assert outcomes == [True, False, False], outcomes
+
+
+def test_r18_a_write_killed_midway_is_reclaimed_by_the_next_put(tmp_path):
+    """L2, the dirty marker: far from any bound, the next put after a killed write recounts, so the
+    killed writer's temporary object is removed and the ledger matches the objects."""
+    from scraper.parsers import raw_store
+
+    one, three, special = (golden_pdf(n) for n in GOLDEN)
+    raw_store.put(three, root=tmp_path)
+    assert _killed_writer(tmp_path, one), "the killed writer left no temporary object"
+    raw_store.put(special, root=tmp_path)
+    store = tmp_path / "raw-pdf"
+    assert sorted(store.rglob("*.tmp")) == [], "the killed writer's temporary object is still there"
+    assert int((store / ".usage").read_text()) == _objects_bytes(tmp_path) == len(three) + len(special)
+
+
+def test_r18_the_free_space_floor_recounts_before_it_refuses(tmp_path, monkeypatch):
+    """L2 (the re-audit's floor_recount_probe.py): a killed writer's temporary object holds the
+    space the next document needs. The marker is gone (as after a power failure), so only the
+    floor's own recount can find it; the filesystem reports the space back once it is removed."""
+    from scraper.parsers import raw_store
+
+    one, three, special = (golden_pdf(n) for n in GOLDEN)
+    raw_store.put(three, root=tmp_path)
+    stale = _killed_writer(tmp_path, one)
+    assert stale, "the killed writer left no temporary object"
+    stale_bytes = sum(p.stat().st_size for p in stale)
+    with contextlib.suppress(FileNotFoundError):
+        (tmp_path / "raw-pdf" / ".dirty").unlink()
+    real = shutil.disk_usage
+
+    def _tight(path):
+        reclaimed = 0 if any(p.exists() for p in stale) else stale_bytes
+        return real(path)._replace(free=raw_store.MIN_FREE_BYTES + len(special) - 1 + reclaimed)
+
+    monkeypatch.setattr(raw_store.shutil, "disk_usage", _tight)
+    try:
+        stored_obj = raw_store.put(special, root=tmp_path)
+    except raw_store.StoreRefused as exc:
+        pytest.fail(f"refused at the floor without reclaiming the stale temporary object: {exc.reason}")
+    assert stored_obj.created and not any(p.exists() for p in stale)
+
+
+def test_r18_a_full_store_refuses_from_its_ledger_without_walking_the_tree_each_time(tmp_path, monkeypatch):
+    """L3: two refused puts in a row at a full store walk the tree at most once between them (the
+    re-audit measured 3.8-5.2 s per walk at 100,000 objects, under the global lock). Once the last
+    recount is older than the interval, an object an operator removed is noticed."""
+    from scraper.parsers import raw_store
+
+    one, three, special = (golden_pdf(n) for n in GOLDEN)
+    raw_store.put(one, root=tmp_path)
+    kept_three = raw_store.put(three, root=tmp_path)
+    monkeypatch.setattr(raw_store, "MAX_STORE_BYTES", len(one) + len(three) + 10)
+    objects = str(tmp_path / "raw-pdf" / "sha256")
+    walked = []
+    real_scandir = os.scandir
+
+    def _spy(path=".", *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and os.path.abspath(os.fspath(path)).startswith(objects):
+            walked.append(os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", _spy)
+    per_put = []
+    for _ in range(2):
+        before = len(walked)
+        with pytest.raises(raw_store.StoreRefused) as caught:
+            raw_store.put(special, root=tmp_path)
+        assert caught.value.full is True
+        per_put.append(len(walked) - before)
+    assert per_put[1] == 0, f"directories scanned per refused put: {per_put}"
+
+    # An operator removes an object by hand; once the interval has passed, the next put notices.
+    path = kept_three.path
+    path.chmod(0o600)
+    path.unlink()
+    stamp = tmp_path / "raw-pdf" / ".recounted"
+    if stamp.exists():
+        aged = time.time() - getattr(raw_store, "RECOUNT_INTERVAL_SECONDS", 600) - 1
+        os.utime(stamp, (aged, aged))
+    assert raw_store.put(special, root=tmp_path).created
+
+
+# ---------------------------------------------------------------------------------------------
+# R21 (INFO): one Content-Type, or not a PDF
+# ---------------------------------------------------------------------------------------------
+def test_r21_a_response_with_more_than_one_content_type_is_not_a_pdf(monkeypatch, tmp_path):
+    import httpx
+
+    from scraper.tasks import outcomes
+
+    body = golden_pdf("golden-one-page")
+    cases = {
+        "two fields": httpx.Headers([("Content-Type", "application/pdf"), ("Content-Type", "text/html")]),
+        "the same field twice": httpx.Headers([("Content-Type", "application/pdf"), ("Content-Type", "application/pdf")]),
+        "a list in one field": {"Content-Type": "application/pdf, text/html"},
+    }
+    for label, headers in cases.items():
+        response = types.SimpleNamespace(status_code=200, content=body, headers=headers, url="https://lhc.gov.pk/x.pdf")
+
+        async def _fetch(client, url, _r=response):
+            return _r
+
+        result, parsed = _intake(object(), _fetch, monkeypatch, tmp_path)
+        assert isinstance(result, outcomes.DocumentRejected) and result.code == "not_pdf", (label, result)
+        assert parsed == [] and not (tmp_path / "vault" / "raw-pdf" / "sha256").exists(), label
+
+    async def _with_a_comma_in_a_parameter(client, url):
+        return types.SimpleNamespace(status_code=200, content=body, url="https://lhc.gov.pk/x.pdf",
+                                     headers=httpx.Headers({"Content-Type": 'application/pdf; name="judgment,2099.pdf"'}))
+
+    result, parsed = _intake(object(), _with_a_comma_in_a_parameter, monkeypatch, tmp_path)
+    assert not isinstance(result, Exception) and len(parsed) == 1, result
+
+
+# ---------------------------------------------------------------------------------------------
+# R19 (L5): /health and /api/vault never walk the raw store
+# ---------------------------------------------------------------------------------------------
+def test_r19_health_and_the_vault_listing_never_walk_the_raw_store(tmp_path, monkeypatch):
+    """The vault holds two bootstrap PDFs over 15,000 bytes, one small one, and three raw-store
+    objects under raw-pdf/. /health's total_pdfs counts the two (what it counted before F26),
+    /api/vault lists the two, and neither scans a directory under raw-pdf/."""
+    from fastapi.testclient import TestClient
+
+    from scraper import config, database, main
+    from scraper.parsers import raw_store
+
+    live = tmp_path / "live"
+    pdfs = live / "PakistanCode" / "pdfs"
+    pdfs.mkdir(parents=True)
+    names = ["Synthetic Act A 2099.pdf", "Synthetic Act B 2099.pdf"]
+    for name in names:
+        (pdfs / name).write_bytes(b"%PDF-1.4 F26 synthetic bootstrap file " + b"x" * 20000)
+    (pdfs / "small.pdf").write_bytes(b"%PDF-1.4 under 15,000 bytes")
+    for i in range(3):
+        raw_store.put(F.padded_pdf(F.judgment_lines(2, seed=f"RAW{i}"), 20000), root=live)
+    assert len(list((live / "raw-pdf").rglob("*.pdf"))) == 3
+
+    monkeypatch.chdir(tmp_path)  # without /app/live (CI), the routes resolve ./live
+    monkeypatch.setattr(main, "_live_dir", lambda: live, raising=False)
+
+    def _no_database():
+        raise ConnectionRefusedError("F26 synthetic: no database for this test")
+
+    monkeypatch.setattr(database, "SessionLocal", _no_database)
+    store = str(live / "raw-pdf")
+    walked = []
+    real_scandir = os.scandir
+
+    def _spy(path=".", *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and os.path.abspath(os.fspath(path)).startswith(store):
+            walked.append(os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", _spy)
+    client = TestClient(main.app)
+    health = client.get("/health").json()
+    vault = client.get("/api/vault", headers={"X-API-Key": config.settings.ADMIN_API_KEY}).json()
+    assert health.get("total_pdfs") == 2, health
+    assert sorted(f["path"] for f in vault.get("files", [])) == [f"PakistanCode/pdfs/{n}" for n in names], vault
+    assert walked == [], walked
+
+
+# ---------------------------------------------------------------------------------------------
+# R22 / R23 (INFO): the test set's billiard; a killed pool process's scratch directory
+# ---------------------------------------------------------------------------------------------
+def test_r22_the_test_set_pins_the_billiard_it_runs():
+    import importlib.metadata
+
+    pins = [line.strip() for line in (PROJECT_ROOT / "requirements-test.txt").read_text(encoding="utf-8").splitlines()
+            if line.strip().lower().startswith("billiard")]
+    assert pins == [f"billiard=={importlib.metadata.version('billiard')}"], pins
+
+
+def _parse_in_a_pool_process(path, sha256, size, limits):
+    """A Celery prefork pool process stands here: it parses, and the test kills it mid-parse."""
+    from scraper.parsers import pdf_sandbox
+
+    pdf_sandbox.parse(path, sha256, size, limits=limits)
+
+
+def test_r23_a_killed_pool_process_s_scratch_directory_is_swept_by_the_next_parse(tmp_path, monkeypatch):
+    """A daemonic pool process is SIGKILLed while its sandbox parses (its watchdog and finally never
+    run); the next parse in this process removes the scratch directory it left. A directory of a
+    live worker (this process) stays; one of F26's first naming stays while fresh and goes once it
+    is older than the age bound."""
+    import billiard
+
+    from scraper.parsers import pdf_sandbox
+
+    root = Path(tempfile.mkdtemp(prefix="f26fu-scratch-"))
+    root.chmod(0o711)  # the child, as uid 65534, must reach its own directory inside
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    try:
+        slow = stored(tmp_path, F.slow_pdf(3_000_000))
+        limits = dataclasses.replace(pdf_sandbox.LIMITS, wall_seconds=60.0, cpu_seconds=3)
+        pool = billiard.get_context("fork").Process(
+            target=_parse_in_a_pool_process, args=(str(slow.path), slow.sha256, slow.size, limits), daemon=True
+        )
+        pool.start()
+        deadline = time.monotonic() + 60
+        while not any(root.iterdir()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        left_by_pool = sorted(p.name for p in root.iterdir())
+        assert left_by_pool, "the pool process never started a parse"
+        os.kill(pool.pid, signal.SIGKILL)
+        pool.join(10)
+
+        live = root / f"f26-pdf-{os.getpid()}-live"
+        live.mkdir()
+        fresh_legacy, old_legacy = root / "f26-pdf-legacyfresh", root / "f26-pdf-legacyold"
+        fresh_legacy.mkdir()
+        old_legacy.mkdir()
+        aged = time.time() - getattr(pdf_sandbox, "SCRATCH_STALE_SECONDS", 7200) - 60
+        os.utime(old_legacy, (aged, aged))
+
+        result = sandbox_parse(tmp_path, golden_pdf("golden-one-page"))
+        assert result.text == golden_text("golden-one-page")
+        remaining = sorted(p.name for p in root.iterdir())
+        assert remaining == sorted([live.name, fresh_legacy.name]), (left_by_pool, remaining)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+# PR #81 review round 1 (Codex P2, thread 4306593931): the pid in a scratch name is parsed strictly.
+def _kernel_pid_max():
+    """The kernel's pid_max, read here independently of the code under test (4,194,304, the 64-bit
+    ceiling, if it cannot be read)."""
+    try:
+        return int(Path("/proc/sys/kernel/pid_max").read_text().strip())
+    except (OSError, ValueError):
+        return 4194304
+
+
+def _a_dead_pid():
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return pid
+
+
+def test_r23_a_scratch_name_without_a_usable_pid_never_stops_a_parse(tmp_path, monkeypatch):
+    """Young directories whose name carries no usable worker pid: one past any C long (os.kill raises
+    OverflowError), a non-ASCII digit ('²'.isdigit() is true and int('²') raises ValueError), 0, a
+    zero-padded pid, and one above the kernel's pid_max (no process can have it, so os.kill says
+    'no such process'). Each is left to the age rule: the parse runs and they stay. A control
+    directory of a dead worker is still swept. On the head before this round the first two stopped
+    every parse, and the last was swept although it was young."""
+    from scraper.parsers import pdf_sandbox
+
+    root = Path(tempfile.mkdtemp(prefix="f26fu-scratch-"))
+    root.chmod(0o711)
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    try:
+        malformed = ["f26-pdf-999999999999999999999-x", "f26-pdf-²-x", "f26-pdf-0-x", "f26-pdf-007-x",
+                     f"f26-pdf-{_kernel_pid_max() + 1}-x"]
+        for name in malformed:
+            (root / name).mkdir()
+        control = root / f"f26-pdf-{_a_dead_pid()}-control"
+        control.mkdir()
+        try:
+            result = sandbox_parse(tmp_path, golden_pdf("golden-one-page"))
+        except (OverflowError, ValueError) as exc:
+            pytest.fail(f"a scratch directory's name stopped the parse: {type(exc).__name__}: {exc}")
+        assert result.text == golden_text("golden-one-page")
+        assert sorted(p.name for p in root.iterdir()) == sorted(malformed), sorted(p.name for p in root.iterdir())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_r23_the_owner_of_a_scratch_name_is_parsed_strictly(tmp_path, monkeypatch):
+    """The pid is ASCII digits in canonical form, above 0 and at most pid_max (read from the kernel,
+    4,194,304 when it cannot be); anything else is no owner. Checking a value that is not a pid never
+    raises, never counts as a dead worker, and never signals a process group (0 or a negative pid)."""
+    from scraper.parsers import pdf_sandbox
+
+    signalled = []
+    real_kill = os.kill
+
+    def _recording_kill(pid, sig):
+        signalled.append(pid)
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(pdf_sandbox.os, "kill", _recording_kill)
+    assert (pdf_sandbox._worker_gone(0), pdf_sandbox._worker_gone(-1), signalled) == (False, False, [])
+    monkeypatch.undo()
+
+    pid_max = _kernel_pid_max()
+    owners = {name: pdf_sandbox._scratch_owner(name) for name in (
+        "f26-pdf-1234-abcd", f"f26-pdf-{pid_max}-x", f"f26-pdf-{pid_max + 1}-x", "f26-pdf-0-x", "f26-pdf-007-x",
+        "f26-pdf-²-x", "f26-pdf-٣-x", "f26-pdf-999999999999999999999-x", "f26-pdf-12", "f26-pdf--x",
+        "f26-pdf-ab12cd34",
+    )}
+    assert owners == {
+        "f26-pdf-1234-abcd": 1234, f"f26-pdf-{pid_max}-x": pid_max, f"f26-pdf-{pid_max + 1}-x": None,
+        "f26-pdf-0-x": None, "f26-pdf-007-x": None, "f26-pdf-²-x": None, "f26-pdf-٣-x": None,
+        "f26-pdf-999999999999999999999-x": None, "f26-pdf-12": None, "f26-pdf--x": None, "f26-pdf-ab12cd34": None,
+    }, owners
+    assert (pdf_sandbox._worker_gone(10 ** 21), pdf_sandbox._worker_gone(-1), pdf_sandbox._worker_gone(os.getpid()),
+            pdf_sandbox._worker_gone(_a_dead_pid())) == (False, False, False, True)
+    for text, want in (("32768\n", 32768), ("not a number\n", 4194304), ("0\n", 4194304)):
+        source = tmp_path / "pid_max"
+        source.write_text(text)
+        assert pdf_sandbox._pid_max(str(source)) == want, text
+    assert pdf_sandbox._pid_max(str(tmp_path / "missing")) == 4194304
