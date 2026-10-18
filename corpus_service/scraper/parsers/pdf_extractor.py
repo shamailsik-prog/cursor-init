@@ -451,8 +451,13 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 # PDF names that carry or launch code, or embed files: JavaScript (/JS, /JavaScript), launch actions,
 # embedded files (the stream's optional /Type, the name tree, a filespec's /EF, an attachment
 # annotation), and the script containers that need no /JS name (/XFA forms, /RichMedia).
+# F26-FU (spec R20, re-audit L4): 3D artwork and its script (/3DD, /OnInstantiate), go-to actions whose
+# target is another or an embedded file (/GoToR, /GoToE: a UNC path leaks the reader's NTLM hash), and
+# form actions that send or load data (/SubmitForm, /ImportData). /URI stays accepted: judgments link
+# to statutes and reports.
 ACTIVE_CONTENT_NAMES = frozenset({
     "JS", "JavaScript", "Launch", "EmbeddedFile", "EmbeddedFiles", "EF", "FileAttachment", "RichMedia", "XFA",
+    "OnInstantiate", "3DD", "GoToR", "GoToE", "SubmitForm", "ImportData",
 })
 
 
@@ -533,6 +538,17 @@ def bound_image_decoding(max_pixels: int) -> None:
 
     Image.MAX_IMAGE_PIXELS = int(max_pixels)
     warnings.simplefilter("error", Image.DecompressionBombWarning)
+
+
+def image_decoding_bound() -> dict:
+    """PIL's bound as it holds now, read back for the sandbox's isolation record (F26-FU, spec R24):
+    the pixel cap and whether the bomb warning is raised as an error."""
+    import warnings
+
+    from PIL import Image
+
+    as_error = any(f[0] == "error" and f[2] is Image.DecompressionBombWarning for f in warnings.filters)
+    return {"image_pixels": Image.MAX_IMAGE_PIXELS, "image_bomb_error": as_error}
 
 
 def _warm_up_pdf() -> bytes:

@@ -4,7 +4,10 @@ Spec: docs/superpowers/specs/2026-10-18-f26-bounded-isolated-pdf-processing-desi
 
 ``parse(path, sha256, size)`` runs the extractor (``scraper.parsers.pdf_extractor``) on a stored PDF in
 a child started with billiard's ``spawn`` context: a fresh Python interpreter that runs one callable,
-``_child``, and inherits only its own pipes (no socket, no database connection). Before it reads a
+``_child``, and inherits only its own pipes (no socket, no database connection). Its first act is to
+point fds 0-2 at ``/dev/null`` and disable logging, so nothing it or its ``tesseract`` writes reaches
+the worker's stdout or stderr, which in a worker container is the container's log (F26-FU, R16: the
+re-audit's 2.8 KB PDF wrote 7,241 MiB there through pdfminer's warnings). Before it reads a
 byte of the PDF the child becomes a session leader, arms an alarm, replaces its environment with a
 fixed minimal one, sets hard resource limits (address space, data, CPU seconds, file size, open
 files, no core dumps), and checks its input against the size and sha256 the worker stored. It then
@@ -15,7 +18,9 @@ It answers with one JSON document on a pipe. The worker reads at most ``max_resu
 never unpickles anything the child sends. A watchdog kills the child's process group (the child and
 any ``tesseract`` it started) at the wall limit, and the group is killed again on every exit path
 before the child is reaped. Every way a parse can end without text is a ``ParseRefused`` with one of
-the F26 codes (``scraper.tasks.outcomes`` holds the same strings for the run tally).
+the F26 codes (``scraper.tasks.outcomes`` holds the same strings for the run tally). Each parse's
+scratch directory is named after the worker's pid, and every parse first removes those whose worker
+is gone (R23), so a pool process killed mid-parse does not leave its directory behind.
 
 Why billiard and not ``subprocess`` (R7): F25's guard bans ``subprocess``, ``os.exec*`` and
 ``os.posix_spawn`` in corpus code (they can run a program such as curl); a spawn-context process can
@@ -25,6 +30,7 @@ only re-run this interpreter on billiard's fixed bootstrap and call ``_child``. 
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -62,6 +68,8 @@ UNPRIVILEGED_ID = 65534  # nobody / nogroup
 ALARM_GRACE_SECONDS = 15  # the child's own alarm, past the worker's watchdog: an orphan still ends
 CPU_HARD_GRACE_SECONDS = 5  # SIGXCPU at the soft limit first, SIGKILL only at the hard one
 SAFE_PATH = "/usr/local/bin:/usr/bin:/bin"
+SCRATCH_PREFIX = "f26-pdf-"  # f26-pdf-<worker pid>-<random> in the system temporary directory (R23)
+SCRATCH_STALE_SECONDS = 7200  # twice Celery's 3,600 s hard task limit: no live parse is this old
 _REAP_SECONDS = 10.0
 _DETAIL_LIMIT = 200
 
@@ -118,9 +126,10 @@ def parse(path: "os.PathLike[str] | str", sha256: str, size: int, *, limits: Opt
     """Extract the text of the stored PDF at ``path`` in a sandboxed child. Blocking: the intake
     calls it through ``asyncio.to_thread``. Raises ``ParseRefused``; never anything the child raised."""
     limits = LIMITS if limits is None else limits  # looked up per call: tests replace LIMITS
+    _sweep_stale_scratch()
     context = billiard.get_context("spawn")
     reader, writer = context.Pipe(duplex=False)
-    scratch = tempfile.mkdtemp(prefix="f26-pdf-")
+    scratch = tempfile.mkdtemp(prefix=f"{SCRATCH_PREFIX}{os.getpid()}-")
     child = context.Process(
         target=_child,
         args=(writer, os.fspath(path), str(sha256), int(size), scratch, dataclasses.asdict(limits)),
@@ -168,6 +177,48 @@ def parse(path: "os.PathLike[str] | str", sha256: str, size: int, *, limits: Opt
         result.isolation.get("net"), result.isolation.get("uid"),
     )
     return result
+
+
+def _scratch_owner(name: str) -> Optional[int]:
+    """The worker pid in ``f26-pdf-<pid>-<random>``; None for a name without one (F26's first
+    version named them ``f26-pdf-<random>``, and ``mkdtemp``'s random part has no ``-``)."""
+    head, sep, _ = name[len(SCRATCH_PREFIX):].partition("-")
+    return int(head) if sep and head.isdigit() and int(head) > 0 else None
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # alive, another user's
+        return True
+    return True
+
+
+def _sweep_stale_scratch() -> None:
+    """R23: remove every scratch directory whose worker is no longer a live process, or that has not
+    changed for ``SCRATCH_STALE_SECONDS``: a pool process killed mid-parse (Celery's hard limit, the
+    OOM killer) never ran its ``finally``. Best effort; links are never followed (``rmtree`` refuses
+    a link and does not follow links inside)."""
+    root = tempfile.gettempdir()
+    now = time.time()
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(SCRATCH_PREFIX):
+            continue
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            age = now - entry.stat(follow_symlinks=False).st_mtime
+        except OSError:
+            continue
+        owner = _scratch_owner(entry.name)
+        if age > SCRATCH_STALE_SECONDS or (owner is not None and not _process_alive(owner)):
+            shutil.rmtree(entry.path, ignore_errors=True)
 
 
 def _expire(child: Any, expired: threading.Event) -> None:
@@ -224,8 +275,8 @@ def _interpret(payload: Optional[bytes], oversized: bool, exitcode: Optional[int
             )
         code = answer.get("code")
         raise ParseRefused(code if code in _CHILD_CODES else PARSE_FAILED, _safe_detail(answer.get("detail")))
-    if oversized:
-        raise ParseRefused(TEXT_LIMIT, "answer over max_result_bytes")
+    if oversized:  # the worker's read bound; the child's own cap answers without "(worker bound)" (R24)
+        raise ParseRefused(TEXT_LIMIT, "answer over max_result_bytes (worker bound)")
     if timed_out or exitcode in (-signal.SIGXCPU, -signal.SIGALRM):
         raise ParseRefused(PARSE_TIMEOUT, f"after {seconds:.1f} s")
     if exitcode is not None and exitcode < 0:
@@ -241,7 +292,18 @@ class _InputMismatch(Exception):
 
 
 def _child(conn: Any, path: str, sha256: str, size: int, scratch: str, limits: Dict[str, Any]) -> None:
-    """The sandbox. Answers through ``conn`` and nothing else."""
+    """The sandbox. Answers through ``conn`` and nothing else; writes nothing to the worker's stdout
+    or stderr (R16)."""
+    try:
+        _detach_output()  # first: before anything can write to the worker's stdout or stderr
+    except OSError:
+        # Never parse while attached to the worker's log: answer at once, without the PDF.
+        answer = {"ok": False, "code": PARSE_FAILED, "detail": "stdio", "isolation": {}, "seconds": 0.0}
+        try:
+            conn.send_bytes(_encode(answer, int(limits["max_result_bytes"])))
+        finally:
+            conn.close()
+        return
     try:
         os.setsid()
     except OSError:
@@ -265,6 +327,21 @@ def _child(conn: Any, path: str, sha256: str, size: int, scratch: str, limits: D
         conn.send_bytes(_encode(answer, int(limits["max_result_bytes"])))
     finally:
         conn.close()
+
+
+def _detach_output() -> None:
+    """R16: fds 0, 1 and 2 become /dev/null and logging is disabled. The child inherits the worker's
+    stdout and stderr (in a container, its log, where ``RLIMIT_FSIZE`` does not apply to a pipe), and
+    pdfminer's warnings, Python warnings, a native library's messages or ``tesseract``'s output would
+    otherwise land there. Raises OSError if /dev/null cannot be opened."""
+    devnull = os.open(os.devnull, os.O_RDWR)
+    try:
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+    finally:
+        if devnull > 2:
+            os.close(devnull)
+    logging.disable(logging.CRITICAL)
 
 
 def _scrub_environment(scratch: str) -> None:
@@ -353,7 +430,14 @@ def _isolate(scratch: str) -> Dict[str, Any]:
 
 def _describe_process() -> Dict[str, Any]:
     """What the child holds, for the record and the isolation tests: environment variable names (never
-    values), open descriptors and how many are sockets, and its resource limits."""
+    values), open descriptors and how many are sockets, its resource limits, where fds 0-2 point,
+    whether logging is disabled and whether it leads its own session and process group (R24)."""
+    stdio: Dict[str, Optional[str]] = {}
+    for fd in (0, 1, 2):
+        try:
+            stdio[str(fd)] = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            stdio[str(fd)] = None
     fds, sockets = 0, 0
     try:
         for name in os.listdir("/proc/self/fd"):
@@ -377,7 +461,22 @@ def _describe_process() -> Dict[str, Any]:
             "nofile": resource.getrlimit(resource.RLIMIT_NOFILE)[0],
             "core": resource.getrlimit(resource.RLIMIT_CORE)[0],
         },
+        "stdio": stdio,
+        "logging_disabled": logging.root.manager.disable >= logging.CRITICAL,
+        "session_leader": os.getsid(0) == os.getpid() == os.getpgrp(),
     }
+
+
+def _read_back_network() -> Dict[str, Any]:
+    """R24: after ``_isolate``, the network namespace this process is in and the interfaces it sees,
+    read from /proc (not what ``_isolate`` set): a test compares them with the worker's."""
+    out: Dict[str, Any] = {"netns": None, "interfaces": None}
+    with contextlib.suppress(OSError):
+        out["netns"] = os.readlink("/proc/self/ns/net")
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        with open("/proc/self/net/dev", encoding="ascii") as dev:
+            out["interfaces"] = sorted(line.split(":", 1)[0].strip() for line in dev.readlines()[2:] if ":" in line)
+    return out
 
 
 def _parse(data: bytes, scratch: str, limits: Dict[str, Any], isolation: Dict[str, Any]) -> Dict[str, Any]:
@@ -387,6 +486,8 @@ def _parse(data: bytes, scratch: str, limits: Dict[str, Any], isolation: Dict[st
     isolation.update(_describe_process())
     isolation.update(_isolate(scratch))
     pdf_extractor.bound_image_decoding(int(limits["max_image_pixels"]))
+    isolation.update(_read_back_network())
+    isolation.update(pdf_extractor.image_decoding_bound())
     caps = pdf_extractor.Limits(
         max_pages=int(limits["max_pages"]),
         max_text_chars=int(limits["max_text_chars"]),
