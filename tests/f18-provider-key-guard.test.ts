@@ -1,0 +1,120 @@
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+/**
+ * Audit F18, spec ruling R5: a provider key in the Next or eve runtime. Under NODE_ENV=production every P1 call is refused
+ * with a documented reason and an alert line that names the variables, never their values; eve refuses to start. Outside
+ * production only the alert line is logged: no paid path exists there to refuse (R2).
+ *
+ * The guard is loaded dynamically, so on main this file runs and fails on its absence. Values are obviously fake.
+ */
+
+const FAKE = "placeholder-not-a-key"
+type Guard = typeof import("@/platform/p1/providerKeyGuard")
+
+async function guard(): Promise<Guard> {
+  const mod = (await import("@/platform/p1/providerKeyGuard").catch(() => null)) as Guard | null
+  expect(mod, "platform/p1/providerKeyGuard.ts exists").not.toBeNull()
+  return mod!
+}
+
+function alertLines(spy: { mock: { calls: unknown[][] } }): string[] {
+  return spy.mock.calls.map((args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
+
+describe("audit F18: the provider-key guard (R5)", () => {
+  it("lists the AI Gateway pair and the common provider keys", async () => {
+    const { PROVIDER_KEY_ENV_NAMES } = await guard()
+    for (const name of ["AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"]) {
+      expect(PROVIDER_KEY_ENV_NAMES).toContain(name)
+    }
+  })
+
+  it("reports the names that are set and non-blank, never a value", async () => {
+    const { providerKeysPresent } = await guard()
+    expect(providerKeysPresent({})).toEqual([])
+    expect(providerKeysPresent({ AI_GATEWAY_API_KEY: "   ", OPENAI_API_KEY: "" })).toEqual([])
+    const present = providerKeysPresent({ VERCEL_AI_GATEWAY_API_KEY: FAKE, ANTHROPIC_API_KEY: FAKE, UNRELATED: FAKE })
+    expect(present.sort()).toEqual(["ANTHROPIC_API_KEY", "VERCEL_AI_GATEWAY_API_KEY"])
+    expect(JSON.stringify(present)).not.toContain(FAKE)
+  })
+
+  it("in production: refuses, and logs one alert line naming the variables without their values", async () => {
+    const { checkProviderKeys, PROVIDER_KEY_ALERT } = await guard()
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    const check = checkProviderKeys("next", { NODE_ENV: "production", AI_GATEWAY_API_KEY: FAKE })
+    expect(check).toEqual({ names: ["AI_GATEWAY_API_KEY"], refuse: true })
+    const lines = alertLines(spy)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(`ALERT ${PROVIDER_KEY_ALERT}`)
+    expect(lines[0]).toContain("AI_GATEWAY_API_KEY")
+    expect(lines[0]).not.toContain(FAKE)
+  })
+
+  it("outside production: alerts, does not refuse", async () => {
+    const { checkProviderKeys } = await guard()
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    expect(checkProviderKeys("eve", { NODE_ENV: "development", OPENAI_API_KEY: FAKE })).toEqual({ names: ["OPENAI_API_KEY"], refuse: false })
+    expect(alertLines(spy)).toHaveLength(1)
+  })
+
+  it("with no key: neither refuses nor alerts", async () => {
+    const { checkProviderKeys } = await guard()
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    expect(checkProviderKeys("next", { NODE_ENV: "production" })).toEqual({ names: [], refuse: false })
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it("eve's start-up check throws in production with a key, and only then", async () => {
+    const { assertNoProviderKeyAtStartup, PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "production", GROQ_API_KEY: FAKE })).toThrow(PROVIDER_KEY_IN_RUNTIME_REASON)
+    expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "production" })).not.toThrow()
+    expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "development", GROQ_API_KEY: FAKE })).not.toThrow()
+  })
+})
+
+describe("audit F18: callCommitteeBrain under the guard (R2, R5)", () => {
+  it("in production with a key: blocked with the documented reason, nothing dispatched", async () => {
+    const { PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
+    expect(result).toMatchObject({ blocked: true, event: "ai.call.blocked", reason: PROVIDER_KEY_IN_RUNTIME_REASON })
+  })
+
+  it("in production without a key: blocked PHASE0_NO_CREDENTIALS, because the Next runtime has no provider transport", async () => {
+    const { callCommitteeBrain, PHASE0_NO_CREDENTIALS } = await import("@/platform/p1/internalAICaller")
+    vi.stubEnv("NODE_ENV", "production")
+    const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
+    expect(result).toMatchObject({ blocked: true, reason: PHASE0_NO_CREDENTIALS })
+  })
+
+  it("outside production with a key: the alert is logged and the call goes to the injected test transport only", async () => {
+    await guard()
+    const { callCommitteeBrain, setTransportForTests } = await import("@/platform/p1/internalAICaller")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    let sent = 0
+    setTransportForTests({
+      async send() {
+        sent += 1
+        return { text: "stub" }
+      },
+    })
+    try {
+      const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
+      expect(result.blocked).toBe(false)
+      expect(sent).toBe(1)
+      expect(alertLines(spy).some((l) => l.includes("p1.provider_key_in_next_runtime"))).toBe(true)
+    } finally {
+      setTransportForTests(null)
+    }
+  })
+})
