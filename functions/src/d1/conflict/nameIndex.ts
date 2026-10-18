@@ -1,6 +1,6 @@
 import { FieldPath, FieldValue, type Query, type Transaction } from "firebase-admin/firestore"
 import { adminDb } from "../../admin"
-import { bumpRegistryVersion, readRegistryState, readRegistryStateTx, type NameIndexPatch, type RegistryState } from "../registryVersion"
+import { bumpRegistryVersion, bumpResettingNameIndex, readRegistryState, readRegistryStateTx, type NameIndexPatch, type NameIndexState, type RegistryState } from "../registryVersion"
 
 /**
  * The firm's conflict name index (audit F37; spec 2026-10-18-f37 rulings 3 to 7): every distinct client
@@ -21,6 +21,12 @@ import { bumpRegistryVersion, readRegistryState, readRegistryStateTx, type NameI
  * - anything else (an old instance during a deploy, an out-of-band counter bump) breaks the mirror, and the
  *   screen refuses (`nameIndexProblem`) until `reconcileNameIndex` (the `d1.conflict.reindex` job) repairs it.
  *
+ * The screen also refuses an index it cannot read whole (PR #80 review): a state missing a field its writers always
+ * write (`registryStateOf`), a pointer the placement cannot produce (`nameIndexStateCorrupt`), or any chunk from 0 to
+ * the pointer missing or malformed (`readIndexedNames`). A missing chunk is never read as empty while the index
+ * reads current: a current index always has its chunks (an index with no name has an empty chunk 0). The
+ * reconciliation rebuilds a damaged index from the registry.
+ *
  * The chunks are server-only (firestore.rules) and carry the highest label: they aggregate names of every
  * classification and are never returned to a caller.
  */
@@ -34,8 +40,13 @@ export const NAME_INDEX_CHUNK_BYTES = 512 * 1024
 export const NAME_INDEX_MAX_CHUNKS = 400
 /** Names appended per reconciliation transaction (bytes): at most one chunk boundary per transaction. */
 const RECONCILE_APPEND_BYTES = 256 * 1024
-/** Reconciliation rounds before it gives up retryably (a round restarts when a non-maintaining write raced its scan). */
-export const RECONCILE_ROUNDS = 3
+/**
+ * Reconciliation rounds before it gives up retryably: a round restarts when a non-maintaining write raced its scan,
+ * and resetting a damaged index takes one round before the rebuild.
+ */
+export const RECONCILE_ROUNDS = 4
+/** Chunk documents one reset deletes at most (the cap on a sound index, with room for strays). */
+const RESET_CHUNKS = NAME_INDEX_MAX_CHUNKS + 50
 const SCAN_PAGE = 500
 
 export const nameIndexChunkRef = (firmId: string, chunk: number) => adminDb().collection(NAME_INDEX_COLLECTION).doc(`${firmId}_${chunk}`)
@@ -53,10 +64,18 @@ export class NameIndexUnavailable extends Error {
   }
 }
 
+/**
+ * The state cannot describe a placement: malformed or partial (`valid` false), a pointer past the cap, or an open
+ * chunk past 0 with no bytes counted in it (the placement opens a chunk only to put a name in it).
+ */
+export function nameIndexStateCorrupt(ix: NameIndexState): boolean {
+  return !ix.valid || ix.chunk >= NAME_INDEX_MAX_CHUNKS || (ix.chunk > 0 && ix.bytes === 0)
+}
+
 /** Why the index cannot serve a screen at `state`, or null when it is current (schema matches, mirror equals the version). */
 export function nameIndexProblem(state: RegistryState): NameIndexProblem | null {
   const ix = state.nameIndex
-  if (!ix.valid || ix.chunk >= NAME_INDEX_MAX_CHUNKS) return "corrupt"
+  if (nameIndexStateCorrupt(ix)) return "corrupt"
   if (ix.schema === null) return "missing"
   if (ix.schema !== NAME_INDEX_SCHEMA) return "schema"
   if (ix.version !== state.version) return "stale"
@@ -98,7 +117,7 @@ export function placeNames(open: { chunk: number; bytes: number }, names: readon
  */
 export function stageRegistryWrite(tx: Transaction, firmId: string, state: RegistryState, names: readonly string[], patch: NameIndexPatch = {}): void {
   const ix = state.nameIndex
-  const place = ix.valid ? placeNames(ix, names) : { byChunk: new Map<number, string[]>(), chunk: ix.chunk, bytes: ix.bytes }
+  const place = nameIndexStateCorrupt(ix) ? { byChunk: new Map<number, string[]>(), chunk: ix.chunk, bytes: ix.bytes } : placeNames(ix, names)
   for (const [n, list] of place.byChunk) {
     tx.set(
       nameIndexChunkRef(firmId, n),
@@ -135,23 +154,30 @@ export async function bornFreshPatch(tx: Transaction, firmId: string, state: Reg
 }
 
 /**
- * Every name in the index at `state` (chunks 0..state.nameIndex.chunk, one getAll). A chunk that is missing
- * (other than an empty open chunk), another firm's, or not an array of strings makes the index corrupt.
+ * Every name in the index at `state` (chunks 0..state.nameIndex.chunk, one getAll), read whole or not at all
+ * (PR #80 review). The index is corrupt when the state is (`nameIndexStateCorrupt`) or when any chunk from 0 to the
+ * pointer is missing, belongs to another firm, carries another chunk number, holds anything but strings, or
+ * contradicts the bytes counted into it: a closed chunk holds the names placed in it, and the open one holds names
+ * exactly when bytes were counted into it. The one chunk that may be absent is chunk 0 of an index never placed
+ * (no schema, nothing counted), which only the reconciliation reads: a screen reads only a current index.
  */
 export async function readIndexedNames(firmId: string, state: RegistryState): Promise<Set<string>> {
   const ix = state.nameIndex
-  if (!ix.valid || ix.chunk >= NAME_INDEX_MAX_CHUNKS) throw new NameIndexUnavailable("corrupt")
+  if (nameIndexStateCorrupt(ix)) throw new NameIndexUnavailable("corrupt")
+  const unplaced = ix.schema === null && ix.chunk === 0 && ix.bytes === 0
   const db = adminDb()
   const snaps = await db.getAll(...Array.from({ length: ix.chunk + 1 }, (_, n) => nameIndexChunkRef(firmId, n)))
   const names = new Set<string>()
   snaps.forEach((snap, n) => {
     const data = snap.data()
     if (data === undefined) {
-      if (n === ix.chunk && ix.bytes === 0) return
+      if (unplaced) return
       throw new NameIndexUnavailable("corrupt")
     }
     const list: unknown = data.names
-    if (data.firmId !== firmId || !Array.isArray(list) || !list.every((x) => typeof x === "string")) throw new NameIndexUnavailable("corrupt")
+    if (data.firmId !== firmId || data.chunk !== n || !Array.isArray(list) || !list.every((x) => typeof x === "string")) throw new NameIndexUnavailable("corrupt")
+    const holdsNames = list.length > 0
+    if (n < ix.chunk ? !holdsNames : holdsNames !== ix.bytes > 0) throw new NameIndexUnavailable("corrupt")
     for (const x of list as string[]) names.add(x)
   })
   return names
@@ -180,42 +206,72 @@ export async function scanRegistryNames(firmId: string): Promise<Set<string>> {
   return out
 }
 
-/** A reconciliation that cannot finish: the index is malformed (permanent), or writes kept racing its scan (retryable). */
+/** A reconciliation that cannot finish: registry writes that do not maintain the index kept racing it (retryable). */
 export class ReconcileError extends Error {
-  readonly code: "name_index_corrupt" | "reconcile_contended"
-  constructor(code: "name_index_corrupt" | "reconcile_contended") {
+  readonly code: "reconcile_contended"
+  constructor(code: "reconcile_contended") {
     super(code)
     this.name = "ReconcileError"
     this.code = code
   }
 }
 
-export type ReconcileResult = { names: number; added: number; marked: boolean; rounds: number }
+export type ReconcileResult = { names: number; added: number; marked: boolean; rebuilt: boolean; rounds: number }
+
+/** True when `id` is one of the firm's chunk document ids (`{firmId}_{n}`), not a longer firm id's. */
+const isChunkIdOf = (firmId: string, id: string): boolean => id.startsWith(`${firmId}_`) && /^\d+$/.test(id.slice(firmId.length + 1))
+
+/**
+ * Drops a damaged index (PR #80 review): in one transaction, every chunk document of the firm is deleted and the
+ * state is reset to an unplaced, schema-less index (it reads `missing`) with a bump, so in-flight openings re-screen.
+ * Nothing is done when the registry moved since `start` was read: the caller's next round reads it again.
+ */
+async function resetNameIndex(firmId: string, start: RegistryState): Promise<void> {
+  const db = adminDb()
+  const chunks = db
+    .collection(NAME_INDEX_COLLECTION)
+    .orderBy(FieldPath.documentId())
+    .startAt(`${firmId}_`)
+    .endAt(`${firmId}_\uf8ff`)
+    .select()
+    .limit(RESET_CHUNKS)
+  await db.runTransaction(async (tx) => {
+    const state = await readRegistryStateTx(tx, firmId)
+    if (state.version !== start.version) return
+    const found = await tx.get(chunks)
+    for (const d of found.docs) if (isChunkIdOf(firmId, d.id)) tx.delete(d.ref)
+    bumpResettingNameIndex(tx, firmId, state.version)
+  })
+}
 
 /**
  * Brings the firm's name index in line with its registry (spec ruling 7), off the request path:
  *
- * 1. read the state (version v0, mirror n0) and the indexed names;
+ * 1. read the state (version v0, mirror n0) and the indexed names; a damaged index (a partial or impossible state,
+ *    a missing or malformed chunk) is reset (`resetNameIndex`) and the round starts over on the empty index;
  * 2. scan the registry's names;
  * 3. append the missing ones, each transaction through `stageRegistryWrite` (so it bumps the version);
  * 4. unless the index is current already, mark it current in one transaction, provided every registry write
  *    since step 1 kept the mirror (version - v0 === mirror - n0). Otherwise a write that did not maintain the
- *    index (an old instance) raced the scan, and the round starts over.
+ *    index (an old instance) raced the scan, and the round starts over. An index with no name gets an empty
+ *    chunk 0 when it is marked, so a current index always has its chunks.
  *
- * Idempotent and append-only: at-least-once delivery and a stale job lease are harmless. A current index with
- * nothing missing costs reads only. A malformed index is refused (`name_index_corrupt`): an operator deletes the
- * firm's chunks and its `nameIndex` field and the next run rebuilds it.
+ * Idempotent and append-only apart from the reset: at-least-once delivery and a stale job lease are harmless. A
+ * current index with nothing missing costs reads only.
  */
 export async function reconcileNameIndex(firmId: string): Promise<ReconcileResult> {
   const db = adminDb()
-  for (let round = 1; round <= RECONCILE_ROUNDS; round++) {
+  let rebuilt = false
+  rounds: for (let round = 1; round <= RECONCILE_ROUNDS; round++) {
     const start = await readRegistryState(firmId)
     let indexed: Set<string>
     try {
       indexed = await readIndexedNames(firmId, start)
     } catch (err) {
-      if (err instanceof NameIndexUnavailable) throw new ReconcileError("name_index_corrupt")
-      throw err
+      if (!(err instanceof NameIndexUnavailable)) throw err
+      await resetNameIndex(firmId, start)
+      rebuilt = true
+      continue
     }
     const names = await scanRegistryNames(firmId)
     const missing = [...names].filter((n) => !indexed.has(n)).sort()
@@ -228,24 +284,34 @@ export async function reconcileNameIndex(firmId: string): Promise<ReconcileResul
         batch.push(missing[i])
         i += 1
       }
-      await db.runTransaction(async (tx) => {
+      const appended = await db.runTransaction(async (tx) => {
         const state = await readRegistryStateTx(tx, firmId)
-        if (!state.nameIndex.valid) throw new ReconcileError("name_index_corrupt")
+        // Damaged since step 1 (an out-of-band edit): start over, which resets it.
+        if (nameIndexStateCorrupt(state.nameIndex)) return false
         stageRegistryWrite(tx, firmId, state, batch)
+        return true
       })
+      if (!appended) continue rounds
     }
 
     const marked = await db.runTransaction(async (tx): Promise<boolean | null> => {
       const state = await readRegistryStateTx(tx, firmId)
-      if (!state.nameIndex.valid) throw new ReconcileError("name_index_corrupt")
+      if (nameIndexStateCorrupt(state.nameIndex)) return null
       if (nameIndexProblem(state) === null) return false
       const writes = state.version - start.version
       const mirrored = (state.nameIndex.version ?? 0) - (start.nameIndex.version ?? 0)
       if (writes !== mirrored) return null
+      if (state.nameIndex.bytes === 0) {
+        // Nothing counted in the open chunk: an index with no name. Marked current, it gets its (empty) chunk 0.
+        const open = nameIndexChunkRef(firmId, state.nameIndex.chunk)
+        if (!(await tx.get(open)).exists) {
+          tx.set(open, { firmId, chunk: state.nameIndex.chunk, kind: NAME_INDEX_COLLECTION, classification: "privileged-restricted", names: [] })
+        }
+      }
       stageRegistryWrite(tx, firmId, state, [], { schema: NAME_INDEX_SCHEMA, version: state.version + 1 })
       return true
     })
-    if (marked !== null) return { names: names.size, added: missing.length, marked, rounds: round }
+    if (marked !== null) return { names: names.size, added: missing.length, marked, rebuilt, rounds: round }
   }
   throw new ReconcileError("reconcile_contended")
 }

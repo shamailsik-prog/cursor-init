@@ -6,8 +6,9 @@ import { reconcileNameIndex, ReconcileError } from "./nameIndex"
  * `d1.conflict.reindex` (audit F37; spec 2026-10-18-f37 ruling 7): the firm's name index reconciliation, off
  * the request path. Runs daily per firm (a scheduled run, `NAME_REINDEX_SPEC`), on demand when a screen finds
  * the index unavailable (`screening.ts`, keyed per PKT hour), and as the deploy backfill
- * (`jobs:backfill d1.conflict.reindex <day> <day>`). The work is `reconcileNameIndex`: append-only and derived
- * from Firestore state, so it is idempotent under at-least-once delivery and needs no fenced step.
+ * (`jobs:backfill d1.conflict.reindex <day> <day>`). The work is `reconcileNameIndex`: derived from Firestore state
+ * (append-only, or a reset and rebuild of a damaged index), so it is idempotent under at-least-once delivery and
+ * needs no fenced step. No failure is permanent: a damaged index is rebuilt, and writes racing the run retry it.
  */
 
 export const NAME_REINDEX_JOB_TYPE = "d1.conflict.reindex"
@@ -17,7 +18,6 @@ export const NAME_REINDEX_SPEC = { jobType: NAME_REINDEX_JOB_TYPE, cron: "35 2 *
 type Payload = { period: string }
 
 const errorCodes = {
-  name_index_corrupt: "The firm's conflict name index is malformed; delete its chunks and nameIndex state to rebuild it.",
   reconcile_contended: "Registry writes that do not maintain the name index kept racing the reconciliation.",
 } as const
 
@@ -35,7 +35,7 @@ async function run(ctx: JobContext<Payload>): Promise<JobResult> {
   try {
     await reconcileNameIndex(ctx.job.firmId)
   } catch (err) {
-    if (err instanceof ReconcileError) throw new JobError(err.code, { permanent: err.code === "name_index_corrupt" })
+    if (err instanceof ReconcileError) throw new JobError(err.code, { permanent: false })
     throw err
   }
   return {}

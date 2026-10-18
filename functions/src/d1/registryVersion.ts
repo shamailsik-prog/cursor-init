@@ -72,7 +72,8 @@ export const PROJECTION_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Ob
 /**
  * The name index state kept on the counter doc (F37, `nameIndex`): `schema` (null until the firm is born fresh
  * or reconciled), `version` (equal to the registry version while the index is complete; null when absent) and
- * the open chunk (`chunk`, with `bytes` counted into it). `valid` is false when a field is present but malformed.
+ * the open chunk (`chunk`, with `bytes` counted into it). `valid` is false when the stored map is not whole
+ * (`registryStateOf`): a field the writers always write together is missing, or a field is malformed.
  */
 export type NameIndexState = { schema: number | null; version: number | null; chunk: number; bytes: number; valid: boolean }
 
@@ -85,21 +86,39 @@ const isCount = (v: unknown): v is number => typeof v === "number" && Number.isI
 
 const ABSENT_INDEX: NameIndexState = { schema: null, version: null, chunk: 0, bytes: 0, valid: true }
 
+const absent = (v: unknown): boolean => v === undefined || v === null
+
+/**
+ * The stored `nameIndex` map, read strictly (PR #80 review): a screen must never take a partial state for a whole
+ * one. Every writer of the map writes `version` (the bump's mirror increment), and every write that sets `schema`
+ * also writes `chunk` and `bytes` (`stageRegistryWrite`). So, once the map exists:
+ *
+ * - `version` is required;
+ * - `chunk` and `bytes` are required whenever `schema` is set, and otherwise come together or not at all. Both are
+ *   absent only on an index never placed (a pre-F37 firm whose non-indexing writers bumped the mirror alone); that
+ *   state has no schema, so it reads `missing` and the screen refuses it anyway;
+ * - every present field is a non-negative integer.
+ *
+ * Anything else is `valid: false`, which the screen refuses as `corrupt` and the reconciliation rebuilds.
+ */
 function nameIndexOf(raw: unknown): NameIndexState {
   if (raw === undefined) return ABSENT_INDEX
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { ...ABSENT_INDEX, valid: false }
+  const invalid = { ...ABSENT_INDEX, valid: false }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return invalid
   const r = raw as Record<string, unknown>
-  const schema = r.schema ?? null
-  const version = r.version ?? null
-  const chunk = r.chunk ?? 0
-  const bytes = r.bytes ?? 0
-  if ((schema !== null && !isCount(schema)) || (version !== null && !isCount(version)) || !isCount(chunk) || !isCount(bytes)) {
-    return { ...ABSENT_INDEX, valid: false }
+  const schema = absent(r.schema) ? null : r.schema
+  if (schema !== null && !isCount(schema)) return invalid
+  if (!isCount(r.version)) return invalid
+  const placed = !absent(r.chunk) || !absent(r.bytes)
+  if (schema !== null || placed) {
+    if (!isCount(r.chunk) || !isCount(r.bytes)) return invalid
+    return { schema: schema as number | null, version: r.version, chunk: r.chunk, bytes: r.bytes, valid: true }
   }
-  return { schema: schema as number | null, version: version as number | null, chunk: chunk as number, bytes: bytes as number, valid: true }
+  return { schema: null, version: r.version, chunk: 0, bytes: 0, valid: true }
 }
 
-function stateOf(exists: boolean, data: DocumentData | undefined): RegistryState {
+/** The counter doc's state from its data (pure; `exists` is whether the doc exists). */
+export function registryStateOf(exists: boolean, data: DocumentData | undefined): RegistryState {
   return { exists, version: versionOf(data), nameIndex: nameIndexOf(data?.nameIndex) }
 }
 
@@ -116,13 +135,13 @@ export async function readRegistryVersionTx(tx: Transaction, firmId: string): Pr
 /** The registry version and the name index state in one read, outside any transaction. */
 export async function readRegistryState(firmId: string): Promise<RegistryState> {
   const snap = await registryVersionRef(firmId).get()
-  return stateOf(snap.exists, snap.data())
+  return registryStateOf(snap.exists, snap.data())
 }
 
 /** The registry version and the name index state read in `tx`. A read: call it before `tx`'s writes. */
 export async function readRegistryStateTx(tx: Transaction, firmId: string): Promise<RegistryState> {
   const snap = await tx.get(registryVersionRef(firmId))
-  return stateOf(snap.exists, snap.data())
+  return registryStateOf(snap.exists, snap.data())
 }
 
 /** Name index fields a writer sets with its bump (absolute values; `version` replaces the mirror increment). */
@@ -138,5 +157,18 @@ export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: 
     registryVersionRef(firmId),
     { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: FieldValue.increment(1), ...nameIndex } },
     { merge: true }
+  )
+}
+
+/**
+ * The bump that resets the name index state (the reconciliation rebuilding a damaged index, F37): the whole
+ * `nameIndex` map is replaced by an unplaced, schema-less one (it reads `missing` until the rebuild marks it) with
+ * its mirror at the new version. `version` is the registry version read in `tx`.
+ */
+export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number): void {
+  tx.set(
+    registryVersionRef(firmId),
+    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: version + 1, chunk: 0, bytes: 0 } },
+    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex"] }
   )
 }

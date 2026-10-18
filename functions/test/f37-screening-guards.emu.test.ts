@@ -7,7 +7,6 @@ import { NAME_REINDEX_JOB_TYPE, nameReindexHandler, pktHourKey } from "../src/d1
 import { openMatterTestSeam } from "../src/d1/matter/ops"
 import { readRegistryState, registryVersionRef } from "../src/d1/registryVersion"
 import { jobIdFor } from "../src/p2/enqueue"
-import { JobError } from "../src/p2/errors"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { apiErrorOf, expectKind, viaApi } from "./api"
@@ -124,21 +123,27 @@ describe.skipIf(!EMULATORS)("F37: an index that cannot be trusted refuses the sc
     expect((await check(partner.token, firmId, client.clientId)).result).toBe("CLEAR")
   })
 
-  it("corrupt: a malformed chunk, a missing chunk below the pointer, or another firm's chunk → refused; the job fails permanently (name_index_corrupt)", async () => {
+  // PR #80 review: the job rebuilds a damaged index (it used to fail permanently with name_index_corrupt and wait for an
+  // operator). f37-index-integrity.emu.test.ts covers every kind of damage through both routes.
+  it("corrupt: a malformed chunk, a missing chunk below the pointer, or another firm's chunk → refused; the job rebuilds the index", async () => {
     const a = await setup()
     await nameIndexChunkRef(a.firmId, 0).set({ names: "not-an-array" }, { merge: true })
     expectKind(await apiErrorOf(check(a.partner.token, a.firmId, a.client.clientId)), "unavailable", "screening_unavailable")
-    await expect(nameReindexHandler.run({ job: { firmId: a.firmId } } as never)).rejects.toMatchObject({ code: "name_index_corrupt", permanent: true })
-    await expect(nameReindexHandler.run({ job: { firmId: a.firmId } } as never)).rejects.toBeInstanceOf(JobError)
+    expect(await runReindexJob(a.firmId)).toBe("done")
+    expect((await check(a.partner.token, a.firmId, a.client.clientId)).result).toBe("CLEAR")
 
     const b = await setup()
     await registryVersionRef(b.firmId).set({ nameIndex: { chunk: 1, bytes: 10 } }, { merge: true })
     await nameIndexChunkRef(b.firmId, 0).delete()
     expectKind(await apiErrorOf(check(b.partner.token, b.firmId, b.client.clientId)), "unavailable", "screening_unavailable")
+    expect(await runReindexJob(b.firmId)).toBe("done")
+    expect((await check(b.partner.token, b.firmId, b.client.clientId)).result).toBe("CLEAR")
 
     const c = await setup()
     await nameIndexChunkRef(c.firmId, 0).set({ firmId: b.firmId }, { merge: true })
     expectKind(await apiErrorOf(check(c.partner.token, c.firmId, c.client.clientId)), "unavailable", "screening_unavailable")
+    expect(await runReindexJob(c.firmId)).toBe("done")
+    expect((await check(c.partner.token, c.firmId, c.client.clientId)).result).toBe("CLEAR")
   })
 })
 
@@ -236,12 +241,12 @@ describe.skipIf(!EMULATORS)("F37: the reconciliation", () => {
   it("is read-only on a current index with nothing missing; repairs drift and bumps; refuses to mark over a write that skipped the index", async () => {
     const { firmId, partner } = await setup()
     const before = await readRegistryState(firmId)
-    expect(await reconcileNameIndex(firmId)).toEqual({ names: 1, added: 0, marked: false, rounds: 1 })
+    expect(await reconcileNameIndex(firmId)).toEqual({ names: 1, added: 0, marked: false, rebuilt: false, rounds: 1 })
     expect(await readRegistryState(firmId)).toEqual(before)
 
     // Drift: a party written out of band while the index reads current.
     await adminDb().collection("matter_parties").add({ firmId, matterId: null, role: "opposing", name: "Haris Qalbani", keys: {}, classification: "internal" })
-    expect(await reconcileNameIndex(firmId)).toEqual({ names: 2, added: 1, marked: false, rounds: 1 })
+    expect(await reconcileNameIndex(firmId)).toEqual({ names: 2, added: 1, marked: false, rebuilt: false, rounds: 1 })
     const after = await readRegistryState(firmId)
     expect(after.version).toBe(before.version + 1)
     expect(after.nameIndex.version).toBe(after.version)
@@ -261,6 +266,8 @@ describe.skipIf(!EMULATORS)("F37: the reconciliation", () => {
       expect(() => nameReindexHandler.parse(bad)).toThrow(expect.objectContaining({ code: "invalid_payload", permanent: true }))
     }
     expect(pktHourKey(Date.parse("2099-01-02T19:30:00Z"))).toBe("2099-01-03T00")
+    // No failure is permanent: a damaged index is rebuilt; racing writes make the run retry (PR #80 review).
+    expect(Object.keys(nameReindexHandler.errorCodes)).toEqual(["reconcile_contended"])
     expect(Timestamp.now()).toBeTruthy()
   })
 })

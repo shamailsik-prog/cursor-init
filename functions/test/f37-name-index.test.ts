@@ -3,7 +3,7 @@ import { matchingNames } from "../src/d1/conflict/candidates"
 import { NAME_THRESHOLD, nameScore, screen, type Candidate, type Subject } from "../src/d1/conflict/match"
 import { NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
 import { nameForms, usesFallback } from "../src/d1/conflict/normalise"
-import type { RegistryState } from "../src/d1/registryVersion"
+import { registryStateOf, type RegistryState } from "../src/d1/registryVersion"
 
 /** Audit F37: the pure parts of the name index and the name tier (no emulator). */
 
@@ -23,6 +23,51 @@ describe("nameIndexProblem: when a screen may use the index", () => {
     expect(nameIndexProblem(state({ nameIndex: { version: null } }))).toBe("stale")
     expect(nameIndexProblem(state({ nameIndex: { valid: false } }))).toBe("corrupt")
     expect(nameIndexProblem(state({ nameIndex: { chunk: NAME_INDEX_MAX_CHUNKS } }))).toBe("corrupt")
+    // The placement opens a chunk only to put a name in it: an open chunk past 0 with no bytes is impossible.
+    expect(nameIndexProblem(state({ nameIndex: { chunk: 2, bytes: 0 } }))).toBe("corrupt")
+  })
+})
+
+describe("registryStateOf: the stored nameIndex map is read whole or not at all (PR #80 review)", () => {
+  const parsed = (nameIndex: unknown) => registryStateOf(true, { version: 7, nameIndex }).nameIndex
+
+  it("no map is an index never built; a whole map is read as stored", () => {
+    expect(parsed(undefined)).toEqual({ schema: null, version: null, chunk: 0, bytes: 0, valid: true })
+    expect(parsed({ schema: NAME_INDEX_SCHEMA, version: 7, chunk: 2, bytes: 10 })).toEqual({ schema: NAME_INDEX_SCHEMA, version: 7, chunk: 2, bytes: 10, valid: true })
+  })
+
+  it("with a schema, chunk and bytes are required: a missing one is corrupt, never 0", () => {
+    expect(parsed({ schema: NAME_INDEX_SCHEMA, version: 7, bytes: 10 }).valid).toBe(false)
+    expect(parsed({ schema: NAME_INDEX_SCHEMA, version: 7, chunk: 2 }).valid).toBe(false)
+    expect(nameIndexProblem(registryStateOf(true, { version: 7, nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, bytes: 10 } }))).toBe("corrupt")
+    expect(nameIndexProblem(registryStateOf(true, { version: 7, nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 2 } }))).toBe("corrupt")
+  })
+
+  it("the mirror version is required (every writer writes it)", () => {
+    expect(parsed({ schema: NAME_INDEX_SCHEMA, chunk: 0, bytes: 0 }).valid).toBe(false)
+    expect(parsed({ chunk: 0, bytes: 0 }).valid).toBe(false)
+  })
+
+  it("without a schema, chunk and bytes come together or not at all (a pre-F37 firm's mirror-only bump has neither)", () => {
+    expect(parsed({ version: 3 })).toEqual({ schema: null, version: 3, chunk: 0, bytes: 0, valid: true })
+    expect(parsed({ version: 3, chunk: 1, bytes: 5 })).toEqual({ schema: null, version: 3, chunk: 1, bytes: 5, valid: true })
+    expect(parsed({ version: 3, chunk: 1 }).valid).toBe(false)
+    expect(parsed({ version: 3, bytes: 5 }).valid).toBe(false)
+  })
+
+  it("any malformed value is corrupt", () => {
+    for (const bad of [
+      null,
+      [],
+      "x",
+      { schema: NAME_INDEX_SCHEMA, version: 7, chunk: -1, bytes: 0 },
+      { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 1.5, bytes: 4 },
+      { schema: String(NAME_INDEX_SCHEMA), version: 7, chunk: 0, bytes: 0 },
+      { schema: NAME_INDEX_SCHEMA, version: "7", chunk: 0, bytes: 0 },
+      { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: null },
+    ]) {
+      expect(parsed(bad).valid, JSON.stringify(bad)).toBe(false)
+    }
   })
 })
 
