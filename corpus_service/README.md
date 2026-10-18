@@ -366,13 +366,20 @@ Spec: `docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md`.
   without a second request (`reconciled`).
 - **Retries.** A failed request sets `next_attempt_at` 300, 600, 1200, 2400 s ahead (then 3600) and,
   at the row's `max_attempts` (default 5), moves it to `dead_letter` (`error_type = max_attempts`).
-  A row whose lease expired (a killed worker) goes back to `pending` with one attempt counted, unless
-  the provider had already answered and the receipt holds the vector for the row's current text: then
-  it is not charged and the next claim stores that answer with no new request.
+  A row whose lease expired (a killed worker) goes back to `pending` with one attempt counted if the
+  dead batch had started its request; a row the dead batch never reached is not charged. If the
+  provider had already answered and the receipt holds the vector for the row's current text, the row
+  is not charged and the next claim stores that answer with no new request.
+- **A paid answer that cannot be stored.** If storing a held answer fails (the database refuses the
+  vector write, or the batch storing it is lost), the row is not charged: the failure is counted on
+  the receipt (`store_failures`) and the store is retried after 300 s, then 600 s. At the third
+  failure the row goes to `dead_letter` as `store_failed` and the receipt keeps the vector.
 - **Dead letters.** `error_type` says why: `unknown_table`, `unsupported_model`, `record_missing`,
-  `empty_text`, `malformed_text`, `max_attempts`. A dead letter is never claimed again. To retry one
-  after fixing its cause:
+  `empty_text`, `malformed_text`, `max_attempts`, `store_failed`. A dead letter is never claimed
+  again. To retry one after fixing its cause:
   `UPDATE embedding_queue SET status = 'pending', attempts = 0, next_attempt_at = NULL, error_type = NULL, error_message = NULL WHERE id = '<id>';`
+  A requeued row whose answer is still held (`store_failed`, or a `max_attempts` row whose receipt
+  reads `answered`) is stored from the receipt with no new request.
   Rows left `failed` by the pre-F27 code are counted with the dead letters and requeued the same way.
 - **Alerts** (F28's line, `F28 source alert: embedding_queue <alert>`, also in the batch summary and
   its `scraper_jobs` row): `backlog_stale` when the oldest waiting row was queued more than 24 h ago,

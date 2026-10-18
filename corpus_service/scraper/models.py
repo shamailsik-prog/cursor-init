@@ -831,7 +831,8 @@ class EmbeddingAttempt(Base):
     `started` is committed before the request and `answered` (with the token count and the vector)
     right after it, so a worker killed in between, or before its store commits, leaves a record of the
     paid request. The vector is held only while the receipt is `answered` and is cleared when it is
-    stored or superseded; a later batch stores a held vector instead of paying again (R6). At most one
+    stored or superseded; a later batch stores a held vector instead of paying again (R6), at most
+    STORE_RETRY_LIMIT times automatically (`store_failures`, review round 2). At most one
     unresolved (`started` or `answered`) receipt exists per operation. No input text, key or provider
     message is kept: `error_type` is the error class or code only. No foreign key to the queue row:
     the receipt outlives it.
@@ -855,6 +856,7 @@ class EmbeddingAttempt(Base):
         CheckConstraint("outcome <> 'answered' OR answered_at IS NOT NULL", name="ck_embedding_attempts_answered"),
         CheckConstraint("attempt >= 1", name="ck_embedding_attempts_attempt"),
         CheckConstraint("token_count IS NULL OR token_count >= 0", name="ck_embedding_attempts_tokens"),
+        CheckConstraint("store_failures >= 0", name="ck_embedding_attempts_store_failures"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -875,6 +877,10 @@ class EmbeddingAttempt(Base):
     answered_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     reconciled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
+    # Review round 2: failed stores of this receipt's held answer (a store the database refused, or a
+    # batch lost while storing it); at scraper.tasks.embeddings.STORE_RETRY_LIMIT the row is dead-lettered
+    # (`store_failed`) with the answer kept for a requeue.
+    store_failures: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(1536), nullable=True)
 
     def __repr__(self) -> str:

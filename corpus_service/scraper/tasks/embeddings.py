@@ -3,10 +3,12 @@ what cannot succeed, give back what a failed batch holds, and record and alert o
 
 Audit F27 (spec docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md, R1-R16):
 
-1. Reclaim (R3): rows whose lease expired return to `pending` with the attempt counted once (or go
-   to the dead letter at `max_attempts`); their `started` receipts become `abandoned`. A row whose
-   current operation has a paid answer held by a receipt is not charged and is due at once (review
-   round 1), so a paid answer is never stranded in the dead letter.
+1. Reclaim (R3): rows whose lease expired return to `pending`. Only a row the dead batch reached (a
+   receipt under its lease) is charged, once (or goes to the dead letter at `max_attempts`); a row it
+   never reached is not (review round 2). A reached row whose current operation has a paid answer
+   held by a receipt is not charged and is due at once (review round 1); the lost store is counted on
+   the receipt, and at STORE_RETRY_LIMIT the row is dead-lettered as `store_failed` with the answer
+   kept for a requeue (review round 2). `started` receipts of the reclaimed rows become `abandoned`.
 2. Claim (R1, R2): one `UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 50)` marks the due
    rows `processing` under this batch's lease token, committed before any provider call. Every later
    write to a claimed row is fenced on the token.
@@ -15,8 +17,10 @@ Audit F27 (spec docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-de
    otherwise a `started` receipt is committed, the provider is called, the `answered` receipt (tokens
    and vector) is committed, and the store verifies the operation under the record's lock (R5, R7). A
    failed attempt is charged once with backoff from `next_attempt_at`, or dead-lettered (R8).
-4. A batch that ends abnormally gives back the rows it still holds (R10); alerts go through F28's line
-   (R11).
+4. A batch that ends abnormally gives back the rows it still holds, every write fenced (R10). The row
+   in flight is charged once, except a row whose held, paid answer failed to store: that failure is
+   counted on the receipt instead, the row backs off, and at STORE_RETRY_LIMIT it is dead-lettered as
+   `store_failed` with the answer kept (review round 2). Alerts go through F28's line (R11).
 
 Audit F28 (spec R4, R13, R19, R21-R26) is kept: a database error fails the batch at once; a batch that
 tried items and completed none raises BatchFailed after its item outcomes are committed; the recording
@@ -53,6 +57,9 @@ PACE_SECONDS = 0.6  # pause after every provider request: 100 requests a minute 
 BACKLOG_ALERT_SECONDS = 24 * 3600  # backlog_stale when the oldest waiting row is older (R11)
 DEAD_LETTER_COUNT_CAP = 10_000  # the dead-letter total in a summary is counted up to this (R13)
 GIVE_BACK_LOCK_TIMEOUT = "5s"  # the give-back never waits long on a lock the failed batch may hold (R10)
+# Review round 2: failed stores of one held, paid answer (refused by the database, or a batch lost while
+# storing it) before the row goes to the dead letter as `store_failed`, the answer kept for a requeue.
+STORE_RETRY_LIMIT = 3
 TEXT_WINDOW = 2000  # characters of the body that are embedded (unchanged; F45 owns the representation)
 OPERATION_VERSION = "f27-embedding-op-v1"
 # The models the vector(1536) columns can hold (R9).
@@ -71,12 +78,20 @@ MAX_ATTEMPTS = "max_attempts"
 LEASE_EXPIRED = "lease_expired"
 MALFORMED_RESPONSE = "malformed_response"
 OPERATION_IN_FLIGHT = "operation_in_flight"
+STORE_FAILED = "store_failed"
 
 LEASE_EXPIRED_TEXT = (
     "lease expired: the batch that held this row ended without giving it back; cause unknown"
 )
 LEASE_EXPIRED_ANSWERED_TEXT = (
     "lease expired after the provider answered: the held answer is stored by the next claim, with no new request"
+)
+LEASE_EXPIRED_UNREACHED_TEXT = (
+    "lease expired before the batch reached this row: no request was made for it, so no attempt is charged"
+)
+STORE_FAILED_TEXT = (
+    "store_failed: the paid answer held for this row could not be stored {n} times ({last}); it is kept in its "
+    "receipt: fix the cause and requeue the row to store it with no new request"
 )
 
 # The text embedded per table: (title-like, label-like, body) columns, as main built it.
@@ -170,18 +185,52 @@ _CHARGE_SET = """
        lease_owner = NULL, lease_expires_at = NULL, updated_at = now()"""
 
 # R3: the expired rows this batch reclaims, locked until its reclaim commits (two reclaims never take
-# the same row).
+# the same row). `reached` (review round 2, auditor finding 5): the dead batch left a receipt for this
+# row under its lease, so it got as far as this row (a `started` receipt is committed with the row's
+# operation mark before any request; R6 (b) takes the held receipt over before it stores). A row it
+# claimed but never reached is given back with nothing charged.
 EXPIRED_SQL = """
-SELECT id, table_name, record_id, embedding_model, embedding_dimensions FROM embedding_queue
- WHERE status = 'processing' AND lease_expires_at <= now()
- ORDER BY lease_expires_at, id
+SELECT q.id, q.table_name, q.record_id, q.embedding_model, q.embedding_dimensions,
+       EXISTS (SELECT 1 FROM embedding_attempts a WHERE a.queue_id = q.id AND a.lease_owner = q.lease_owner) AS reached
+  FROM embedding_queue q
+ WHERE q.status = 'processing' AND q.lease_expires_at <= now()
+ ORDER BY q.lease_expires_at, q.id
  LIMIT :limit
- FOR UPDATE SKIP LOCKED"""
+ FOR UPDATE OF q SKIP LOCKED"""
 
 # R3 (review round 1): which of these operations already has a paid answer held by a receipt.
 HELD_ANSWERS_SQL = """
 SELECT operation_id FROM embedding_attempts
  WHERE operation_id = ANY(:ops) AND outcome = 'answered' AND embedding IS NOT NULL"""
+
+# R3 (review round 2): the dead batch reached these rows while their answer was held, so it was lost
+# storing it: one failed store each, counted on the receipt, with the new count returned.
+COUNT_LOST_STORES_SQL = """
+UPDATE embedding_attempts SET store_failures = store_failures + 1
+ WHERE operation_id = ANY(:ops) AND outcome = 'answered' AND embedding IS NOT NULL
+RETURNING operation_id, store_failures"""
+
+# R3 (review round 2, auditor finding 5): an expired row the dead batch never reached. No request was
+# made for it, so no attempt is charged: back to `pending`, due at once.
+RECLAIM_UNREACHED_SQL = """
+UPDATE embedding_queue SET status = 'pending', next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
+       error_type = :error_type, error_message = :message, updated_at = now()
+ WHERE id = ANY(:ids)"""
+
+# Review round 2: a held answer whose stores have failed STORE_RETRY_LIMIT times. The row goes to the
+# dead letter (`store_failed`), its attempts untouched; the receipt keeps the vector, so a requeue
+# stores it through R6 (b) with no new request.
+RECLAIM_STORE_FAILED_SQL = """
+UPDATE embedding_queue SET status = 'dead_letter', next_attempt_at = NULL, lease_owner = NULL,
+       lease_expires_at = NULL, error_type = 'store_failed', error_message = :message, updated_at = now()
+ WHERE id = ANY(:ids)"""
+
+# The give-back's count of one failed store of the held answer the batch was storing (review round 2).
+# None when the receipt holds no answer any more.
+COUNT_STORE_FAILURE_SQL = """
+UPDATE embedding_attempts SET store_failures = store_failures + 1
+ WHERE id = :receipt AND outcome = 'answered' AND embedding IS NOT NULL
+RETURNING store_failures"""
 
 # An expired row with no usable held answer: the lost attempt is charged once (R3, R8).
 RECLAIM_CHARGE_SQL = f"""
@@ -228,6 +277,30 @@ RETURNING q.id, q.table_name, q.record_id, q.attempts, q.max_attempts, q.embeddi
 _FENCE = "WHERE id = :id AND lease_owner = :owner AND status = 'processing'"
 
 CHARGE_SQL = f"UPDATE embedding_queue q SET {_CHARGE_SET} {_FENCE.replace('id =', 'q.id =', 1)} RETURNING q.status"
+
+# R6 (b), review round 2: the batch takes over the held receipt before it stores it, so a reclaim
+# after this batch dies knows it reached the row (EXPIRED_SQL's `reached`).
+TAKE_OVER_RECEIPT_SQL = """
+UPDATE embedding_attempts SET lease_owner = :owner, queue_id = :queue_id
+ WHERE id = :receipt AND outcome = 'answered' AND embedding IS NOT NULL"""
+
+# The give-back's fence (R2, review round 2: Bugbot 4307442940): the row is still this batch's, and
+# stays locked until the give-back commits. No row: another batch holds it, and nothing is written.
+HOLD_SQL = f"SELECT 1 FROM embedding_queue {_FENCE} FOR UPDATE"
+
+# Review round 2 (Bugbot 4307417933, 4307442945): the give-back for a row whose held, paid answer
+# failed to store. Not a provider attempt, so `attempts` is untouched, and the answer is never charged
+# into the max_attempts dead letter. The row waits R8's delay for the n-th failure (300 s, 600 s), so a
+# store the database keeps refusing cannot fail the next batches back to back; at the receipt's
+# STORE_RETRY_LIMIT-th failed store it goes to the dead letter as `store_failed`, the vector kept in
+# the receipt for a requeue. Fenced on the batch's token like every write.
+GIVE_BACK_STORE_FAILED_SQL = f"""
+UPDATE embedding_queue SET status = CASE WHEN :exhausted THEN 'dead_letter' ELSE 'pending' END,
+       next_attempt_at = CASE WHEN :exhausted THEN NULL
+                              ELSE now() + make_interval(secs => LEAST(:base * power(2, CAST(:failures AS int) - 1), :cap)) END,
+       error_type = CASE WHEN :exhausted THEN 'store_failed' ELSE CAST(:error_type AS text) END,
+       error_message = :message, lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+ {_FENCE}"""
 
 DEAD_LETTER_SQL = f"""
 UPDATE embedding_queue SET status = 'dead_letter', error_type = :reason, error_message = :message,
@@ -317,6 +390,7 @@ class BatchCounts:
         self.missing = 0
         self.reclaimed = 0
         self.reclaimed_answered = 0  # review round 1: reclaimed rows not charged (a paid answer was held)
+        self.reclaimed_unreached = 0  # review round 2: reclaimed rows the dead batch never reached (not charged)
         self.dead_lettered: Counter = Counter()
         self.reused = 0
         self.superseded = 0
@@ -335,6 +409,7 @@ class BatchCounts:
             "errors": dict(self.tally.errors),
             "reclaimed": self.reclaimed,
             "reclaimed_answered": self.reclaimed_answered,
+            "reclaimed_unreached": self.reclaimed_unreached,
             "dead_lettered": sum(self.dead_lettered.values()),
             "dead_letter_reasons": dict(self.dead_lettered),
             "reused": self.reused,
@@ -353,6 +428,7 @@ class _Batch:
         self.owner = uuid.uuid4()  # this batch's lease token
         self.db = None
         self.current = None  # the claimed row being processed
+        self.held = None  # review round 2: the receipt whose paid answer the batch is storing for that row
 
     def _params(self, row, **extra):
         return {"id": row.id, "owner": self.owner, **extra}
@@ -376,9 +452,9 @@ class _Batch:
             rows = await self._claim()
             try:
                 for row in rows:
-                    self.current = row
+                    self.current, self.held = row, None
                     paid = await self._process(row)
-                    self.current = None
+                    self.current, self.held = None, None
                     if paid:
                         await asyncio.sleep(PACE_SECONDS)  # after every provider request: 100 RPM (R15)
             except (Exception, *outcomes.INTERRUPTIONS) as exc:
@@ -391,22 +467,45 @@ class _Batch:
 
     # -- R3 ------------------------------------------------------------------------------------
     async def _reclaim(self) -> None:
-        """Reclaim up to RECLAIM_LIMIT expired leases in one transaction. Review round 1 (Codex
-        4307196399): a row whose current operation has an answered receipt holding a vector is not
-        charged (its attempt was paid and answered; only the store was lost) and is due at once, so
-        even on its last attempt it is never dead-lettered with its paid answer stranded. Every other
-        expired row is charged once, or dead-lettered at max_attempts. Held answers of these records
-        under any other operation are superseded (R7)."""
+        """Reclaim up to RECLAIM_LIMIT expired leases in one transaction (R3). Each expired row is one of:
+
+        - not reached: the dead batch left no receipt for it under its lease, so no request was made;
+          it goes back to `pending`, due at once, with nothing charged (review round 2, auditor
+          finding 5: at fa56eee-132957c such rows were charged and could reach the dead letter with
+          no request ever made);
+        - reached, with a paid answer held for its current operation: the batch was lost storing it.
+          Review round 1 (Codex 4307196399): not charged, due at once, R6 (b) stores it with no
+          request. Review round 2: the lost store is counted on the receipt, and at the
+          STORE_RETRY_LIMIT-th the row goes to the dead letter as `store_failed` with the answer
+          kept, so a row whose storing batch keeps dying stops cycling;
+        - reached, no answer held (a `started` receipt: the request's outcome is unknown): charged
+          once, or dead-lettered at max_attempts (R8).
+
+        Held answers of these records under any other operation are superseded (R7)."""
         expired = (await self.db.execute(text(EXPIRED_SQL), {"limit": RECLAIM_LIMIT})).all()
         current = {row.id: await self._current_operation(row) for row in expired}
         ops = sorted({op for op in current.values() if op is not None})
         held = set((await self.db.execute(text(HELD_ANSWERS_SQL), {"ops": ops})).scalars()) if ops else set()
-        spared = [row.id for row in expired if current[row.id] in held]
-        charged = [row.id for row in expired if current[row.id] not in held]
+        unreached = [row.id for row in expired if not row.reached]
+        lost_stores = sorted({current[row.id] for row in expired if row.reached and current[row.id] in held})
+        failures = dict((await self.db.execute(text(COUNT_LOST_STORES_SQL), {"ops": lost_stores})).all()) if lost_stores else {}
+        spared = [row.id for row in expired if row.reached and failures.get(current[row.id], STORE_RETRY_LIMIT) < STORE_RETRY_LIMIT]
+        exhausted = [row.id for row in expired if row.reached and current[row.id] in failures and row.id not in spared]
+        charged = [row.id for row in expired if row.reached and current[row.id] not in failures]
+        if unreached:
+            await self.db.execute(text(RECLAIM_UNREACHED_SQL), {
+                "ids": unreached, "error_type": LEASE_EXPIRED, "message": LEASE_EXPIRED_UNREACHED_TEXT,
+            })
         if spared:
             await self.db.execute(text(RECLAIM_ANSWERED_SQL), {
                 "ids": spared, "error_type": LEASE_EXPIRED, "message": LEASE_EXPIRED_ANSWERED_TEXT,
             })
+        if exhausted:
+            await self.db.execute(text(RECLAIM_STORE_FAILED_SQL), {
+                "ids": exhausted,
+                "message": STORE_FAILED_TEXT.format(n=STORE_RETRY_LIMIT, last="the batch storing it was lost"),
+            })
+            self.counts.dead_lettered[STORE_FAILED] += len(exhausted)
         statuses = []
         if charged:
             statuses = (await self.db.execute(text(RECLAIM_CHARGE_SQL), {
@@ -421,19 +520,22 @@ class _Batch:
         await self.db.commit()
         self.counts.reclaimed = len(expired)
         self.counts.reclaimed_answered = len(spared)
+        self.counts.reclaimed_unreached = len(unreached)
         for row in statuses:
             if row.status == DEAD_LETTER:
                 self.counts.dead_lettered[MAX_ATTEMPTS] += 1
         if expired:
-            logger.warning("F27: reclaimed %d embedding row(s) whose lease expired: %d charged, %d with a paid "
-                           "answer held (not charged)", len(expired), len(charged), len(spared))
+            logger.warning("F27: reclaimed %d embedding row(s) whose lease expired: %d never reached (not charged), "
+                           "%d charged, %d with a paid answer held (not charged), %d dead-lettered after %d failed "
+                           "stores of their answer", len(expired), len(unreached), len(charged), len(spared),
+                           len(exhausted), STORE_RETRY_LIMIT)
 
-    async def _current_operation(self, row, db=None) -> Optional[str]:
+    async def _current_operation(self, row) -> Optional[str]:
         """The operation a row would embed now, or None when it cannot be embedded (R9 would
         dead-letter it on its next claim)."""
         if row.table_name not in SOURCES or SUPPORTED_MODELS.get(row.embedding_model) != row.embedding_dimensions:
             return None
-        record = await self._read_record(row, lock=False, db=db)
+        record = await self._read_record(row, lock=False)
         if record is None or text_problem(record[0]) is not None:
             return None
         return operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, record[0])
@@ -481,13 +583,18 @@ class _Batch:
             .with_for_update()
         )).first()
         if held is not None:  # R6 (b): a vector already paid for, never stored
+            _fenced(await self.db.execute(text(TAKE_OVER_RECEIPT_SQL), {
+                "owner": self.owner, "queue_id": row.id, "receipt": held.id,
+            }), row)
+            _fenced(await self.db.execute(text(MARK_OPERATION_SQL), self._params(row, op=op)), row)
+            await self.db.commit()
+            self.held = held.id
             await self._store(row, op, list(held.embedding), held.id, held.token_count, None, reconciled=True)
             return False
         return await self._attempt(row, op, value)
 
-    async def _read_record(self, row, *, lock: bool, db=None) -> Optional[Tuple[str, bool]]:
-        session = db if db is not None else self.db
-        found = (await session.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
+    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[str, bool]]:
+        found = (await self.db.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
         if found is None:
             return None
         return embed_text(found[0], found[1], found[2]), bool(found[3])
@@ -539,6 +646,7 @@ class _Batch:
         )
         _fenced(answered, row)  # the receipt is this batch's until it is stored
         await self.db.commit()
+        self.held = receipt
         await self._store(row, op, vector, receipt, tokens, started, reconciled=False)
         return True
 
@@ -601,31 +709,20 @@ class _Batch:
     async def _give_back(self, exc: BaseException) -> None:
         """Give back what the batch still holds, in a fresh session, never replacing the batch's own
         exception. On an interruption nothing is charged (F28 R26) and a request still out is
-        `interrupted`; otherwise the row in flight is charged once and its `started` receipt is
-        `failed` with the row's error type (review round 1, Bugbot 4307214719; kept from Autofix
-        c2266ae). If this cannot run, the leases expire and the next batch reclaims the rows (R3)."""
+        `interrupted`; otherwise the row in flight is settled by `_give_back_row`. Every other claimed
+        row goes back to `pending` untouched. If this cannot run, the leases expire and the next batch
+        reclaims the rows (R3)."""
         await self._discard_session()
         charge = None if outcomes.is_interruption(exc) else self.current
         try:
             async with SessionLocal() as db:
                 await db.execute(text(f"SET LOCAL lock_timeout = '{GIVE_BACK_LOCK_TIMEOUT}'"))
                 if charge is not None:
-                    op = await self._current_operation(charge, db=db)
-                    held = set((await db.execute(text(HELD_ANSWERS_SQL), {"ops": [op]})).scalars()) if op else set()
-                    if op in held:
-                        await db.execute(text(RECLAIM_ANSWERED_SQL), {
-                            "ids": [charge.id],
-                            "error_type": outcomes.error_key(exc),
-                            "message": outcomes.describe_error(exc),
-                        })
-                    else:
-                        try:
-                            await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
-                        except LeaseLost:
-                            logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
-                        await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
-                            "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
-                        })
+                    try:
+                        await self._give_back_row(db, charge, exc)
+                    except LeaseLost:
+                        logger.error("F27: embedding row %s is held by another batch now; the failed batch "
+                                     "leaves it and its receipts to that holder", charge.id)
                 released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
                 if outcomes.is_interruption(exc):
                     await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
@@ -639,6 +736,48 @@ class _Batch:
                 "and the next batch reclaims them. The batch's own error: %s",
                 outcomes.describe_error(cleanup), outcomes.describe_error(exc),
             )
+
+    async def _give_back_row(self, db, row, exc: BaseException) -> None:
+        """R10 for the row in flight (never on an interruption). Every write is fenced on the batch's
+        token, the fence checked first: a row another batch holds now (the fence matches nothing:
+        LeaseLost) is left to it with its receipts, and nothing is counted or written (review round 2:
+        Bugbot 4307442940, against Autofix ee8ee02's unfenced write).
+
+        - The batch was storing a paid answer it holds (`self.held`: the `answered` receipt committed,
+          or taken over for R6 (b)): the failed store is not a provider attempt and is not charged, so
+          the answer is never charged into the max_attempts dead letter (Bugbot 4307417933). It is
+          counted on the receipt; the row waits R8's delay, and at STORE_RETRY_LIMIT failed stores it
+          is dead-lettered as `store_failed` with the answer kept for a requeue (bounded: Bugbot
+          4307442945, against ee8ee02's always-due, never-charged row).
+        - Otherwise the row is charged once (R8) and its `started` receipt is `failed` with the row's
+          error type (review round 1, Bugbot 4307214719; kept from Autofix c2266ae)."""
+        error_type, message = outcomes.error_key(exc), outcomes.describe_error(exc)
+        if self.held is not None and await self._store_failed(db, row, error_type, message):
+            return
+        await self._charge(db, row, error_type, message)
+        await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
+            "owner": self.owner, "queue_id": row.id, "error_type": error_type,
+        })
+
+    async def _store_failed(self, db, row, error_type: str, message: str) -> bool:
+        """Count one failed store of the held answer and give the row back (see `_give_back_row`).
+        False when the receipt holds no answer any more (the row is then charged as usual)."""
+        if (await db.execute(text(HOLD_SQL), self._params(row))).first() is None:
+            raise LeaseLost(str(row.id))
+        failures = (await db.execute(text(COUNT_STORE_FAILURE_SQL), {"receipt": self.held})).scalar()
+        if failures is None:
+            return False
+        exhausted = failures >= STORE_RETRY_LIMIT
+        if exhausted:
+            message = STORE_FAILED_TEXT.format(n=failures, last=message)
+        _fenced(await db.execute(text(GIVE_BACK_STORE_FAILED_SQL), self._params(
+            row, exhausted=exhausted, failures=failures, error_type=error_type, message=message, **self._backoff(),
+        )), row)
+        if exhausted:
+            self.counts.dead_lettered[STORE_FAILED] += 1
+        logger.error("F27: embedding row %s: storing its paid answer failed (%d of %d): %s", row.id, failures,
+                     STORE_RETRY_LIMIT, message)
+        return True
 
     async def _discard_session(self) -> None:
         """End the batch session's transaction so its locks are gone before the give-back; if a
