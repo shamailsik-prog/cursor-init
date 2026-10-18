@@ -49,7 +49,7 @@ FAILED_ACT_NAME_TOO_LONG = "act_name_too_long"
 # A record in one of these states has passed normalisation, so it can be the original of a copy.
 _PAST_NORMALISATION = (
     lifecycle.NORMALISED, lifecycle.QUARANTINED, lifecycle.APPROVED, lifecycle.PUBLISHED,
-    lifecycle.EMBEDDED, lifecycle.REJECTED, lifecycle.DEAD_LETTER,
+    lifecycle.EMBEDDED, lifecycle.REJECTED,
 )
 
 

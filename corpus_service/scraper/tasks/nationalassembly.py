@@ -1,4 +1,4 @@
-import re, logging, asyncio
+import hashlib, re, logging, asyncio
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
@@ -25,8 +25,14 @@ async def scrape_nationalassembly(source, db):
             listing.item_failed(f"http_{r.status_code}")
             listing.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
         soup = BeautifulSoup(r.text, "html.parser")
-        pdf_links = [a.get("href") for a in soup.find_all("a", href=re.compile(r"\.pdf$", re.I)) if a.get_text() and ("Act" in a.get_text() or "Ordinance" in a.get_text())]
-        for pdf_url in pdf_links[:20]:
+        pdf_entries = []
+        for anchor in soup.find_all("a", href=re.compile(r"\.pdf$", re.I)):
+            act_name = (anchor.get_text() or "").strip()
+            href = anchor.get("href")
+            if not href or not act_name or ("Act" not in act_name and "Ordinance" not in act_name):
+                continue
+            pdf_entries.append((href, act_name))
+        for pdf_url, act_name in pdf_entries[:20]:
             try:
                 full = pdf_url if pdf_url.startswith("http") else f"https://na.gov.pk{pdf_url}" if pdf_url.startswith("/") else f"https://na.gov.pk/en/{pdf_url}"
                 # Audit F26: the one bounded PDF path (size cap at the fetch boundary, type and
@@ -47,8 +53,8 @@ async def scrape_nationalassembly(source, db):
                             job_id=lifecycle.run_job_id(),
                             raw_text=chunk[:20000],
                             raw_pdf_path=document.raw_key,
-                            extracted_act_name="National Assembly Act",
-                            extracted_section_number=chunk[:20],
+                            extracted_act_name=act_name,
+                            extracted_section_number=hashlib.sha256(chunk.encode("utf-8")).hexdigest()[:32],
                             extracted_section_text=chunk[:20000],
                             confidence_score=STATUTE_CONFIDENCE,
                             parsing_metadata=stamp_metadata(source, {
