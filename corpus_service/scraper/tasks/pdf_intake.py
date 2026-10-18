@@ -8,8 +8,8 @@ Assembly call for each PDF, with the ``PolicyFetcher`` they already hold:
 
 1. size (R2): the client's body cap is narrowed to the operator's ``PDF_MAX_SIZE_MB`` (never above
    F25's cap), so the fetch boundary refuses an oversized body while it reads: ``pdf_too_large``;
-2. cheap checks (R3): HTTP 200 (else ``http_<status>``, F28's key), a declared Content-Type that is
-   not a non-PDF family and the ``%PDF-`` signature (else ``not_pdf``);
+2. cheap checks (R3): HTTP 200 (else ``http_<status>``, F28's key), one declared Content-Type (F26-FU,
+   R21) that is not a non-PDF family and the ``%PDF-`` signature (else ``not_pdf``);
 3. keep (R5): the bytes go to the raw store by sha256 before any parsing (``raw_store_full`` /
    ``raw_store_failed`` when they cannot), in a thread;
 4. parse (R6-R8): ``pdf_sandbox.parse`` in a separate, limited process, awaited in a thread so the
@@ -73,6 +73,22 @@ def declared_type(headers: Optional[Mapping[str, str]]) -> str:
     return ""
 
 
+def declared_types(headers: Any) -> list:
+    """Every Content-Type field's value (F26-FU, R21): ``get_list`` on the boundary's httpx.Headers
+    (its ``items()`` would join repeated fields with a comma), every matching key of a mapping."""
+    if headers is None:
+        return []
+    if hasattr(headers, "get_list"):
+        return [str(v) for v in headers.get_list("content-type")]
+    return [str(v) for k, v in headers.items() if str(k).lower() == "content-type"]
+
+
+def repeated_type(values: list) -> bool:
+    """More than one Content-Type field, or one whose media type (before any ``;`` parameter) is a
+    comma-separated list. RFC 9110 makes Content-Type a singleton field."""
+    return len(values) > 1 or any("," in v.split(";", 1)[0] for v in values)
+
+
 def declared_not_pdf(content_type: str) -> bool:
     return content_type.startswith(_NOT_PDF_PREFIXES) or any(m in content_type for m in _NOT_PDF_MARKERS)
 
@@ -105,9 +121,12 @@ async def intake(client: Any, url: str, *, fetch: Optional[Fetch] = None) -> Pdf
         raise outcomes.DocumentRejected(f"http_{response.status_code}")
     body = response.content or b""
     content_type = declared_type(getattr(response, "headers", None))
+    repeated = repeated_type(declared_types(getattr(response, "headers", None)))
     del response
     if len(body) > cap:
         raise _rejected(url, outcomes.ERROR_PDF_TOO_LARGE, f"{len(body)} bytes over {cap}")
+    if repeated:  # R21: a singleton field sent twice, or as a list, is a malformed or rewritten response
+        raise _rejected(url, outcomes.ERROR_NOT_PDF, "multiple Content-Type values")
     if declared_not_pdf(content_type):
         raise _rejected(url, outcomes.ERROR_NOT_PDF, f"declared {content_type[:60]}")
     if not outcomes.looks_like_pdf(body):

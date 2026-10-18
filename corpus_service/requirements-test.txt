@@ -19,6 +19,9 @@ cryptography==50.0.2
 beautifulsoup4==4.15.0
 celery[redis]==5.6.3
 kombu==5.6.2
+# Audit F26-FU (spec R22): the PDF sandbox's process library, pinned to the version celery[redis]==5.6.3
+# resolves, so the sandbox tests run what they were proven with (requirements.txt declares it unpinned).
+billiard==4.3.1
 redis==6.4.0
 pytest==9.1.1
 # Audit F26: the PDF parser stack, so the sandbox, golden and end-to-end tests run the real parser in a

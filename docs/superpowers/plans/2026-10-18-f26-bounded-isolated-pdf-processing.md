@@ -55,3 +55,74 @@ Exact commands and full counts are in the evidence log. Wall-clock tests are rer
 | GREEN, full suite (38f7a5f), CI-like venv | `python -m pytest corpus_service/tests -q -rf` | **1044 passed**, 3 warnings, 157 subtests, 0 skipped |
 
 Rulings: **R14** (spec) the raw store is owner-only and requires one uid for every container that mounts it; **R15** (spec) the ledger is written before the link and recounted before any refusal at the cap.
+
+## F26-FU: after the independent re-audit (FAIL 7/10)
+
+**Goal:** close the re-audit's MEDIUM (FA-corpus-009: the sandbox child writes to the worker's stdout and stderr) and its cheap LOWs and INFO items, test-first, in one PR.
+**Architecture:** no new module. `pdf_sandbox._child` detaches from the worker's output first; `raw_store` gets a random temporary name, a dirty marker and a rate-limited recount; `main.py` gets one vault-walking helper that skips the raw store; `pdf_extractor.ACTIVE_CONTENT_NAMES` grows; `pdf_intake` refuses a repeated Content-Type; `parse` sweeps scratch directories of dead workers.
+**Spec:** section 7 of the F26 spec, rulings R16-R25.
+**Branch:** `claude/remediate-f26-fu` from origin/main 53f4450. Evidence log: scratchpad `evidence-f26-fu.txt`. Every RED is the new tests on 53f4450's code.
+
+### Global constraints
+
+- No change to `scraper/net/*` or `tests/test_f25_*` (F25), F23-fu's `routers/quarantine.py` and `main.py` body guard, F28-fu's failure handling, `job_record` and dispatcher. `pdf_intake.py` and `main.py` changes stay small and additive.
+- The auditor's mutation patterns for the R8 bounds and the store's two final checks (`if used + size > MAX_STORE_BYTES:` / `if shutil.disk_usage(store).free - size < MIN_FREE_BYTES:`, `payload = reader.recv_bytes(limits.max_result_bytes)`, `if len(body) > max_bytes:`) keep their exact text, so the re-audit's driver still applies.
+- No literal that looks like a key, anywhere; gitleaks on `origin/main..HEAD` before every push.
+
+### Review focus
+
+1. A real Celery prefork worker logs to Docker: the e2e flood test captures the worker process's fds 1 and 2 (what a spawned child inherits), not pytest's capture objects. Task 2.
+2. A full store keeps getting puts: two refused puts in a row walk the tree at most once (Task 3); an operator's manual removal is still noticed after the interval (Task 3).
+3. A writer SIGKILLed mid-put, then the same document from the same pid: stored (Task 3), with real processes and real signals.
+4. `/health` on a vault where `raw-pdf/` holds objects: `total_pdfs` counts only the bootstrap PDFs and nothing under `raw-pdf/` is listed (Task 4).
+5. CI runs as a non-root user where user namespaces may be refused: the netns test skips with the probe's error, never passes silently (Task 2).
+
+### Tasks
+
+1. **Spec and plan** (spec section 7, this section). Commit and push.
+2. **RED tests**, all in the existing F26 files plus `tests/pdf_fixtures.py` (`log_flood_pdf`, `active_pdf(name)`), run on 53f4450's code and recorded below:
+   - e2e `test_b_a_pdf_that_floods_the_parser_s_log_writes_nothing_to_the_worker_s_output`: LHC run of the flood PDF (the auditor's `write_flood_pdf.py`) then a golden judgment, wall 8 s; fds 1 and 2 of the test process point at a counted pipe; want <= 64 KiB, `pdf_parse_timeout` 1, the judgment staged (R16);
+   - sandbox: isolation read-backs (`stdio` all `/dev/null`, `logging_disabled`, `session_leader`, `image_pixels`, `image_bomb_error`) (R16, R24, M44); netns compared with the worker's where a forked probe can `unshare` (R24, M37); `_kill_group` on a forked session leader with a grandchild (M38); the worker-bound and child-bound reply details (M14, M15); scratch directories of a killed daemonic pool process are gone after the next parse (R23);
+   - extractor: one fixture per listed name (M19-M24) and per R20 name; a URI-link judgment accepted; OCR goes on past a page whose size raises (M48);
+   - raw store: killed writer with pid 4242 then the same document with pid 4242 (R17, L1); a killed writer's leftovers reclaimed by the next put (R18 marker); the floor recounts before refusing (R18, L2); two refused puts at a full store walk the tree at most once, and an aged stamp lets a removal be noticed (R18, L3);
+   - intake: two Content-Type fields, a comma list, identical duplicates refused `not_pdf`; a comma in a parameter accepted (R21);
+   - `/health` and `/api/vault` skip `raw-pdf/` (R19); `requirements-test.txt` pins the installed billiard (R22).
+   Commit and push.
+3. **`raw_store.py`** (R17, R18): `secrets.token_hex(8)` temporary names; `_mark_dirty`, `_recount_due`, the `.recounted` stamp; recount order: temps, ledger, stamp, then marker.
+4. **`main.py`** (R19): `_live_dir()` and `_vault_pdfs(live_dir)` (os.walk, prunes `raw_store.STORE_DIR`, no link following); `/health` and `/api/vault` use them.
+5. **`pdf_sandbox.py`** (R16, R23, R24): `_detach_output()` first in `_child`; read-backs; the worker-bound detail; scratch naming and `_sweep_stale_scratch()`.
+6. **`pdf_extractor.py`** (R20) and **`pdf_intake.py`** (R21); **`requirements-test.txt`** (R22).
+7. **GREEN**: both F26 files, then the neighbours (F20, F25, F28, F31), then the full suite as CI runs it; wall-clock tests rerun alone when the machine is loaded. The auditor's probes (`logflood_probe.py`, `pid_reuse_probe.py`, `floor_recount_probe.py`) on the head. Mutation: the re-audit's survivors M14, M15, M19-M24, M37, M38, M44, M48 and new mutants for R16-R23. Gates: G-0, F31 import contract, F31 runtime smoke, gitleaks, the claim gate on the PR body.
+
+### Ledger
+
+| Step | Command | Result |
+|---|---|---|
+| RED, the F26-FU tests on 53f4450's code | `python -m pytest corpus_service/tests/test_f26_pdf_sandbox.py corpus_service/tests/test_f26_pdf_intake_e2e.py -q -rfEs` (CI=1, PG16 on 55551) | **21 failed, 59 passed**. Flood: the worker's stdout and stderr received **552,931,560 bytes (527.3 MiB)** in the 8 s-wall run (bound 64 KiB). R16: no stdio/logging read-back; with `/dev/null` refused the child went on (`FileNotFoundError`). M14: no worker-bound detail. M37/M44/session: no read-back. R20: the six new names accepted. L1: `FileExistsError` x3. L2: a killed writer's temporary object survives the next put; the floor refuses without reclaiming it. L3: 20 directories scanned at each of two refused puts in a row. R21: two Content-Type fields accepted. R22: no billiard pin. R23: the killed pool process's scratch directory survives the next parse. R19: `total_pdfs` 0, because this machine has an empty `/app/live` (next row). Passing, as expected: the mutant-killing tests for unchanged code (M15, M38, M48, the six R4 names, the URI control) and every existing test |
+| RED, R19 as on a CI runner (no `/app/live`: `/app` hidden by a tmpfs in a private mount namespace) | `unshare -m ... -k r19_` | **1 failed**: `total_pdfs` 5 (2 bootstrap PDFs + 3 raw-store objects), want 2 |
+| GREEN, both F26 files (ec6778e) | same command | **80 passed**, 0 skipped (root here: the netns test compared namespaces). Flood run alone with `-s`: the worker's stdout and stderr received **0 bytes** |
+| GREEN, R19 as on a CI runner | `unshare -m ... -k r19_` | 1 passed |
+| Non-root route of the netns test | a spawn child after `warm_up`, as uid 65534 | `Threads: 1`; `unshare(CLONE_NEWUSER\|CLONE_NEWNET)` succeeds here, so the forked probe and the sandbox agree on the route CI's non-root runner takes |
+| GREEN, full suite as CI runs it (ec6778e) | `python -m pytest corpus_service/tests -q -rfEs` | **1075 passed**, 157 subtests, 0 skipped (1044 on 53f4450 + 31 new) |
+| Merge origin/main a9b0e06 (F28-fu #78, F03 #47/#79, gitleaks #77), no conflicts (f58c685) | full suite on the merged tree | **1141 passed**, 157 subtests, 0 skipped. The branch adds no broad handler on the worker side (only `OSError`, `FileNotFoundError`, `ProcessLookupError`, `PermissionError`, `UnicodeDecodeError`), so F28's R23 interruptions still propagate; `pdf_intake` still calls `declared_type` once per response, which F28's `f26_compat` test patches |
+| Mutation (copy of f58c685, one mutant at a time, both F26 files, `-x`) | `f26fu_mutate.py` | **40 mutants, 36 killed, 4 survived**. The survivors are the re-audit's four equivalents (M11, M16, M17, M32). Killed: the re-audit's 12 real survivors (M14, M15, M19-M24, M37, M38, M44, M48), each by its new test, and N01-N24 for R16-R24 |
+| The re-audit's probes on f58c685 | `logflood_probe.py <repo> 20` | head: **209 bytes** in 20 s, which are the probe process's own two config warnings, not the child's; 53f4450: **956.3 MiB** in 20 s |
+| | `pid_reuse_probe.py`; the same with the kill at the temporary object's fsync and the marker removed | as written, the kill now lands at the marker's directory fsync (no temporary file; one recount), then stored 3/3; at the object's fsync: a stale `.<sha256>.<random>.tmp` and **stored 3/3** (53f4450: refused 3/3) |
+| | `floor_recount_probe.py` | floor: one recount, the stale temporary file reclaimed; full store of 100,000 objects: refused puts took **3.83 s, 0.00 s, 0.00 s** (re-audit: 5.23, 3.97, 3.76 s) |
+| Real tesseract through the sandbox after R16 (clean runtime venv) | an image-only page | OCR text read back exactly; `uid` 65534, `net` netns, fds 0-2 `/dev/null` |
+| Gates (f58c685) | G-0; F31 runtime smoke; gitleaks 8.30.1 `--log-opts=origin/main..HEAD` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines; F31 runtime smoke all checks passed (billiard resolves to 4.3.1 there too); no leaks found |
+
+Rulings: **R16-R25** (spec section 7). No ruling changed while going GREEN; one note was added to R23 (the pid in a scratch name is meaningful only because compose shares no `/tmp` between containers).
+
+### Review round 1 on PR #81 (Codex P2, thread 4306593931)
+
+`_scratch_owner` accepted any `isdigit()` run, so a young `f26-pdf-999999999999999999999-x` (`os.kill` raises `OverflowError`) or `f26-pdf-²-x` (`int('²')` raises `ValueError`) in the temporary directory made every `parse()` abort until the directory aged out. A name above the kernel's `pid_max` was swept although young. Ruling: spec R23 is amended so the owner is parsed strictly and the liveness check never raises.
+
+| Step | Command | Result |
+|---|---|---|
+| RED, each name alone through `_sweep_stale_scratch` on 0b55327 | `f26fu_rr1_sweep_probe.py` | `999999999999999999999`: **OverflowError** escapes; `²`: **ValueError** escapes; `32769` (`pid_max` + 1 here): **swept although young**; `0` and `007`: kept |
+| RED, the two new tests on b377fef's code (archive copy) | `-k r23_` | **2 failed, 1 passed**: through `parse()`, `ValueError: invalid literal for int() with base 10: '²'`; the owner/liveness test, `_worker_gone` missing. The pass is the existing killed-pool test |
+| GREEN (59c3769) | `-k r23_`; the probe again | 3 passed; every name kept while young |
+| Mutation (copy of 59c3769), the R23 mutants plus one per part of the fix | `f26fu_mutate.py N21 N22 N23 N25-N34` | **13 of 13 killed**. Two of the kills depend on this machine: N32 (`pid_max` never read) and N34 (the sweep ignores the kernel's `pid_max`) are killed through `parse()` because `pid_max` is 32,768 here. On a host whose `pid_max` is the 4,194,304 ceiling, N34 is equivalent; N32 is still killed by the reader's own unit case |
+| GREEN, full suite as CI runs it (59c3769) | `python -m pytest corpus_service/tests -q -rfEs` | **1143 passed**, 157 subtests, 0 skipped (load ~20). Both F26 files are part of this run (82 tests) |
+| Gates (59c3769) | G-0; gitleaks `--log-opts=origin/main..HEAD` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines; no leaks found |
