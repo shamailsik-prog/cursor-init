@@ -56,7 +56,9 @@ function useS3(endpoint: string, extra: Partial<Record<(typeof S3_ENV)[number], 
   process.env.SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID = ACCESS_KEY
   process.env.SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY = SECRET_KEY
   process.env.SIKANDER_DOCUMENT_OBJECT_S3_FORCE_PATH_STYLE = "true"
-  process.env.SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS = "300"
+  // Generous by default, so a loaded runner never turns an HTTP answer into a timeout; the hang
+  // cases set their own short deadline.
+  process.env.SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS = "3000"
   process.env.SIKANDER_DOCUMENT_OBJECT_S3_SETTLE_MS = "400"
   for (const [name, value] of Object.entries(extra)) process.env[name] = value
   resetDocumentObjectStoreForTests()
@@ -260,6 +262,7 @@ describe("F03 vault time budget (owner review item 4)", () => {
   })
 
   it("a hanging endpoint fails the upload within one request timeout plus the settle budget", async () => {
+    useS3(proxy.endpoint, { SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS: "300" })
     proxy.setMode({ kind: "hang" })
     const started = performance.now()
     const { text, error } = await capturedErrors(() => putImmutableDocumentObject(putInput("doc_hang")))
@@ -274,6 +277,7 @@ describe("F03 vault time budget (owner review item 4)", () => {
   })
 
   it("a hanging read fails within one request timeout", async () => {
+    useS3(proxy.endpoint, { SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS: "300" })
     proxy.setMode({ kind: "hang" })
     const started = performance.now()
     const error = await getImmutableDocumentObject(

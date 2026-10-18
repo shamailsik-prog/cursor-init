@@ -84,7 +84,9 @@ function vaultOnS3(extra: Partial<Record<(typeof VAULT_ENV)[number], string | un
     SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID: "contract-access-id",
     SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY: "contract-secret",
     SIKANDER_DOCUMENT_OBJECT_S3_FORCE_PATH_STYLE: "true",
-    SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS: "500",
+    // Generous by default (a loaded runner must not turn an answer into a timeout); the deadline
+    // cases set their own.
+    SIKANDER_DOCUMENT_OBJECT_S3_TIMEOUT_MS: "3000",
     SIKANDER_DOCUMENT_OBJECT_S3_SETTLE_MS: "1000",
     ...extra,
   })
