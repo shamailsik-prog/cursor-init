@@ -621,9 +621,72 @@ def test_r10_an_interrupted_request_leaves_an_interrupted_receipt_and_its_row_un
     assert (summary_row["claimed"], summary_row["released"], summary_row["interrupted_by"]) == (2, 2, "CancelledError"), summary_row
 
 
+def test_r10_a_charged_failure_records_its_receipt_as_failed_not_interrupted(corpus_db, monkeypatch):
+    """Review round 1 (Bugbot 4307214719). The provider answered, but the database refused the
+    `answered` write (a trigger, SQLSTATE 23514), so the batch fails with the receipt still `started`.
+    The row in flight is charged (R10), so its receipt must say `failed` with the same error type as
+    the row, as `_failed` records any charged attempt. At fa56eee the give-back turned it into
+    `interrupted`, the outcome R10 keeps for an uncharged time-limit cut-off, so the receipt disagreed
+    with the row. Neither `failed` nor `interrupted` is reused (R6) or abandoned (R3)."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    corpus_db.admin(
+        "CREATE FUNCTION f27_refuse_answer() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.outcome = 'answered' THEN "
+        "RAISE EXCEPTION 'synthetic F27 receipt write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+        "CREATE TRIGGER f27_refuse_answer BEFORE UPDATE ON embedding_attempts FOR EACH ROW EXECUTE FUNCTION f27_refuse_answer()",
+    )
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    result = fire("process-embeddings")
+
+    assert result.state == "FAILURE", repr(result.result)
+    row = queue_by_row()[1]
+    assert receipts() == [("failed", None, False, False, row[2])], (
+        f"the charged row says {row}, its receipt {receipts()}")
+    assert row[:3] == ("pending", 1, "IntegrityError"), row
+    corpus_db.admin("DROP TRIGGER f27_refuse_answer ON embedding_attempts")
+    make_due()
+    again = summary(fire("process-embeddings"))
+    assert (again.get("completed"), again.get("reused"), len(provider.calls)) == (1, 0, 2), (
+        "a failed receipt holds no answer: the row is paid for again", again)
+
+
 # ---------------------------------------------------------------------------------------------
 # R11: alerts through F28's corpus alert path
 # ---------------------------------------------------------------------------------------------
+def test_r11_a_batch_that_fails_after_dead_lettering_still_raises_its_alerts(corpus_db, monkeypatch, caplog):
+    """Review round 1 (Bugbot 4307214725). The batch dead-letters a row whose record is gone, then
+    fails on the next row (the database refuses its vector write). At fa56eee the alerts were
+    evaluated only after a clean item loop, so this failed batch logged no `F28 source alert` line and
+    recorded `alerts: []`. R11: every keyed batch evaluates them, failed ones included, and the
+    batch's own exception still reaches Celery."""
+    migrated(corpus_db)
+    seed_statutes(1, 1, age="2 days")
+    run(execute(
+        "INSERT INTO embedding_queue (record_id, table_name, created_at) "
+        "VALUES (gen_random_uuid(), 'statutes_master', now() - interval '3 days')"
+    ))
+    corpus_db.admin(
+        "CREATE FUNCTION f27_refuse_vector() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.embedding IS NOT NULL THEN "
+        "RAISE EXCEPTION 'synthetic F27 vector write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+        "CREATE TRIGGER f27_refuse_vector BEFORE UPDATE ON statutes_master FOR EACH ROW EXECUTE FUNCTION f27_refuse_vector()",
+    )
+    Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("process-embeddings")
+
+    assert (result.state, type(result.result).__name__) == ("FAILURE", "IntegrityError"), repr(result.result)
+    record = jobs("embedding_queue", job_type="embed")
+    assert [r.status for r in record] == ["failed"], record
+    kinds = sorted(a.split(":")[0] for a in record[0].result_summary.get("alerts", []))
+    assert kinds == ["backlog_stale", "dead_letter"], f"the failed batch recorded alerts {record[0].result_summary.get('alerts')}"
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith(ALERT)]
+    assert sorted(line[len(ALERT):].split(":")[0] for line in lines) == ["backlog_stale", "dead_letter"], lines
 def test_r11_a_stale_backlog_and_new_dead_letters_raise_the_corpus_alert(corpus_db, monkeypatch, caplog):
     """A row queued two days ago is waiting for its retry, and a row whose record is gone is next.
     On main nothing alerted (and the waiting row was retried at once). Here the batch dead-letters
