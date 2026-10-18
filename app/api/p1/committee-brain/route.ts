@@ -28,6 +28,12 @@ import {
   requireIdempotencyKey,
 } from "@/platform/http/idempotency"
 
+/**
+ * Audit F18: a Firebase forward can wait on Cloud Functions for at most FORWARD_TIMEOUT_MS
+ * (125 s; platform/p1/functionsCommitteeBrain.ts). The platform limit sits above that so the
+ * forward's own deadline, not a platform kill, ends a hanging call. A literal: Next reads it statically.
+ */
+export const maxDuration = 130
 
 /** Allowed `purpose` values (I1); anything else is 400 invalid_purpose. */
 const COMMITTEE_PURPOSES = ["committee-brain", "summarise", "research", "translate", "ops-audit"] as const
