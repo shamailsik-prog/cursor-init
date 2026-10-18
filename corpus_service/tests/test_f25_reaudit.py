@@ -194,7 +194,7 @@ def test_single_gzip_bomb_at_the_production_cap(env):
     env.source.routes["/b"] = _fixed(200, {"Content-Encoding": "gzip"}, gzip_zeros(256 * MIB))
     result, peak = _peak(lambda: _run_get(_fetcher(env), f"{env.origin}/b"))
     assert isinstance(result, fp.FetchRefused) and result.reason == fp.TOO_LARGE, result
-    assert peak < fp.MAX_BYTES * 1.25 + 8 * MIB, f"peak {peak / MIB:.0f} MiB"
+    assert peak < fp.MAX_BYTES * 1.15 + 4 * MIB, f"peak {peak / MIB:.0f} MiB"  # main: 142 MiB; fixed: ~104 MiB
 
 
 def test_compressed_bodies_within_the_cap_decode_and_only_gzip_is_advertised(env):

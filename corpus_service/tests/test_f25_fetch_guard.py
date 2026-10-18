@@ -1,11 +1,17 @@
 """Audit F25 closure guard: no corpus code opens an HTTP path of its own (spec R1, R4, R12, R13).
 
 1. An AST scan of every non-test module under corpus_service/ (scraper/, bootstrap_harvest.py,
-   migrations/) except scraper/net/fetch_policy.py fails on: building an httpx client or transport
-   or an httpcore pool; module-level httpx request functions; HTTP or browser libraries that would
-   bypass the boundary; raw sockets; any ``follow_redirects`` other than a literal False; any
-   ``_test_*`` keyword (the boundary's test-only hooks). Positive controls prove the scanner sees
-   each form, so the guard cannot rot into a pass.
+   migrations/) except scraper/net/fetch_policy.py fails on: importing or referencing a network,
+   socket, process or browser module (by any alias, even after only ``import urllib.parse``);
+   httpx client/transport classes and request functions outside type annotations (calls, aliases,
+   subclasses); private members of httpx or the boundary; raw connection methods on any receiver
+   (``loop.create_connection``, ``anyio.connect_tcp``); ``os.system`` / ``os.popen`` / exec /
+   spawn; ``getattr``/``setattr``/``vars`` on those modules; dynamic imports of them by literal
+   (constant-folded) name, and by any computed name outside the dispatcher; building
+   ``FetchPolicy`` / ``PolicyFetcher`` outside the registry or writing to the boundary; any
+   ``follow_redirects`` other than a literal False; the test-only hooks (``_test_*``,
+   ``loopback_origins``). Positive controls (including every form of the re-audit's probe) prove
+   the scanner sees each form, so the guard cannot rot into a pass.
 2. Every harvester the dispatcher routes, except PakistanLawSite (import folder, no network), gets
    its client from ``fetch_policy.fetcher_for`` with a registered policy; bootstrap_harvest.py uses
    ``sync_fetcher_for`` for each source it harvests.
@@ -23,19 +29,49 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLICY_MODULE = Path("scraper") / "net" / "fetch_policy.py"
 
-FORBIDDEN_CALLS = {
+BOUNDARY = "scraper.net.fetch_policy"
+# Modules (and their submodules) that open network paths of their own: nothing outside the boundary
+# imports or references them (re-audit round, R21).
+FORBIDDEN_MODULES = (
+    "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "httplib2", "pycurl", "playwright",
+    "treq", "tornado.httpclient", "tornado.simple_httpclient", "tornado.tcpclient", "websockets", "websocket",
+    "httpcore", "anyio", "h11", "h2", "trio", "socket", "ftplib", "smtplib", "poplib", "imaplib", "nntplib",
+    "telnetlib", "xmlrpc", "webbrowser", "subprocess", "pty", "asyncssh", "paramiko", "pexpect", "curl_cffi",
+    "pyppeteer", "selenium", "mechanize", "scrapy", "grpc",
+)
+# Names inside otherwise-allowed modules that open a network path, run a program, or widen the boundary.
+FORBIDDEN_NAMES = (
     "httpx.Client", "httpx.AsyncClient", "httpx.HTTPTransport", "httpx.AsyncHTTPTransport",
     "httpx.get", "httpx.post", "httpx.put", "httpx.patch", "httpx.delete", "httpx.head", "httpx.options",
     "httpx.request", "httpx.stream",
-    "httpcore.ConnectionPool", "httpcore.AsyncConnectionPool", "httpcore.HTTPProxy", "httpcore.AsyncHTTPProxy",
-    "httpcore.SOCKSProxy", "httpcore.AsyncSOCKSProxy", "httpcore.HTTPConnection", "httpcore.AsyncHTTPConnection",
-    "httpcore.request", "httpcore.stream",
-    "socket.socket", "socket.create_connection", "asyncio.open_connection",
-}
-FORBIDDEN_IMPORTS = (
-    "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "httplib2", "pycurl", "playwright",
-    "treq", "tornado.httpclient", "websockets",
+    "asyncio.open_connection", "asyncio.open_unix_connection", "asyncio.create_subprocess_exec",
+    "asyncio.create_subprocess_shell",
+    "os.system", "os.popen", "os.posix_spawn", "os.posix_spawnp", "os.startfile",
+    "ssl.get_server_certificate", "ssl.wrap_socket", "ssl.SSLSocket",
+    "lxml.etree.parse", "lxml.etree.iterparse", "lxml.html.parse",
+    f"{BOUNDARY}.FetchPolicy", f"{BOUNDARY}.PolicyFetcher",
 )
+FORBIDDEN_PREFIXES = ("os.exec", "os.spawn")
+# Modules whose private members (``_x``, ``__dict__``) nothing outside may reach.
+PRIVATE_GUARDED = ("httpx", BOUNDARY)
+# Calls of these methods open connections whatever the receiver is (loop.create_connection, ...).
+NETWORK_METHODS = {
+    "create_connection", "create_unix_connection", "create_datagram_endpoint", "sock_connect", "connect_tcp",
+    "connect_unix", "connect_unix_socket", "open_connection", "open_unix_connection", "wrap_socket", "wrap_bio",
+    "urlopen", "urlretrieve", "build_opener", "set_url",
+}
+# Roots that getattr/setattr/delattr/vars and writes may not touch.
+NETWORK_ROOTS = (
+    "httpx", "httpcore", "anyio", "socket", "ssl", "asyncio", "urllib", "http", "subprocess", "os", "importlib",
+    "builtins", "sys", "ftplib", "smtplib", "poplib", "imaplib", "nntplib", "telnetlib", "xmlrpc", "requests",
+    "aiohttp", "urllib3", "lxml", "webbrowser", "pty", BOUNDARY,
+)
+DYNAMIC_IMPORTS = {"importlib.import_module", "importlib.__import__", "builtins.__import__", "__import__"}
+# The one reviewed dynamic import by variable: the dispatcher's ROUTES (every routed module is
+# checked by test_every_fetching_harvester_uses_one_registered_policy).
+DYNAMIC_IMPORT_ALLOWLIST = {"scraper/tasks/dispatcher.py"}
+FORBIDDEN_KEYWORDS = {"loopback_origins"}
+FORBIDDEN_IMPORTS = FORBIDDEN_MODULES  # kept for readers of PR #65's guard
 # Harvester modules that fetch nothing (PakistanLawSite: licensed API placeholder + import folder).
 NO_NETWORK_HARVESTERS = {"scraper.tasks.pakistanlawsite"}
 
@@ -49,39 +85,126 @@ def _dotted(node, aliases):
     return None
 
 
-def _forbidden_import(name):
-    return any(name == f or name.startswith(f + ".") for f in FORBIDDEN_IMPORTS)
+def _under(name, roots):
+    return any(name == r or name.startswith(r + ".") for r in roots)
+
+
+def _forbidden(name):
+    """Why ``name`` (a dotted reference) is outside the boundary, or None."""
+    if not name:
+        return None
+    if _under(name, FORBIDDEN_MODULES):
+        return "reaches a network module"
+    if _under(name, FORBIDDEN_NAMES) or name.startswith(FORBIDDEN_PREFIXES):
+        return "reaches a raw network or process API"
+    for root in PRIVATE_GUARDED:
+        if name.startswith(root + "."):
+            if name[len(root) + 1:].split(".")[0].startswith("_"):
+                return "reaches a private member"
+    return None
+
+
+def _const_str(node):
+    """A string the AST spells out (literals, + concatenation, f-strings of literals), or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _const_str(node.left), _const_str(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = [_const_str(v) for v in node.values]
+        return None if any(p is None for p in parts) else "".join(parts)
+    return None
+
+
+def _annotation_nodes(tree):
+    """ids of every node inside a type annotation (references there open nothing)."""
+    ids = set()
+    roots = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+                if arg is not None and arg.annotation is not None:
+                    roots.append(arg.annotation)
+            if node.returns is not None:
+                roots.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            roots.append(node.annotation)
+    for root in roots:
+        ids.update(id(n) for n in ast.walk(root))
+    return ids
 
 
 def scan_source(source, where="<snippet>"):
-    """Every way ``source`` opens an HTTP path outside the fetch boundary."""
+    """Every way ``source`` opens a network path outside the fetch boundary, widens the boundary, or
+    passes one of its test hooks."""
     tree = ast.parse(source)
     aliases = {}
     found = []
+
+    def flag(node, message):
+        found.append(f"{where}:{getattr(node, 'lineno', 0)} {message}")
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
-                if _forbidden_import(alias.name):
-                    found.append(f"{where}:{node.lineno} imports {alias.name}")
+                why = _forbidden(alias.name)
+                if why:
+                    flag(node, f"imports {alias.name} ({why})")
         elif isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
                 full = f"{node.module}.{alias.name}"
                 aliases[alias.asname or alias.name] = full
-                if _forbidden_import(node.module) or _forbidden_import(full):
-                    found.append(f"{where}:{node.lineno} imports {full}")
+                why = _forbidden(node.module) or _forbidden(full)
+                if why:
+                    flag(node, f"imports {full} ({why})")
+
+    in_annotation = _annotation_nodes(tree)
+    parents = {}
     for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+
+    for node in ast.walk(tree):
+        # References: the longest dotted chain at each spot, outside annotations.
+        if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in in_annotation:
+            parent = parents.get(id(node))
+            if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                dotted = _dotted(node, aliases)
+                why = _forbidden(dotted)
+                if why:
+                    flag(node, f"references {dotted} ({why})")
+        # Writes to the boundary or a network module (monkeypatching a factory, widening the registry).
+        if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            target = _dotted(node if isinstance(node, ast.Attribute) else node.value, aliases)
+            if target and _under(target, NETWORK_ROOTS):
+                flag(node, f"modifies {target}")
         if not isinstance(node, ast.Call):
             continue
         dotted = _dotted(node.func, aliases)
-        if dotted in FORBIDDEN_CALLS:
-            found.append(f"{where}:{node.lineno} calls {dotted}")
+        if dotted in DYNAMIC_IMPORTS:
+            name = _const_str(node.args[0]) if node.args else None
+            if name is None:
+                if where not in DYNAMIC_IMPORT_ALLOWLIST:
+                    flag(node, f"imports a module by a computed name via {dotted}")
+            elif _forbidden(name) or _under(name, NETWORK_ROOTS):
+                flag(node, f"imports {name} via {dotted}")
+        if dotted in {"getattr", "setattr", "delattr", "vars", "hasattr"} and node.args:
+            target = _dotted(node.args[0], aliases)
+            if target and _under(target, NETWORK_ROOTS):
+                flag(node, f"calls {dotted} on {target}")
+        if dotted == "urllib.robotparser.RobotFileParser" and (node.args or node.keywords):
+            flag(node, "gives RobotFileParser a URL (it fetches with urllib)")
+        if isinstance(node.func, ast.Attribute) and node.func.attr in NETWORK_METHODS:
+            flag(node, f"calls .{node.func.attr}() (a raw connection)")
         for kw in node.keywords:
             if kw.arg == "follow_redirects" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
-                found.append(f"{where}:{node.lineno} passes follow_redirects={ast.unparse(kw.value)}")
-            if kw.arg and kw.arg.startswith("_test_"):
-                found.append(f"{where}:{node.lineno} passes the test-only hook {kw.arg}")
-    return found
+                flag(node, f"passes follow_redirects={ast.unparse(kw.value)}")
+            if kw.arg and (kw.arg.startswith("_test_") or kw.arg in FORBIDDEN_KEYWORDS):
+                flag(node, f"passes the test-only hook {kw.arg}")
+    return list(dict.fromkeys(found))
 
 
 def corpus_modules():
