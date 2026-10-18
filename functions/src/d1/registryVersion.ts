@@ -181,9 +181,10 @@ export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: 
  * The bump that resets the name index state (the reconciliation rebuilding a damaged index, F37): the whole
  * `nameIndex` map is replaced by an unplaced, schema-less one (it reads `missing` until the rebuild marks it) with
  * its mirror at the new version, and the generation moves (the reset drops every name, so no earlier stamp holds;
- * an increment also replaces a malformed generation). `version` is the registry version read in `tx`.
+ * a write of the next generation also replaces a malformed one). `version` is the registry version read in `tx`;
+ * `nameIndexGen` is the generation after the move (`state.nameIndexGen + 1`, absolute so a corrupt stored value heals).
  */
-export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number): void {
+export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number, nameIndexGen: number): void {
   tx.set(
     registryVersionRef(firmId),
     {
@@ -192,7 +193,7 @@ export function bumpResettingNameIndex(tx: Transaction, firmId: string, version:
       version: FieldValue.increment(1),
       classification: "internal",
       nameIndex: { version: version + 1, chunk: 0, bytes: 0 },
-      nameIndexGen: FieldValue.increment(1),
+      nameIndexGen,
     },
     { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex", "nameIndexGen"] }
   )
