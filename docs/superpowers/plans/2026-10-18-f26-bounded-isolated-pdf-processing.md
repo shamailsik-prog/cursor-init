@@ -36,3 +36,12 @@ Exact commands and full counts are in the evidence log. Wall-clock tests are rer
 | GREEN, full suite (006f181), CI-like venv | `python -m pytest corpus_service/tests -q -rf` | **1040 passed**, 3 warnings, 157 subtests, 0 skipped (8:53; main: 995, +45 = 14 e2e + 31 unit) |
 | Mutation check (scratch copy of 006f181, one undo per run, both F26 files) | `f26-mutate.py` | M1 parse in the worker: 13 failed; M2 cap not narrowed: 2; M3 nothing kept: 11; M4 no active-content scan: 10; M5 wrapped `MemoryError` swallowed: 2; M6 environment kept: 1; M7 no rlimits: 4; M9 refusals counted by class name: 13; M10 NA parses in the worker: 3. M8 (only the poll unbounded) was **not** caught, because the watchdog still acted; the stronger M8b (no watchdog) was caught only after the unit wall bound was tightened from wall + 15 s to wall + 10 s (`refused after 19.5 s`); the e2e slow case passes under M8b because the child's alarm (wall + 15 s) is inside its run budget |
 | Tightened wall test, real code, alone, twice | `-k "wall_limit or cpu_limit"` | 4.20 s / 4.18 s (watchdog at 4 s); CPU test 2.73 s / 2.67 s; all passed |
+| GREEN, full suite at e4741c5 (the last code or test change), CI-like venv | `python -m pytest corpus_service/tests -q -rf` | **1040 passed**, 3 warnings, 157 subtests, 0 skipped (7:15) |
+| Gate G-0 (e4741c5) | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines |
+| gitleaks 8.30.1 (e4741c5) | `gitleaks git --config .gitleaks.toml --log-opts=origin/main..HEAD` | 5 commits, no leaks found |
+
+## Rulings made while going GREEN
+
+- **R9** (spec): pdfplumber wraps a `MemoryError` (`PdfminerException(e)`); every broad handler in the extractor re-raises a `MemoryError` or a cap found in the exception's chain.
+- **R2** (spec): F25's guard refuses any reference to `PolicyFetcher` outside the boundary; the intake recognises the connector's client by its public `max_bytes`.
+- **R8** (spec): the wall-limit unit test bound is wall + 10 s, so it fails when only the child's alarm (wall + 15 s) ends a parse.

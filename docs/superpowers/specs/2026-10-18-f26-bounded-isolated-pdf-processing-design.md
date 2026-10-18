@@ -96,7 +96,7 @@ The flow is the production one: the `scrape-lahorehighcourt` beat entry runs the
 
 ## 5. Residual risks
 
-- Native-code exploit inside the sandbox: bounded by the limits, the uid drop (when root) and the network namespace (when the kernel allows it); the child's initial environment block stays in its memory (R7). In Docker's default seccomp profile `unshare` is refused, so production reports `net: none` unless the operator grants it; the brief's floor ("inheriting none of the parent's DB or credential handles") holds regardless.
+- Native-code exploit inside the sandbox (the finding asserts none): bounded by the limits, the uid drop (when root) and the network namespace (when the kernel allows it); the child's initial environment block stays in its memory (R7). In Docker's default seccomp profile `unshare` is refused, so production reports `net: none` unless the operator grants it, and such an exploit could then read the worker's environment and reach the network. The brief's floor ("inheriting none of the parent's DB or credential handles") holds regardless; F26-FU3 closes both gaps.
 - No `PR_SET_PDEATHSIG` or `PR_SET_NO_NEW_PRIVS` (both need `ctypes`, which F25's guard bans): if Celery hard-kills a worker mid-parse, the orphaned child ends at its alarm (wall + 15 s) or CPU limit.
 - The structural scan sees what pdfminer resolves (every cross-reference section, object streams, its own repair scan of a broken table). A viewer with a different repair heuristic could see objects pdfminer does not.
 - Refused documents that reached parsing stay in the raw store (R5); the store has no pruning or retention policy beyond its size bound.
