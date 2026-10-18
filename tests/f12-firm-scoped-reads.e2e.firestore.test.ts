@@ -9,7 +9,6 @@
 // scans and filtered queries share). A scan returns the other firm's rows; a firm-scoped query never does.
 // The identity rows here carry `id` (Next's own shape), so the route also answers on main, where F01's missing-id
 // defect would otherwise stop the request before any listing.
-import { randomUUID } from "node:crypto"
 import { Query, type QuerySnapshot } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GET as mattersGet } from "@/app/api/d1/matters/route"

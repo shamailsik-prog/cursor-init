@@ -361,6 +361,9 @@ describe("re-audit attacks: the effect fence's load-bearing claims", () => {
         (e: Error) => `threw ${e.name}`
       )
     const out: Record<string, string> = {}
+    // A production process refuses FIRESTORE_EMULATOR_HOST (F01 re-audit LOW, takeover of #44), so the emulator
+    // database reaches the production-mode claim through the database test seam, as the F01 e2e does.
+    const emulatorDb = await getProductionFirestore()
     try {
       env.NODE_ENV = "production"
       env.SIKANDER_PERSISTENCE_MODE = "memory"
@@ -368,6 +371,7 @@ describe("re-audit attacks: the effect fence's load-bearing claims", () => {
       delete env.SIKANDER_PERSISTENCE_MODE
       out.unset = await outcome(idempotency.beginIdempotentRequest(req(), randomUUID(), "fp"))
       env.SIKANDER_PERSISTENCE_MODE = "firestore"
+      setFirestorePersistenceForTests(emulatorDb)
       seam().claimFailures = [new Error("the seam must be inert in production")]
       out.seam = await idempotency.runWithIdempotencyScope({ firmId: "firmA", userId: "partner_a" }, async () => {
         const r = await idempotency.beginIdempotentRequest(req(), randomUUID(), "fp")
@@ -376,6 +380,7 @@ describe("re-audit attacks: the effect fence's load-bearing claims", () => {
     } finally {
       env.NODE_ENV = saved.NODE_ENV
       env.SIKANDER_PERSISTENCE_MODE = saved.mode
+      setFirestorePersistenceForTests(null)
     }
     expect(out).toEqual({ memory: "threw PersistenceConfigurationError", unset: "threw PersistenceConfigurationError", seam: "claimed (seam inert)" })
   })
