@@ -260,6 +260,11 @@ jobs:
           # pull_request: the PR's base commit; push: origin/main (present because fetch-depth is 0).
           BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: bash ci_gates/gate_g0.sh
+      # Audit F39: the pinned npm's own `npm ci` validator (dry run, no install) accepts every lockfile, and the npm
+      # here is inside the pin (ci_gates/check_lockfiles.py; G-0 [18] runs its static half).
+      - name: Frozen-install guard (npm ci --dry-run per lockfile, pinned npm)
+        if: ${{ !cancelled() }}
+        run: python3 ci_gates/check_lockfiles.py --npm-ci
       # The gates are independent: a G-0 failure must not hide the G-1 and G-2 results.
       - name: Install
         if: ${{ !cancelled() }}

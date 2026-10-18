@@ -2,6 +2,14 @@
   "name": "sikander-ai",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@10.9.9",
+  "devEngines": {
+    "packageManager": {
+      "name": "npm",
+      "version": "~10.9.0",
+      "onFail": "warn"
+    }
+  },
   "scripts": {
     "dev": "next dev --port 43127",
     "build": "next build",
@@ -23,6 +31,7 @@
     "test:f02-functions-http": "npm run functions:build && firebase emulators:exec --only auth,firestore,functions --project demo-sikander \"FIREBASE_FUNCTIONS_EMULATOR_HOST=127.0.0.1:15001 npx vitest run --no-file-parallelism tests/audit-f02-functions-http-emulator.e2e.test.ts\"",
     "test:e2e:console-auth": "npm run functions:build && firebase emulators:exec --only auth,firestore,functions --project demo-sikander \"FIREBASE_FUNCTIONS_EMULATOR_HOST=127.0.0.1:15001 bash scripts/e2e-console-auth.sh\"",
     "gate:g0": "bash ci_gates/gate_g0.sh",
+    "gate:lockfiles": "python3 ci_gates/check_lockfiles.py --npm-ci",
     "gate:f17-eval-record": "python3 ci_gates/check_committee_eval_record.py",
     "gate:g1": "python3 ci_gates/gate_g1.py",
     "gate:g2": "bash ci_gates/gate_g2.sh",
@@ -75,7 +84,7 @@
   },
   "overrides": {
     "eve": {
-      "undici": "8.11.2"
+      "undici@8.9.0": "8.11.2"
     }
   }
 }
