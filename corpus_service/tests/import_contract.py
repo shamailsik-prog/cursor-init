@@ -46,11 +46,47 @@ ALIASES: Dict[str, Tuple[str, str]] = {
     "reportlab": ("reportlab", "runtime-only (parsers/pdf_writer.py); not in the pinned test set"),
 }
 
-# Distributions the runtime loads by name rather than by an import statement.
+# Distributions the runtime loads by name rather than by an import statement, by hand. The scan
+# below also finds every parser feature and URL driver in the Python code (BY-NAME LOADS); this
+# table keeps the ones it cannot see (compose commands, compose URLs) and names the ones it does.
 LOADED_BY_NAME: Dict[str, str] = {
     "asyncpg": "SQLAlchemy dialect of every postgresql+asyncpg:// DATABASE_URL (config default, compose)",
     "redis": "kombu transport and Celery result backend for redis:// and rediss:// (tasks/celery_app.py)",
     "uvicorn": "the compose api command: uvicorn scraper.main:app",
+    "lxml": "BeautifulSoup parser feature 'lxml' in bootstrap_harvest.py (Harvester.harvest_pakistancode, "
+            "harvest_nasirlawsite, harvest_national_assembly); review round, independent re-audit",
+}
+
+# -- by-name loads: a string that makes a library import a distribution ---------------------------
+# Review round (independent re-audit, MEDIUM): BeautifulSoup(..., "lxml") needs lxml as surely as
+# `import lxml` does. The scan maps every such string under RUNTIME_ROOTS to the distribution that
+# provides it (a tuple: any one of them satisfies it; () is the standard library). An unknown
+# feature or driver, or a computed parser feature, fails closed.
+BS4_FEATURES: Dict[str, Tuple[str, ...]] = {
+    "html.parser": (), "html": (),          # html.parser is the stdlib builder; "html" alone falls back to it
+    "lxml": ("lxml",), "lxml-xml": ("lxml",), "xml": ("lxml",), "fast": ("lxml",),
+    "html5lib": ("html5lib",), "html5": ("html5lib",),
+}
+# SQLAlchemy "<dialect>+<driver>://" URLs: the driver is imported when an engine is built.
+URL_DRIVERS: Dict[str, Tuple[str, ...]] = {
+    "asyncpg": ("asyncpg",), "psycopg2": ("psycopg2", "psycopg2-binary"), "psycopg": ("psycopg",),
+    "pg8000": ("pg8000",), "aiosqlite": ("aiosqlite",), "pysqlite": (), "pymysql": ("pymysql",),
+    "aiomysql": ("aiomysql",), "asyncmy": ("asyncmy",), "mysqldb": ("mysqlclient",),
+}
+_URL_DIALECTS = ("postgresql", "postgres", "mysql", "mariadb", "sqlite", "oracle", "mssql")
+_DRIVER_URL_RE = re.compile(r"(?<![A-Za-z0-9+.-])(" + "|".join(_URL_DIALECTS) + r")\+([A-Za-z0-9_]*)://")
+# Celery / kombu broker and result-backend URL schemes.
+URL_SCHEMES: Dict[str, Tuple[str, ...]] = {"redis": ("redis",), "rediss": ("redis",)}
+_SCHEME_URL_RE = re.compile(r"(?<![A-Za-z0-9+.-])(" + "|".join(URL_SCHEMES) + r")://")
+
+# (file, enclosing function, distribution) -> reason: a by-name use that never runs. It holds only
+# while nothing in RUNTIME_ROOTS refers to the function by name (attribute, name or string); once
+# something does, or once the use is gone, the check fails.
+BY_NAME_EXCEPTIONS: Dict[Tuple[str, str, str], str] = {
+    ("scraper/config.py", "database_sync_url", "psycopg2"): (
+        "Settings.database_sync_url rewrites DATABASE_URL to postgresql+psycopg2:// for a sync client "
+        "(Alembic) that nothing wires up: no runtime code reads it, so psycopg2 is never imported"
+    ),
 }
 
 # file (relative to corpus_service/) -> (number of lines with a dynamic import the check cannot
@@ -123,10 +159,22 @@ class ImportSite:
     line: int
 
 
+@dataclass(frozen=True)
+class ByNameUse:
+    distributions: Tuple[str, ...]  # any one satisfies the use; () = standard library
+    what: str  # e.g. "BeautifulSoup parser feature 'lxml'"
+    path: str
+    line: int
+    function: str  # enclosing function ("" at module or class level)
+    problem: str = ""  # set when the string cannot be mapped (fail closed)
+
+
 @dataclass
 class ScanResult:
     imports: List[ImportSite] = field(default_factory=list)
     dynamic: Dict[str, List[int]] = field(default_factory=dict)  # path -> lines of non-literal dynamic imports
+    by_name: List[ByNameUse] = field(default_factory=list)
+    referenced: Set[str] = field(default_factory=set)  # names read anywhere: attributes, names, strings
 
 
 def iter_runtime_files(project_root: Path, roots: Sequence[str] = RUNTIME_ROOTS) -> Iterator[Path]:
@@ -170,10 +218,15 @@ _STAR_UNKNOWN_LOADERS = frozenset({"import_module", "find_spec"})
 _LOADER, _RUNNER, _UNRESOLVED = "loader", "runner", "unresolved"
 _SYS, _SYS_MODULES = "sys", "sys.modules"  # the sys module; its module table (any module by name)
 _MOD, _FP = "mod:", "fp:"  # a loader's home module ("mod:importlib"); a scanned first-party module
+_EXT, _FN = "ext:", "fn:"  # a third-party module with a tracked callable; the callable ("fn:bs4.BeautifulSoup")
+# Third-party callables whose string arguments name a distribution to load (BS4_FEATURES).
+TRACKED_CALLABLES: Dict[str, frozenset] = {"bs4": frozenset({"BeautifulSoup"})}
+_BS4 = _FN + "bs4.BeautifulSoup"
 
 
 def _is_ref(kind: Optional[str]) -> bool:
-    return kind in (_LOADER, _RUNNER, _SYS, _SYS_MODULES) or (kind is not None and kind.startswith((_MOD, _FP)))
+    return kind in (_LOADER, _RUNNER, _SYS, _SYS_MODULES) or (
+        kind is not None and kind.startswith((_MOD, _FP, _EXT, _FN)))
 
 
 def _scope_of(mod: "_Module", node: ast.AST) -> Optional[ast.AST]:
@@ -240,6 +293,8 @@ class _Analyzer:
             return _MOD + dotted
         if dotted == "sys":
             return _SYS
+        if dotted in TRACKED_CALLABLES:
+            return _EXT + dotted
         if dotted and (dotted in self.index or dotted in self.packages):
             return _FP + dotted
         return None
@@ -249,6 +304,9 @@ class _Analyzer:
             return None
         if base == _SYS:
             return _SYS_MODULES if attr == "modules" else None
+        if base.startswith(_EXT):
+            home = base[len(_EXT):]
+            return f"{_FN}{home}.{attr}" if attr in TRACKED_CALLABLES.get(home, ()) else None
         if base.startswith(_MOD):
             home = base[len(_MOD):]
             if attr in LOADERS.get(home, ()):
@@ -283,7 +341,7 @@ class _Analyzer:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr" \
                 and len(node.args) >= 2:
             base = self.kind(mod, node.args[0])
-            if base is None or not base.startswith((_MOD, _FP)):
+            if base is None or not base.startswith((_MOD, _FP, _EXT)):
                 return None
             name = node.args[1]
             if isinstance(name, ast.Constant) and isinstance(name.value, str):
@@ -304,7 +362,7 @@ class _Analyzer:
                 base = self.kind(mod, box.args[0])
             elif isinstance(box, ast.Attribute) and box.attr == "__dict__":
                 base = self.kind(mod, box.value)
-            if base is not None and base.startswith((_MOD, _FP)):
+            if base is not None and base.startswith((_MOD, _FP, _EXT)):
                 return self._member(base, literal) if literal is not None else _UNRESOLVED
         return None
 
@@ -397,6 +455,72 @@ class _Analyzer:
                 return True
         return False
 
+    # -- by-name loads ------------------------------------------------------------------------------
+    def _function_of(self, mod: _Module, node: ast.AST) -> str:
+        parent = mod.parents.get(id(node))
+        while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parent = mod.parents.get(id(parent))
+        return parent.name if parent is not None else ""
+
+    @staticmethod
+    def _docstrings(tree: ast.Module) -> Set[int]:
+        ids = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                        and isinstance(first.value.value, str):
+                    ids.add(id(first.value))
+        return ids
+
+    def by_name(self, mod: _Module) -> Tuple[List[ByNameUse], Set[str]]:
+        """Parser features handed to BeautifulSoup and URL drivers/schemes in string literals, each
+        mapped to its distribution; and every name the file reads (for BY_NAME_EXCEPTIONS)."""
+        uses: List[ByNameUse] = []
+        referenced: Set[str] = set()
+        docstrings = self._docstrings(mod.tree)
+
+        def use(dists, what, node, problem=""):
+            uses.append(ByNameUse(tuple(dists), what, mod.rel, node.lineno, self._function_of(mod, node), problem))
+
+        for node in ast.walk(mod.tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                referenced.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                referenced.add(node.attr)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+                if node.value.isidentifier():
+                    referenced.add(node.value)
+                for m in _DRIVER_URL_RE.finditer(node.value):
+                    dialect, driver = m.group(1), m.group(2).lower()
+                    label = f"database URL driver '{dialect}+{driver}'"
+                    if driver in URL_DRIVERS:
+                        use(URL_DRIVERS[driver], label, node)
+                    else:
+                        use((), label, node, f"unknown URL driver '{dialect}+{driver}' at {mod.rel}:{node.lineno}: "
+                                             f"no distribution is known for it (fail closed): add it to URL_DRIVERS")
+                for m in _SCHEME_URL_RE.finditer(node.value):
+                    use(URL_SCHEMES[m.group(1)], f"broker URL scheme '{m.group(1)}://'", node)
+            elif isinstance(node, ast.Call) and self.kind(mod, node.func) == _BS4:
+                feature = node.args[1] if len(node.args) > 1 else next(
+                    (kw.value for kw in node.keywords if kw.arg == "features"), None)
+                if feature is None:
+                    continue  # no feature: bs4 picks an installed builder, html.parser at worst
+                items = feature.elts if isinstance(feature, (ast.List, ast.Tuple)) else [feature]
+                if not all(isinstance(i, ast.Constant) and isinstance(i.value, str) for i in items):
+                    use((), "BeautifulSoup parser feature", node,
+                        f"unresolved parser feature at {mod.rel}:{node.lineno}: a computed BeautifulSoup feature "
+                        f"cannot be mapped to a distribution (fail closed)")
+                    continue
+                for name in [f.strip().lower() for i in items for f in i.value.split(",") if f.strip()]:
+                    if name in BS4_FEATURES:
+                        use(BS4_FEATURES[name], f"BeautifulSoup parser feature '{name}'", node)
+                    else:
+                        use((), f"BeautifulSoup parser feature '{name}'", node,
+                            f"unknown parser feature '{name}' at {mod.rel}:{node.lineno}: no distribution is known "
+                            f"for it (fail closed): add it to BS4_FEATURES")
+        return uses, referenced
+
     def classify(self, mod: _Module) -> Tuple[List[ImportSite], List[int]]:
         imports: List[ImportSite] = []
         dynamic: Set[int] = set()
@@ -423,7 +547,7 @@ class _Analyzer:
             kind = self.kind(mod, node)
             if kind == _UNRESOLVED:
                 dynamic.add(node.lineno)
-            elif kind is not None and kind != _SYS and not kind.startswith(_FP) \
+            elif kind is not None and kind != _SYS and not kind.startswith((_FP, _EXT, _FN)) \
                     and not self._contained(mod, node, kind):
                 dynamic.add(node.lineno)  # a reference that escapes where the check cannot follow it
         return imports, sorted(dynamic)
@@ -447,6 +571,9 @@ def scan_tree(project_root: Path, roots: Sequence[str] = RUNTIME_ROOTS) -> ScanR
         result.imports.extend(imports)
         if dynamic:
             result.dynamic[mod.rel] = dynamic
+        uses, referenced = analyzer.by_name(mod)
+        result.by_name.extend(uses)
+        result.referenced |= referenced
     return result
 
 
@@ -469,6 +596,7 @@ def check(
     aliases: Mapping[str, Tuple[str, str]] = ALIASES,
     loaded_by_name: Mapping[str, str] = LOADED_BY_NAME,
     dynamic_sites: Mapping[str, Tuple[int, str]] = DYNAMIC_IMPORT_SITES,
+    by_name_exceptions: Mapping[Tuple[str, str, str], str] = BY_NAME_EXCEPTIONS,
     distributions: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> List[str]:
     """Every way the runtime code breaks the contract, as readable lines; empty means it holds.
@@ -543,6 +671,41 @@ def check(
             )
     for path in sorted(set(dynamic_sites) - set(scan.dynamic)):
         problems.append(f"stale dynamic-import site: {path} is reviewed but has no non-literal dynamic import")
+
+    # By-name loads (review round): a parser feature or URL driver is a dependency like an import.
+    installed_dists = {normalize(d) for ds in distributions.values() for d in ds}
+    groups: Dict[Tuple[str, ...], List[ByNameUse]] = {}
+    matched_exceptions = set()
+    for item in scan.by_name:
+        if item.problem:
+            problems.append(item.problem)
+            continue
+        if not item.distributions:
+            continue  # standard library
+        key = next((k for k in by_name_exceptions
+                    if (k[0], k[1]) == (item.path, item.function) and k[2] in item.distributions), None)
+        if key is not None:
+            matched_exceptions.add(key)
+            if key[1] in scan.referenced:
+                problems.append(
+                    f"reviewed by-name exception {key[0]}:{key[1]} ({key[2]}) is reachable: something in the runtime "
+                    f"refers to {key[1]!r}, so declare {key[2]} in requirements.txt and drop the exception"
+                )
+            continue
+        groups.setdefault(item.distributions, []).append(item)
+    for dists, items in sorted(groups.items()):
+        whats = "; ".join(sorted({i.what for i in items}))
+        where = ", ".join(f"{i.path}:{i.line}" for i in sorted(items, key=lambda i: (i.path, i.line))[:4]) + (
+            f" (+{len(items) - 4} more)" if len(items) > 4 else "")
+        anyof = f" (any of: {', '.join(dists)})" if len(dists) > 1 else ""
+        if not {normalize(d) for d in dists} & declared:
+            problems.append(f"undeclared: {dists[0]} is loaded by name ({whats}) at {where} "
+                            f"but requirements.txt does not declare it{anyof}")
+        elif strict and not {normalize(d) for d in dists} & installed_dists:
+            problems.append(f"not installed: {dists[0]} is loaded by name ({whats}) at {where} but no distribution "
+                            f"in this runtime environment provides it{anyof}")
+    for key in sorted(set(by_name_exceptions) - matched_exceptions):
+        problems.append(f"stale by-name exception: {key[0]}:{key[1]} ({key[2]}) matches no by-name use")
 
     return problems
 
