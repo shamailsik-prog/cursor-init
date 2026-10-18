@@ -1,4 +1,4 @@
-import type { DocumentReference, DocumentSnapshot, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, type DocumentReference, type DocumentSnapshot, type Firestore, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import {
   AUDIT_DEAD_LETTER_COLLECTION,
   AUDIT_LOG_COLLECTION,
@@ -56,6 +56,7 @@ export const RECONCILE_BUDGET_MS = 30_000
 export const RECONCILER_TIMEOUT_SECONDS = 45
 export const BACKLOG_STATE_COLLECTION = "platform"
 export const BACKLOG_STATE_DOC = "auditOutboxBacklog"
+export const BACKLOG_SWEEP_CURSOR_DOC = "auditOutboxSweepCursor"
 
 if (!(RECONCILE_BUDGET_MS + 10_000 <= RECONCILER_TIMEOUT_SECONDS * 1000)) {
   throw new Error(`audit outbox budget (${RECONCILE_BUDGET_MS} ms) must end at least 10 s before the reconciler timeout (${RECONCILER_TIMEOUT_SECONDS} s)`)
@@ -85,6 +86,8 @@ export type Backlog = {
   oldestAgeMs: number | null
   /** Entries past the grace. */
   stale: number
+  /** Entries whose `stagedAt` is missing or not a timestamp (spec ruling 19). */
+  unreadable: number
 }
 
 export type ReconcileResult = {
@@ -253,6 +256,28 @@ async function deadLetterWhole(db: Firestore, entryId: string, reason: string, n
   })
 }
 
+function stagedAtReadable(doc: QueryDocumentSnapshot): boolean {
+  return Number.isFinite(millisOf(doc.get("stagedAt")))
+}
+
+/** Entries whose `stagedAt` no index can read (spec ruling 19). */
+async function countUnreadableOutbox(db: Firestore): Promise<number> {
+  const outbox = db.collection(AUDIT_OUTBOX_COLLECTION)
+  let unreadable = 0
+  let last: QueryDocumentSnapshot | undefined
+  for (;;) {
+    let page = outbox.orderBy(FieldPath.documentId()).limit(RECONCILE_PAGE_SIZE)
+    if (last !== undefined) page = page.startAfter(last)
+    const snap = await page.get()
+    for (const doc of snap.docs) {
+      if (!stagedAtReadable(doc)) unreadable += 1
+    }
+    if (snap.size < RECONCILE_PAGE_SIZE) break
+    last = snap.docs[snap.docs.length - 1]
+  }
+  return unreadable
+}
+
 /** Measures the backlog and keeps the alert state (ruling 9). */
 async function measureBacklog(db: Firestore, nowMs: number, log: ReconcileLog): Promise<Backlog> {
   const outbox = db.collection(AUDIT_OUTBOX_COLLECTION)
@@ -260,7 +285,9 @@ async function measureBacklog(db: Firestore, nowMs: number, log: ReconcileLog): 
   const oldestMs = oldest.empty ? Number.NaN : millisOf(oldest.docs[0]!.get("stagedAt"))
   const oldestAgeMs = Number.isFinite(oldestMs) ? Math.max(0, nowMs - oldestMs) : null
   const stale = (await outbox.where("stagedAt", "<=", new Date(nowMs - AUDIT_OUTBOX_GRACE_MS)).count().get()).data().count
-  const firing = oldestAgeMs !== null && oldestAgeMs >= AUDIT_OUTBOX_ALERT_AGE_MS
+  const unreadable = await countUnreadableOutbox(db)
+  const firing =
+    unreadable > 0 || (oldestAgeMs !== null && oldestAgeMs >= AUDIT_OUTBOX_ALERT_AGE_MS)
   const stateRef = db.collection(BACKLOG_STATE_COLLECTION).doc(BACKLOG_STATE_DOC)
   const wasFiring = (await stateRef.get()).get("firing") === true
   const transition = firing && !wasFiring ? "fired" : !firing && wasFiring ? "cleared" : null
@@ -270,6 +297,7 @@ async function measureBacklog(db: Firestore, nowMs: number, log: ReconcileLog): 
       firing,
       oldestAgeMs,
       stale,
+      unreadable,
       checkedAt: at,
       alertAgeMs: AUDIT_OUTBOX_ALERT_AGE_MS,
       ...(transition === "fired" ? { firedAt: at } : {}),
@@ -277,9 +305,9 @@ async function measureBacklog(db: Firestore, nowMs: number, log: ReconcileLog): 
     },
     { merge: true }
   )
-  if (firing) log.error("audit.outbox_backlog_stale", { oldestAgeMs, stale, alertAgeMs: AUDIT_OUTBOX_ALERT_AGE_MS })
-  if (transition === "cleared") log.info("audit.outbox_backlog_cleared", { oldestAgeMs, stale })
-  return { firing, transition, oldestAgeMs, stale }
+  if (firing) log.error("audit.outbox_backlog_stale", { oldestAgeMs, stale, unreadable, alertAgeMs: AUDIT_OUTBOX_ALERT_AGE_MS })
+  if (transition === "cleared") log.info("audit.outbox_backlog_cleared", { oldestAgeMs, stale, unreadable })
+  return { firing, transition, oldestAgeMs, stale, unreadable }
 }
 
 /** One reconciler run (see the module comment). */
@@ -298,7 +326,7 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
     rowsPublished: 0,
     rowsSuperseded: 0,
     rowsDeadLettered: 0,
-    backlog: { firing: false, transition: null, oldestAgeMs: null, stale: 0 },
+    backlog: { firing: false, transition: null, oldestAgeMs: null, stale: 0, unreadable: 0 },
   }
   const tried = new Set<string>()
 
@@ -361,6 +389,26 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
     if (page.size < RECONCILE_PAGE_SIZE) break
     last = page.docs[page.docs.length - 1]
   }
+
+  // Ruling 19: entries with no readable `stagedAt` are invisible to the range query; sweep by document id.
+  if (!spent()) {
+    try {
+      const cursorRef = db.collection(BACKLOG_STATE_COLLECTION).doc(BACKLOG_SWEEP_CURSOR_DOC)
+      const after = (await cursorRef.get()).get("after")
+      let sweep = db.collection(AUDIT_OUTBOX_COLLECTION).orderBy(FieldPath.documentId()).limit(RECONCILE_PAGE_SIZE)
+      if (typeof after === "string" && after !== "") sweep = sweep.startAfter(after)
+      const slice = await sweep.get()
+      for (const doc of slice.docs) {
+        if (spent()) break
+        if (!stagedAtReadable(doc)) await handle(doc)
+      }
+      const next = slice.size < RECONCILE_PAGE_SIZE ? "" : slice.docs[slice.docs.length - 1]!.id
+      await cursorRef.set({ after: next, updatedAt: FieldValue.serverTimestamp() })
+    } catch (err) {
+      log.error("audit.outbox_sweep_failed", { code: codeOf(err) })
+    }
+  }
+
   if (spent()) log.warn("audit.outbox_budget_spent", { published: result.published.length, deadLettered: result.deadLettered.length })
   result.backlog = await measureBacklog(db, now(), log)
   return result
