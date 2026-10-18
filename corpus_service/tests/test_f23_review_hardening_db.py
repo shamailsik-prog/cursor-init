@@ -103,6 +103,26 @@ async def _until_waiting(admin, user, tasks, n, *, wait_event=None, seconds=30):
     return count, queries
 
 
+ANSWER_SECONDS = 30  # a request the test has released answers well within this
+
+
+async def _answered(awaitable, release, seconds=ANSWER_SECONDS):
+    """The request(s) ``awaitable`` resolves to. If they are still waiting after ``seconds`` (the
+    code took a lock in another order than the test expects), ``release`` frees whatever the test
+    holds, the requests are let finish, and the test fails instead of hanging."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), seconds)
+    except asyncio.TimeoutError:
+        await release()
+        await asyncio.wait_for(task, seconds)
+        raise AssertionError(f"a request was still waiting {seconds} s after the test released it") from None
+
+
+async def _nothing():
+    return None
+
+
 def _asgi_client():
     import httpx
 
@@ -238,7 +258,7 @@ def test_l1_two_records_with_one_citation_serialise_on_the_advisory_lock(review,
                              for qid, reviewer in zip(qids, (REVIEWER, OTHER_REVIEWER))]
                     waiting, _queries = await _until_waiting(admin, user, tasks, 2, wait_event="advisory")
                     await holder.rollback()
-                    return waiting, await asyncio.gather(*tasks)
+                    return waiting, await _answered(asyncio.gather(*tasks), _nothing)
         finally:
             await admin.dispose()
 
@@ -276,7 +296,7 @@ def test_l2_the_source_for_share_lock_waits_for_a_concurrent_block(review, corpu
                     locks = await _waiter_locks_on(admin, user, "scraper_sources")
                     finished_early = task.done()
                     await holder.commit()
-                    return waiting, (queries, locks), finished_early, await task
+                    return waiting, (queries, locks), finished_early, await _answered(task, _nothing)
         finally:
             await admin.dispose()
 
@@ -328,25 +348,30 @@ async def _contend(corpus_db, user, qid, sid, sqlstate):
                     task = asyncio.create_task(_post(ac, qid, "promote"))
                     await _until_waiting(admin, user, [task], 1)
                     await holder.commit()
-                    return await task
+                    return await _answered(task, _nothing)
                 if sqlstate == "40P01":
                     # The holder takes the staging row, the request takes the queue row and waits for the
                     # staging row, then the holder asks for the queue row: a cycle. The request's
                     # deadlock check (2 s) fires long before the holder's (30 s), so the request is the
-                    # one aborted.
+                    # one aborted. The holder never waits more than 20 s itself.
                     await holder.execute(text("SET LOCAL deadlock_timeout = '30s'"))
+                    await holder.execute(text("SET LOCAL lock_timeout = '20s'"))
                     await holder.execute(text("SELECT 1 FROM scraper_staging WHERE id = :i FOR UPDATE"), {"i": sid})
                     task = asyncio.create_task(_post(ac, qid, "promote"))
                     await _until_waiting(admin, user, [task], 1)
                     closing = asyncio.create_task(holder.execute(
                         text("SELECT 1 FROM quarantine_queue WHERE id = :i FOR UPDATE"), {"i": qid}))
-                    res = await task
-                    await closing
-                    await holder.rollback()
+
+                    async def release():
+                        await asyncio.gather(closing, return_exceptions=True)
+                        await holder.rollback()
+
+                    res = await _answered(task, release)
+                    await release()
                     return res
                 # 55P03 / 57014: the queue row is held while the request's lock or statement times out.
                 await holder.execute(text("SELECT 1 FROM quarantine_queue WHERE id = :i FOR UPDATE"), {"i": qid})
-                res = await _post(ac, qid, "promote")
+                res = await _answered(_post(ac, qid, "promote"), holder.rollback)
                 await holder.rollback()
                 return res
     finally:
