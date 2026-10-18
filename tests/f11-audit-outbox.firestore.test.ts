@@ -8,7 +8,7 @@
 // The F11 modules are loaded loosely so that each test fails on its own assertion against main.
 // Spec: docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md.
 import { randomUUID } from "node:crypto"
-import type { Firestore, Transaction } from "firebase-admin/firestore"
+import type { DocumentReference, Firestore, Transaction } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { beginIdempotentRequest, recordExternalEffect, resetIdempotencyForTests } from "@/platform/http/idempotency"
 import { withSession } from "@/platform/http/withSession"
@@ -109,7 +109,8 @@ async function inRequest(handler: (request: Request) => Promise<Response | void>
 const probeRef = () => {
   const id = randomUUID()
   created.push({ collection: "f11_probe", id })
-  return doc(db(), "f11_probe", id)
+  // The helpers' ref, typed as the Admin SDK's (the database here is the Admin Firestore), so a test can read it back.
+  return doc(db(), "f11_probe", id) as ReturnType<typeof doc> & DocumentReference
 }
 
 function pushRow(action: string): AuditEntry {
@@ -275,8 +276,10 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
 
     it("a repository transaction stages one entry naming every document it wrote, in the same commit", async () => {
       const [a, b] = [probeRef(), probeRef()]
-      const { route } = await inRequest(
+      // A request with a row to flush, so the failing flush keeps its entries (a request with none has nothing to fail).
+      const { res, route } = await inRequest(
         async () => {
+          pushRow("f11_tx")
           await runTransaction(db(), async (tx) => {
             await tx.get(a)
             tx.set(a, { n: 1 })
@@ -285,20 +288,25 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
         },
         { flushFails: true }
       )
+      expect(res.status).toBe(503)
       const entries = await entriesOf(route)
       expect(entries.map((e) => [...(e.effectPaths as string[])].sort())).toEqual([[a.path, b.path].sort()])
+      expect(entries.map((e) => (e.rows as Row[]).map((r) => r.action))).toEqual([["f11_tx"]])
     })
 
     it("a provider dispatch is staged with its F10 marker, before it happens", async () => {
       let operationId: string | undefined
-      const { route } = await inRequest(
+      const { res, route } = await inRequest(
         async (request) => {
           const c = await claim(request)
           operationId = c.operationId
+          pushRow("f11_dispatch")
           await recordExternalEffect("p1_dispatch")
         },
         { flushFails: true }
       )
+      // The failed flush's 503 after a committed effect is answered as F10's terminal 409 (F10 ruling 9).
+      expect(res.status).toBe(409)
       const entries = await entriesOf(route)
       expect(entries.map((e) => [e.effectPaths, e.operationId])).toEqual([[["external:p1_dispatch"], operationId]])
       const markers = await docsWhere("idempotency_effects", "route", route)

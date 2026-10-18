@@ -39,6 +39,7 @@ import { attachParsedBody, DEFAULT_JSON_BODY_BYTES, readBodyLimited } from "@/pl
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
 import { runWithRequestAudit } from "@/platform/audit/requestAudit"
 import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
+import { openRequestOutbox, type RequestOutboxMeta } from "@/platform/persistence/auditOutbox"
 import { runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
 
 /**
@@ -136,6 +137,26 @@ async function readBoundedBody(request: Request, options: SessionRouteOptions): 
   }
 }
 
+/** Audit F11: the body's top-level `action` of a handler request, recorded on its audit-outbox entries. */
+const requestActions = new WeakMap<Request, string>()
+const ACTION_NAME = /^[A-Za-z0-9_.:-]{1,100}$/
+
+function noteRequestAction(request: Request, parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return
+  const action = (parsed as Record<string, unknown>).action
+  if (typeof action === "string" && ACTION_NAME.test(action)) requestActions.set(request, action)
+}
+
+/** Who and what the request is, for its audit-outbox entries (spec §2.1). */
+function outboxMeta(request: Request, handlerRequest: Request, session: HandlerSession | null): RequestOutboxMeta {
+  return {
+    firmId: session?.firmId ?? null,
+    actorId: session?.userId ?? null,
+    route: describe(request),
+    requestAction: requestActions.get(handlerRequest) ?? null,
+  }
+}
+
 /**
  * The request the handler sees: same headers, `url`, the already-read body (re-serialised
  * only when `mutated`), with the parsed value cached for `readJsonLimited`.
@@ -167,6 +188,7 @@ function rebuild(
     // Caps are enforced against the raw wire size, never the re-serialised body
     // (filling in actorId must not push an at-cap request over its limit).
     attachParsedBody(next, body.parsed, body.bytes)
+    noteRequestAction(next, body.parsed)
   }
   return next
 }
@@ -253,35 +275,43 @@ function claimedFirmIdForInsecureDev(url: URL, parsed: unknown): string | undefi
  * outcome (runAudited below), so a same-key retry replays the committed result instead of
  * running the effect again. The failed rows stay on the audit log's retry queue.
  *
- * FOLLOW-UP (outbox): the effect and its audit rows are still not atomic. The durable fix is to
- * stage each effect's audit rows in the same Firestore batch/transaction as the effect (an
- * audit outbox drained to audit_log), as the Cloud Functions identity/MFA paths already do, so
- * a committed effect can never lack its audit row (and a crash between effect and flush cannot
- * lose it). Until then the retry queue + dead-letter path is the safety net.
+ * Audit F11: the flush no longer establishes audit durability. The handler runs with the
+ * request's audit outbox open (platform/persistence/auditOutbox.ts): every effect write commits,
+ * in the same transaction or batch, an `audit_outbox` entry carrying the request's rows staged so
+ * far, so a committed effect always has its audit in the database. After a successful flush the
+ * request deletes its entries; after a failed flush, or a process that died at any point after a
+ * commit, they stay and the reconciler (functions/src/p5/auditOutbox.ts) publishes them once.
  */
 async function runAudited(
   request: Request,
   scope: IdempotencyScope,
+  outbox: RequestOutboxMeta,
   run: () => Promise<Response> | Response
 ): Promise<Response> {
   // Idempotency claims taken by the handler are settled after the audit flush, whatever its
   // outcome (platform/http/idempotency.ts).
-  return runWithIdempotencyScope(scope, () => runAuditedInner(request, run))
+  return runWithIdempotencyScope(scope, () => runAuditedInner(request, outbox, run))
 }
 
-async function runAuditedInner(request: Request, run: () => Promise<Response> | Response): Promise<Response> {
-  const outcome = await runWithRequestAudit(run)
+async function runAuditedInner(
+  request: Request,
+  meta: RequestOutboxMeta,
+  run: () => Promise<Response> | Response
+): Promise<Response> {
+  const outbox = openRequestOutbox(meta)
+  const outcome = await runWithRequestAudit(() => outbox.run(run))
   try {
     await flushRequestAudit(outcome.rows)
   } catch (err) {
-    const committed = hasBody(request) && !("error" in outcome)
+    const staged = outbox.entryIds.length
     console.error(
       `[audit] could not persist ${outcome.rows.length} audit row(s) for ${describe(request)}` +
-        (committed ? " — the request's effect may already be committed (async P5 is the fix)" : ""),
+        (staged > 0 ? ` — its ${staged} committed effect write(s) are in the audit outbox for the reconciler` : ""),
       err
     )
     return errorResponse(503, "AUDIT_UNAVAILABLE", "audit log unavailable")
   }
+  await outbox.release()
   if ("error" in outcome) throw outcome.error
   return outcome.value
 }
@@ -292,7 +322,9 @@ export async function withSession(
   options: SessionRouteOptions = {}
 ): Promise<Response> {
   try {
-    if (options.public) return await runAudited(request, PUBLIC_SCOPE, () => handler(request, null))
+    if (options.public) {
+      return await runAudited(request, PUBLIC_SCOPE, outboxMeta(request, request, null), () => handler(request, null))
+    }
 
     let session: Awaited<ReturnType<typeof resolveSession>>
     try {
@@ -338,7 +370,9 @@ export async function withSession(
           }
         : null
       const devScope = devSession ? { firmId: devSession.firmId, userId: devSession.userId } : PUBLIC_SCOPE
-      return await runAudited(request, devScope, () => handler(devRequest, devSession))
+      return await runAudited(request, devScope, outboxMeta(request, devRequest, devSession), () =>
+        handler(devRequest, devSession)
+      )
     }
 
     const bound = await bindRequestToSession(request, session, options)
@@ -357,8 +391,11 @@ export async function withSession(
     return await runWithSession(
       { userId: session.userId, firmId: session.firmId, clearance: session.clearance },
       () =>
-        runAudited(request, { firmId: session.firmId, userId: session.userId }, () =>
-          handler(bound, handlerSession)
+        runAudited(
+          request,
+          { firmId: session.firmId, userId: session.userId },
+          outboxMeta(request, bound, handlerSession),
+          () => handler(bound, handlerSession)
         )
     )
   } catch (err) {

@@ -277,6 +277,16 @@
       "collectionGroup": "drafts",
       "fieldPath": "reviewChecklist",
       "indexes": []
+    },
+    {
+      "collectionGroup": "audit_outbox",
+      "fieldPath": "rows",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "audit_outbox",
+      "fieldPath": "effectPaths",
+      "indexes": []
     }
   ]
 }
