@@ -2,10 +2,16 @@ import { NextResponse } from "next/server"
 import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
-import { withSession } from "@/platform/http/withSession"
+import { withSession, type HandlerSession } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { callCommitteeBrain } from "@/platform/p1/internalAICaller"
+import {
+  FUNCTIONS_NOT_CONFIGURED_ALERT,
+  forwardCommitteeBrain,
+  functionsP1BaseUrl,
+} from "@/platform/p1/functionsCommitteeBrain"
+import { checkProviderKeys, providerKeysPresent } from "@/platform/p1/providerKeyGuard"
 import { rankOf, rankOfStoredOrMax, type CommitteeBrainOutput } from "@/platform/spine/store"
 import {
   CommitteeScopeError,
@@ -130,7 +136,41 @@ export async function POST(request: Request) {
   return withSession(request, handlePost)
 }
 
-async function handlePost(request: Request) {
+type Dispatch = { kind: "functions"; baseUrl: string; authorization: string } | { kind: "local" }
+
+/**
+ * Audit F18 (spec docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md, R1, R3, R4, R5): where the
+ * committee call runs. A Firebase session is forwarded, with the caller's own token, to the canonical Cloud Functions P1
+ * route, where the kill switches, the budget and the cost log apply. Everything else runs the local P1 pipeline, which
+ * has no provider transport and so records a blocked row:
+ *   - an insecure-dev session (local and tests only; it has no ID token to forward);
+ *   - no usable Functions base URL (an alert line in production);
+ *   - a provider key in this runtime under NODE_ENV=production (callCommitteeBrain refuses it with its alert line).
+ */
+function chooseDispatch(request: Request, session: HandlerSession | null): Dispatch {
+  if (session?.mode !== "firebase") return { kind: "local" }
+  const authorization = request.headers.get("authorization")
+  if (!authorization) return { kind: "local" }
+  if (process.env.NODE_ENV === "production" && providerKeysPresent().length > 0) return { kind: "local" }
+  const baseUrl = functionsP1BaseUrl()
+  if (!baseUrl) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(`[p1] ALERT ${FUNCTIONS_NOT_CONFIGURED_ALERT}`, { route: "/api/p1/committee-brain" })
+    }
+    return { kind: "local" }
+  }
+  // Outside production a key is not refused (no paid path exists here), but its alert line is still logged.
+  checkProviderKeys("next")
+  return { kind: "functions", baseUrl, authorization }
+}
+
+const FORWARD_FAILURE_MESSAGES: Record<string, string> = {
+  p1_functions_unavailable: "Cloud Functions P1 did not answer; retry with the same Idempotency-Key",
+  p1_functions_timeout: "Cloud Functions P1 did not answer in time; retry with the same Idempotency-Key",
+  p1_functions_bad_answer: "Cloud Functions P1 answered with something that is not a committee answer",
+}
+
+async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()
   const repos = await getRuntimeRepositories(store)
   let key: string
@@ -239,6 +279,40 @@ async function handlePost(request: Request) {
       return NextResponse.json(
         { error: "actor clearance is below requested committee classification" },
         { status: 403 }
+      )
+    }
+
+    const dispatch = chooseDispatch(request, session)
+    if (dispatch.kind === "functions") {
+      // R7: the strictest derived label travels as the caller's label (Functions takes the strictest again, so it is
+      // never lower); documents are not forwarded (Functions refuses them; their one effect is that label). R6: Next
+      // marks no effect of its own and writes nothing here, so a same-key retry reaches Functions' own fence (F09).
+      const forwarded = await forwardCommitteeBrain(dispatch.baseUrl, {
+        authorization: dispatch.authorization,
+        firmId: actor.firmId,
+        idempotencyKey: key,
+        payload: {
+          matterId: scope.matterId ?? matterId,
+          body: parsed.body,
+          purpose,
+          classification,
+          partyNames: [...new Set(partyNames.map((name) => name.trim()).filter((name) => name !== ""))],
+        },
+      })
+      if (forwarded.kind === "answer") {
+        const payload = { ...forwarded.body, agent: "sikander-ai" }
+        claim.complete(payload)
+        return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
+      }
+      if (forwarded.kind === "refused") {
+        return NextResponse.json(
+          { error: forwarded.code, code: forwarded.code },
+          { status: forwarded.status, headers: forwarded.retryAfter ? { "Retry-After": forwarded.retryAfter } : undefined }
+        )
+      }
+      return NextResponse.json(
+        { error: FORWARD_FAILURE_MESSAGES[forwarded.code] ?? forwarded.code, code: forwarded.code },
+        { status: forwarded.status }
       )
     }
 

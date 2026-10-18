@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 /**
  * Audit F18, spec ruling R5: a provider key in the Next or eve runtime. Under NODE_ENV=production every P1 call is refused
@@ -6,7 +6,45 @@ import { afterEach, describe, expect, it, vi } from "vitest"
  * production only the alert line is logged: no paid path exists there to refuse (R2).
  *
  * The guard is loaded dynamically, so on main this file runs and fails on its absence. Values are obviously fake.
+ *
+ * No request can leave: the legacy provider boundary (the `ai` SDK's `createGateway`/`generateText`, which main's
+ * platform/p1/gatewayTransport.ts calls when a key is set) is a counting fake, and a fetch tripwire refuses and counts
+ * every non-loopback request. (An intermediate run of this file without either, on a tree that still had the transport,
+ * let that transport attempt a call with the fake key: see the F18 evidence log. Both guards close that.)
  */
+
+const direct = vi.hoisted(() => ({ calls: 0 }))
+vi.mock("ai", async (importActual) => {
+  const actual = await importActual<Record<string, unknown>>()
+  return {
+    ...actual,
+    createGateway: () => ({ languageModel: (id: string) => ({ fakeModelId: id }) }),
+    generateText: async () => {
+      direct.calls += 1
+      return { text: "Answer from the fake provider." }
+    },
+  }
+})
+
+const egress: string[] = []
+const realFetch = globalThis.fetch
+
+beforeAll(() => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+    const host = url.hostname.replace(/^\[|\]$/g, "")
+    if (!(host === "localhost" || host === "::1" || /^127\./.test(host))) {
+      egress.push(url.host)
+      throw new TypeError(`F18 tripwire: request to ${url.host} refused`)
+    }
+    return realFetch(input, init)
+  }) as typeof fetch
+})
+
+afterAll(() => {
+  globalThis.fetch = realFetch
+  expect(egress, "non-loopback requests attempted by this file").toEqual([])
+})
 
 const FAKE = "placeholder-not-a-key"
 type Guard = typeof import("@/platform/p1/providerKeyGuard")
@@ -86,6 +124,8 @@ describe("audit F18: callCommitteeBrain under the guard (R2, R5)", () => {
     vi.stubEnv("NODE_ENV", "production")
     vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
     const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
+    expect(direct.calls, "calls through the legacy provider boundary").toBe(0)
+    expect(egress).toEqual([])
     expect(result).toMatchObject({ blocked: true, event: "ai.call.blocked", reason: PROVIDER_KEY_IN_RUNTIME_REASON })
   })
 

@@ -1,8 +1,8 @@
 # P1 AI gateway
 
-The single routing point for every AI call in Cloud Functions (spec `docs/superpowers/specs/2026-10-11-phase3d-p1-ai-layer-design.md`, rulings P3-60 to P3-73; errata E-48 and E-49 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`). A layer that needs a provider calls `callP1` with a classification and never calls a provider itself (Layer 18 §9, rule 6). `callP1` records every decision, allowed or refused, in `ai_usage_logs`, and the provider guard and the fetch allowlist let only `functions/src/p1/`, `platform/p1` and `platform/committeeBrain` reach a provider.
+The single routing point for every AI call in Cloud Functions (spec `docs/superpowers/specs/2026-10-11-phase3d-p1-ai-layer-design.md`, rulings P3-60 to P3-73; errata E-48 and E-49 in `docs/architecture/ERRATUM_SET_2_PROPOSED.md`). A layer that needs a provider calls `callP1` with a classification and never calls a provider itself (Layer 18 §9, rule 6). `callP1` records every decision, allowed or refused, in `ai_usage_logs`, and the provider guard and the fetch allowlist let only `functions/src/p1/`, `platform/p1` and `platform/committeeBrain` reach a provider. Since audit F18, G-0 check [19] (`ci_gates/check_next_ai_egress.py`) also holds the Next and eve runtime, `platform/p1` included, to no AI SDK, provider SDK, provider key or provider host, so in the app only this directory can reach one (the corpus service's allowlisted embedding call, FA-D3C-002, is outside the app and in the F27 lane).
 
-P1 is CORE, with no layer flag. The Next.js `/api/p1/committee-brain` route is the transitional path (E-23) and has no cost log, kill switch or budget; it stays until the app calls the functions route (O-53). Until then the Next.js deployment must hold no AI Gateway key (`AI_GATEWAY_API_KEY` and `VERCEL_AI_GATEWAY_API_KEY` unset), so that route stays blocked (`PHASE0_NO_CREDENTIALS`): the kill switches, the budget and the cost log below govern the Cloud Functions path only (ruling R8).
+P1 is CORE, with no layer flag. Audit F18 (spec `docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md`) closed the Next.js legacy path. The Next.js and eve runtime holds no provider transport: `platform/p1/gatewayTransport.ts` is deleted, and `callCommitteeBrain` masks, applies policy and is blocked (`PHASE0_NO_CREDENTIALS`). In a Firebase session the Next.js `/api/p1/committee-brain` route forwards the request to `committeeBrain` below with the caller's own ID token, firm and Idempotency-Key, so the kill switches, the budget and the cost log govern it too. The eve bridge has no signed-in caller or matter and stays blocked. The Next.js and eve deployment must hold no provider key: under `NODE_ENV=production` a key there refuses every call there with the alert line `p1.provider_key_in_next_runtime`, and eve refuses to start. `AI_GATEWAY_API_KEY` belongs to the `api` function only.
 
 ## Entry point
 
@@ -103,7 +103,7 @@ On the existing HTTP `api` under `/api/platform/brain/` (E-37: no onCall).
 
 | Variable | Meaning |
 | --- | --- |
-| `AI_GATEWAY_API_KEY` | Bearer key for the Vercel AI Gateway. Unset or blank: every call is refused `no_credentials`. Held in Secret Manager in deployment, never in code (L962). |
+| `AI_GATEWAY_API_KEY` | Bearer key for the Vercel AI Gateway. Unset or blank: every call is refused `no_credentials`. Held in Secret Manager in deployment, never in code (L962). Bound to the `api` function only, never to the Next.js or eve service (audit F18; G-0 [19] fails a deploy surface that hands it one). |
 | `OPIK_BASE_URL` | Base URL of the self-hosted Opik API (for example `http://localhost:5173/api` for a local server). Plain `http` only for a private host (below). Unset: tracing is off. |
 | `OPIK_SELF_HOSTED_CONFIRMED` | Must be exactly `"true"` before any matter content is traced (L2067). |
 | `OPIK_PROJECT_NAME` | Opik project; default `sikander-p1`. |
@@ -141,7 +141,7 @@ Nothing in `functions/src` binds the key as a function secret yet. Until the dep
 
 ## Kill switch
 
-Two scopes, each `{ disableAll, disabledModels, reason, setBy, setAt }`: the firm's in `ai_config/{firmId}.killSwitch`, the platform's in `platform/p1.killSwitch`. Both govern the Cloud Functions path only until O-53 closes (see the top of this file). The platform switch's `reason` is shown to every firm's partners in `getAiUsage` (its `setBy` is shown as `"platform"`), so it must never name a firm or a client. Only `disableAll === true` and an exact model id in `disabledModels` block. A request replaces the whole state; `disableAll: false` with no models re-enables. The reason is required (1 to 500 characters) and both writes are audited. P1 reads both on every call with no cache, so a switch takes effect on the next call; calls already in flight complete. Block reasons `kill_switch_platform` and `kill_switch_firm`.
+Two scopes, each `{ disableAll, disabledModels, reason, setBy, setAt }`: the firm's in `ai_config/{firmId}.killSwitch`, the platform's in `platform/p1.killSwitch`. They govern every paid call: since audit F18 the Next.js committee route forwards here and the Next.js and eve runtime has no provider path of its own (see the top of this file). The platform switch's `reason` is shown to every firm's partners in `getAiUsage` (its `setBy` is shown as `"platform"`), so it must never name a firm or a client. Only `disableAll === true` and an exact model id in `disabledModels` block. A request replaces the whole state; `disableAll: false` with no models re-enables. The reason is required (1 to 500 characters) and both writes are audited. P1 reads both on every call with no cache, so a switch takes effect on the next call; calls already in flight complete. Block reasons `kill_switch_platform` and `kill_switch_firm`.
 
 ## Block reasons
 
@@ -272,7 +272,7 @@ One trace per decision, posted to `{OPIK_BASE_URL}/v1/private/traces/batch`. The
 - Address masking: `maskOutboundPII` has no address rule (a recorded gap under O-13). Since audit F15 the residual detector finds the common address forms; at rank 3 and above they block the call, below it they are counted.
 - The partner-authorised exception and the human review of a blocked high-risk call (L18 §4.6, L17.13a/h, `TODO(firm)` in `providerPolicy.ts`): a `not_minimised` block has no override.
 - Per-firm daily limits (E-34).
-- Retiring the Next.js route (O-53).
+- Retiring the Next.js route (O-53). Since audit F18 it forwards Firebase sessions here and holds no provider path; the eve bridge reaching this route with a caller's identity is the open part.
 - Deployment: the Secret Manager binding and the self-hosted Opik server (O-55).
 
 ## Open items

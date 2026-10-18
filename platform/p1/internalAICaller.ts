@@ -1,5 +1,11 @@
 /**
- * P1 Committee Brain — the only outbound path to AI / OCR / STT / TTS / translation.
+ * P1 Committee Brain on the Next and eve side: the mask, the provider policy and the system-message check, with no provider
+ * transport (audit F18, spec docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md, ruling R2). Paid calls
+ * run only in Cloud Functions P1 (`/api/platform/brain/committeeBrain`), where the kill switches, the budget and the cost
+ * log apply; the Next committee route forwards there (platform/p1/functionsCommitteeBrain.ts). Here a call reaches a
+ * transport only when a test injects one (`setTransportForTests`, refused in production); otherwise it is blocked
+ * PHASE0_NO_CREDENTIALS. A provider key in this runtime refuses every call in production, with an alert line (R5).
+ *
  * Only the masked, role-separated messages are sent (audit F16): one system message from the platform registry
  * (platform/p1/systemPolicy.ts), then the user and assistant turns, untrusted content in envelopes. Classification
  * travels in metadata, never in a message.
@@ -12,10 +18,10 @@
 
 import { recordExternalEffect } from "@/platform/http/idempotency"
 import { MAX_STORED_OUTBOUND_BYTES, PHASE0_NO_CREDENTIALS, STORED_OUTBOUND_TOO_LARGE_REASON, SYSTEM_UNVERIFIED_REASON } from "@/platform/p1/constants"
-import { gatewayTransport, readGatewayApiKey } from "@/platform/p1/gatewayTransport"
 import { maskOutboundPII, type MaskOptions } from "@/platform/p1/maskOutboundPII"
 import { buildOutbound, verifySystemMessage, type OutboundMessage, type PromptTurn, type SystemRecord, type TurnRecord } from "@/platform/p1/outboundPrompt"
 import { assertMinimised, providerAllowedFor, type ProviderId } from "@/platform/p1/providerPolicy"
+import { PROVIDER_KEY_IN_RUNTIME_REASON, checkProviderKeys } from "@/platform/p1/providerKeyGuard"
 import { isClassification, type Classification } from "@/platform/p1/types"
 
 export { PHASE0_NO_CREDENTIALS } from "@/platform/p1/constants"
@@ -93,10 +99,9 @@ const blockedTransport: Transport = {
 
 let testTransport: Transport | null = null
 
+/** Audit F18 (R2): the injected test transport, else none. No environment variable can select a provider transport. */
 function activeTransport(): Transport {
-  if (testTransport) return testTransport
-  if (readGatewayApiKey()) return gatewayTransport
-  return blockedTransport
+  return testTransport ?? blockedTransport
 }
 
 /** Test-only. Production never injects a transport that sees raw text. */
@@ -169,6 +174,10 @@ export async function callCommitteeBrain(
   if (storedOutboundBytes(outbound) > MAX_STORED_OUTBOUND_BYTES) {
     return blocked(STORED_OUTBOUND_TOO_LARGE_REASON, { ...outbound, body: "" }, [])
   }
+
+  // Audit F18 (R5): a provider key in this runtime is a deployment error. In production every call is refused; in every
+  // mode the alert line names the variables (never their values).
+  if (checkProviderKeys("p1-call").refuse) return blocked(PROVIDER_KEY_IN_RUNTIME_REASON)
 
   // R3a: the system message is exactly the platform text its record names, or nothing is sent.
   if (!verifySystemMessage(messages, built.system)) return blocked(SYSTEM_UNVERIFIED_REASON)

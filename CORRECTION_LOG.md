@@ -335,3 +335,12 @@ Main was green on gates/tests but `npm run lint` failed on `react-hooks/set-stat
 
 - **Updated** `.github/workflows/gate-g0.yml` — added a dedicated `npm run lint` step after `npm ci` / static gate checks and before unit tests.
 - Scope is intentionally small: no runtime behavior, data model, or guard semantics changed.
+
+## Audit F18: the legacy Next/eve AI path closed (18 Oct 2026)
+
+Supersedes the "Transport" line of "eve Committee Brain / P1 path" above: `platform/p1/gatewayTransport.ts` (AI SDK `createGateway` + `generateText`, live whenever `AI_GATEWAY_API_KEY` or `VERCEL_AI_GATEWAY_API_KEY` was set, with no cost log, budget or kill switch) is deleted. Spec `docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md`.
+
+- `callCommitteeBrain` has no provider transport; outside tests it is blocked `PHASE0_NO_CREDENTIALS`. A provider key in the Next/eve environment refuses every call under `NODE_ENV=production`, with the alert line `p1.provider_key_in_next_runtime`; eve refuses to start.
+- `POST /api/p1/committee-brain` forwards Firebase sessions to Cloud Functions P1 (`/api/platform/brain/committeeBrain`) with the caller's own ID token, firm and Idempotency-Key (`platform/p1/functionsCommitteeBrain.ts`).
+- G-0 check [19] (`ci_gates/check_next_ai_egress.py`); `.env.example` no longer offers the keys.
+

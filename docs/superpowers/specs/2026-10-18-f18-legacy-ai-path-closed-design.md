@@ -116,6 +116,15 @@ to the configured host. It times out at 125 s: the `api` function's 120 s plus 5
   `netlify.toml`, `app.yaml`, `cloudbuild*.y*ml`, `render.yaml`, `.github/workflows/*.y*ml`) binding a provider key: an
   `=` or `:` assignment (a commented template line counts), `secrets.NAME`, or `ENV`/`ARG NAME`.
 
+**R9a (refined at GREEN).** A GitHub workflow is a deploy surface only for jobs that build, start or deploy the Next or
+eve service (`next build|start|dev`, a root `npm run build|start|dev`, `eve dev|start|build|deploy`, `vercel`,
+`firebase deploy`, `apphosting`, or a hosting or Cloud Run deploy action), plus the workflow-level `env` above such a job.
+The first run of the gate on this repository flagged `legal-os-continue.yml` and `legal-os-watchdog.yml`. Those
+workflows hand `ANTHROPIC_API_KEY` to `anthropics/claude-code-action`, the coding agent that opens remediation PRs. That
+is CI tooling, not the product runtime, and its spend is not committee work. Why not an allowlist: the rule should say
+what a Next deploy is, so a new tooling workflow does not need an entry and a new Next deploy job is caught. Residual: a
+job that deploys through a command or action outside that list passes [19] (text analysis).
+
 The gate has no allowlist. It runs in `gate_g0.sh`, which the Gates job of `.github/workflows/gate-g0.yml` runs. G-0 [3] is
 unchanged: it still lists which trees may hold a provider SDK at all; [19] is stricter for the Next and eve runtime.
 `--print-key-names` prints the gate's key list, and a test holds it equal to the TypeScript guard's list.

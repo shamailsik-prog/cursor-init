@@ -14,39 +14,40 @@ environment variables are present (audit F18).
   `platform/audit/**` and `.gitleaks.toml`.
 
 ### Task 1: RED tests, spec and plan
-- [ ] `tests/f18-legacy-ai-path.e2e.firestore.test.ts`: rows (a) to (j) of the spec. It imports nothing new to F18; the
+- [x] `tests/f18-legacy-ai-path.e2e.firestore.test.ts`: rows (a) to (j) of the spec. It imports nothing new to F18; the
   documented reasons and codes are literals.
-- [ ] `tests/f18-next-ai-egress-gate.test.ts`: planted violations fail [19], and the repository passes.
-- [ ] Unit tests: `tests/f18-provider-key-guard.test.ts` and `tests/f18-functions-forward.test.ts`.
-- [ ] Run the e2e and the gate test against main's source on private emulators (firestore 8997, auth 9997, hub 4991,
+- [x] `tests/f18-next-ai-egress-gate.test.ts`: planted violations fail [19], and the repository passes.
+- [x] Unit tests: `tests/f18-provider-key-guard.test.ts` and `tests/f18-functions-forward.test.ts`.
+- [x] Run the e2e and the gate test against main's source on private emulators (firestore 8997, auth 9997, hub 4991,
   logging 4993). **Expected: FAIL.** Record the counts as ledger RED 1 and RED 2.
-- [ ] Commit the spec, the plan and the RED tests; run gitleaks; push.
+- [x] Commit the spec, the plan and the RED tests; run gitleaks; push.
 
 ### Task 2: guard and forward client
-- [ ] `platform/p1/providerKeyGuard.ts` (R5).
-- [ ] `platform/p1/functionsCommitteeBrain.ts` (R7, R8).
-- [ ] Unit tests GREEN.
+- [x] `platform/p1/providerKeyGuard.ts` (R5).
+- [x] `platform/p1/functionsCommitteeBrain.ts` (R7, R8).
+- [x] Unit tests GREEN.
 
 ### Task 3: remove the transport
-- [ ] Delete `platform/p1/gatewayTransport.ts`. Drop `readGatewayApiKey` from `platform/p1/index.ts`.
-- [ ] `callCommitteeBrain`: the test seam or no transport, plus the key guard after the size bound (R2, R5).
-- [ ] `agent/agent.ts`: refuse to start in production with a key present.
+- [x] Delete `platform/p1/gatewayTransport.ts`. Drop `readGatewayApiKey` from `platform/p1/index.ts`.
+- [x] `callCommitteeBrain`: the test seam or no transport, plus the key guard after the size bound (R2, R5).
+- [x] `agent/agent.ts`: refuse to start in production with a key present.
 
 ### Task 4: route dispatch
-- [ ] `app/api/p1/committee-brain/route.ts`: forward in a Firebase session with a valid URL and no key refusal; otherwise
+- [x] `app/api/p1/committee-brain/route.ts`: forward in a Firebase session with a valid URL and no key refusal; otherwise
   the local pipeline (R1, R4, R6, R7).
 
 ### Task 5: gate [19]
-- [ ] `ci_gates/check_next_ai_egress.py` (R9), with `--print-key-names`.
-- [ ] `gate_g0.sh` [19]. Update `tests/g0-gate-e2e.test.ts`: move the plant under `platform/p1/` from the clean base to a
+- [x] `ci_gates/check_next_ai_egress.py` (R9), with `--print-key-names`. Refined at GREEN (R9a): workflow jobs count only when they build, start or deploy the Next/eve service.
+- [x] `gate_g0.sh` [19]. Update `tests/g0-gate-e2e.test.ts`: move the plant under `platform/p1/` from the clean base to a
   failing case (R12).
-- [ ] `.env.example` (R10). Update the console card text that named the key.
+- [x] `.env.example` (R10). Update the console card text that named the key.
+- [x] The rules job of `.github/workflows/gate-g0.yml` installs `functions/` (the F18 e2e serves the Functions router in process); the e2e joins `test:rules` and the emulator-only exclude list.
 
 ### Task 6: tests whose subject changed (R12)
-- [ ] `tests/f16-next-transport.test.ts`, `tests/p1.eve-committee-brain.test.ts` and the F16 live block.
+- [x] `tests/f16-next-transport.test.ts`, `tests/p1.eve-committee-brain.test.ts` and the F16 live block.
 
 ### Task 7: docs
-- [ ] `functions/src/p1/README.md` (top paragraph and the kill-switch scope), `README.md`, `docs/architecture/README.md`
+- [x] `functions/src/p1/README.md` (top paragraph and the kill-switch scope), `README.md`, `docs/architecture/README.md`
   ([19]) and `CORRECTION_LOG.md` (the transport entry).
 
 ### Task 8: verification

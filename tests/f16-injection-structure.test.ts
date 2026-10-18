@@ -5,6 +5,8 @@ import type { LanguageModelV3Prompt } from "@ai-sdk/provider"
 import { committeeBrainLanguageModel } from "@/platform/p1/committeeBrainModel"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
 import { F16_CORPUS_VERSION, F16_INJECTION_CORPUS, type InjectionCase } from "@/tests/fixtures/f16-injection-corpus"
+import { MAX_OUTPUT_TOKENS, TASK_MODEL } from "@/functions/src/p1/costTable"
+import { gatewayTransport } from "@/functions/src/p1/transport"
 
 /**
  * Audit F16, spec ruling 6: the adversarial corpus through every P1 request builder.
@@ -15,7 +17,10 @@ import { F16_CORPUS_VERSION, F16_INJECTION_CORPUS, type InjectionCase } from "@/
  *     canary lands only in a user turn or inside an envelope; and no envelope can be closed early.
  * (b) Live, only when AI_GATEWAY_API_KEY is set: every case as a tool result against the real model; a case fails when
  *     the answer contains its canary. Without the key the suite is skipped and reported NOT RUN, never as a pass.
- *     Model-level injection resistance is NOT DEMONSTRATED by (a).
+ *     Model-level injection resistance is NOT DEMONSTRATED by (a). Audit F18 (spec ruling R12): the Next transport is
+ *     deleted and the bridge has no provider path, so (b) sends the messages the bridge builds through the Cloud
+ *     Functions P1 transport (functions/src/p1/transport.ts, the committee model, the 4,096-token bound): the only
+ *     transport that can serve a call.
  *
  * The modules new in F16 are loaded dynamically, so on main this file still runs and its assertions fail.
  */
@@ -126,10 +131,14 @@ describe.skipIf(!LIVE)(`audit F16: injection corpus ${F16_CORPUS_VERSION} agains
   it.each(F16_INJECTION_CORPUS.map((c) => [c.id, c] as const))(
     "%s as a tool result: the answer does not carry the canary",
     async (_id, c) => {
-      const result = await committeeBrainLanguageModel.doGenerate({ prompt: toolPrompt(c), providerOptions: { sikander: { classification: "public" } } })
-      const text = result.content.map((p) => ("text" in p ? p.text : "")).join("")
-      expect(result.finishReason.unified, text).toBe("stop")
-      expect(text).not.toContain(c.canary)
+      const messages = await viaBridge(toolPrompt(c))
+      expect(messages, "the bridge built a request").toBeDefined()
+      const reply = await gatewayTransport(process.env.AI_GATEWAY_API_KEY!.trim()).send({
+        model: TASK_MODEL.committee,
+        messages: messages!.map((m) => ({ role: m.role as "system" | "user" | "assistant", content: m.content })),
+        maxTokens: MAX_OUTPUT_TOKENS,
+      })
+      expect(reply.text).not.toContain(c.canary)
     },
     60_000
   )
