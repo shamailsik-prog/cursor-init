@@ -341,7 +341,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: package-lock.json
-      # The end-to-end suite keeps document rows in Admin Firestore (the emulator, a Java process).
+      # The end-to-end suite keeps document rows in Admin Firestore and signs in through the Auth emulator
+      # (firebase-tools; the Firestore emulator is a Java process).
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
@@ -370,25 +371,34 @@ jobs:
           GOBIN="$HOME/.cache/sikander-minio" GOTOOLCHAIN=local go install "github.com/minio/minio@${MINIO_COMMIT}"
           "$HOME/.cache/sikander-minio/minio" --version
       - run: npm ci
-      - name: F03 vault suites (MinIO + Firestore emulator)
+      - name: F03 vault suites (MinIO over TLS + Auth and Firestore emulators)
         run: |
           set -euo pipefail
-          # Credentials and the document key are made for this run: none is stored in the repository.
+          # Credentials, the document key and the TLS certificate are made for this run: none is stored in the
+          # repository. TLS because the end-to-end suite runs in production mode, which refuses a plain-http vault;
+          # Node trusts the throwaway certificate through NODE_EXTRA_CA_CERTS.
           MINIO_ROOT_USER="ci$(openssl rand -hex 8)"
           MINIO_ROOT_PASSWORD="$(openssl rand -hex 24)"
           SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY="$(openssl rand -hex 32)"
           echo "::add-mask::${MINIO_ROOT_PASSWORD}"
           echo "::add-mask::${SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY}"
           export MINIO_ROOT_USER MINIO_ROOT_PASSWORD SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY
-          MINIO_BROWSER=off "$HOME/.cache/sikander-minio/minio" server "$(mktemp -d)" \
+          certs="$RUNNER_TEMP/minio-certs"
+          mkdir -p "$certs"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$certs/private.key" -out "$certs/public.crt" \
+            -days 1 -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" 2>/dev/null
+          MINIO_BROWSER=off "$HOME/.cache/sikander-minio/minio" server "$(mktemp -d)" --certs-dir "$certs" \
             --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 > "$RUNNER_TEMP/minio.log" 2>&1 &
           for _ in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            if curl -sf --cacert "$certs/public.crt" https://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
             sleep 1
           done
-          curl -sf http://127.0.0.1:9000/minio/health/live
+          curl -sf --cacert "$certs/public.crt" https://127.0.0.1:9000/minio/health/live
+          export NODE_EXTRA_CA_CERTS="$certs/public.crt"
+          export SIKANDER_TEST_S3_TLS_CERT="$certs/public.crt"
+          export SIKANDER_TEST_S3_TLS_KEY="$certs/private.key"
           export SIKANDER_DOCUMENT_OBJECT_BACKEND=s3
-          export SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT=http://127.0.0.1:9000
+          export SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT=https://127.0.0.1:9000
           export SIKANDER_DOCUMENT_OBJECT_S3_BUCKET=sikander-documents-ci
           export SIKANDER_DOCUMENT_OBJECT_S3_ACCESS_KEY_ID="${MINIO_ROOT_USER}"
           export SIKANDER_DOCUMENT_OBJECT_S3_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}"

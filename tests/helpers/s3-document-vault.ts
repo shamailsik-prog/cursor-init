@@ -7,8 +7,15 @@
  * - `startS3FaultProxy()` sits between the product and MinIO and injects the failures the vault has
  *   to survive: hangs, lost or late PUTs, hostile error bodies, corrupted reads, failed deletes.
  *   It forwards the client's Host header unchanged, so MinIO still verifies the SigV4 signature.
+ *
+ * TLS: when the real endpoint is https (MinIO started with --certs-dir, as the production-mode e2e
+ * needs, since production refuses a plain-http vault), the proxy serves https too, with the
+ * certificate and key named by SIKANDER_TEST_S3_TLS_CERT / SIKANDER_TEST_S3_TLS_KEY. Node trusts
+ * that certificate through NODE_EXTRA_CA_CERTS, set before the test process starts.
  */
+import { readFileSync } from "node:fs"
 import http from "node:http"
+import https from "node:https"
 import type { AddressInfo } from "node:net"
 import {
   CreateBucketCommand,
@@ -156,7 +163,7 @@ function forward(
   // Expect is never signed (SigV4 unsignable header); the body is already buffered here.
   delete headers.expect
   return new Promise((resolve, reject) => {
-    const upstream = http.request(
+    const upstream = (target.protocol === "https:" ? https : http).request(
       {
         protocol: target.protocol,
         hostname: target.hostname,
@@ -177,8 +184,22 @@ function forward(
   })
 }
 
+export type TestTls = { cert: Buffer; key: Buffer }
+
+/** The test certificate and key for an https MinIO, or null when the run uses plain http. */
+export function testTlsFromEnv(): TestTls | null {
+  const cert = process.env.SIKANDER_TEST_S3_TLS_CERT?.trim()
+  const key = process.env.SIKANDER_TEST_S3_TLS_KEY?.trim()
+  if (!cert || !key) return null
+  return { cert: readFileSync(cert), key: readFileSync(key) }
+}
+
 export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Promise<FaultProxy> {
   const target = new URL(targetEndpoint)
+  const tls = target.protocol === "https:" ? testTlsFromEnv() : null
+  if (target.protocol === "https:" && !tls) {
+    throw new Error("an https S3 endpoint needs SIKANDER_TEST_S3_TLS_CERT and SIKANDER_TEST_S3_TLS_KEY for the fault proxy")
+  }
   let mode: FaultMode = { kind: "pass" }
   const seen: SeenRequest[] = []
   const pending = new Set<Promise<unknown>>()
@@ -189,7 +210,7 @@ export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Prom
     res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>${code}</Code><Message>${code}</Message></Error>`)
   }
 
-  const server = http.createServer(async (req, res) => {
+  const handler: http.RequestListener = async (req, res) => {
     const method = req.method ?? "GET"
     seen.push({ method, path: req.url ?? "", headers: req.headers })
     const current = mode
@@ -313,11 +334,12 @@ export async function startS3FaultProxy(targetEndpoint = realS3Endpoint()): Prom
     } catch {
       req.socket.destroy()
     }
-  })
+  }
+  const server = tls ? https.createServer({ cert: tls.cert, key: tls.key }, handler) : http.createServer(handler)
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const { port } = server.address() as AddressInfo
   return {
-    endpoint: `http://127.0.0.1:${port}`,
+    endpoint: `${tls ? "https" : "http"}://127.0.0.1:${port}`,
     setMode(next) {
       mode = next
     },
