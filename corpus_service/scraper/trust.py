@@ -104,6 +104,28 @@ def publication_decision(trust_raw: Optional[str], confidence: Optional[float]) 
     return PublicationDecision(True, None)
 
 
+def human_review_decision(trust_raw: Optional[str]) -> PublicationDecision:
+    """Whether a reviewer may promote a quarantined record from a source with ``trust_raw`` (audit
+    F23, the manual route in scraper.routers.quarantine).
+
+    A human review is the step FINAL_2 :896-897 sends both a low-confidence trusted record and every
+    review-source record to, so confidence is not consulted and ``review`` may be promoted. What F20
+    refuses everywhere is refused here too, failing closed:
+
+    trusted                      -> promote
+    review                       -> promote
+    blocked                      -> refuse "blocked_source"
+    anything else (None, '', legacy, different case/whitespace, a missing or deleted source)
+                                 -> refuse "unknown_source"
+    """
+    level = _known(trust_raw)
+    if level is None:
+        return PublicationDecision(False, REASON_UNKNOWN_SOURCE)
+    if level == BLOCKED:
+        return PublicationDecision(False, REASON_BLOCKED_SOURCE)
+    return PublicationDecision(True, None)
+
+
 def may_harvest(trust_raw: Optional[str]) -> bool:
     """Only trusted and review sources are harvested; blocked and anything unknown are not."""
     return _known(trust_raw) in (TRUSTED, REVIEW)

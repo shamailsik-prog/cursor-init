@@ -285,6 +285,51 @@ drive the real app against Postgres (need `CORPUS_TEST_DATABASE_URL`);
 routers may use only `scraper/public_corpus.py`'s public API; `tests/test_trust_policy.py`
 (`PublicCorpusReadGuardTests`) enforces it.
 
+## Quarantine review (audit F23)
+
+`POST /quarantine/{id}/promote` and `POST /quarantine/{id}/reject` (`scraper/routers/quarantine.py`,
+admin key) decide one `quarantine_queue` record. Spec:
+`docs/superpowers/specs/2026-10-18-f23-auditable-quarantine-promotion-design.md`.
+
+- **Request.** Body `{"reviewer": "<name>", "reason": "<why>"}`, both required (reviewer 1-255
+  characters, reason 1-2000, no control characters; unknown fields refused), and optionally an
+  `Idempotency-Key` header (1-128 characters of `A-Z a-z 0-9 . _ : -`). Anything malformed is `422`.
+- **One transaction, one transition.** The queue row is locked (`FOR UPDATE`) and decided only while
+  pending. A second decision, the loser of two concurrent ones, and a row resolved before this change
+  are `409 already_resolved` (the body names the existing decision). A request repeating the winning
+  decision with the same `Idempotency-Key` gets the stored result again (`"replayed": true`) and
+  writes nothing; a client that may retry should send one. An unknown id is `404`.
+- **Promote.** Refused with `409`, writing nothing, when the record has no staging row
+  (`staging_record_missing`), its staging row is already promoted (`staging_already_promoted`), its
+  source, resolved from the staging row by promotion's rule and read now, is `blocked` or unknown
+  (`source_not_promotable`; `trusted` and `review` may be promoted by a reviewer, whatever the
+  confidence), or its citation is already in `case_law_master` (`citation_already_published`,
+  serialised per citation by an advisory lock). Otherwise it writes, in the same transaction, the
+  `case_law_master` row (`is_promoted`, `promoted_at`, `source_site` = the verified source) under the
+  id `uuid5(NAMESPACE_URL, "corpus-service:case_law_master:quarantine/<id>")`, one pending
+  `embedding_queue` row for it (the outbox; `tasks/embeddings.py` consumes it, and its lease and
+  outcome are F27 / F28), the staging lineage (`promoted`, `promoted_at`, `promoted_to_id`) and the
+  decision. The published row is served by the public API (F24) while its source stays
+  `trusted` or `review`.
+- **Reject.** Resolves the record `rejected` with a decision; the staging row stays quarantined.
+- **Evidence.** Every decision writes one `quarantine_decisions` row: the reviewer as given and
+  `reviewer_auth = 'shared_admin_key'` (the shared key names nobody; named identities are F47), the
+  reason, the prior and new state of the queue and staging rows, the source and trust read at decision
+  time, the publication (key, table, id, outbox row), the `Idempotency-Key` and the time. The queue
+  row's `reviewed`, `reviewed_by`, `reviewed_at`, `resolution` (`approved` / `rejected`) and
+  `resolution_notes` are filled from the same values. The table is append-only in the database:
+  triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` (SQLSTATE 23001) for every role
+  (`scraper/quarantine_ledger.py`). They are `ENABLE ALWAYS`, so a session in
+  `session_replication_role = replica` cannot skip them. They are created with the table, and
+  migration `migrations/002_quarantine_decisions.py`, run by `python -m scraper.migrate`, compares
+  the function and both triggers attribute by attribute (a `WHEN` clause, an `UPDATE OF` column
+  list, a statement-level, disabled or origin-only trigger, a replaced function body) and drops and
+  recreates all three on any difference.
+
+**Tests.** `tests/test_f23_quarantine_review_db.py` drives the real app against Postgres (needs
+`CORPUS_TEST_DATABASE_URL`), with quarantine rows made by the real promotion;
+`tests/test_f23_quarantine_review_rules.py` needs no database.
+
 ## Quick start (no Docker)
 
 ```bash
