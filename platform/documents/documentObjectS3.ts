@@ -277,7 +277,6 @@ export function toDocumentObjectStoreError(
   timeoutMs: number
 ): DocumentObjectStoreError {
   if (err instanceof DocumentObjectStoreError) return err
-  if (err instanceof DocumentObjectConfigurationError) throw err
   const status = httpStatusOf(err)
   let failure: DocumentObjectStoreError["failure"]
   let code: string | null = null
