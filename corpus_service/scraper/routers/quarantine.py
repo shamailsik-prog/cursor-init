@@ -27,6 +27,21 @@ database transaction. Spec: docs/superpowers/specs/2026-10-18-f23-auditable-quar
 * Ruling 9, outbox. One embedding_queue row (case_law_master, the published id) in the same
   transaction, exactly once by its unique key. The consumer is scraper/tasks/embeddings.py,
   unchanged (its lease and recovery are audit F27, its job outcome F28).
+
+Re-audit round 2 (spec section 7):
+
+* Ruling 13, the key before the body. The two review routes declare no FastAPI body parameter:
+  FastAPI reads a declared body before it runs any dependency, so an unauthenticated body used to be
+  buffered and parsed whole. The admin key is checked by require_admin_api_key, the dependency every
+  admin route uses, and only then does the endpoint read the body itself (read_review_body).
+* Ruling 14, at most MAX_BODY_BYTES (32 KiB, the largest valid body under ruling 12's bounds with
+  every character \\u-escaped): a larger Content-Length is 413 before anything is read, a streamed
+  body is 413 as soon as it passes the cap.
+* Ruling 15, the body must arrive within BODY_READ_SECONDS (10 s) of the start of the read, or 408.
+* Ruling 16, a response sent before the body was completely received carries Connection: close, so
+  the server closes the connection instead of draining whatever the client keeps sending.
+* Ruling 18, every 422 on these routes is rendered here (ReviewRoute): type, loc and msg only, never
+  the input, every string encodable and cut short, at most ten errors.
 """
 
 from __future__ import annotations
@@ -36,10 +51,16 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from typing import Any, Dict, Final, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+import anyio
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -127,6 +148,113 @@ def _request_key(raw: Optional[str]) -> Optional[str]:
         raise HTTPException(status_code=422, detail={
             "error": "invalid_idempotency_key", "rule": "1-128 characters of A-Z a-z 0-9 . _ : -"})
     return raw
+
+
+# -- rulings 13-18: the body is read here, after the admin key, bounded in size and time -----------
+# 255 + 2000 characters (ruling 12) at up to 12 bytes each in valid JSON (a non-BMP character as a
+# \uXXXX\uXXXX escape) is 27,060 bytes of field text; 32 KiB never refuses a valid body.
+MAX_BODY_BYTES: Final = 32 * 1024
+BODY_READ_SECONDS = 10  # read at call time, so a test may shorten it
+_BODY_COMPLETE: Final = "corpus.review_body_complete"  # request scope flag
+_MAX_ERRORS: Final = 10
+_JSON_TYPE: Final = re.compile(r"application/(?:json|[^/;\s]+\+json)")
+
+
+def _body_received(request: Request) -> bool:
+    """Whether the whole request body has been received: read to its end here, or declared empty."""
+    if request.scope.get(_BODY_COMPLETE):
+        return True
+    headers = request.headers
+    return "transfer-encoding" not in headers and headers.get("content-length", "0").strip() == "0"
+
+
+def _too_large() -> HTTPException:
+    return HTTPException(status_code=413, detail={"error": "body_too_large", "max_bytes": MAX_BODY_BYTES})
+
+
+def _body_error(kind: str, message: str) -> RequestValidationError:
+    return RequestValidationError([{"type": kind, "loc": ("body",), "msg": message}])
+
+
+async def read_review_body(request: Request) -> ReviewDecisionIn:
+    """The request body as a ReviewDecisionIn, read only by this function, after the route's
+    dependencies (the admin key among them) have run. 422 for a body that is not JSON or not valid,
+    413 past MAX_BODY_BYTES (declared or streamed), 408 when it has not arrived within
+    BODY_READ_SECONDS."""
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if not _JSON_TYPE.fullmatch(content_type):
+        raise _body_error("json_required", "Content-Type must be application/json")
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.strip().isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise _too_large()
+    chunks: List[bytes] = []
+    size = 0
+    try:
+        with anyio.fail_after(BODY_READ_SECONDS):
+            while True:
+                message = await request.receive()
+                if message["type"] == "http.disconnect":
+                    raise HTTPException(status_code=400, detail={"error": "client_disconnected"})
+                data = message.get("body", b"")
+                size += len(data)
+                if size > MAX_BODY_BYTES:
+                    raise _too_large()
+                chunks.append(data)
+                if not message.get("more_body", False):
+                    request.scope[_BODY_COMPLETE] = True
+                    break
+    except TimeoutError:
+        raise HTTPException(status_code=408, detail={"error": "body_timeout", "seconds": BODY_READ_SECONDS}) from None
+    try:
+        return ReviewDecisionIn.model_validate_json(b"".join(chunks))
+    except ValidationError as exc:
+        errors = exc.errors(include_url=False, include_context=False, include_input=False)
+        raise RequestValidationError([{**e, "loc": ("body", *e["loc"])} for e in errors]) from None
+
+
+def _bounded(value: Any, limit: int) -> str:
+    """``value`` as text that always encodes (a lone surrogate becomes its escape) and is cut short."""
+    text = str(value).encode("utf-8", "backslashreplace").decode("utf-8")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def validation_response(errors: List[Dict[str, Any]]) -> JSONResponse:
+    """A 422 that never echoes the input (ruling 18): type, loc and msg of at most _MAX_ERRORS errors."""
+    entries = [
+        {"type": _bounded(e.get("type", "value_error"), 64),
+         "loc": [part if isinstance(part, int) else _bounded(part, 64) for part in e.get("loc", ())],
+         "msg": _bounded(e.get("msg", ""), 200)}
+        for e in errors[:_MAX_ERRORS]
+    ]
+    if len(errors) > _MAX_ERRORS:
+        entries.append({"type": "too_many_errors", "loc": ["body"],
+                        "msg": f"{len(errors) - _MAX_ERRORS} more errors not shown"})
+    return JSONResponse(status_code=422, content={"detail": entries})
+
+
+class ReviewRoute(APIRoute):
+    """Route class of the two review routes. Renders their 422s (ruling 18), and closes the
+    connection after any response sent before the request body was completely received (ruling 16):
+    uvicorn would otherwise keep the connection and drain whatever the client goes on sending."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def review_handler(request: Request) -> Response:
+            try:
+                response = await handler(request)
+            except RequestValidationError as exc:
+                response = validation_response(list(exc.errors()))
+            except StarletteHTTPException as exc:
+                if _body_received(request):
+                    raise
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail,
+                                    headers={**(exc.headers or {}), "Connection": "close"}) from None
+            if not _body_received(request):
+                response.headers["Connection"] = "close"
+            return response
+
+        return review_handler
 
 
 # -- the transition ---------------------------------------------------------------------------------
@@ -351,23 +479,39 @@ async def list_q(
     return r.scalars().all()
 
 
-@router.post("/{quarantine_id}/promote")
+# The body is not a FastAPI parameter (ruling 13); its schema is still published.
+_REVIEW_BODY_OPENAPI: Final = {"requestBody": {"required": True, "content": {
+    "application/json": {"schema": ReviewDecisionIn.model_json_schema()}}}}
+
+
+def _review_route(path: str):
+    def register(endpoint):
+        router.add_api_route(path, endpoint, methods=["POST"], route_class_override=ReviewRoute,
+                             openapi_extra=_REVIEW_BODY_OPENAPI)
+        return endpoint
+
+    return register
+
+
+@_review_route("/{quarantine_id}/promote")
 async def promote(
+    request: Request,
     quarantine_id: uuid.UUID,
-    decision: ReviewDecisionIn,
+    _: None = Depends(require_admin_api_key),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
 ):
-    return await _decide(db, quarantine_id, "promote", decision, _request_key(idempotency_key))
+    request_key = _request_key(idempotency_key)
+    return await _decide(db, quarantine_id, "promote", await read_review_body(request), request_key)
 
 
-@router.post("/{quarantine_id}/reject")
+@_review_route("/{quarantine_id}/reject")
 async def reject(
+    request: Request,
     quarantine_id: uuid.UUID,
-    decision: ReviewDecisionIn,
+    _: None = Depends(require_admin_api_key),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
 ):
-    return await _decide(db, quarantine_id, "reject", decision, _request_key(idempotency_key))
+    request_key = _request_key(idempotency_key)
+    return await _decide(db, quarantine_id, "reject", await read_review_body(request), request_key)

@@ -337,4 +337,5 @@ def test_m1_review_routes_refuse_before_reading_the_body(review, corpus_db, http
         "key, body stalls": {"status": 408, "answered after the deadline, not long after": True,
                              "connection closed": True},
     }
+    print(f"[f23 body guard, {http}] measured: {measured!r}")  # shown with -s, for the ledger
     assert observed == expected, f"measured: {measured!r}"
