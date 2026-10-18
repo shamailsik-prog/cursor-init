@@ -1,6 +1,5 @@
 {
   "fa_d3c_001_scraper": [
-    "package.json:devDependencies/@playwright/test",
     "corpus_service/requirements.txt:playwright",
     "corpus_service/Dockerfile:playwright_install"
   ],

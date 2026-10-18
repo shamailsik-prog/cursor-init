@@ -577,7 +577,7 @@ import {
   type OpsPostAction,
 } from "@/app/api/d2/ops-reporting/dispatch"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { checkPermission } from "@/platform/p5/checkPermission"
 
@@ -3613,13 +3613,11 @@ async function ensureWorkflowOpsAlertDigests(params: {
   reason: string
   store: ReturnType<typeof getRuntimeStore>
   repos: FirmBoundSpineRepositories
+  /** The actor firm's matters as `syncFirmMatters` listed them for this request (Copilot C4: one listing per request). */
+  firmMatters: readonly Matter[]
 }): Promise<WorkflowOpsAlertDigestRow[]> {
-  const { actorId, actorFirmId, reason, store, repos } = params
-  const matters = await repos.matters.listByFirm()
-  for (const matter of matters) {
-    store.matters.set(matter.id, matter)
-  }
-  const matterById = new Map(matters.map((matter) => [matter.id, matter]))
+  const { actorId, actorFirmId, reason, store, repos, firmMatters } = params
+  const matterById = new Map(firmMatters.filter((matter) => matter.firmId === actorFirmId).map((matter) => [matter.id, matter]))
   const activities = await repos.workflowOpsActivity.listByFirm()
   const followUps = await repos.followUps.listByFirm()
   const now = Date.now()
@@ -12538,10 +12536,8 @@ async function handleGet(request: Request) {
 
   await syncFirmUsers(store, repos, actor.firmId)
   await syncFirmMembers(store, repos, actor.firmId)
-  const firmMatters = await repos.matters.listByFirm()
-  for (const matter of firmMatters) {
-    store.matters.set(matter.id, matter)
-  }
+  // The request's one listing of the firm's matters (Copilot C4): the sync refreshes the cache and its list is reused.
+  const firmMatters = await syncFirmMatters(store, repos, actor.firmId)
 
   const refreshedActor = store.users.get(actorId)
   if (!refreshedActor) {
@@ -12581,6 +12577,7 @@ async function handleGet(request: Request) {
     reason: "read_scaffold_seed",
     store,
     repos,
+    firmMatters,
   })
   await ensureWorkflowOpsAlertGovernanceRows({
     digests,
@@ -17161,7 +17158,7 @@ async function handlePost(request: Request) {
     body: parsed,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
 
@@ -17183,6 +17180,8 @@ async function handlePost(request: Request) {
 
   await syncFirmUsers(store, repos, actor.firmId)
   await syncFirmMembers(store, repos, actor.firmId)
+  // The request's one listing of the firm's matters (Copilot C4), reused for the digests below.
+  const firmMatters = await syncFirmMatters(store, repos, actor.firmId)
   const matter = await resolveMatter({ matterId, store, repos })
   if (!matter || matter.firmId !== actor.firmId) {
     return NextResponse.json({ error: "unknown matter" }, { status: 404 })
@@ -17195,6 +17194,7 @@ async function handlePost(request: Request) {
     reason: "post_scaffold_seed",
     store,
     repos,
+    firmMatters,
   })
   const seededRow = seeded.find((row) => row.matterId === matter.id) ?? null
   const digestId = alertDigestId(matter.id)

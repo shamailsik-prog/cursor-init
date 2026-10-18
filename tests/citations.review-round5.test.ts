@@ -62,7 +62,7 @@ describe("R5-1: acronym reporters with citation filler (court names, at page, br
   })
   it("prose with an acronym, a year and a number but ordinary words between stays clean", () => {
     for (const text of [
-      "4. That in 2019 Engro Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons.",
+      "4. That in 2019 Qalvo Fertilizers PLC entered into a supply agreement with the Plaintiff for 500 metric tons.",
       "The 2022 PTCL bill of Rs. 4,500 was disputed.",
       "The CLC committee of the Board met on 5 May 2024 and approved 3 resolutions.",
       "In 2021 PTCL Ltd. disconnected 2 lines.",
@@ -231,7 +231,7 @@ describe("R5-5: a numeric HTML entity that decodes to a disallowed character is 
     if (!check.ok) expect(check.violations.some((v) => /entity/.test(v.reason))).toBe(true)
   })
   it("entities for allowed characters stay accepted", () => {
-    for (const body of ["&#169; 2024 Engro", "&#65;BC", "AT&amp;T", "line&#10;break", "&#x0627;", "Rs.&#160;500"]) {
+    for (const body of ["&#169; 2024 Qalvo", "&#65;BC", "AT&amp;T", "line&#10;break", "&#x0627;", "Rs.&#160;500"]) {
       expect(checkDraftCharset(body).ok, body).toBe(true)
     }
   })

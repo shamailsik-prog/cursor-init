@@ -1,11 +1,14 @@
-import httpx, re, logging, asyncio
+import re, logging, asyncio
 from bs4 import BeautifulSoup
+from scraper.net import fetch_policy
 from scraper.parsers.pdf_extractor import extract_pdf_text
 from scraper.models import StatutesMaster
 logger = logging.getLogger(__name__)
 
 async def scrape_nationalassembly(source, db):
-    async with httpx.AsyncClient(timeout=30) as client:
+    # Audit F25: index-page PDF links are external input; the NationalAssembly fetch policy
+    # refuses (and logs) any link off na.gov.pk, off 443, or resolving to a non-public address.
+    async with fetch_policy.fetcher_for("NationalAssembly") as client:
         try:
             r = await client.get("https://na.gov.pk/en/legis.php")
             soup = BeautifulSoup(r.text, "html.parser")

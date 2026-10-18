@@ -3,6 +3,7 @@ import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
+import { SYSTEM_POLICIES, SYSTEM_POLICY_VERSION } from "@/platform/p1/systemPolicy"
 import { adminDb } from "../src/admin"
 import { alertRef, firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { p1TestSeam } from "../src/p1/gateway"
@@ -11,6 +12,7 @@ import { p1OpsTestSeam } from "../src/p1/ops"
 import { setP1TransportForTests, type P1Transport } from "../src/p1/transport"
 import { HttpError } from "../src/http/errors"
 import { apiErrorOf, expectKind, viaApi } from "./api"
+import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 
 /**
@@ -37,8 +39,14 @@ type Out = {
   classification: string
   usage: { inputTokens: number; outputTokens: number; costMicroUsd: number }
   traceId: string
+  /** Audit F17 (rulings 3 and 4). */
+  grounding?: { status: string; citations: unknown[] }
+  advisory?: boolean
+  model?: string
+  modelReported?: string | null
+  modelMatch?: boolean
 }
-type KillView = { disableAll: boolean; disabledModels: string[]; reason: string; setBy: string; setAt: string }
+type KillView ={ disableAll: boolean; disabledModels: string[]; reason: string; setBy: string; setAt: string }
 type Usage = {
   month: string
   budgetMicroUsd: number | null
@@ -46,7 +54,7 @@ type Usage = {
   spentPkr: number | null
   pkrPerUsd: number | null
   percentUsed: number | null
-  calls: { ok: number; failed: number; blocked: number }
+  calls: { ok: number; failed: number; blocked: number; reconciled: number }
   inputTokens: number
   outputTokens: number
   alerts: Array<{ threshold: number; at: string }>
@@ -126,14 +134,14 @@ async function memberOf(f: Firm, role: string, clearance: string): Promise<Membe
   return m
 }
 
-type Sent = { model: string; body: string; maxTokens: number }
+// Audit F16: the transport receives role-separated messages; `recordSent` keeps them and the user turn as `body`.
 
 /** A fake Gateway transport that records what it is sent; the default reply costs 14000 micro-USD (1000 in, 500 out). */
 function fakeTransport(reply: { text?: string } | (() => Promise<never>) = {}): Sent[] {
   const sent: Sent[] = []
   const t: P1Transport = {
     async send(r) {
-      sent.push({ ...r })
+      sent.push(recordSent(r))
       if (typeof reply === "function") return reply()
       return { text: reply.text ?? "REPLY", inputTokens: 1000, outputTokens: 500 }
     },
@@ -389,7 +397,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
   })
 
   describe("committeeBrain: masking (Review Focus 1)", () => {
-    const RAW = ["Ali Raza Khan", "Zubair Hashmi", "Kamran Akmal", "35202-1234567-1", "0300-1234567"]
+    const RAW = ["Ali Raza Khan", "Zubair Hashmi", "Haris Qalbani", "35202-1234567-1", "0300-1234567"]
     const leaks = (s: string) => RAW.filter((raw) => s.toLowerCase().includes(raw.toLowerCase()))
 
     it("the matter's party names (name and names) and the supplied ones are masked in what the transport receives, in the stored output and in the reply; none reaches a row, an event, an audit row or a log line", async () => {
@@ -400,12 +408,12 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         ],
       })
       const logs = spyLogs()
-      const sent = fakeTransport({ text: "Reply: ali raza khan and Kamran Akmal may call 0300-1234567; zubair hashmi agrees." })
+      const sent = fakeTransport({ text: "Reply: ali raza khan and Haris Qalbani may call 0300-1234567; zubair hashmi agrees." })
       const r = await send(brainAt, f.P, {
         firmId: f.firmId,
         matterId: f.matterId,
-        body: "Client Ali Raza Khan (CNIC 35202-1234567-1, mobile 0300-1234567) v. Zubair Hashmi and Kamran Akmal.",
-        partyNames: ["Kamran Akmal"],
+        body: "Client Ali Raza Khan (CNIC 35202-1234567-1, mobile 0300-1234567) v. Zubair Hashmi and Haris Qalbani.",
+        partyNames: ["Haris Qalbani"],
       }) as Out
 
       expect(sent).toHaveLength(1)
@@ -452,18 +460,56 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const sent = fakeTransport({ text: "Reply for Ali Raza" })
       const r = await send(brainAt, f.P, base(f, { body: "Draft for Ali Raza, 0300-1234567.", purpose: "summarise" })) as Out
 
-      expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "text", "traceId", "usage"])
-      expect(r).toMatchObject({ blocked: false, text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+      // Audit F17 (rulings 3 and 4): the answer's grounding, the advisory flag and the model identity ride beside it.
+      expect(Object.keys(r).sort()).toEqual(
+        ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "text", "traceId", "usage"].sort()
+      )
+      expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "Reply for [PARTY]", classification: "internal", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+      // A prose answer is not the committee answer contract: unstructured, advisory; the stub reports no model.
+      expect(r).toMatchObject({ grounding: { status: "unstructured", citations: [] }, advisory: true, model: OPUS, modelReported: null, modelMatch: false })
       expect(r.traceId).toMatch(UUID_V7)
-      expect(sent).toEqual([{ model: OPUS, body: "Draft for [PARTY], [PHONE].", maxTokens: 4096 }])
+      // Audit F16: the registry's system message for the purpose ("summarise"), then the masked body as the user's turn.
+      expect(sent).toEqual([
+        {
+          model: OPUS,
+          messages: [
+            { role: "system", content: SYSTEM_POLICIES.summarise.text },
+            { role: "user", content: "Draft for [PARTY], [PHONE]." },
+          ],
+          maxTokens: 4096,
+          body: "Draft for [PARTY], [PHONE].",
+        },
+      ])
 
       const outputs = await outputsOf(f.firmId)
       expect(outputs).toHaveLength(1)
       expect(outputs[0]!.id).toBe(r.outputId)
       const row = outputs[0]!.data
       expect(Object.keys(row).sort()).toEqual(
-        ["actorId", "blocked", "classification", "createdAt", "documentIds", "firmId", "id", "matterId", "outbound", "purpose", "text", "traceId", "usageLogId"].sort()
+        [
+          "accounting",
+          "actorId",
+          "blocked",
+          "classification",
+          "createdAt",
+          "documentIds",
+          "firmId",
+          "id",
+          "matterId",
+          "outbound",
+          "purpose",
+          "text",
+          "traceId",
+          "usageLogId",
+          // Audit F17 (rulings 3 and 4).
+          "grounding",
+          "advisory",
+          "model",
+          "modelReported",
+          "modelMatch",
+        ].sort()
       )
+      expect(row).toMatchObject({ grounding: r.grounding, advisory: true, model: OPUS, modelReported: null, modelMatch: false })
       expect(row).toMatchObject({
         id: r.outputId,
         firmId: f.firmId,
@@ -473,13 +519,20 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         classification: "internal",
         purpose: "summarise",
         blocked: false,
+        accounting: "settled",
         text: "Reply for [PARTY]",
         traceId: r.traceId,
         outbound: { body: sent[0]!.body, metadata: { classification: "internal", provider: "ai-gateway", purpose: "summarise" } },
       })
       expect(row.outbound.metadata.redactionCounts).toEqual({ cnic: 0, phone: 1, party: 1, email: 0, iban: 0, ntn: 0, passport: 0 })
-      expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata"])
-      expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts"])
+      // Audit F16: the system message that was sent with the body is recorded beside it.
+      expect(Object.keys(row.outbound).sort()).toEqual(["body", "metadata", "system"])
+      expect(row.outbound.system).toEqual({ policyId: "summarise", version: SYSTEM_POLICY_VERSION })
+      // Review round (R4a): the row names the policy; its text is never stored.
+      expect(JSON.stringify(row)).not.toContain(SYSTEM_POLICIES.summarise.text.slice(0, 80))
+      // Audit F15: the residual detector's counts on the masked body sit beside the mask's own.
+      expect(row.outbound.metadata.residualCounts).toEqual({ id_digits: 0, labelled_identifier: 0, address: 0, kinship_name: 0 })
+      expect(Object.keys(row.outbound.metadata).sort()).toEqual(["classification", "provider", "purpose", "redactionCounts", "residualCounts"])
       // The Next.js CommitteeBrainOutput shape: epoch milliseconds from the op's clock (T plus the time the call took).
       expect(typeof row.createdAt).toBe("number")
       expect(Number.isInteger(row.createdAt)).toBe(true)
@@ -502,8 +555,12 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
       const f = await newFirm({ budget: null })
       const sent = fakeTransport()
       const r = await send(brainAt, f.P, base(f)) as Out
-      expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "reason", "traceId", "usage"])
-      expect(r).toMatchObject({ blocked: true, reason: "budget_not_set", usage: { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 } })
+      // Audit F17: a blocked call has nothing to ground (not_assessed, advisory) and no reported model.
+      expect(Object.keys(r).sort()).toEqual(
+        ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "reason", "traceId", "usage"].sort()
+      )
+      expect(r).toMatchObject({ blocked: true, accounting: "settled", reason: "budget_not_set", usage: { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 } })
+      expect(r).toMatchObject({ grounding: { status: "not_assessed", citations: [] }, advisory: true, modelReported: null, modelMatch: false })
       expect(sent).toHaveLength(0)
       const row = (await outputsOf(f.firmId))[0]!.data
       expect(row).toMatchObject({ blocked: true, reason: "budget_not_set", outbound: { body: "Draft a reply to the notice." } })
@@ -587,6 +644,23 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         expect((await auditOf(f.P.uid, "ai.call")).filter((r) => r.decision === "deny" && r.reason === "internal")).toHaveLength(1)
       })
 
+      it("no attempt starts after the output write's deadline: it rethrows with the remaining injected failures unused (Codex P1 on PR #40)", async () => {
+        const f = await newFirm()
+        const sent = fakeTransport()
+        const waits: number[] = []
+        p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
+        p1OpsTestSeam.outputWriteFailures = [new Error("down"), new Error("down"), new Error("down")]
+        // The deadline's clock: the first read starts the window, the next is already past it.
+        const reads = [0, 60_000]
+        p1OpsTestSeam.wallClock = () => reads.shift() ?? 60_000
+        const err = await apiErrorOf(ask(f))
+        expect({ status: err.status, code: err.code }).toEqual({ status: 500, code: "internal" })
+        expect(waits).toEqual([])
+        expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(2)
+        expect(sent).toHaveLength(1)
+        expect(await outputsOf(f.firmId)).toHaveLength(0)
+      })
+
       it("an ambiguous commit (the first attempt commits, its answer is lost, the retry's create hits ALREADY_EXISTS) is a success: 200, one output row, one route allow row and no deny row, one provider call", async () => {
         const f = await newFirm()
         const sent = fakeTransport()
@@ -595,8 +669,11 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         // A retryable gRPC code (DEADLINE_EXCEEDED) thrown after the first attempt's transaction has committed.
         p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("deadline exceeded"), { code: 4 })]
         const r = (await ask(f)) as Out
-        expect(Object.keys(r).sort()).toEqual(["blocked", "classification", "outputId", "text", "traceId", "usage"])
-        expect(r).toMatchObject({ blocked: false, text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
+        // Audit F17 (rulings 3 and 4): grounding, the advisory flag and the model identity ride beside the answer.
+        expect(Object.keys(r).sort()).toEqual(
+          ["accounting", "advisory", "blocked", "classification", "grounding", "model", "modelMatch", "modelReported", "outputId", "text", "traceId", "usage"].sort()
+        )
+        expect(r).toMatchObject({ blocked: false, accounting: "settled", text: "REPLY", usage: { inputTokens: 1000, outputTokens: 500, costMicroUsd: 14000 } })
         expect(waits).toEqual([100])
         expect(p1OpsTestSeam.lostCommitAnswers).toEqual([])
         expect(sent).toHaveLength(1)
@@ -631,9 +708,19 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         p1OpsTestSeam.sleep = async (ms) => void waits.push(ms)
         p1OpsTestSeam.outputWriteFailures = [new Error("injected"), new Error("injected"), new Error("injected")]
         p1OpsTestSeam.lostCommitAnswers = [Object.assign(new Error("lost"), { code: 4 })]
+        // The output write's deadline clock too (Codex P1): a clock already past the deadline is ignored.
+        let clockReads = 0
+        p1OpsTestSeam.wallClock = () => (clockReads += 1) * 60_000
+        // And the pre-call deadline's clock (re-audit R3-D2): a clock already past the allowance is ignored.
+        let preCallReads = 0
+        p1OpsTestSeam.preCallClock = () => {
+          preCallReads += 1
+          return Date.now() + 60_000
+        }
         vi.stubEnv("NODE_ENV", "production")
         const r = (await ask(f)) as Out
         expect(r).toMatchObject({ blocked: false, text: "REPLY" })
+        expect([clockReads, preCallReads]).toEqual([0, 0])
         expect(waits).toEqual([])
         expect(p1OpsTestSeam.outputWriteFailures).toHaveLength(3)
         expect(p1OpsTestSeam.lostCommitAnswers).toHaveLength(1)
@@ -1030,7 +1117,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         spentPkr: null,
         pkrPerUsd: null,
         percentUsed: null,
-        calls: { ok: 0, failed: 0, blocked: 0 },
+        calls: { ok: 0, failed: 0, blocked: 0, reconciled: 0 },
         inputTokens: 0,
         outputTokens: 0,
         alerts: [],
@@ -1056,7 +1143,7 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         spentPkr: 347.22,
         pkrPerUsd: 281.25,
         percentUsed: 41.15,
-        calls: { ok: 5, failed: 1, blocked: 2 },
+        calls: { ok: 5, failed: 1, blocked: 2, reconciled: 0 },
         inputTokens: 1200,
         outputTokens: 340,
         alerts: [],
@@ -1152,6 +1239,8 @@ describe.skipIf(!EMULATORS)("the /api/platform/brain routes (P3-60, P3-66, P3-70
         ["alerts", "budgetMicroUsd", "calls", "inputTokens", "killSwitch", "month", "outputTokens", "percentUsed", "pkrPerUsd", "spentMicroUsd", "spentPkr"].sort()
       )
       expect(Object.keys(u.killSwitch).sort()).toEqual(["firm", "platform"])
+      // Codex P2 on PR #40: calls the lease reconciler settled are counted beside the others (additive).
+      expect(Object.keys(u.calls).sort()).toEqual(["blocked", "failed", "ok", "reconciled"])
       const rows = (await auditOf(f.P.uid, "ai.usage.read")).filter((r) => r.target === `ai_usage_months/${f.firmId}_${MONTH}`)
       expect(rows.map((r) => [r.firmId, r.decision, r.reason])).toEqual([[f.firmId, "allow", "ok"]])
     })

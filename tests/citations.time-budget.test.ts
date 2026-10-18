@@ -31,7 +31,7 @@ const PATHOLOGICAL: ReadonlyArray<readonly [string, string]> = [
   ["glued case reference", "Crl.P.L.A.No.5/2019 "],
   ["acronym reporter then number", "CLC 12 "],
   ["year then acronym reporter", "2019 CLC "],
-  ["acronym in prose", "Engro PLC entered into 500 "],
+  ["acronym in prose", "Qalvo PLC entered into 500 "],
   ["reporter, year, court", "PLD 2019 SC "],
   ["Urdu number word", "نمبر "],
   ["Urdu case reference", "مقدمہ نمبر 12 سال 2019 "],

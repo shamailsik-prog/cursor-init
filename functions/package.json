@@ -9,14 +9,17 @@
   "scripts": {
     "build": "node build.mjs",
     "jobs:backfill": "node lib/cli/jobsBackfill.js",
+    "eval:committee-live": "node build.mjs && cd .. && node functions/lib/cli/committeeEval.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "test:emu": "cd .. && npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test\"",
+    "test:f05-authority": "cd .. && F05_AUTHORITY_SUITE=1 npx firebase emulators:exec --only auth,firestore --project demo-sikander \"npm --prefix functions test -- test/f05-authority-corpus.e2e.emu.test.ts test/d4.corpus-authority.pg.test.ts test/d4.authority-parity.pg.test.ts test/f17-grounding-corpus.pg.test.ts\"",
     "mutation": "bash scripts/mutation.sh"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",
-    "firebase-functions": "^6.0.0"
+    "firebase-functions": "^6.0.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
@@ -24,6 +27,7 @@
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/express": "^4.17.25",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.5",
     "esbuild": "^0.25.0",
     "firebase": "^11.10.0",
     "typescript": "^5.6.0",

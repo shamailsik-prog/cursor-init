@@ -10,7 +10,7 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 |---|---|
 | `data/courts.json` | Court prefix table (Job B). Prefixes are data. |
 | `data/documentTypes.json` | 159 VERIFIED types, keyed on `id` (Job C). |
-| `firestore.rules` | Every Phase 0 collection + default deny. |
+| `firestore.rules` | Every Phase 0 collection + default deny. Matter-bound `documents`, `document_versions` and non-engine `jobs` reads also check the matter's current label (audit F14): two access calls per distinct matter on top of two identity calls, so a client transaction or batch over rows of about nine or more matters can be denied (limit 20); split such work by matter. |
 | `postgres/ddl/` | Annex A corpus contract + platform flags. Embedding lock: `text-embedding-3-small`, 1536, HNSW. |
 | `ci_gates/gate_g0.sh` | Static guards (fee, scraper, provider, master-write, idempotency, pagination, classification, embedding). Fail the build; no warn-only checks. |
 | `platform/p1/` | Committee Brain. Masked body is the only text sent to a provider. |
@@ -48,7 +48,7 @@ Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (need
 
 The eve agent lives at `agent/` (`sikander-ai`). It is not a second provider path. `agent/agent.ts` uses `committeeBrainLanguageModel` from `platform/p1`, which only calls `callCommitteeBrain`. Default eve tools (`web_fetch`, `web_search`, `bash`) are off.
 
-The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI use **Node 22+** (`package.json` `engines.node`).
+The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI stay on Node 20+.
 
 Do not set provider API keys. Until O-53 closes (the app moves to the Cloud Functions route), the Next.js deployment must not hold an AI Gateway key: leave `AI_GATEWAY_API_KEY` and `VERCEL_AI_GATEWAY_API_KEY` unset, so `POST /api/p1/committee-brain` stays blocked (`PHASE0_NO_CREDENTIALS`). That route does not go through `callP1`, so the P1 kill switches, the monthly budget and the cost log govern the Cloud Functions path (`/api/platform/brain/committeeBrain`) only (ruling R8, `functions/src/p1/README.md`). Through that path, per L18 §4.6, public and internal calls may leave; confidential and above stay blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
 
@@ -59,7 +59,7 @@ npm run eve:info   # Node 24 — discovered agent surface
 ## Non-negotiables
 
 - Court fee and stamp duty are MANUAL checklist items only. L17.9 REMOVED by E-15 (8 Sep 2026). The four banned identifiers fail CI.
-- No Puppeteer in this repository. Root `@playwright/test` is a **dev-only** dependency for console auth e2e (allowlisted in `ci_gates/g0_guard_allowlist.json`; see `docs/errata/FA-F02-004-playwright-dev-e2e.md`). Corpus harvest Playwright stays in `corpus_service` / `05_Corpus_Service`.
+- No Playwright / Puppeteer in this repository. Corpus harvest is a separate repo (`05_Corpus_Service` in the handover pack).
 - Provider SDKs only under `platform/committeeBrain` or `platform/p1`.
 - Tenant and matter scoping at the data layer. No role exempt.
 - Classification ranks 0–4, monotonic. Downgrade only via partner `declassify()`.

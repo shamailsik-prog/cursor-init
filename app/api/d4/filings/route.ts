@@ -25,7 +25,7 @@ import type {
 } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
-import { syncFirmMembers } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildFilingPacketArtifactRow } from "@/platform/persistence/filingPacketArtifacts"
 import {
   buildFilingDispatchQueueRow,
@@ -3717,6 +3717,7 @@ async function handleGet(request: Request) {
       return NextResponse.json({ error: "unknown user" }, { status: 404 })
     }
     await syncFirmMembers(store, spineRepos, user.firmId)
+    await syncFirmMatters(store, spineRepos, user.firmId)
     const repos: FirmBoundSpineRepositories = bindRouteRepos(spineRepos, user.firmId)
     const firmPackages = await repos.filings.listByFirm()
     const artifactRows = await repos.filingPacketArtifacts.listByFirm()
@@ -7142,7 +7143,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
     body: parsed,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
   const actorIdForScope =
@@ -7183,6 +7184,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const created = createFilingPackage(store, {
         actorId: parsed.actorId,
         matterId: parsed.matterId,
@@ -7236,6 +7238,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "unknown actor" }, { status: 404 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       // Final audit F2: decide against the durable package status, never a stale spine copy.
       const durablePackage = await repos.filings.get(parsed.packageId)
       if (durablePackage) store.filingPackages.set(durablePackage.id, durablePackage)
@@ -7334,6 +7337,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -7441,6 +7445,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "clerk or partner role required for clerk verification checkpoint" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -7585,6 +7590,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -7754,6 +7760,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -7876,6 +7883,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -7944,6 +7952,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8034,6 +8043,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8100,6 +8110,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "invalid severity" }, { status: 400 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8173,6 +8184,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8301,6 +8313,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8429,6 +8442,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8560,6 +8574,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "acknowledge_breach requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8642,6 +8657,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "defer_window requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8719,6 +8735,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "clear_digest requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8819,6 +8836,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8912,6 +8930,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -8992,6 +9011,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9056,6 +9076,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "revoke_assignment requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9122,6 +9143,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9214,6 +9236,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9326,6 +9349,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "snooze_workload_alert requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage =
         store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
@@ -9425,6 +9449,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "waiverWindowHours must be between 1 and 168" }, { status: 400 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       let filingPackage: Awaited<ReturnType<typeof repos.filings.get>> | null = null
       if (parsed.packageId) {
         filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
@@ -9487,6 +9512,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "grant_breach_waiver requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -9617,6 +9643,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "revoke_breach_waiver requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -9772,6 +9799,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -9929,6 +9957,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -10034,6 +10063,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -10125,6 +10155,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "snooze_remediation_expiry requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -10209,6 +10240,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "acknowledge_rollover_breach requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -10298,6 +10330,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "reaffirm_rollover_attestation requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -10409,6 +10442,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -18559,6 +18593,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -18639,6 +18674,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         return NextResponse.json({ error: "snooze_policy_variance requires partner role" }, { status: 403 })
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -18713,6 +18749,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })
@@ -18800,6 +18837,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
         )
       }
       await syncFirmMembers(store, repos, actor.firmId)
+      await syncFirmMatters(store, repos, actor.firmId)
       const filingPackage = store.filingPackages.get(parsed.packageId) ?? (await repos.filings.get(parsed.packageId))
       if (!filingPackage) {
         return NextResponse.json({ error: "unknown filing package" }, { status: 404 })

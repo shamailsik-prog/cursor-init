@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url"
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "..")
 
-const shared = { bundle: true, platform: "node", target: "node22", format: "cjs", external: ["firebase-admin", "firebase-functions"], alias: { "@": repoRoot } }
+// pg's optional native binding (pg-native) is never installed or used: the F05 corpus reader runs on pure-JS pg.
+const EXTERNAL = ["firebase-admin", "firebase-functions", "pg-native"]
+const shared = { bundle: true, platform: "node", target: "node22", format: "cjs", external: EXTERNAL, alias: { "@": repoRoot } }
 
 // Static route check (L18 §4.1): load the route table and index it, so a
 // duplicate method + path fails `npm run build` before anything is bundled.
@@ -30,7 +32,7 @@ await build({
   target: "node22",
   format: "cjs",
   sourcemap: true,
-  external: ["firebase-admin", "firebase-functions"],
+  external: EXTERNAL,
   alias: { "@": repoRoot },
   // Defence in depth: the deployed bundle is production whatever the host's NODE_ENV, so the test seams that
   // check it (p1TestSeam, p1OpsTestSeam; the set*ForTests refusals) stay inert. The route check and the
@@ -39,16 +41,19 @@ await build({
   logLevel: "info",
 })
 
-// Operator CLI (not a deployed export): `npm run jobs:backfill`.
-await build({
-  entryPoints: [path.join(here, "src/cli/jobsBackfill.ts")],
-  outfile: path.join(here, "lib/cli/jobsBackfill.js"),
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "cjs",
-  sourcemap: true,
-  external: ["firebase-admin", "firebase-functions"],
-  alias: { "@": repoRoot },
-  logLevel: "info",
-})
+// Operator CLIs (not deployed exports): `npm run jobs:backfill`, and `npm run eval:committee-live` (audit F17: the live
+// evaluation of docs/evals/committee-brain-eval-set.json, which reports NOT RUN without AI_GATEWAY_API_KEY).
+for (const cli of ["jobsBackfill", "committeeEval"]) {
+  await build({
+    entryPoints: [path.join(here, `src/cli/${cli}.ts`)],
+    outfile: path.join(here, `lib/cli/${cli}.js`),
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "cjs",
+    sourcemap: true,
+    external: EXTERNAL,
+    alias: { "@": repoRoot },
+    logLevel: "info",
+  })
+}

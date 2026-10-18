@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { committeeBrainLanguageModel } from "@/platform/p1/committeeBrainModel"
 import {
@@ -38,7 +40,9 @@ describe("eve Committee Brain — P1 is the only outbound path", () => {
 
     const result = await committeeBrainLanguageModel.doGenerate({
       prompt: [
-        { role: "system", content: "You are Committee Brain." },
+        // Audit F16 review round (R3a): the agent's system message is eve's instructions block, which must carry the
+        // pinned agent/instructions.md; a different system text is refused.
+        { role: "system", content: `Instructions (instructions)\n${readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8").trim()}` },
         {
           role: "user",
           content: [{ type: "text", text: `Counsel for ${party}, CNIC ${cnic}` }],

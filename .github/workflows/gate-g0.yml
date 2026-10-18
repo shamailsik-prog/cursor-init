@@ -5,8 +5,14 @@ name: Gate G-0
 # docs/architecture/README.md ("Running the gates and scans locally").
 # Third-party actions are pinned to commit SHAs (tag in the trailing comment).
 
+# Cost (Actions minutes are billed on this private repository): a draft PR runs none of these jobs; they run when it
+# is opened ready, marked ready for review, or pushed to while ready, and on every push to the branches below. A PR
+# converted to draft starts a run whose jobs all skip, and that run cancels the one in flight (concurrency below). On a
+# PR, the Postgres DDL and corpus_service pytest jobs run only when files they depend on changed (the `changes` job);
+# on a push they always run. The Gates G-0/G-1/G-2 job is never path-gated.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main, correction-pack-10sep2026]
 
@@ -25,8 +31,59 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
+  # Which path-gated jobs a PR needs, from `git diff --name-only` against the PR base (no third-party action). On a
+  # push every output is true. If the diff cannot be computed the outputs are true too: a path gate fails open.
+  changes:
+    name: Changed paths (PR path gate)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      postgres_ddl: ${{ steps.diff.outputs.postgres_ddl }}
+      corpus_service: ${{ steps.diff.outputs.corpus_service }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Files the PR changes
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # What each gated job executes, and so depends on:
+          # - postgres-ddl: npm ci, then `npm run test:postgres-ddl` (tests/postgres.ddl.integration.test.ts and
+          #   tests/probe-fa-data-001.regression.test.ts under the root vitest config and its setup files, reading
+          #   postgres/ddl) and `npm run probe:fa-data-001` (docs/audit/probes/probe_fa_data_001.mjs).
+          # - corpus-service: `python -m pytest corpus_service/tests` with corpus_service/requirements-test.txt; the
+          #   Annex A suites read postgres/ddl and tests/fixtures/corpus.
+          # Both also depend on this workflow file.
+          postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
+          corpus_service_re='^(corpus_service/|postgres/|tests/fixtures/corpus/|\.github/workflows/gate-g0\.yml$)'
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Not a pull request ($EVENT_NAME): every path-gated job runs."
+            echo "postgres_ddl=true" >> "$GITHUB_OUTPUT"
+            echo "corpus_service=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: a rename is listed as its old path and its new path, so a file renamed out of a gated
+          # prefix still counts as a change there.
+          if ! files=$(git diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA"); then
+            echo "::warning::cannot diff $BASE_SHA..$HEAD_SHA; every path-gated job runs"
+            echo "postgres_ddl=true" >> "$GITHUB_OUTPUT"
+            echo "corpus_service=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'Changed files:\n%s\n' "$files"
+          match() { if printf '%s\n' "$files" | grep -Eq "$1"; then echo true; else echo false; fi; }
+          echo "postgres_ddl=$(match "$postgres_ddl_re")" | tee -a "$GITHUB_OUTPUT"
+          echo "corpus_service=$(match "$corpus_service_re")" | tee -a "$GITHUB_OUTPUT"
+
   lint-typecheck:
     name: Lint and typecheck
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -50,6 +107,7 @@ jobs:
 
   unit:
     name: Unit tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -67,6 +125,7 @@ jobs:
 
   rules:
     name: Firestore rules (emulator)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -92,10 +151,11 @@ jobs:
       - name: Rules and persistence suites (Firestore emulator)
         run: npm run test:rules
 
-  f02-console-auth:
-    name: F02 console auth (vitest)
+  console-f02:
+    name: Console F02 (emulator e2e)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -116,66 +176,20 @@ jobs:
           key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: firebase-emulators-${{ runner.os }}-
       - run: npm ci
-      - run: npm --prefix functions ci
-      - run: npm run test:f02-console-auth
-
-  f02-functions-http:
-    name: F02 Functions HTTP (emulator)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-      - name: Cache Firebase emulator jars
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/firebase/emulators
-          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: firebase-emulators-${{ runner.os }}-
-      - run: npm ci
-      - run: npm --prefix functions ci
-      - run: npm run test:f02-functions-http
-
-  f02-console-e2e:
-    name: F02 console auth (Playwright)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-      - name: Cache Firebase emulator jars
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/firebase/emulators
-          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: firebase-emulators-${{ runner.os }}-
-      - run: npm ci
-      - run: npm --prefix functions ci && npm --prefix functions run build
-      - run: npx playwright install chromium --with-deps
-      - run: npm run test:e2e:console-auth
+      - name: Functions install and build
+        run: npm --prefix functions ci && npm --prefix functions run build
+      - name: F02 console Functions client (Auth + Firestore emulators)
+        run: npm run test:f02-console-auth
+      - name: F02 Functions HTTP emulator
+        run: npm run test:f02-functions-http
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+      - name: F02 browser console auth (Playwright)
+        run: npm run test:e2e:console-auth
 
   functions:
     name: Cloud Functions
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -212,6 +226,7 @@ jobs:
 
   gates:
     name: Gates G-0, G-1, G-2
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -279,6 +294,7 @@ jobs:
 
   next-build:
     name: Next.js build
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -296,6 +312,8 @@ jobs:
 
   postgres-ddl:
     name: Postgres DDL integration (FA-CI-002)
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.postgres_ddl == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -320,17 +338,112 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      # Audit F19: 003 is additive and idempotent. Apply every DDL file in order as the superuser,
+      # twice, with the same tool PR 2b's postgres init uses; the harness then applies them again.
+      - name: Every postgres/ddl/*.sql applies in order as the superuser, twice (idempotent)
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            for f in $(LC_ALL=C ls postgres/ddl/*.sql | sort); do
+              docker exec -i "${{ job.services.postgres.id }}" \
+                psql -v ON_ERROR_STOP=1 --no-psqlrc -q -U postgres -d sikander_ci < "$f"
+            done
+          done
       - name: Annex A + platform DDL tests (real Postgres + pgvector)
         env:
           SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
         run: npm run test:postgres-ddl
+      - name: FA-DATA-001 probe (runtime bypass check)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/sikander_ci
+        run: npm run probe:fa-data-001
+
+  authority-f05:
+    name: Authority corpus e2e (F05)
+    # Audit F05: the draft gate answers from the firm's promoted Annex A corpus. The user-flow e2e drives the HTTP
+    # router under the Auth and Firestore emulators against real Postgres (pgvector), seeded through the corpus
+    # publication CLI (Python, as a corpus_writer member); the adapter and O-59 parity suites run beside it. The
+    # suites run only with F05_AUTHORITY_SUITE=1, which `npm run test:f05-authority` sets, and then a missing
+    # SIKANDER_POSTGRES_URL fails the job instead of skipping it (F05 plan D14).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: corpus_service/requirements-test.txt
+      # The publication CLI (scraper.publication.cli) that seeds the corpus.
+      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: npm ci
+      - name: Functions install
+        run: npm --prefix functions ci
+      - name: F05 user-flow e2e, adapter and parity suites (emulators + real Postgres)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          SIKANDER_CORPUS_PYTHON: python
+        run: npm run test:f05-authority
 
   corpus-service:
     name: corpus_service pytest
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.corpus_service == 'true'
     # corpus_service/ pytest, including the security-hardening regression tests. Runs until
     # the service moves to its own repository (E-25); the pinned test set is requirements-test.txt.
+    # The F20 trust-vocabulary tests run against this real Postgres (each test creates and drops
+    # its own database); under CI, tests/conftest.py stops the run if CORPUS_TEST_DATABASE_URL is
+    # missing, so they cannot pass by being skipped. The F19 publication tests apply the Annex A
+    # contract (postgres/ddl 001 + 003 + 004, in that order) to each per-test database; the step below applies it once
+    # (twice) to the service database first, which creates the cluster-global corpus roles once
+    # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: corpus_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d corpus_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -343,4 +456,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: python -m pip install -r corpus_service/requirements-test.txt
-      - run: python -m pytest corpus_service/tests -q
+      - name: Annex A DDL (001, 003, 004) applies as the superuser, twice (idempotent)
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql; do
+              docker exec -i "${{ job.services.postgres.id }}" \
+                psql -v ON_ERROR_STOP=1 --no-psqlrc -q -U postgres -d corpus_ci < "$f"
+            done
+          done
+      - name: corpus_service pytest (unit + real Postgres)
+        env:
+          CORPUS_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/corpus_ci
+        run: python -m pytest corpus_service/tests -q

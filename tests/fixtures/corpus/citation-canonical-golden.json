@@ -1,0 +1,833 @@
+{
+  "format": "citation-canonical-golden/1",
+  "generatedBy": "npm run corpus:citation-golden",
+  "note": "Synthetic 2099 citations only; no real authority. `canonical` is generated from services/d4-2/citations.ts normaliseCitation(raw); every other field is hand-written.",
+  "cases": [
+    {
+      "id": "pld-sc",
+      "raw": "PLD 2099 SC 1",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "1",
+        "court": "SC",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC 1"
+    },
+    {
+      "id": "pld-supreme-court",
+      "raw": "PLD 2099 Supreme Court 1",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "1",
+        "court": "Supreme Court",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC 1"
+    },
+    {
+      "id": "pld-karachi",
+      "raw": "PLD 2099 Karachi 12",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "12",
+        "court": "Karachi",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Sindh 12"
+    },
+    {
+      "id": "pld-kar-dot",
+      "raw": "PLD 2099 Kar. 12",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "12",
+        "court": "Kar.",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Sindh 12"
+    },
+    {
+      "id": "pld-quetta",
+      "raw": "PLD 2099 Quetta 7",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "7",
+        "court": "Quetta",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Quetta 7"
+    },
+    {
+      "id": "pld-balochistan",
+      "raw": "PLD 2099 Balochistan 7",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "7",
+        "court": "Balochistan",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Quetta 7"
+    },
+    {
+      "id": "pld-lah",
+      "raw": "PLD 2099 Lah. 3",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "3",
+        "court": "Lah.",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Lahore 3"
+    },
+    {
+      "id": "pld-peshawar",
+      "raw": "PLD 2099 Peshawar 4",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "4",
+        "court": "Peshawar",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Peshawar 4"
+    },
+    {
+      "id": "pld-islamabad",
+      "raw": "PLD 2099 Islamabad 5",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "5",
+        "court": "Islamabad",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Islamabad 5"
+    },
+    {
+      "id": "pld-gb",
+      "raw": "PLD 2099 GB 9",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "9",
+        "court": "GB",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 GB 9"
+    },
+    {
+      "id": "pld-ajk",
+      "raw": "PLD 2099 AJ&K 8",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "8",
+        "court": "AJ&K",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 AJ&K 8"
+    },
+    {
+      "id": "pld-fsc-long",
+      "raw": "PLD 2099 Federal Shariat Court 6",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "6",
+        "court": "Federal Shariat Court",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 FSC 6"
+    },
+    {
+      "id": "pld-series",
+      "raw": "PLD 2099 SC (AJ&K) 10",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "10",
+        "court": "SC",
+        "series": "AJ&K",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC(AJ&K) 10"
+    },
+    {
+      "id": "pld-lower",
+      "raw": "pld 2099 sc 26",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "26",
+        "court": "sc",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC 26"
+    },
+    {
+      "id": "pld-dotted",
+      "raw": "P.L.D. 2099 S.C. 32",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "32",
+        "court": "S.C.",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC 32"
+    },
+    {
+      "id": "pld-lahore-high-court",
+      "raw": "PLD 2099 Lahore High Court 33",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "33",
+        "court": "Lahore High Court",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Lahore 33"
+    },
+    {
+      "id": "pld-bhc-long",
+      "raw": "PLD 2099 Balochistan High Court 34",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "34",
+        "court": "Balochistan High Court",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Quetta 34"
+    },
+    {
+      "id": "pld-shc-dotted",
+      "raw": "PLD 2099 S.H.C. 35",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "35",
+        "court": "S.H.C.",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Sindh 35"
+    },
+    {
+      "id": "pld-canonical-sindh",
+      "raw": "PLD 2099 Sindh 12",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "12",
+        "court": "Sindh",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLD 2099 Sindh 12"
+    },
+    {
+      "id": "pld-note-supra",
+      "raw": "PLD 2099 SC 1 (supra)",
+      "parts": {
+        "reporter": "PLD",
+        "year": "2099",
+        "page": "1",
+        "court": "SC",
+        "series": null,
+        "note": "supra"
+      },
+      "python": "match",
+      "canonical": "PLD 2099 SC 1"
+    },
+    {
+      "id": "scmr",
+      "raw": "2099 SCMR 11",
+      "parts": {
+        "reporter": "SCMR",
+        "year": "2099",
+        "page": "11",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 SCMR 11"
+    },
+    {
+      "id": "scmr-dotted",
+      "raw": "2099 S.C.M.R. 11",
+      "parts": {
+        "reporter": "SCMR",
+        "year": "2099",
+        "page": "11",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 SCMR 11"
+    },
+    {
+      "id": "scmr-note-supra",
+      "raw": "2099 SCMR 36 (supra)",
+      "parts": {
+        "reporter": "SCMR",
+        "year": "2099",
+        "page": "36",
+        "court": null,
+        "series": null,
+        "note": "supra"
+      },
+      "python": "match",
+      "canonical": "2099 SCMR 36"
+    },
+    {
+      "id": "clc-court-dropped",
+      "raw": "2099 CLC (Karachi) 12",
+      "parts": {
+        "reporter": "CLC",
+        "year": "2099",
+        "page": "12",
+        "court": null,
+        "series": "Karachi",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 CLC 12"
+    },
+    {
+      "id": "clc-extractor-shape",
+      "raw": "2099 CLC (Sindh) 12",
+      "parts": {
+        "reporter": "CLC",
+        "year": "2099",
+        "page": "12",
+        "court": null,
+        "series": "Sindh",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 CLC 12"
+    },
+    {
+      "id": "clc-non-court-series",
+      "raw": "2099 CLC (Atlantis) 37",
+      "parts": {
+        "reporter": "CLC",
+        "year": "2099",
+        "page": "37",
+        "court": null,
+        "series": "Atlantis",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 CLC(ATLANTIS) 37"
+    },
+    {
+      "id": "ylr-court-dropped",
+      "raw": "2099 YLR (Quetta) 13",
+      "parts": {
+        "reporter": "YLR",
+        "year": "2099",
+        "page": "13",
+        "court": null,
+        "series": "Quetta",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 YLR 13"
+    },
+    {
+      "id": "plc-series-lead",
+      "raw": "2099 PLC (C.S.) 14",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "14",
+        "court": null,
+        "series": "C.S.",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PLC(CS) 14"
+    },
+    {
+      "id": "plc-series-trail",
+      "raw": "2099 PLC 14 (C.S.)",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "14",
+        "court": null,
+        "series": null,
+        "note": "C.S."
+      },
+      "python": "match",
+      "canonical": "2099 PLC(CS) 14"
+    },
+    {
+      "id": "plc-series-glued",
+      "raw": "2099 PLC(C.S.) 14",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "14",
+        "court": null,
+        "series": "C.S.",
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PLC(CS) 14"
+    },
+    {
+      "id": "plc-plain",
+      "raw": "2099 PLC 14",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "14",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PLC 14"
+    },
+    {
+      "id": "plc-note-supra",
+      "raw": "2099 PLC 38 (supra)",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "38",
+        "court": null,
+        "series": null,
+        "note": "supra"
+      },
+      "python": "match",
+      "canonical": "2099 PLC 38"
+    },
+    {
+      "id": "plc-two-brackets",
+      "raw": "2099 PLC (C.S.) 39 (Lab.)",
+      "parts": {
+        "reporter": "PLC",
+        "year": "2099",
+        "page": "39",
+        "court": null,
+        "series": "C.S.",
+        "note": "Lab."
+      },
+      "python": "match",
+      "canonical": "2099 PLC(CS) 39 (LAB)"
+    },
+    {
+      "id": "pcrlj",
+      "raw": "2099 PCrLJ 15",
+      "parts": {
+        "reporter": "PCrLJ",
+        "year": "2099",
+        "page": "15",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PCrLJ 15"
+    },
+    {
+      "id": "pcrlj-dotted",
+      "raw": "2099 P.Cr.L.J. 15",
+      "parts": {
+        "reporter": "PCrLJ",
+        "year": "2099",
+        "page": "15",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PCrLJ 15"
+    },
+    {
+      "id": "plj-reporter-first",
+      "raw": "PLJ 2099 SC 16",
+      "parts": {
+        "reporter": "PLJ",
+        "year": "2099",
+        "page": "16",
+        "court": "SC",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLJ 2099 SC 16"
+    },
+    {
+      "id": "plj-year-first",
+      "raw": "2099 PLJ SC 16",
+      "parts": {
+        "reporter": "PLJ",
+        "year": "2099",
+        "page": "16",
+        "court": "SC",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "PLJ 2099 SC 16"
+    },
+    {
+      "id": "plj-no-court",
+      "raw": "2099 PLJ 40",
+      "parts": {
+        "reporter": "PLJ",
+        "year": "2099",
+        "page": "40",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PLJ 40"
+    },
+    {
+      "id": "nlr-section",
+      "raw": "NLR 2099 Civil 24",
+      "parts": {
+        "reporter": "NLR",
+        "year": "2099",
+        "page": "24",
+        "court": "Civil",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "NLR 2099 Civil 24"
+    },
+    {
+      "id": "nlr-criminal",
+      "raw": "NLR 2099 Criminal 29",
+      "parts": {
+        "reporter": "NLR",
+        "year": "2099",
+        "page": "29",
+        "court": "Criminal",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "NLR 2099 Criminal 29"
+    },
+    {
+      "id": "nlr-crl",
+      "raw": "NLR 2099 Crl. 29",
+      "parts": {
+        "reporter": "NLR",
+        "year": "2099",
+        "page": "29",
+        "court": "Crl.",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "NLR 2099 Criminal 29"
+    },
+    {
+      "id": "nlr-tax",
+      "raw": "NLR 2099 Tax 30",
+      "parts": {
+        "reporter": "NLR",
+        "year": "2099",
+        "page": "30",
+        "court": "Tax",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "NLR 2099 Tax 30"
+    },
+    {
+      "id": "nlr-revenue",
+      "raw": "NLR 2099 Revenue 31",
+      "parts": {
+        "reporter": "NLR",
+        "year": "2099",
+        "page": "31",
+        "court": "Revenue",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "NLR 2099 Revenue 31"
+    },
+    {
+      "id": "klr-court-first",
+      "raw": "KLR 2099 Lahore 41",
+      "parts": {
+        "reporter": "KLR",
+        "year": "2099",
+        "page": "41",
+        "court": "Lahore",
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "KLR 2099 Lahore 41"
+    },
+    {
+      "id": "ptd",
+      "raw": "2099 PTD 17",
+      "parts": {
+        "reporter": "PTD",
+        "year": "2099",
+        "page": "17",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PTD 17"
+    },
+    {
+      "id": "ptcl",
+      "raw": "2099 PTCL 18",
+      "parts": {
+        "reporter": "PTCL",
+        "year": "2099",
+        "page": "18",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 PTCL 18"
+    },
+    {
+      "id": "cld",
+      "raw": "2099 CLD 19",
+      "parts": {
+        "reporter": "CLD",
+        "year": "2099",
+        "page": "19",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 CLD 19"
+    },
+    {
+      "id": "mld",
+      "raw": "2099 MLD 20",
+      "parts": {
+        "reporter": "MLD",
+        "year": "2099",
+        "page": "20",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 MLD 20"
+    },
+    {
+      "id": "gblr",
+      "raw": "2099 GBLR 21",
+      "parts": {
+        "reporter": "GBLR",
+        "year": "2099",
+        "page": "21",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 GBLR 21"
+    },
+    {
+      "id": "scr",
+      "raw": "2099 SCR 22",
+      "parts": {
+        "reporter": "SCR",
+        "year": "2099",
+        "page": "22",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 SCR 22"
+    },
+    {
+      "id": "klr-year",
+      "raw": "2099 KLR 23",
+      "parts": {
+        "reporter": "KLR",
+        "year": "2099",
+        "page": "23",
+        "court": null,
+        "series": null,
+        "note": null
+      },
+      "python": "match",
+      "canonical": "2099 KLR 23"
+    },
+    {
+      "id": "trailing-punct",
+      "raw": "2099 SCMR 27.",
+      "parts": null,
+      "python": "none",
+      "canonical": "2099 SCMR 27"
+    },
+    {
+      "id": "spaced-abbrev",
+      "raw": "2099 S C M R 28",
+      "parts": null,
+      "python": "none",
+      "canonical": "2099 SCMR 28"
+    },
+    {
+      "id": "paren-year",
+      "raw": "(2099) SCMR 42",
+      "parts": null,
+      "python": "none",
+      "canonical": "2099 SCMR 42"
+    },
+    {
+      "id": "comma-after-reporter",
+      "raw": "PLD, 2099 SC 43",
+      "parts": null,
+      "python": "none",
+      "canonical": "PLD 2099 SC 43"
+    },
+    {
+      "id": "dash-page",
+      "raw": "2099 SCMR-44",
+      "parts": null,
+      "python": "none",
+      "canonical": "2099 SCMR 44"
+    },
+    {
+      "id": "two-cites",
+      "raw": "2099 SCMR 1 and 2099 SCMR 2",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "unknown-court",
+      "raw": "PLD 2099 Atlantis 1",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "no-page",
+      "raw": "2099 SCMR",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "ambiguous-page",
+      "raw": "PLD 2099 SC 12 3",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "page-suffix",
+      "raw": "2099 SCMR 12A",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "glued",
+      "raw": "2099SCMR12",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "case-ref",
+      "raw": "C.P. No. 12 of 2099",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "pinpoint-residue",
+      "raw": "2099 SCMR 12, 15",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "court-on-scmr",
+      "raw": "2099 SCMR SC 45",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "hyphen-court",
+      "raw": "PLD 2099 Supreme-Court 46",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    },
+    {
+      "id": "empty",
+      "raw": "",
+      "parts": null,
+      "python": "none",
+      "canonical": null
+    }
+  ]
+}

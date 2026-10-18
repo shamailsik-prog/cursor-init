@@ -27,7 +27,7 @@ import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDr
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { HttpError } from "./errors"
-import { withIdempotency, type HttpResult } from "./idempotency"
+import { withIdempotency, type HttpResult, type IdempotencyMode, type IdempotentOperation } from "./idempotency"
 import { logFailure } from "../log"
 import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKind } from "./rateLimit"
 
@@ -43,7 +43,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * auth (401/403; a failure is audited as a deny unless the client IP is over
  * its per-minute limit, then 429) → per-user rate limit (429 + Retry-After) →
  * idempotency for POST/PUT (400 / 409 / 422, each audited as a deny; a replay
- * is not audited) → handler.
+ * is not audited, nor is 409 idempotency_effect_committed, the stored answer of
+ * an operation whose effect committed: audit F09) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
  * GET data is the parsed query (string values only; 400 invalid_query otherwise); list GETs
@@ -59,6 +60,13 @@ export type Route = {
   kind: RateKind
   /** Replays of a 2xx response return `{ redacted: true }`: the body carries secrets that are never stored. */
   redactReplay?: boolean
+  /**
+   * What a same-key request gets once the operation's effect committed without a stored answer (audit F09, spec §2.2):
+   * `once` (the default) 409 idempotency_effect_committed; `resume` a takeover that resumes the operation from its
+   * marker (committeeBrain); `rerun` no effect marker and a re-run, for an operation idempotent by construction whose
+   * post-commit step a same-key retry is designed to heal (spec §4).
+   */
+  idempotency?: IdempotencyMode
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024
@@ -79,7 +87,7 @@ const D4_DRAFTING = "/api/d4/drafting"
 const D4_INTELLIGENCE = "/api/d4/intelligence"
 
 /** A POST route whose rate-limit kind is the operation's own. */
-const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay"> = {}): Route => ({
+const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay" | "idempotency"> = {}): Route => ({
   method: "POST",
   path,
   handler,
@@ -90,14 +98,22 @@ const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay
 /** A GET route; its data is the query string. */
 const get = (path: string, handler: Operation): Route => ({ method: "GET", path, handler, kind: handler.kind })
 
+/**
+ * Audit F09 (spec §4): the identity operations whose post-commit Auth step a same-key retry is designed to heal, each
+ * idempotent by construction: onboardFirm resumes its firm (FN-1), createFirmUser is deduplicated by the Auth email,
+ * setUserClaims re-applies the same role and clearance (or reverts), deactivateUser sets `active: false` again, and
+ * disableMfa resumes from its approval. Every other POST route is `once` (or `resume`).
+ */
+const RERUN = { idempotency: "rerun" } as const
+
 export const ROUTES: readonly Route[] = [
-  post(`${IDENTITY}/onboardFirm`, onboardFirmOp),
-  post(`${IDENTITY}/createFirmUser`, createFirmUserOp),
-  post(`${IDENTITY}/setUserClaims`, setUserClaimsOp),
-  post(`${IDENTITY}/deactivateUser`, deactivateUserOp),
+  post(`${IDENTITY}/onboardFirm`, onboardFirmOp, RERUN),
+  post(`${IDENTITY}/createFirmUser`, createFirmUserOp, RERUN),
+  post(`${IDENTITY}/setUserClaims`, setUserClaimsOp, RERUN),
+  post(`${IDENTITY}/deactivateUser`, deactivateUserOp, RERUN),
   post(`${IDENTITY}/enforceMfaForRole`, enforceMfaForRoleOp),
   post(`${IDENTITY}/approveMfaDisable`, approveMfaDisableOp),
-  post(`${IDENTITY}/disableMfa`, disableMfaOp),
+  post(`${IDENTITY}/disableMfa`, disableMfaOp, RERUN),
   post(`${IDENTITY}/generateRecoveryCodes`, generateRecoveryCodesOp, { redactReplay: true }),
   post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
   // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
@@ -127,7 +143,8 @@ export const ROUTES: readonly Route[] = [
   get(`${PLATFORM_JOBS}/getJob`, getJobOp),
   post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
   post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
-  post(`${PLATFORM_BRAIN}/committeeBrain`, committeeBrainOp),
+  // Audit F09: a same-key retry after the provider call resumes publication from the operation's receipt.
+  post(`${PLATFORM_BRAIN}/committeeBrain`, committeeBrainOp, { idempotency: "resume" }),
   get(`${PLATFORM_BRAIN}/getAiUsage`, getAiUsageOp),
   post(`${PLATFORM_BRAIN}/setBudgetAlerts`, setBudgetAlertsOp),
   post(`${PLATFORM_BRAIN}/setAiKillSwitch`, setAiKillSwitchOp),
@@ -263,13 +280,30 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
  * gets the router's clock as `session.now` and, on POST/PUT, the request's Idempotency-Key as
  * `session.idempotencyKey` (so a job it enqueues carries that key, P3-4; a GET gets none). An operation's RateLimitedError (e.g. 429
  * daily_limit) keeps its Retry-After header; a 429 is never stored for idempotent replay
- * (isStorableResult), so a same-key retry after the reset runs.
+ * (isStorableResult), so a same-key retry after the reset runs. `startedAtMs` (the real clock when the router received
+ * the request) is passed on as `session.startedAtMs`. `operation` (POST/PUT) is the request's idempotent operation
+ * (audit F09): a firm operation gets it as `session.operation`, and unless the route is `rerun` the call's audit stages
+ * the operation's effect marker with its allow row (CallAudit.effects).
  */
-async function execute(op: Operation, auth: Authenticated, body: Data, now: number, idempotencyKey?: string, routeName?: string): Promise<HttpResult> {
+async function execute(
+  op: Operation,
+  auth: Authenticated,
+  body: Data,
+  now: number,
+  idempotencyKey?: string,
+  routeName?: string,
+  startedAtMs?: number,
+  operation?: IdempotentOperation
+): Promise<HttpResult> {
   const uid = auth.kind === "firm" ? auth.session.caller.uid : auth.who.uid
   const audit = new CallAudit(op.action, uid, op.target)
+  if (operation !== undefined && operation.mode !== "rerun") audit.effects = operation
+  const started = startedAtMs === undefined ? {} : { startedAtMs }
+  const bound = operation === undefined ? {} : { operation }
   const session = (s: Session): Session =>
-    idempotencyKey === undefined || routeName === undefined ? { ...s, now } : { ...s, now, idempotencyKey, route: routeName }
+    idempotencyKey === undefined || routeName === undefined
+      ? { ...s, now, ...started }
+      : { ...s, now, idempotencyKey, route: routeName, ...started, ...bound }
   try {
     const result = await runAudited(audit, () =>
       op.auth === "firm" && auth.kind === "firm" ? op.run(session(auth.session), body, audit) : runFirmless(op, auth, body, audit)
@@ -294,6 +328,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
   const clock = opts.now ?? Date.now
 
   return async function router(req: ApiRequest, res: Response): Promise<void> {
+    // The real clock, never the injectable one: an operation bounds its pre-work against it (re-audit R3-D2).
+    const startedAtMs = Date.now()
     try {
       const path = normalisePath(req.path)
       const byMethod = table.get(path)
@@ -328,11 +364,12 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
 
       const idempotencyKey = hasBody ? header(headers, "idempotency-key") : undefined
       const routeName = `${route.method} ${route.path}`
-      const run = () => execute(op, auth, body, now, idempotencyKey, hasBody ? routeName : undefined)
+      const run = (operation?: IdempotentOperation) =>
+        execute(op, auth, body, now, idempotencyKey, hasBody ? routeName : undefined, startedAtMs, operation)
       const firmId = auth.kind === "firm" ? auth.session.caller.firmId : ""
       const result = hasBody
         ? await withIdempotency(
-            { firmId, uid, route: routeName, key: idempotencyKey, body, now, redact: route.redactReplay },
+            { firmId, uid, route: routeName, key: idempotencyKey, body, now, redact: route.redactReplay, mode: route.idempotency ?? "once" },
             run
           ).catch((err: unknown) => auditRefusal(op, uid, firmId, err))
         : await run()

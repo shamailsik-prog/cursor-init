@@ -227,31 +227,62 @@ resumes idempotently and returns the same `firmId` (audited as
   duplicate while the first is running gives 409 `idempotency_in_progress`.
   The claim is a 5-minute lease (`claimedAt`): a claim still `in_progress`
   after that, for example after a crash, is taken over by the same request.
-  5xx responses are not stored, so a retry runs again. The
-  `generateRecoveryCodes` response is never stored: its replay is
+  The `generateRecoveryCodes` response is never stored: its replay is
   `{ redacted: true, reused: true }`, so generate again with a new key if the
   codes were lost.
+- **Committed effects are never repeated (audit F09):** each key is one
+  operation (`operationId`, kept across takeovers; the 24 h window runs from
+  the first claim). The operation's effect marker
+  `idempotency_effects/{same id}` is created (`tx.create`) in the effect's own
+  transaction, with the route's allow row (`CallAudit.stage`), so it exists
+  exactly when the effect committed, and a second effect of the operation
+  cannot commit. A 5xx, a throw or a lost answer after the effect never
+  releases the key. What a same-key request gets then depends on the route's
+  `idempotency` mode (`http/router.ts`):
+  - `once` (default): 409 `idempotency_effect_committed`, stored and replayed.
+  - `resume` (`committeeBrain`): the request takes the operation over and
+    publishes the answer recorded when the provider answered, with no second
+    provider call.
+  - `rerun` (`onboardFirm`, `createFirmUser`, `setUserClaims`,
+    `deactivateUser`, `disableMfa`): no marker. These run again, as before;
+    each is idempotent by construction.
+
+  The 409 body is `{ error: { code: "idempotency_effect_committed",
+  operationId } }`, so a client can correlate it with the effect.
+  A refusal before any effect (401/403, 429, 5xx) still releases the key.
+  A first claim is deleted. A claim this request took over is kept as a
+  `released` tombstone, because an older holder may still commit (Codex P1 on
+  PR #58). An unexpired marker counts as the key's committed effect even if
+  its record is gone. The marker carries the request that made it (`uid`,
+  `route`, `requestHash`), and a marker whose record is gone answers only that
+  request: any other user, route or body gets 422 `idempotency_key_reused`,
+  with nothing written (re-audit MEDIUM-1).
+  Spec: `docs/superpowers/specs/2026-10-16-f09-atomic-idempotency-design.md`.
 - **Audit:** a replay is not audited. It is the stored answer to a decision
   that already has its row. The idempotency refusals (400
   `idempotency_key_required`, 409 `idempotency_in_progress`, 422
   `idempotency_key_reused`) are audited as denies under the route's action.
   Rate-limit refusals are not audited.
 - **Stored results:** only 2xx, 400, 404, 422 and business-conflict 409s
-  (`already_exists`, `already_onboarded`, `last_partner`, `code_used`) are
-  stored and replayed. 401/403 (a refreshed token or a step-up may succeed),
-  contention 409s (`claims_sync_failed`, …), 429 and 5xx release the key, so a
-  retry with the same key runs again. See `isStorableResult`.
+  (`already_exists`, `already_onboarded`, `last_partner`, `code_used`,
+  `gate_blocked`, `idempotency_effect_committed`) are stored and replayed.
+  401/403 (a refreshed token or a step-up may succeed), contention 409s
+  (`claims_sync_failed`, `idempotency_claim_lost`, …), 429 and 5xx release the
+  key, so a retry with the same key runs again, unless the operation's effect
+  committed (above). See `isStorableResult`.
 - **Timeouts:** `api` pins `timeoutSeconds: 120`
   (`FUNCTION_TIMEOUT_SECONDS`). The 5-minute idempotency lease must be longer,
   and `idempotency.ts` throws at load if it is not.
 - **Build check:** `npm run build` loads the route table and fails on a
   duplicate method + path before bundling.
-- **TTL policies (set once per project):** both collections carry `expiresAt`.
-  Enable Firestore TTL on it so old docs are purged. Until the purge runs, an
-  expired idempotency key is treated as absent.
+- **TTL policies (set once per project):** these collections carry
+  `expiresAt`. Enable Firestore TTL on it so old docs are purged. Until the
+  purge runs, an expired idempotency key is treated as absent, and a marker
+  left by an expired operation is deleted by the next claim of its key.
 
   ```bash
   gcloud firestore fields ttls update expiresAt --collection-group=idempotency_keys --enable-ttl
+  gcloud firestore fields ttls update expiresAt --collection-group=idempotency_effects --enable-ttl
   gcloud firestore fields ttls update expiresAt --collection-group=rate_limits --enable-ttl
   ```
 

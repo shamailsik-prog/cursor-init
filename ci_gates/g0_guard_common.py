@@ -1,33 +1,61 @@
 #!/usr/bin/env python3
-"""Shared path rules and allowlist handling for G-0 scraper and provider guards."""
+"""Shared tree walk, file classification, import/manifest parsing and allowlist handling for the
+G-0 scraper and provider guards (FA-CI-001).
+
+Skip rules (re-audit 2026-10-16, defect 1): generated trees (node_modules, .git, .next) are
+skipped wherever they appear. The gate scripts (ci_gates/), the root test suite (tests/, which
+holds the sanctioned @playwright/test e2e specs), displaced slice files (_superseded/) and the
+eve runtime cache (.eve/, gitignored as /.eve/) are skipped only at the repository root. A
+directory with one of those names anywhere else, such as app/ci_gates/ or lib/_superseded/, is
+scanned like any other.
+"""
 from __future__ import annotations
 
+import ast
 import json
+import os
 import pathlib
+import re
+import warnings
 from dataclasses import dataclass
 
-SOURCE_SUFFIXES = {
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".mts",
-    ".cts",
-    ".py",
-}
+try:  # Python 3.11+; CI runs 3.12.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - fail closed below
+    tomllib = None  # type: ignore[assignment]
 
-SKIP_DIR_NAMES = {
-    "node_modules",
-    ".git",
-    ".next",
-    "ci_gates",
-    "_superseded",
-    ".eve",
-}
+JS_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"})
+PY_SUFFIXES = frozenset({".py"})
+SOURCE_SUFFIXES = JS_SUFFIXES | PY_SUFFIXES
+SHELL_SUFFIXES = frozenset({".sh", ".bash", ".zsh", ".ksh"})
+
+# Skipped at any depth.
+ANY_DEPTH_SKIP_DIRS = frozenset({"node_modules", ".git", ".next"})
+# Skipped only as a top-level directory of the repository.
+ROOT_ONLY_SKIP_DIRS = frozenset({"ci_gates", "tests", "_superseded", ".eve"})
+# Root Playwright config for the e2e suite (root devDependency @playwright/test).
+ROOT_SKIP_FILES = frozenset({"playwright.config.ts", "playwright.config.mts", "playwright.config.cts"})
 
 ALLOWLIST_PATH = pathlib.Path(__file__).with_name("g0_guard_allowlist.json")
+
+DOCKERFILE_NAME_RE = re.compile(
+    r"^(?:(?:docker|container)file(?:[.-][\w.-]+)?|[\w.-]+\.(?:docker|container)file)$",
+    re.I,
+)
+# requirements.txt, requirements-test.txt, requirements_dev.in, dev-requirements.txt, ...
+REQUIREMENTS_NAME_RE = re.compile(
+    r"^(?:[\w.-]+[-_.])?requirements(?:[-_.][\w.-]+)?\.(?:txt|in)$",
+    re.I,
+)
+
+# Shebang interpreters (basename of the interpreter, after `env [options]` and `busybox`).
+SHELL_INTERPRETERS = frozenset(
+    {"sh", "bash", "dash", "ash", "ksh", "ksh93", "mksh", "pdksh", "zsh", "yash", "busybox"}
+)
+JS_INTERPRETERS = frozenset({"node", "nodejs", "bun", "deno", "tsx", "ts-node", "ts-node-esm"})
+PY_INTERPRETER_RE = re.compile(r"^(?:python|pypy)(?:\d+(?:\.\d+)*)?$")
+# env options that take a separate argument.
+_ENV_OPTS_WITH_ARG = frozenset({"-u", "--unset", "-C", "--chdir", "-P", "--default-signal"})
 
 
 @dataclass(frozen=True)
@@ -45,27 +73,416 @@ def rel_posix(p: pathlib.Path) -> str:
     return str(p).replace("\\", "/")
 
 
+# --- tree walk ------------------------------------------------------------------------------
+
+
 def is_skipped_path(p: pathlib.Path) -> bool:
-    if any(part in SKIP_DIR_NAMES for part in p.parts):
-        return True
-    r = rel_posix(p)
-    if r == "playwright.config.ts":
-        return True
-    if r == "playwright.config.mts" or r == "playwright.config.cts":
-        return True
+    """True when a repository-relative path is outside the guards' scan."""
     parts = p.parts
-    if parts and parts[0] == "tests":
+    if not parts:
+        return True
+    if any(part in ANY_DEPTH_SKIP_DIRS for part in parts):
+        return True
+    if len(parts) > 1 and parts[0] in ROOT_ONLY_SKIP_DIRS:
+        return True
+    if len(parts) == 1 and parts[0] in ROOT_SKIP_FILES:
         return True
     return False
 
 
 def iter_scan_files(root: pathlib.Path = pathlib.Path(".")):
-    for p in root.rglob("*"):
-        if not p.is_file():
+    """Yield every regular file under root as a root-relative path, pruning skipped trees.
+
+    Symlinked directories are not descended into (as with Path.rglob before 3.13).
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = pathlib.Path(dirpath).relative_to(root)
+        at_root = not rel_dir.parts
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in ANY_DEPTH_SKIP_DIRS and not (at_root and d in ROOT_ONLY_SKIP_DIRS)
+        )
+        for name in sorted(filenames):
+            rel = rel_dir / name
+            if is_skipped_path(rel) or not (root / rel).is_file():
+                continue
+            yield rel
+
+
+def read_text(p: pathlib.Path) -> str | None:
+    try:
+        return p.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+
+def shebang_interpreter(first_line: str) -> str | None:
+    """Basename of the program a `#!` line runs: `#!/bin/ash` -> ash, `#!/usr/bin/env -S deno run`
+    -> deno, `#!/usr/bin/env -u X bash` -> bash, `#!/bin/busybox sh` -> sh. None without `#!`."""
+    if not first_line.startswith("#!"):
+        return None
+    tokens = [t.strip("\"'") for t in first_line[2:].split()]
+    if not tokens:
+        return None
+    name, rest = os.path.basename(tokens[0]), tokens[1:]
+    if name == "env":
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok in {"-S", "--split-string"}:
+                i += 1
+            elif tok.startswith("-S") and len(tok) > 2:  # -Sbash
+                rest[i] = tok[2:]
+                break
+            elif tok.startswith("--split-string="):
+                rest[i] = tok.split("=", 1)[1]
+                break
+            elif tok in _ENV_OPTS_WITH_ARG:
+                i += 2
+            elif tok.startswith("-") or "=" in tok:  # -i, --ignore-environment, VAR=value
+                i += 1
+            else:
+                break
+        if i >= len(rest) or not rest[i]:
+            return None
+        name, rest = os.path.basename(rest[i]), rest[i + 1:]
+    if name == "busybox" and rest:
+        name = os.path.basename(rest[0])
+    return name or None
+
+
+def _shebang_kind(p: pathlib.Path) -> str | None:
+    """shell, js or py for an extensionless script, from its `#!` line."""
+    try:
+        with p.open("rb") as fh:
+            head = fh.read(512).decode("utf-8", errors="ignore")
+    except OSError:
+        return None
+    interpreter = shebang_interpreter(head.splitlines()[0] if head else "")
+    if interpreter is None:
+        return None
+    if interpreter in SHELL_INTERPRETERS:
+        return "shell"
+    if interpreter in JS_INTERPRETERS:
+        return "js"
+    if PY_INTERPRETER_RE.match(interpreter):
+        return "py"
+    return None
+
+
+def file_kind(p: pathlib.Path) -> str | None:
+    """Classify a scanned file: package_json, requirements, pyproject, pipfile, dockerfile,
+    js, py, shell, or None (not inspected)."""
+    name = p.name
+    suffix = p.suffix.lower()
+    if name == "package.json":
+        return "package_json"
+    if REQUIREMENTS_NAME_RE.match(name) or (
+        p.parent.name.lower() == "requirements" and suffix in {".txt", ".in"}
+    ):
+        return "requirements"
+    if name == "pyproject.toml":
+        return "pyproject"
+    if name == "Pipfile":
+        return "pipfile"
+    if DOCKERFILE_NAME_RE.match(name):
+        return "dockerfile"
+    if suffix in JS_SUFFIXES:
+        return "js"
+    if suffix in PY_SUFFIXES:
+        return "py"
+    if suffix in SHELL_SUFFIXES:
+        return "shell"
+    if not suffix:
+        # Extensionless script: its shebang decides (sh/bash/dash/ash/ksh/zsh/busybox -> shell,
+        # node/bun/deno -> js, python -> py).
+        return _shebang_kind(p)
+    return None
+
+
+# --- source imports -------------------------------------------------------------------------
+
+# JS whitespace, where `/* block */` and `// line` comments count as whitespace (Codex P2 #1 on
+# PR #57): JS allows a comment anywhere whitespace may appear between tokens.
+_JS_WS = r"(?:\s|/\*.*?\*/|//[^\n]*(?:\n|$))*"
+_JS_IDENT = r"[A-Za-z_$][\w$]*"
+
+
+def _js_string(tag: str = "") -> str:
+    """A quoted module specifier; the quote is group q<tag>, the text group s<tag>."""
+    return rf"""(?P<q{tag}>["'`])(?P<s{tag}>[^"'`\r\n]+)(?P=q{tag})"""
+
+
+# The module specifier in every import position, with comments allowed between the tokens:
+# `from "x"` (import/export ... from, across lines), `import "x"`, `import("x")`,
+# `require("x")` and `require.resolve("x")`, with ', " or ` quotes.
+_JS_SPECIFIER_RE = re.compile(
+    rf"(?:\bfrom|\bimport){_JS_WS}(?:\({_JS_WS})?{_js_string('1')}"
+    rf"|\brequire(?:{_JS_WS}\.{_JS_WS}resolve)?{_JS_WS}\({_JS_WS}{_js_string('2')}",
+    re.DOTALL,
+)
+
+# Names bound to Node's createRequire (auditor LOW-3 on PR #57): the factory itself, renamed on
+# import (`createRequire as mk`) or destructuring (`{ createRequire: mk }`), and the require
+# functions it returns (`const cjs = createRequire(import.meta.url)`), which load like require().
+_CREATE_REQUIRE_RENAME_RE = re.compile(rf"\bcreateRequire\s*(?:\bas\b|:)\s*({_JS_IDENT})")
+
+
+def _create_require_specifiers(text: str) -> list[str]:
+    if "createRequire" not in text:
+        return []
+    factories = {"createRequire", *_CREATE_REQUIRE_RENAME_RE.findall(text)}
+    specs: list[str] = []
+    loaders: set[str] = set()
+    for factory in factories:
+        f = re.escape(factory)
+        # `factory(...)("x")`: the returned require called at once (one level of nested parens).
+        invoked = re.compile(
+            rf"(?<![\w$]){f}{_JS_WS}\((?:[^()]|\([^()]*\))*\){_JS_WS}\({_JS_WS}{_js_string()}",
+            re.DOTALL,
+        )
+        specs.extend(m.group("s") for m in invoked.finditer(text))
+        # `name = factory(` or `name = module.factory(`
+        bound = re.compile(
+            rf"(?<![\w$])({_JS_IDENT}){_JS_WS}={_JS_WS}(?:{_JS_IDENT}{_JS_WS}\.{_JS_WS})?{f}{_JS_WS}\(",
+            re.DOTALL,
+        )
+        loaders.update(m.group(1) for m in bound.finditer(text))
+    for loader in loaders - {"require"}:
+        call = re.compile(
+            rf"(?<![\w$]){re.escape(loader)}(?:{_JS_WS}\.{_JS_WS}resolve)?{_JS_WS}\({_JS_WS}{_js_string()}",
+            re.DOTALL,
+        )
+        specs.extend(m.group("s") for m in call.finditer(text))
+    return specs
+
+
+def js_package_root(spec: str) -> str | None:
+    """npm package a module specifier resolves to (lower case), or None for relative, absolute,
+    URL and node: specifiers. `openai/client` -> openai; `@anthropic-ai/sdk/x` -> @anthropic-ai/sdk;
+    `npm:openai@4` -> openai."""
+    s = spec.strip()
+    if s.startswith("npm:"):
+        s = s[len("npm:"):]
+    if not s or s.startswith((".", "/")) or ":" in s:
+        return None
+    parts = s.split("/")
+    if s.startswith("@"):
+        if len(parts) < 2 or not parts[1]:
+            return None
+        root = f"{parts[0]}/{parts[1].split('@', 1)[0]}"
+    else:
+        root = parts[0].split("@", 1)[0]
+    return root.lower() or None
+
+
+def js_imported_packages(text: str) -> set[str]:
+    specs = [m.group("s1") or m.group("s2") or "" for m in _JS_SPECIFIER_RE.finditer(text)]
+    specs += _create_require_specifiers(text)
+    roots: set[str] = set()
+    for spec in specs:
+        root = js_package_root(spec)
+        if root:
+            roots.add(root)
+    return roots
+
+
+_PY_FROM_RE = re.compile(r"^[ \t]*from[ \t]+([\w.]+)[ \t]+import[ \t]+\(?([^\n#;)]*)", re.M)
+_PY_IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+([^\n#;]+)", re.M)
+_PY_DYNAMIC_RE = re.compile(r"\b(?:__import__|import_module)\s*\(\s*[\"']([\w.]+)[\"']")
+
+
+def _py_imports_by_regex(text: str) -> set[str]:
+    """Fallback for files ast cannot parse (other Python versions, templates)."""
+    mods: set[str] = set()
+    for m in _PY_FROM_RE.finditer(text):
+        base = m.group(1)
+        if base.startswith("."):
             continue
-        if is_skipped_path(p):
+        mods.add(base)
+        for item in m.group(2).split(","):
+            words = item.split()
+            if words and words[0] != "*":
+                mods.add(f"{base}.{words[0]}")
+    for m in _PY_IMPORT_RE.finditer(text):
+        for item in m.group(1).split(","):
+            words = item.split()
+            if words:
+                mods.add(words[0])
+    mods.update(m.group(1) for m in _PY_DYNAMIC_RE.finditer(text))
+    return mods
+
+
+def python_imported_modules(text: str) -> set[str]:
+    """Absolute module names a Python file imports. `from a import b` yields `a` and `a.b`, so
+    `from google.cloud import vision` yields google.cloud.vision. Also __import__("x") and
+    importlib.import_module("x") with a literal name. Relative imports are local, not packages."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return _py_imports_by_regex(text)
+    mods: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or not node.module:
+                continue
+            mods.add(node.module)
+            mods.update(f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*")
+        elif isinstance(node, ast.Call) and node.args:
+            func = node.func
+            fname = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else func.id
+                if isinstance(func, ast.Name)
+                else None
+            )
+            first = node.args[0]
+            if (
+                fname in {"__import__", "import_module"}
+                and isinstance(first, ast.Constant)
+                and isinstance(first.value, str)
+            ):
+                mods.add(first.value)
+    return mods
+
+
+def module_matches(module: str, banned: str) -> bool:
+    """`banned` itself, a submodule of it, or a versioned sibling (google.cloud.vision_v1)."""
+    return (
+        module == banned
+        or module.startswith(banned + ".")
+        or re.match(re.escape(banned) + r"_v\d", module) is not None
+    )
+
+
+# --- dependency manifests -------------------------------------------------------------------
+
+_DIST_NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+_EGG_RE = re.compile(r"#egg=([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+class ManifestError(ValueError):
+    """A dependency manifest the guards cannot read. The guards fail closed on it."""
+
+
+def normalize_dist_name(name: str) -> str:
+    """PEP 503 normalisation: case-folded, runs of - _ . collapsed to -."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirement_name(spec: str) -> str | None:
+    """Distribution name of one PEP 508 requirement (extras, versions, markers and direct
+    references stripped), normalised. `openai[datalib]>=1; python_version>"3.8"` -> openai."""
+    m = _DIST_NAME_RE.match(spec.strip())
+    return normalize_dist_name(m.group(0)) if m else None
+
+
+def requirements_file_names(text: str) -> list[str]:
+    """Distribution names a pip requirements file installs."""
+    names: list[str] = []
+    for raw in re.sub(r"\\\r?\n", " ", text).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
-        yield p
+        egg = _EGG_RE.search(line)
+        if egg:
+            names.append(normalize_dist_name(egg.group(1)))
+        if line.startswith("-"):
+            continue  # -r/-c/-e/--option lines; an -e VCS URL is covered by #egg= above
+        name = requirement_name(re.split(r"\s#", line, maxsplit=1)[0])
+        if name:
+            names.append(name)
+    return names
+
+
+def _toml(text: str) -> dict:
+    if tomllib is None:
+        raise ManifestError("Python 3.11+ (tomllib) is required to read TOML manifests")
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as err:
+        raise ManifestError(f"invalid TOML: {err}") from err
+
+
+def _strings(value: object) -> list[str]:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def pyproject_dependency_names(text: str) -> list[str]:
+    """PEP 621 dependencies and optional-dependencies, PEP 735 dependency-groups, build-system
+    requires, uv/pdm dev-dependencies and Poetry dependency tables."""
+    data = _toml(text)
+    specs: list[str] = []
+    project = data.get("project") or {}
+    specs += _strings(project.get("dependencies"))
+    for group in (project.get("optional-dependencies") or {}).values():
+        specs += _strings(group)
+    for group in (data.get("dependency-groups") or {}).values():
+        specs += _strings(group)
+    specs += _strings((data.get("build-system") or {}).get("requires"))
+    tool = data.get("tool") or {}
+    for name in ("uv", "pdm"):
+        dev = (tool.get(name) or {}).get("dev-dependencies")
+        if isinstance(dev, dict):
+            for group in dev.values():
+                specs += _strings(group)
+        else:
+            specs += _strings(dev)
+    names = [n for n in (requirement_name(s) for s in specs) if n]
+    poetry = tool.get("poetry") or {}
+    tables = [poetry.get("dependencies"), poetry.get("dev-dependencies")]
+    tables += [(g or {}).get("dependencies") for g in (poetry.get("group") or {}).values()]
+    for table in tables:
+        if isinstance(table, dict):
+            names += [normalize_dist_name(k) for k in table]
+    return names
+
+
+def pipfile_dependency_names(text: str) -> list[str]:
+    """Every package category table of a Pipfile ([packages], [dev-packages], custom)."""
+    data = _toml(text)
+    names: list[str] = []
+    for key, table in data.items():
+        if key in {"source", "requires", "scripts", "pipenv"} or not isinstance(table, dict):
+            continue
+        names += [normalize_dist_name(k) for k in table]
+    return names
+
+
+def python_manifest_names(kind: str, text: str) -> list[str]:
+    if kind == "requirements":
+        return requirements_file_names(text)
+    if kind == "pyproject":
+        return pyproject_dependency_names(text)
+    if kind == "pipfile":
+        return pipfile_dependency_names(text)
+    raise ValueError(kind)
+
+
+def load_package_json(text: str) -> dict:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as err:
+        raise ManifestError(f"invalid JSON: {err}") from err
+    if not isinstance(data, dict):
+        raise ManifestError("package.json is not a JSON object")
+    return data
+
+
+def command_text(text: str) -> str:
+    """Dockerfile or shell text with full-line comments dropped and line continuations joined,
+    so `RUN pip install \\` + newline + `playwright` reads as one command."""
+    kept = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    return re.sub(r"\\[ \t]*\n", " ", "\n".join(kept))
+
+
+# --- allowlist ------------------------------------------------------------------------------
 
 
 def load_allowlist() -> dict[str, set[str]]:

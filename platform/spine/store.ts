@@ -1920,7 +1920,15 @@ export type CommitteeBrainOutput = {
   reason?: string
   text?: string
   outbound: {
+    /** The masked content of the final user message. */
     body: string
+    /**
+     * Audit F16 (review round R4a): which platform text the system message was, by reference: the registry policy's id
+     * and version, and on the eve bridge the pinned agent instructions' SHA-256; never the text (absent before F16).
+     */
+    system?: { policyId: string; version: string; agentInstructionsSha256?: string }
+    /** Audit F16 (R4a), a conversation only: each merged turn's role and envelope sources, without its text. */
+    turns?: { role: "user" | "assistant"; envelopes: string[] }[]
     metadata: {
       classification: Classification
       provider: string

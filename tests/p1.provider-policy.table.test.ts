@@ -53,6 +53,8 @@ const TABLE = LABELS.flatMap((label) =>
 )
 
 let sent: OutboundRequest[] = []
+/** Audit F16: an outbound request in its pre-F16 shape (body and metadata only); assertMinimised still accepts it. */
+type PreF16Request = Pick<OutboundRequest, "body" | "metadata">
 beforeEach(() => {
   sent = []
   setTransportForTests({
@@ -176,12 +178,12 @@ describe("§4.6 rank 3 (privileged): content minimisation and PII-scrubbed trace
   })
 
   it("assertMinimised rejects an outbound request that still carries PII", () => {
-    const leaky: OutboundRequest = {
+    const leaky: PreF16Request = {
       body: "CNIC 42101-1234567-1",
       metadata: { classification: "privileged", provider: "openai", purpose: "x", redactionCounts: {} },
     }
     expect(assertMinimised(leaky, [])).toBe(false)
-    const leakyPurpose: OutboundRequest = {
+    const leakyPurpose: PreF16Request = {
       body: "[CNIC]",
       metadata: {
         classification: "privileged",
@@ -191,7 +193,7 @@ describe("§4.6 rank 3 (privileged): content minimisation and PII-scrubbed trace
       },
     }
     expect(assertMinimised(leakyPurpose, ["Ayesha Malik"])).toBe(false)
-    const clean: OutboundRequest = {
+    const clean: PreF16Request = {
       body: "[CNIC] [PARTY]",
       metadata: { classification: "privileged", provider: "openai", purpose: "x", redactionCounts: {} },
     }

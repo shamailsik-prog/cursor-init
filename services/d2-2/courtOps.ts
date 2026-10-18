@@ -1,4 +1,5 @@
 import { checkPermission } from "@/platform/p5/checkPermission"
+import { canReadDocument } from "@/platform/p5/documentAccess"
 import { PublicError } from "@/platform/http/publicError"
 import type { SpineStore, WorkflowStatus } from "@/platform/spine/store"
 import { transitionWorkflowStatus } from "@/services/d1-7/documentWorkflow"
@@ -21,6 +22,12 @@ function requireOpsActor(store: SpineStore, userId: string): OpsActor {
 function canAccessMatter(store: SpineStore, actorId: string, matterId: string): boolean {
   const perm = checkPermission(store, actorId, "research", matterId)
   return perm.allow
+}
+
+function canSeeDocument(store: SpineStore, actorId: string, documentId: string): boolean {
+  const user = store.users.get(actorId)
+  const doc = store.documents.get(documentId)
+  return Boolean(user && doc && canReadDocument(store, user, doc))
 }
 
 export function listCourtOpsQueue(
@@ -64,6 +71,9 @@ export function listCourtOpsQueue(
     .filter((row) => row.status === "review_required")
     .filter((row) => (opts.matterId ? row.matterId === opts.matterId : true))
     .filter((row) => (row.matterId ? canAccessMatter(store, actor.id, row.matterId) : true))
+    // Audit F14 R2-D4: a row names its document, so it is shown only to a caller who may read that document (its own
+    // label, and its matter's current label and membership); a row whose document is unknown here is left out.
+    .filter((row) => canSeeDocument(store, actor.id, row.documentId))
     .map((row) => ({
       queueType: "workflow" as const,
       id: row.documentId,

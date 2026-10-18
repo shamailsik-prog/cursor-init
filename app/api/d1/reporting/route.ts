@@ -27,6 +27,7 @@ import {
   buildMatterSearchIndexRow,
 } from "@/platform/persistence/matterClientSearchIndex"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
+import { syncFirmMatters } from "@/platform/persistence/memberSync"
 
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -291,8 +292,9 @@ async function handleGet(request: Request) {
   if (!refreshedActor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
-  const matters = await repos.matters.listByFirm(refreshedActor.firmId)
-  for (const matter of matters) store.matters.set(matter.id, matter)
+  // Audit F14 NEW-1: the shared matter sync (reconciles the cache as every other route does) in place of this route's
+  // own upsert loop; its listing is reused below.
+  const matters = await syncFirmMatters(store, repos, refreshedActor.firmId)
 
   if (view === "search") {
     const rowType = parseRowType(getQuery(REPORTING_SURFACE, url, "rowType"))
@@ -429,7 +431,7 @@ async function handlePost(request: Request) {
     body: parsed,
   })
   // Final audit F4: check-and-reserve the key in one synchronous step (no await in between).
-  const idem = beginIdempotentRequest(request, key, fingerprint)
+  const idem = await beginIdempotentRequest(request, key, fingerprint)
   if (idem.response) return idem.response
   const claim = idem.claim
 
@@ -456,6 +458,8 @@ async function handlePost(request: Request) {
   }
 
   await syncFirmUsers(store, repos, actor.firmId)
+  // Audit F14 R2-D1: the reporting rows seeded below take the matter's current label, not a cached one.
+  await syncFirmMatters(store, repos, actor.firmId)
   const matter = await resolveMatter(matterId, actor.firmId, store, repos)
   if (!matter || matter.firmId !== actor.firmId) {
     return NextResponse.json({ error: "unknown matter" }, { status: 404 })

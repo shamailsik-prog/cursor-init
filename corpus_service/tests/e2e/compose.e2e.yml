@@ -1,0 +1,19 @@
+# Audit F30 e2e overlay, used only by tests/e2e/*.sh:
+#   docker compose -f docker-compose.yml -f tests/e2e/compose.e2e.yml ...
+# It swaps the app image for tests/e2e/Dockerfile (same code, same pinned DB/broker clients) and
+# nothing else: environments, credentials, URLs, the CA mount, networks and every store service
+# come from docker-compose.yml exactly as shipped, with the secrets read from .env as the README
+# tells operators to do.
+x-e2e-app: &e2e-app
+  build:
+    context: .
+    dockerfile: tests/e2e/Dockerfile
+  image: ${E2E_IMAGE:-corpus-f30-e2e:local}
+
+services:
+  migrate: *e2e-app
+  api: *e2e-app
+  worker-embed: *e2e-app
+  celery-beat: *e2e-app
+  worker-a: *e2e-app
+  worker-b: *e2e-app
