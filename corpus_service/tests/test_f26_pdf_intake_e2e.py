@@ -127,7 +127,7 @@ def lhc_court(monkeypatch, tmp_path, documents):
         return list(urls), {url: f"{origin}/reported_judgments" for url in urls}
 
     vault = tmp_path / "live"
-    vault.mkdir()
+    vault.mkdir(mode=0o700)
     with serving(server):
         monkeypatch.setattr(fetch_policy, "fetcher_for", _factory)
         monkeypatch.setattr(lhc, "_discover_pdf_urls", _discover)
@@ -419,7 +419,7 @@ def test_r1_every_pdf_harvester_refuses_active_content_and_keeps_its_judgment(co
     assert_migrated(corpus_db.migrate(), corpus_db)
     no_sleep(monkeypatch)
     vault = tmp_path / "live"
-    vault.mkdir()
+    vault.mkdir(mode=0o700)
     monkeypatch.setattr(config.settings, "PDF_STORAGE_PATH", str(vault))
     hostile = F.javascript_pdf(F.judgment_lines(6, seed="R1"))
     golden = golden_pdf("golden-three-pages")

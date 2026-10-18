@@ -222,8 +222,8 @@ def _ocr_extract_with_pdfplumber_images(
     OCR fallback using pdfplumber's page.to_image() -> PIL -> pytesseract
     Works without poppler dependency.
     Audit F26: at most limits.max_ocr_pages pages, none larger than limits.max_image_pixels at
-    OCR_DPI, each tesseract call bounded by limits.tesseract_seconds; MemoryError and
-    PdfLimitExceeded propagate. ``stats`` records what was done.
+    OCR_DPI, each tesseract call bounded by limits.tesseract_seconds, the OCR text held to
+    limits.max_text_chars; MemoryError and PdfLimitExceeded propagate. ``stats`` records what was done.
     """
     stats = stats if stats is not None else _OcrStats()
     try:
@@ -235,6 +235,7 @@ def _ocr_extract_with_pdfplumber_images(
         return ""
 
     ocr_texts: list[str] = []
+    ocr_chars = 0
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             _check_pages(len(pdf.pages), limits)
@@ -301,6 +302,10 @@ def _ocr_extract_with_pdfplumber_images(
 
                     if txt:
                         ocr_texts.append(txt)
+                        # audit F26: OCR text counts against the same cap as a text layer
+                        ocr_chars += len(txt)
+                        if ocr_chars > limits.max_text_chars:
+                            raise PdfLimitExceeded(TEXT_LIMIT)
 
                 except _NEVER_SWALLOWED:
                     raise

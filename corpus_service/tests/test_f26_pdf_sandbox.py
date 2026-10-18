@@ -638,9 +638,11 @@ def test_r15_a_writer_killed_after_the_ledger_overcounts_and_the_recount_correct
     monkeypatch.setattr(raw_store, "MAX_STORE_BYTES", len(three) + 10)
     store = tmp_path / "raw-pdf"
     assert int((store / ".usage").read_text()) == len(one), "the ledger must count the interrupted write"
-    stale = store / "sha256" / "00" / "00" / ".dead.1.tmp"
-    stale.parent.mkdir(parents=True)
-    stale.write_bytes(b"left by a killed writer")
+    killed_dir = (tmp_path / raw_store.key_for(hashlib.sha256(one).hexdigest())).parent  # made by the killed write
+    stale = killed_dir / ".dead.1.tmp"
+    fd = os.open(stale, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, b"left by a killed writer")
+    os.close(fd)
     stored = raw_store.put(three, root=tmp_path)  # fits only once the phantom object is recounted away
     assert stored.created and (store / ".usage").read_text() == str(len(three))
     assert not stale.exists(), "a temporary file no writer can own was left behind"
