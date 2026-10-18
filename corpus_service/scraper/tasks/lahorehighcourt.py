@@ -118,7 +118,7 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
                 listings.item_failed(e)
                 continue
 
-            if response.status_code >= 400:
+            if response.status_code != 200:
                 logger.warning(
                     "LHC listing returned status %s for %s",
                     response.status_code,

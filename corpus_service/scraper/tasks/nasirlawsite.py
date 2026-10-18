@@ -41,7 +41,7 @@ def _resolve_link(page_url: str, href: str) -> str | None:
 
 async def scrape_nasirlawsite(source, db):
     # Audit F28: reporter pages are the run's listings and case pages its documents. Each is counted;
-    # a case page answering 4xx/5xx is a failure, never staged as a judgment; a database error fails
+    # a case page answering anything but 200 is a failure, never staged; a database error fails
     # the run at once; a run whose every reporter page, or every case page, failed raises
     # SourceRunFailed.
     tally = outcomes.run_tally()
@@ -53,7 +53,7 @@ async def scrape_nasirlawsite(source, db):
         for url in REPORTER_URLS:
             try:
                 r = await client.get(url)
-                if r.status_code >= 400:
+                if r.status_code != 200:
                     logger.error(f"Nasir reporter {url} returned status {r.status_code}")
                     listings.item_failed(f"http_{r.status_code}")
                     continue
@@ -65,7 +65,7 @@ async def scrape_nasirlawsite(source, db):
                 for full in links[:20]:
                     try:
                         cr = await client.get(full)
-                        if cr.status_code >= 400:
+                        if cr.status_code != 200:
                             logger.error(f"Nasir case {full} returned status {cr.status_code}")
                             tally.item_failed(f"http_{cr.status_code}")
                             continue

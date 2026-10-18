@@ -311,7 +311,7 @@ async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[
                 listings.item_failed(e)
                 continue
 
-            if response.status_code >= 400:
+            if response.status_code != 200:
                 logger.warning(
                     "IHC listing returned status %s for %s",
                     response.status_code,
@@ -346,7 +346,7 @@ async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[
                     logger.warning("IHC feed request failed %s: %s", feed_url, repr(e))
                     feeds.item_failed(e)
                     continue
-                if feed_response.status_code >= 400:
+                if feed_response.status_code != 200:
                     logger.warning(
                         "IHC feed returned status %s for %s",
                         feed_response.status_code,

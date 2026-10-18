@@ -8,14 +8,14 @@ logger = logging.getLogger(__name__)
 
 async def scrape_nationalassembly(source, db):
     # Audit F28: the index page is the run's only listing, so a failed index request (network, an
-    # F25 refusal, a 4xx/5xx answer) fails the run; every PDF's outcome is counted, a database error
+    # F25 refusal, any answer but 200) fails the run; every PDF's outcome is counted, a database error
     # fails the run at once, and a run whose every PDF failed raises SourceRunFailed.
     tally = outcomes.run_tally()
     # Audit F25: index-page PDF links are external input; the NationalAssembly fetch policy
     # refuses (and logs) any link off na.gov.pk, off 443, or resolving to a non-public address.
     async with fetch_policy.fetcher_for("NationalAssembly") as client:
         r = await client.get("https://na.gov.pk/en/legis.php")
-        if r.status_code >= 400:
+        if r.status_code != 200:
             listing = outcomes.Tally()
             listing.item_failed(f"http_{r.status_code}")
             listing.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
