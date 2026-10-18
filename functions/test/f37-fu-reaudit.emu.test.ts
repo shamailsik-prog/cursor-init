@@ -211,6 +211,49 @@ describe.skipIf(!EMULATORS)("FA-D1C-002: registry writes made outside functions/
   }, 180_000)
 })
 
+describe.skipIf(!EMULATORS)("FA-D1C-002, stale stamps: a stamp older than a rebuild that dropped its name is not trusted", () => {
+  /** Damages the index (chunk 0 carries another chunk number), lets a screen refuse it, and rebuilds it: the reset drops every name no row holds. */
+  async function resetAndRebuild(f: Firm): Promise<void> {
+    const chunk0 = nameIndexChunkRef(f.firmId, 0)
+    await outOfBand(chunk0, () => chunk0.update({ chunk: 7 }))
+    expectKind(await apiErrorOf(screenAsOpposing(f)), "unavailable", "screening_unavailable")
+    expect(await reconcileNameIndex(f.firmId)).toMatchObject({ rebuilt: true, marked: true })
+  }
+
+  /** Both routes refuse until the reconciliation rebuilds the index; then the conflict is found and the matter opens. */
+  async function expectRefusedThenRebuilt(f: Firm): Promise<void> {
+    expectKind(await apiErrorOf(screenAsOpposing(f)), "unavailable", "screening_unavailable")
+    expectKind(await apiErrorOf(open(f)), "unavailable", "screening_unavailable")
+    expect(await rows("matters", f.firmId)).toHaveLength(0)
+    expect(await reconcileNameIndex(f.firmId)).toMatchObject({ marked: true })
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(true)
+    expect((await open(f)).matterNo).toMatch(/^NHS\/\d{4}\/0001$/)
+  }
+
+  it("O7: a client deleted, the index rebuilt without its name, then the row restored out of band (a backup import)", async () => {
+    const f = await registeredFirm([CONFLICT])
+    const ref = adminDb().collection("clients").doc(f.clients[CONFLICT])
+    const saved = (await ref.get()).data()
+    expect(saved?.nameIndexed).toMatchObject({ firmId: f.firmId, name: CONFLICT })
+    await outOfBand(ref, () => ref.delete())
+    await resetAndRebuild(f)
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(false)
+    await outOfBand(ref, () => ref.set(saved as DocumentData))
+    await expectRefusedThenRebuilt(f)
+  }, 180_000)
+
+  it("O8: a client renamed out of band, the index rebuilt, then renamed back to the name its stamp records", async () => {
+    const f = await registeredFirm([CONFLICT])
+    const ref = adminDb().collection("clients").doc(f.clients[CONFLICT])
+    await outOfBand(ref, () => ref.update({ canonicalName: "Zubair Hashmi" }))
+    await reconcileNameIndex(f.firmId)
+    await resetAndRebuild(f)
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(false)
+    await outOfBand(ref, () => ref.update({ canonicalName: CONFLICT }))
+    await expectRefusedThenRebuilt(f)
+  }, 180_000)
+})
+
 describe.skipIf(!EMULATORS)("FA-D1C-003: a rebuild completing between a screen's counter read and its chunk read never gives CLEAR", () => {
   it("the index is damaged and rebuilt into two chunks right after the screen reads the counter: the screen finds the conflict or refuses", async () => {
     const f = await registeredFirm([CONFLICT])
