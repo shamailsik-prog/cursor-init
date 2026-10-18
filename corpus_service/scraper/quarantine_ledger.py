@@ -50,7 +50,8 @@ FUNCTION_SQL: Final = (
 )
 # tgenabled is a "char"; asyncpg returns it as bytes, so it is compared as text.
 TRIGGERS_SQL: Final = (
-    "SELECT tgname, tgfoid, tgenabled::text, tgtype FROM pg_catalog.pg_trigger "
+    "SELECT tgname, tgfoid, tgenabled::text, tgtype, (tgqual IS NULL) AS no_when, "
+    "(tgattr = ''::int2vector) AS all_columns FROM pg_catalog.pg_trigger "
     "WHERE tgrelid = CAST(:t AS regclass) AND NOT tgisinternal"
 )
 
@@ -65,18 +66,21 @@ def ddl(schema: str) -> Tuple[str, ...]:
         f"DROP TRIGGER IF EXISTS {TRUNCATE_TRIGGER} ON {table}",
         f"CREATE TRIGGER {ROW_TRIGGER} BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION {function}()",
         f"CREATE TRIGGER {TRUNCATE_TRIGGER} BEFORE TRUNCATE ON {table} FOR EACH STATEMENT EXECUTE FUNCTION {function}()",
+        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {ROW_TRIGGER}",
+        f"ALTER TABLE {table} ENABLE ALWAYS TRIGGER {TRUNCATE_TRIGGER}",
     )
 
 
 def is_current(function: Optional[Sequence[Any]], triggers: Sequence[Sequence[Any]]) -> bool:
     """True when the function (oid, prosrc) has the expected body and both triggers (name, function
-    oid, enabled, type) exist, are enabled ('O') and call it with the expected timing and events."""
+    oid, enabled, type, no WHEN, no UPDATE OF column list) exist, are always enabled ('A') and call
+    it with the expected timing and events."""
     if function is None or function[1] != FUNCTION_BODY:
         return False
-    found = {row[0]: (row[1], row[2], row[3]) for row in triggers}
+    found = {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in triggers}
     return (
-        found.get(ROW_TRIGGER) == (function[0], "O", ROW_TGTYPE)
-        and found.get(TRUNCATE_TRIGGER) == (function[0], "O", TRUNCATE_TGTYPE)
+        found.get(ROW_TRIGGER) == (function[0], "A", ROW_TGTYPE, True, True)
+        and found.get(TRUNCATE_TRIGGER) == (function[0], "A", TRUNCATE_TGTYPE, True, True)
     )
 
 
