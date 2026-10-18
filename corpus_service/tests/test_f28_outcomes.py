@@ -149,11 +149,14 @@ def test_an_empty_text_layer_is_a_failed_document_never_progress():
     """Review round, Codex P1 (spec R16): a PDF whose extraction is empty is a failed item."""
     assert outcomes.has_text("Short title. 1") is True
     assert [outcomes.has_text(t) for t in ("", "   \n\t ", None)] == [False, False, False]
+    # Copilot 4305705122: the signature is checked before extraction wherever a body is assumed a PDF.
+    assert outcomes.looks_like_pdf(b"%PDF-1.7\n...") is True
+    assert [outcomes.looks_like_pdf(b) for b in (b"", b"%PDF", b"<html>%PDF-1.4", b" %PDF-1.4")] == [False] * 4
     unreadable = outcomes.Tally()
-    unreadable.item_failed(outcomes.ERROR_PDF_TEXT_EMPTY)
+    unreadable.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
     with pytest.raises(outcomes.SourceRunFailed) as caught:
         unreadable.finish()
-    assert caught.value.errors == {"pdf_text_empty": 1} and caught.value.retryable is False
+    assert caught.value.errors == {"empty_pdf_text": 1} and caught.value.retryable is False
 
 
 def test_failed_discovery_requests_make_a_run_partial_and_all_failing_fails_it():

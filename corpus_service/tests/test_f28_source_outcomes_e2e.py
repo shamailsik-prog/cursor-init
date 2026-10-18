@@ -661,7 +661,7 @@ def test_p1_a_court_run_whose_every_pdf_is_unreadable_fails_and_stages_nothing(c
     assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("failed", 0, 2)], rows
     summary = rows[0].result_summary
     assert summary["reason"] == "every document request failed", summary
-    assert summary["errors"] == {"pdf_text_empty": 2} and summary["retryable"] is False, summary
+    assert summary["errors"] == {"empty_pdf_text": 2} and summary["retryable"] is False, summary
     assert source_row("SindhHighCourtPublic").consecutive_failures == 3, "the failure streak was reset"
     assert source_row("SindhHighCourtPublic").last_success_at is None
 
@@ -681,7 +681,7 @@ def test_p1_a_mix_of_readable_and_unreadable_pdfs_is_partial(corpus_db, monkeypa
     rows = jobs("SindhHighCourtPublic")
     assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 1)], rows
     summary = rows[0].result_summary
-    assert summary["outcome"] == "partial" and summary["errors"] == {"pdf_text_empty": 1}, summary
+    assert summary["outcome"] == "partial" and summary["errors"] == {"empty_pdf_text": 1}, summary
 
 
 COURT_PDF_SOURCES = {
@@ -715,7 +715,7 @@ def test_p1_every_pdf_extracting_court_fails_a_run_of_unreadable_pdfs(corpus_db,
     assert result.state == "FAILURE", f"{source}: a run of unreadable PDFs was recorded as {result.state}"
     assert count("scraper_staging") == 0, f"{source}: an empty extraction was staged"
     rows = jobs(source)
-    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"pdf_text_empty": 1})], rows
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"empty_pdf_text": 1})], rows
 
 
 def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypatch):
@@ -732,7 +732,7 @@ def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypa
 
     assert result.state == "FAILURE", f"an unreadable NA PDF was recorded as {result.state}"
     rows = jobs("NationalAssembly")
-    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"pdf_text_empty": 1})], rows
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"empty_pdf_text": 1})], rows
     assert count("statutes_master") == 0
     assert source_row("NationalAssembly").consecutive_failures == 1
 
@@ -858,3 +858,147 @@ def test_bugbot_an_embedding_batch_whose_record_cannot_be_written_raises_run_rec
     assert result.state == "FAILURE" and type(result.result).__name__ == "RunRecordFailed", repr(result.result)
     assert queue_state(statute_id) == [("completed", 0, True)], "the batch's own work stands"
     assert any(r.getMessage().startswith("F28 run record failed: embedding_queue") for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------------------------
+# Review round, Copilot (PR #72 at 9403795): 4305705122, 4305705087, 4305705063, 4305705102,
+# 4305705096 (4305705140 is covered by the Codex P1 tests above). Spec R16-R20.
+# ---------------------------------------------------------------------------------------------
+def test_copilot_na_checks_the_pdf_signature_before_extraction(corpus_db, monkeypatch):
+    """4305705122: an empty 200 body where a PDF was linked reached item_ok(0), so a wholly
+    unreadable batch was an empty success. It is a failed document (`not_pdf`)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    canned_network(monkeypatch, {
+        "https://na.gov.pk/en/legis.php": (200, b"<html><a href='/uploads/f28-act-2099.pdf'>Test Act 2099</a></html>"),
+        "https://na.gov.pk/uploads/f28-act-2099.pdf": (200, b""),
+    })
+
+    result = fire("scrape-na")
+
+    assert result.state == "FAILURE", f"an empty NA PDF body was recorded as {result.state}"
+    rows = jobs("NationalAssembly")
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"not_pdf": 1})], rows
+    assert count("statutes_master") == 0
+
+
+def test_copilot_ihc_feed_failures_with_markup_pdfs_found_are_partial_not_failed(corpus_db, monkeypatch):
+    """4305705087: the feed is required only when no other discovery path found anything. Here the
+    listing markup links a judgment directly and the only feed answers 503: the run harvests the
+    judgment and is partial, with the feed failure counted."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    page = IHC_FEED_PAGE.replace(
+        b"</body>", b'<a href="/attachments/judgements/2099/1/F28_WP_1_2099.pdf">W.P. 1/2099 judgment</a></body>'
+    )
+    canned_network(monkeypatch, {
+        IHC_JGS1: (200, page),
+        ("POST", IHC_MIS_FEED): (503, b"Service Unavailable"),
+        IHC_PDF: (200, READABLE_PDF),
+    })
+
+    result = fire("scrape-islamabadhighcourt-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    rows = jobs("IslamabadHighCourtPublic")
+    assert [(r.status, r.records_extracted) for r in rows] == [("completed", 1)], rows
+    summary = rows[0].result_summary
+    assert summary["outcome"] == "partial" and summary["discovery_errors"] == {"http_503": 1}, summary
+
+
+def test_copilot_a_failed_embedding_batch_record_keeps_the_counts_of_items_before_the_failure(corpus_db, monkeypatch):
+    """4305705063: the first item is embedded and committed, the second item's write fails in the
+    database (a trigger refuses the second embedding update). The batch fails; its record keeps
+    attempted 2, written 1, failed 1 instead of zeros."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    first = _queue_one_statute()
+    run(execute(
+        "INSERT INTO statutes_master (statute_name, short_name, section_number, section_text, source_site) "
+        "VALUES ('Synthetic F28 Act 2099', 'F28A', '2', 'Interpretation. Synthetic F28 fixture.', 'F28Fixture2')"
+    ))
+    second = run(fetch("SELECT id FROM statutes_master WHERE source_site = 'F28Fixture2'"))[0][0]
+    run(execute("INSERT INTO embedding_queue (record_id, table_name) VALUES (:id, 'statutes_master')", params={"id": second}))
+    corpus_db.admin(
+        "CREATE SEQUENCE f28_embedding_writes",
+        "CREATE FUNCTION f28_refuse_second_embedding() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.embedding IS NOT NULL AND nextval('f28_embedding_writes') > 1 THEN "
+        "RAISE EXCEPTION 'synthetic F28 embedding write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+        "CREATE TRIGGER f28_refuse_second_embedding BEFORE UPDATE ON statutes_master "
+        "FOR EACH ROW EXECUTE FUNCTION f28_refuse_second_embedding()",
+    )
+    install_provider(monkeypatch, fail=False)
+    no_sleep(monkeypatch)
+
+    result = fire("process-embeddings")
+
+    assert result.state == "FAILURE", repr(result.result)
+    states = sorted(s for s, _, _ in queue_state(first) + queue_state(second))
+    assert states == ["completed", "pending"], states
+    rows = jobs("embedding_queue", job_type="embed")
+    assert [(r.status, r.pages_scraped, r.records_extracted, r.records_failed) for r in rows] == [("failed", 2, 1, 1)], rows
+    summary = rows[0].result_summary
+    assert (summary["claimed"], summary["completed"], summary["failed"]) == (2, 1, 1), summary
+    assert "23514" in rows[0].error_message, rows[0].error_message
+
+
+def test_copilot_nasir_stages_only_a_200_case_page(corpus_db, monkeypatch, tmp_path):
+    """4305705102: a 204 (no content) case page was staged; only a 200 is. The 204 is counted as
+    http_204, the run is partial."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+
+    def routes(origin):
+        return {
+            "/case/scmr.htm": _page(
+                f'<html><title>F28 SCMR</title><body><a href="{origin}/case/2099-scmr-1.htm">case</a>'
+                f'<a href="{origin}/case/2099-scmr-2.htm">case</a></body></html>'
+            ),
+            "/case/pld.htm": _page("<html><title>F28 PLD</title><body>Nothing new.</body></html>"),
+            "/case/2099-scmr-1.htm": _page(f"<html><body>{CASE_TEXT.format(n=1)}</body></html>"),
+            "/case/2099-scmr-2.htm": (204, {}, b""),
+        }
+
+    with nasir_site(monkeypatch, tmp_path, routes) as (server, origin):
+        result = fire("scrape-nasirlawsite")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    assert [u for (u,) in run(fetch("SELECT source_url FROM scraper_staging"))] == [f"{origin}/case/2099-scmr-1.htm"]
+    summary = jobs("NasirLawSite")[0].result_summary
+    assert summary["outcome"] == "partial" and summary["errors"] == {"http_204": 1}, summary
+
+
+def test_copilot_a_listing_page_that_is_not_a_200_is_not_a_loaded_listing(corpus_db, monkeypatch):
+    """4305705102 sweep: a court listing answering 204 counted as a loaded listing, so a court whose
+    listings all answered 204/404 was an empty success. Only a 200 is a loaded listing."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    canned_network(monkeypatch, {SHC_LISTING: (204, b"")})
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "FAILURE", f"a court whose listings answered 204/404 was recorded as {result.state}"
+    summary = jobs("SindhHighCourtPublic")[0].result_summary
+    assert summary["reason"] == "every listing request failed", summary
+    assert summary["errors"] == {"http_204": 1, "http_404": 3}, summary
+
+
+def test_copilot_a_skipped_source_is_still_checked_for_staleness(corpus_db, monkeypatch, caplog):
+    """4305705096: a skipped run bypassed the alerts, so an inactive source could go stale silently.
+    The alerts are evaluated; the freshness counters are not touched (a skip is not a run)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    run(execute(
+        "UPDATE scraper_sources SET is_active = false, last_success_at = now() - interval '5 days' "
+        "WHERE source_name = 'PakistanCode'"
+    ))
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("scrape-pakistancode")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    rows = jobs("PakistanCode")
+    assert [r.status for r in rows] == ["cancelled"], rows
+    assert [a.split(":")[0] for a in rows[0].result_summary["alerts"]] == ["stale"], rows[0].result_summary
+    src = source_row("PakistanCode")
+    assert (src.last_scraped_at, src.consecutive_failures, src.total_pages_scraped) == (None, 0, 0), src
+    assert any(r.getMessage().startswith("F28 source alert: PakistanCode stale") for r in caplog.records)
