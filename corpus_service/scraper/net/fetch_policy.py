@@ -207,6 +207,8 @@ class FetchPolicy:
         object.__setattr__(self, "ports", frozenset(int(p) for p in self.ports))
         if any(not s.startswith(".") for s in self.host_suffixes):
             raise ValueError(f"{self.name}: host suffixes must be dot-anchored, got {self.host_suffixes}")
+        if not isinstance(self.upgrade_http, bool):  # a switch, never a truthy object (Copilot review)
+            raise TypeError(f"{self.name}: upgrade_http must be True or False, got {self.upgrade_http!r}")
 
     def host_allowed(self, host: str) -> bool:
         host = host.lower()
@@ -380,15 +382,22 @@ class _GuardedBackend(httpcore.AsyncNetworkBackend):
         policy_name: str,
         *,
         resolver: Resolver | None = None,
-        loopback_origins: typing.AbstractSet = frozenset(),
+        loopback_origins: typing.Iterable | None = None,
         inner: httpcore.AsyncNetworkBackend | None = None,
     ):
-        hooks = [name for name, value in (("resolver", resolver), ("loopback_origins", loopback_origins), ("inner", inner)) if value]
+        # Identity, never truthiness (Copilot review): a hook object whose __bool__ is False is still
+        # a hook, and the origins are materialised once, so what is gated is what gets installed.
+        origins = tuple(loopback_origins) if loopback_origins is not None else ()
+        hooks = [
+            name
+            for name, present in (("resolver", resolver is not None), ("loopback_origins", len(origins) > 0), ("inner", inner is not None))
+            if present
+        ]
         if hooks and not _hooks_permitted():
             raise RuntimeError(f"F25: test-only backend hooks {hooks} are refused outside ENVIRONMENT=development")
         self._policy_name = policy_name
-        self._resolver = resolver or _system_resolve
-        self._loopback = frozenset((str(h).lower(), int(p)) for h, p in loopback_origins)
+        self._resolver = resolver if resolver is not None else _system_resolve
+        self._loopback = frozenset((str(h).lower(), int(p)) for h, p in origins)
         self._inner = inner if inner is not None else httpcore.AnyIOBackend()
 
     def _refuse(self, reason: str, detail: str) -> FetchRefused:
@@ -660,9 +669,7 @@ class PolicyFetcher:
         self.deadline = float(deadline)
         self.max_redirects = int(max_redirects)
         ssl_context = _test_ssl_context if _test_ssl_context is not None else _verified_ssl_context()
-        backend = _GuardedBackend(
-            policy.name, resolver=_test_resolver, loopback_origins=frozenset(_test_loopback_origins or ())
-        )
+        backend = _GuardedBackend(policy.name, resolver=_test_resolver, loopback_origins=_test_loopback_origins)
         self._transport = _GuardedTransport(policy, ssl_context=ssl_context, backend=backend)
         self._client = httpx.AsyncClient(
             transport=self._transport,
