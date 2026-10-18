@@ -62,13 +62,11 @@ from datetime import datetime
 from typing import Any, Dict, Final, List, Optional
 
 import anyio
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import Response
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -281,7 +279,7 @@ class ReviewRoute(APIRoute):
                 response = await handler(request)
             except RequestValidationError as exc:
                 response = validation_response(list(exc.errors()))
-            except StarletteHTTPException as exc:
+            except HTTPException as exc:  # the admin key's 401, and every refusal raised in this module
                 if _body_received(request):
                     raise
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail,
