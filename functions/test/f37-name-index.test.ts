@@ -4,13 +4,14 @@ import { NAME_THRESHOLD, nameScore, screen, type Candidate, type Subject } from 
 import { indexedNamesOf, NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
 import { chunkWriteVerdict, rowWriteVerdict } from "../src/d1/conflict/registryTriggers"
 import { nameForms, usesFallback } from "../src/d1/conflict/normalise"
-import { registryStateOf, type RegistryState } from "../src/d1/registryVersion"
+import { nameIndexGenOf, registryStateOf, type RegistryState } from "../src/d1/registryVersion"
 
 /** Audit F37: the pure parts of the name index and the name tier (no emulator). */
 
 const state = (over: Omit<Partial<RegistryState>, "nameIndex"> & { nameIndex?: Partial<RegistryState["nameIndex"]> } = {}): RegistryState => ({
   exists: true,
   version: 7,
+  nameIndexGen: 0,
   ...over,
   nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: 10, valid: true, ...over.nameIndex },
 })
@@ -194,32 +195,58 @@ describe("indexedNamesOf: every chunk of the firm, none beyond the pointer (F37 
 
 describe("the registry triggers' verdicts (F37 re-audit FA-D1C-002, FA-D1C-004)", () => {
   const firm = "firm-x"
-  const stamp = (name: string, firmId = firm) => ({ nameIndexed: { firmId, name } })
+  const GEN = 3
+  const stamp = (name: string, firmId = firm, gen = GEN) => ({ nameIndexed: { firmId, name, gen } })
+  const verdict = (collection: string, before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined) =>
+    rowWriteVerdict(collection, before, after, GEN)
 
   it("a stamped new name is indexed; an unstamped, mis-stamped or other-firm-stamped one is unindexed", () => {
-    expect(rowWriteVerdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
-    expect(rowWriteVerdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani" })).toBe("unindexed")
-    expect(rowWriteVerdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Zubair Hashmi") })).toBe("unindexed")
-    expect(rowWriteVerdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", "firm-y") })).toBe("unindexed")
-    expect(rowWriteVerdict("matter_parties", undefined, { firmId: firm, role: "opposing", name: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Zubair Hashmi") })).toBe("unindexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", "firm-y") })).toBe("unindexed")
+    expect(verdict("matter_parties", undefined, { firmId: firm, role: "opposing", name: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
+  })
+
+  it("a stamp of another generation, without one, or against an unknown generation is not trusted (a rebuild may have dropped the name)", () => {
+    const row = (nameIndexed: unknown) => ({ firmId: firm, canonicalName: "Haris Qalbani", nameIndexed })
+    expect(verdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN - 1) })).toBe("unindexed")
+    expect(verdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN + 1) })).toBe("unindexed")
+    expect(verdict("clients", undefined, row({ firmId: firm, name: "Haris Qalbani" }))).toBe("unindexed")
+    expect(verdict("clients", undefined, row({ firmId: firm, name: "Haris Qalbani", gen: "3" }))).toBe("unindexed")
+    expect(rowWriteVerdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani") }, null)).toBe("unindexed")
+    // A rename back to the stamped name is judged like any new name: its generation decides.
+    const renamed = { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN - 1), canonicalName: "Zubair Hashmi" }
+    expect(verdict("clients", renamed, { ...renamed, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+  })
+
+  it("the stored generation: absent is 0, a malformed one is unknown and makes the index state invalid", () => {
+    expect(nameIndexGenOf(undefined)).toBe(0)
+    expect(nameIndexGenOf({ version: 7 })).toBe(0)
+    expect(nameIndexGenOf({ nameIndexGen: 4 })).toBe(4)
+    for (const bad of [-1, 1.5, "4", {}]) expect(nameIndexGenOf({ nameIndexGen: bad })).toBeNull()
+    const good = { version: 7, nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: 10 } }
+    expect(registryStateOf(true, { ...good, nameIndexGen: 2 })).toMatchObject({ nameIndexGen: 2, nameIndex: { valid: true } })
+    expect(registryStateOf(true, { ...good, nameIndexGen: "2" })).toMatchObject({ nameIndexGen: 0, nameIndex: { valid: false } })
+    expect(nameIndexProblem(registryStateOf(true, { ...good, nameIndexGen: "2" }))).toBe("corrupt")
   })
 
   it("a rename, a role flip to opposing and a move between firms set a new screened name", () => {
     const zubair = { firmId: firm, canonicalName: "Zubair Hashmi", ...stamp("Zubair Hashmi") }
-    expect(rowWriteVerdict("clients", zubair, { ...zubair, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+    expect(verdict("clients", zubair, { ...zubair, canonicalName: "Haris Qalbani" })).toBe("unindexed")
     const party = { firmId: firm, role: "client", name: "Haris Qalbani" }
-    expect(rowWriteVerdict("matter_parties", party, { ...party, role: "opposing" })).toBe("unindexed")
+    expect(verdict("matter_parties", party, { ...party, role: "opposing" })).toBe("unindexed")
     const elsewhere = { firmId: "firm-y", canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", "firm-y") }
-    expect(rowWriteVerdict("clients", elsewhere, { ...elsewhere, firmId: firm })).toBe("unindexed")
+    expect(verdict("clients", elsewhere, { ...elsewhere, firmId: firm })).toBe("unindexed")
   })
 
   it("an edit that keeps the screened name (even on an unstamped, pre-trigger row), a deletion, and a row the screen cannot hit are unchanged", () => {
     const legacy = { firmId: firm, role: "opposing", name: "Haris Qalbani", matterStatus: "live" }
-    expect(rowWriteVerdict("matter_parties", legacy, { ...legacy, matterStatus: "closed" })).toBe("unchanged")
-    expect(rowWriteVerdict("clients", { firmId: firm, canonicalName: "Haris Qalbani" }, undefined)).toBe("unchanged")
-    expect(rowWriteVerdict("matter_parties", undefined, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
-    expect(rowWriteVerdict("matter_parties", { firmId: firm, role: "opposing", name: "Haris Qalbani" }, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
-    expect(rowWriteVerdict("clients", undefined, { firmId: firm })).toBe("unchanged")
+    expect(verdict("matter_parties", legacy, { ...legacy, matterStatus: "closed" })).toBe("unchanged")
+    expect(verdict("clients", { firmId: firm, canonicalName: "Haris Qalbani" }, undefined)).toBe("unchanged")
+    expect(verdict("matter_parties", undefined, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
+    expect(verdict("matter_parties", { firmId: firm, role: "opposing", name: "Haris Qalbani" }, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
+    expect(verdict("clients", undefined, { firmId: firm })).toBe("unchanged")
   })
 
   it("a chunk that loses a name is names_removed; appends, creates and deletes are ok", () => {

@@ -2,7 +2,7 @@ import { FieldValue, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onDocumentWritten } from "firebase-functions/v2/firestore"
 import { REGION } from "../../health"
-import { registryVersionRef } from "../registryVersion"
+import { nameIndexGenOf, registryVersionRef } from "../registryVersion"
 import { sameKey, screenedKeyOf, stampOf } from "./screenedName"
 import { requestReindex } from "./screening"
 
@@ -11,7 +11,8 @@ import { requestReindex } from "./screening"
  * FA-D1C-004; spec 2026-10-18-f37 ruling 16).
  *
  * The index's invariant holds for every writer in functions/src: each one that sets a screened name stages it in the
- * index in the same transaction (`stageRegistryWrite`) and stamps the row with `nameIndexed = { firmId, name }`. A
+ * index in the same transaction (`stageRegistryWrite`) and stamps the row with `nameIndexed = { firmId, name, gen }`,
+ * `gen` being the index generation it read there (`nameIndexGen`, moved by every reset and every break). A
  * client renamed, a client or opposing party inserted, a party flipped to opposing, or a row moved between firms by the
  * Admin SDK, a console edit or an import does neither, and a name removed from a chunk out of band takes a name away.
  * These Firestore triggers notice both and break the index's mirror: the registry version moves while
@@ -23,18 +24,34 @@ import { requestReindex } from "./screening"
  * in that window does not see the new name (residual; measured in `f37-fu-trigger-pipeline.emu.test.ts`).
  */
 
-export { nameIndexStamp, screenedKeyOf, stampOf, type ScreenedKey } from "./screenedName"
+export { nameIndexStamp, screenedKeyOf, stampOf, type NameStamp, type ScreenedKey } from "./screenedName"
 
 /**
- * What a client or party write means for the index (pure). `unchanged`: after it the row has no screened name, or the
- * same one as before (closeMatter's status update, any edit of other fields; a deletion leaves a name the index may
- * keep, which finds no row and so no hit). `indexed`: a new screened name stamped by a writer that staged it.
- * `unindexed`: a new screened name nobody staged (written outside functions/src): the index must be rebuilt.
+ * What a client or party write means for the index (pure; `gen` is the firm's current index generation, null when
+ * unknown or malformed). `unchanged`: after it the row has no screened name, or the same one as before (closeMatter's
+ * status update, any edit of other fields; a deletion leaves a name the index may keep, which finds no row and so no
+ * hit). `indexed`: a new screened name stamped by a writer that staged it in the current generation. `unindexed`: a new
+ * screened name nobody staged (written outside functions/src), or one whose stamp is older than the last reset or break
+ * (a row restored from a backup, or renamed back to its stamped name, after a rebuild dropped that name): the index
+ * must be rebuilt.
  */
-export function rowWriteVerdict(collection: string, before: DocumentData | undefined, after: DocumentData | undefined): "unchanged" | "indexed" | "unindexed" {
+export function rowWriteVerdict(
+  collection: string,
+  before: DocumentData | undefined,
+  after: DocumentData | undefined,
+  gen: number | null
+): "unchanged" | "indexed" | "unindexed" {
   const key = screenedKeyOf(collection, after)
   if (key === null || sameKey(key, screenedKeyOf(collection, before))) return "unchanged"
-  return sameKey(key, stampOf(after)) ? "indexed" : "unindexed"
+  const stamp = stampOf(after)
+  return sameKey(key, stamp) && stamp !== null && gen !== null && stamp.gen === gen ? "indexed" : "unindexed"
+}
+
+/** Whether the verdict of this write depends on the firm's current generation (a new screened name, stamped with it). */
+function needsGen(collection: string, before: DocumentData | undefined, after: DocumentData | undefined): string | null {
+  const key = screenedKeyOf(collection, after)
+  if (key === null || sameKey(key, screenedKeyOf(collection, before))) return null
+  return sameKey(key, stampOf(after)) ? key.firmId : null
 }
 
 /** The names a chunk body holds (strings only). */
@@ -57,15 +74,23 @@ export function chunkWriteVerdict(before: DocumentData | undefined, after: Docum
 /**
  * Breaks the firm's index mirror: a blind increment of the registry version (no read, so no contention retry, and no
  * write to a watched collection, so no trigger loop), then the on-demand reindex. Every screen refuses until the
- * reconciliation marks a rebuilt index current. A redelivered event bumps again, which only breaks the mirror again.
+ * reconciliation marks a rebuilt index current. The generation moves with it, so no stamp written before the break is
+ * trusted again (a name removed from a chunk may be missing, and its row may come back later with an old stamp). A
+ * redelivered event bumps again, which only breaks the mirror again.
  */
 export async function breakNameIndex(firmId: string, nowMs: number, cause: Record<string, string>): Promise<void> {
-  await registryVersionRef(firmId).set({ firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1) }, { merge: true })
+  await registryVersionRef(firmId).set(
+    { firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1), nameIndexGen: FieldValue.increment(1) },
+    { merge: true }
+  )
   logger.warn("conflict.name_index_broken", { firmId, ...cause })
   await requestReindex(firmId, nowMs)
 }
 
-/** The handler of a client or opposing-party write (the event's before and after data). Returns the verdict. */
+/**
+ * The handler of a client or opposing-party write (the event's before and after data). Returns the verdict. A new,
+ * stamped screened name costs one read: the firm's counter, for its current generation.
+ */
 export async function registryRowWritten(
   collection: string,
   docId: string,
@@ -73,7 +98,9 @@ export async function registryRowWritten(
   after: DocumentData | undefined,
   nowMs: number
 ): Promise<"unchanged" | "indexed" | "unindexed"> {
-  const verdict = rowWriteVerdict(collection, before, after)
+  const firmOfStamp = needsGen(collection, before, after)
+  const gen = firmOfStamp === null ? null : nameIndexGenOf((await registryVersionRef(firmOfStamp).get()).data())
+  const verdict = rowWriteVerdict(collection, before, after, gen)
   const key = screenedKeyOf(collection, after)
   if (verdict === "unindexed" && key !== null) await breakNameIndex(key.firmId, nowMs, { collection, docId, reason: "unindexed_name" })
   return verdict

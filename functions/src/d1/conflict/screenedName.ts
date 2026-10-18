@@ -19,13 +19,19 @@ export function screenedKeyOf(collection: string, data: DocumentData | undefined
   return null
 }
 
-/** The stamp a writer in functions/src puts on a row whose screened name it staged in the index. */
-export const nameIndexStamp = (firmId: string, name: string) => ({ nameIndexed: { firmId, name } })
+/** A stamp: the screened name a writer staged, and the index generation (`nameIndexGen`) it staged it in. */
+export type NameStamp = ScreenedKey & { gen: number }
 
-/** The row's stamp, when it is well formed. */
-export function stampOf(data: DocumentData | undefined): ScreenedKey | null {
+/**
+ * The stamp a writer in functions/src puts on a row whose screened name it staged in the index, in the same transaction
+ * that read `gen` (the counter's `nameIndexGen`).
+ */
+export const nameIndexStamp = (firmId: string, name: string, gen: number) => ({ nameIndexed: { firmId, name, gen } })
+
+/** The row's stamp, when it is well formed (a stamp without a generation is not). */
+export function stampOf(data: DocumentData | undefined): NameStamp | null {
   const s: unknown = data?.nameIndexed
   if (s === null || typeof s !== "object") return null
-  const { firmId, name } = s as Record<string, unknown>
-  return typeof firmId === "string" && typeof name === "string" ? { firmId, name } : null
+  const { firmId, name, gen } = s as Record<string, unknown>
+  return typeof firmId === "string" && typeof name === "string" && typeof gen === "number" && Number.isInteger(gen) && gen >= 0 ? { firmId, name, gen } : null
 }

@@ -252,6 +252,45 @@ describe.skipIf(!EMULATORS)("FA-D1C-002, stale stamps: a stamp older than a rebu
     await outOfBand(ref, () => ref.update({ canonicalName: CONFLICT }))
     await expectRefusedThenRebuilt(f)
   }, 180_000)
+
+  it("O9: a name removed from a chunk, its client deleted and the index healed without it, then the row restored (no reset involved)", async () => {
+    const f = await registeredFirm([CONFLICT])
+    const ref = adminDb().collection("clients").doc(f.clients[CONFLICT])
+    const saved = (await ref.get()).data()
+    const chunk0 = nameIndexChunkRef(f.firmId, 0)
+    await outOfBand(chunk0, () => chunk0.update({ names: FieldValue.arrayRemove(CONFLICT) }), f.firmId)
+    await outOfBand(ref, () => ref.delete())
+    expect(await reconcileNameIndex(f.firmId)).toMatchObject({ rebuilt: false, marked: true })
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(false)
+    await outOfBand(ref, () => ref.set(saved as DocumentData))
+    await expectRefusedThenRebuilt(f)
+  }, 180_000)
+
+  it("control: after a reset, registerClient and openMatter stamp the new generation, and their triggers leave the index current", async () => {
+    const f = await registeredFirm()
+    await resetAndRebuild(f)
+    const gen = (await readRegistryState(f.firmId)).nameIndexGen
+    expect(gen).toBeGreaterThan(0)
+    const t = await triggers()
+    const deliver = async (collection: string, id: string, data: DocumentData | undefined) =>
+      t ? t.registryRowWritten(collection, id, undefined, data, Date.now()) : "no triggers"
+
+    const c = await registerClient({ token: f.token, data: { firmId: f.firmId, name: "Zubair Hashmi", type: "individual", primaryMobile: nextMobile(), classification: "internal" } } as never)
+    const client = (await adminDb().collection("clients").doc(c.clientId).get()).data()
+    expect(client?.nameIndexed).toEqual({ firmId: f.firmId, name: "Zubair Hashmi", gen })
+    expect(await deliver("clients", c.clientId, client)).toBe("indexed")
+
+    const check = await runCheck({ token: f.token, data: { firmId: f.firmId, client: { clientId: f.clientId }, opposingParties: [{ name: "Omer Daryani" }] } } as never)
+    const opened = await openMatter({ token: f.token, data: { firmId: f.firmId, conflictCheckId: check.checkId, title: "Recovery suit", classification: "confidential" } } as never)
+    const opposing = (await rows("matter_parties", f.firmId)).filter((d) => d.data().matterId === opened.matterId && d.data().role === "opposing")
+    expect(opposing).toHaveLength(1)
+    expect(opposing[0].data().nameIndexed).toEqual({ firmId: f.firmId, name: "Omer Daryani", gen })
+    expect(await deliver("matter_parties", opposing[0].id, opposing[0].data())).toBe("indexed")
+
+    const state = await readRegistryState(f.firmId)
+    expect(state.nameIndex.version).toBe(state.version)
+    expect(state.nameIndexGen).toBe(gen)
+  }, 180_000)
 })
 
 describe.skipIf(!EMULATORS)("FA-D1C-003: a rebuild completing between a screen's counter read and its chunk read never gives CLEAR", () => {

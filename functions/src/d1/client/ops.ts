@@ -188,7 +188,7 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
         ...Object.fromEntries(Object.entries(optional).filter(([, v]) => v !== undefined)),
         classification,
         // The name staged in the index above: the registry trigger leaves a stamped name alone (F37 re-audit).
-        ...nameIndexStamp(caller.firmId, canonicalName),
+        ...nameIndexStamp(caller.firmId, canonicalName, registryState.nameIndexGen),
         createdBy: caller.uid,
         createdAt: FieldValue.serverTimestamp(),
       })

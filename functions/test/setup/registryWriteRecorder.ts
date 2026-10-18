@@ -26,7 +26,8 @@
  *   the top level, or its resulting name is unknown and reported. The attempt must hold an index-aware bump for the
  *   firm (one whose `nameIndex` patch carries the chunk pointer, which only `stageRegistryWrite` writes) and a chunk
  *   write of that firm adding the name (`no_name_index` otherwise), and the row's `nameIndexed` must equal
- *   `{ firmId, name }` (`no_name_stamp` otherwise; the registry trigger relies on it).
+ *   `{ firmId, name, gen }` with a generation (`no_name_stamp` otherwise; the registry trigger relies on it; the
+ *   generation's value is pinned by the reaudit suite's post-reset control).
  *
  * Every violation not taken by the test (`registryRecorder.take()`) fails it in `afterEach`. Writes
  * from test files are never product writes, so seeding fixtures is unaffected.

@@ -338,7 +338,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
               matterClassification: classification,
               matterStatus: "live",
               classification: partyClass,
-              ...(s.role === "opposing" ? nameIndexStamp(caller.firmId, s.name) : {}),
+              ...(s.role === "opposing" ? nameIndexStamp(caller.firmId, s.name, registryState.nameIndexGen) : {}),
               createdAt: FieldValue.serverTimestamp(),
             })
           }

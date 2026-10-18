@@ -77,8 +77,13 @@ export const PROJECTION_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Ob
  */
 export type NameIndexState = { schema: number | null; version: number | null; chunk: number; bytes: number; valid: boolean }
 
-/** The counter doc as one consistent read: whether it exists, the registry version and the name index state. */
-export type RegistryState = { exists: boolean; version: number; nameIndex: NameIndexState }
+/**
+ * The counter doc as one consistent read: whether it exists, the registry version, the name index state and the name
+ * index generation (`nameIndexGen`, 0 when absent; F37 re-audit). The generation moves whenever the index may have lost
+ * a name: its reset (`bumpResettingNameIndex`) and every break by a registry trigger. A row's `nameIndexed` stamp
+ * records the generation its name was staged in; a stamp of an older generation is not trusted.
+ */
+export type RegistryState = { exists: boolean; version: number; nameIndex: NameIndexState; nameIndexGen: number }
 
 const versionOf = (data: DocumentData | undefined): number => (typeof data?.version === "number" ? data.version : 0)
 
@@ -117,9 +122,21 @@ function nameIndexOf(raw: unknown): NameIndexState {
   return { schema: null, version: r.version, chunk: 0, bytes: 0, valid: true }
 }
 
-/** The counter doc's state from its data (pure; `exists` is whether the doc exists). */
+/** The name index generation of the counter's data: 0 when absent, null when malformed (then nothing is trusted). */
+export function nameIndexGenOf(data: DocumentData | undefined): number | null {
+  const gen: unknown = data?.nameIndexGen
+  if (absent(gen)) return 0
+  return isCount(gen) ? gen : null
+}
+
+/**
+ * The counter doc's state from its data (pure; `exists` is whether the doc exists). A malformed generation makes the
+ * index state invalid (the screen refuses it as corrupt, and the reset that rebuilds the index rewrites it).
+ */
 export function registryStateOf(exists: boolean, data: DocumentData | undefined): RegistryState {
-  return { exists, version: versionOf(data), nameIndex: nameIndexOf(data?.nameIndex) }
+  const gen = nameIndexGenOf(data)
+  const nameIndex = nameIndexOf(data?.nameIndex)
+  return { exists, version: versionOf(data), nameIndex: gen === null ? { ...nameIndex, valid: false } : nameIndex, nameIndexGen: gen ?? 0 }
 }
 
 /** The current version (0 before the first registry write), read outside any transaction. */
@@ -163,12 +180,20 @@ export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: 
 /**
  * The bump that resets the name index state (the reconciliation rebuilding a damaged index, F37): the whole
  * `nameIndex` map is replaced by an unplaced, schema-less one (it reads `missing` until the rebuild marks it) with
- * its mirror at the new version. `version` is the registry version read in `tx`.
+ * its mirror at the new version, and the generation moves (the reset drops every name, so no earlier stamp holds;
+ * an increment also replaces a malformed generation). `version` is the registry version read in `tx`.
  */
 export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number): void {
   tx.set(
     registryVersionRef(firmId),
-    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: version + 1, chunk: 0, bytes: 0 } },
-    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex"] }
+    {
+      firmId,
+      kind: "registry",
+      version: FieldValue.increment(1),
+      classification: "internal",
+      nameIndex: { version: version + 1, chunk: 0, bytes: 0 },
+      nameIndexGen: FieldValue.increment(1),
+    },
+    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex", "nameIndexGen"] }
   )
 }

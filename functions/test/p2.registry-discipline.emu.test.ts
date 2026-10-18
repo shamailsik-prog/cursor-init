@@ -1,10 +1,11 @@
-import { beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { FieldPath, type DocumentReference, type Firestore } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { loadRegistry } from "../src/d1/conflict/engine"
 import { nameIndexChunkRef, stageRegistryWrite } from "../src/d1/conflict/nameIndex"
 import { bumpRegistryVersion, readRegistryStateTx, REGISTRY_SCOPE } from "../src/d1/registryVersion"
 import { EMULATORS, uniq } from "./emu"
+import { deleteFirmData } from "./firmCleanup"
 import { registryRecorder } from "./setup/registryWriteRecorder"
 
 /**
@@ -146,6 +147,10 @@ describe.skipIf(!EMULATORS)("Registry recorder: the F37 conflict name index", ()
     firmId = uniq("firm")
     await db.collection("firms").doc(firmId).set({ name: "F", plan: "internal" })
   })
+  // The documents these tests write for the test firm (the shared `other-firm` id other files use is left alone).
+  afterAll(async () => {
+    if (EMULATORS) await deleteFirmData([firmId])
+  }, 120_000)
 
   const asProduct = async (fn: () => Promise<unknown>) => {
     registryRecorder.attributeTo("functions/src/fake/product.ts:9")
@@ -171,8 +176,8 @@ describe.skipIf(!EMULATORS)("Registry recorder: the F37 conflict name index", ()
         db.runTransaction(async (tx) => {
           const state = await readRegistryStateTx(tx, firmId)
           // Staged and stamped (F37 re-audit: the stamp is what the registry trigger and the recorder check).
-          tx.create(client(), { firmId, canonicalName: "Haris Qalbani", nameIndexed: { firmId, name: "Haris Qalbani" } })
-          tx.create(party(), { firmId, role: "opposing", name: "Omer Daryani", nameIndexed: { firmId, name: "Omer Daryani" } })
+          tx.create(client(), { firmId, canonicalName: "Haris Qalbani", nameIndexed: { firmId, name: "Haris Qalbani", gen: state.nameIndexGen } })
+          tx.create(party(), { firmId, role: "opposing", name: "Omer Daryani", nameIndexed: { firmId, name: "Omer Daryani", gen: state.nameIndexGen } })
           stageRegistryWrite(tx, firmId, state, ["Haris Qalbani", "Omer Daryani"])
         })
       )
@@ -221,6 +226,10 @@ describe.skipIf(!EMULATORS)("Registry recorder: every screened name a product wr
     firmId = uniq("firm")
     await db.collection("firms").doc(firmId).set({ name: "F", plan: "internal" })
   })
+  // The documents these tests write: each carries the test firm's id (the moved client ends in it) or is keyed by it.
+  afterAll(async () => {
+    if (EMULATORS) await deleteFirmData([firmId])
+  }, 120_000)
 
   const asProduct = async (fn: () => Promise<unknown>) => {
     registryRecorder.attributeTo("functions/src/fake/product.ts:9")
@@ -231,7 +240,7 @@ describe.skipIf(!EMULATORS)("Registry recorder: every screened name a product wr
       registryRecorder.attributeTo(null)
     }
   }
-  const stamp = (name: string) => ({ nameIndexed: { firmId, name } })
+  const stamp = (name: string, gen = 0) => ({ nameIndexed: { firmId, name, gen } })
 
   it("a rename by update, a create by non-merge set, a role flip and a move between firms, each with a bare bump, are no_name_index", async () => {
     const client = db.collection("clients").doc(uniq("client"))
@@ -287,8 +296,8 @@ describe.skipIf(!EMULATORS)("Registry recorder: every screened name a product wr
       await asProduct(() =>
         db.runTransaction(async (tx) => {
           const state = await readRegistryStateTx(tx, firmId)
-          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })
-          tx.create(db.collection("matter_parties").doc(uniq("party")), { firmId, role: "opposing", name: "Omer Daryani", ...stamp("Omer Daryani") })
+          tx.create(db.collection("clients").doc(uniq("client")), { firmId, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", state.nameIndexGen) })
+          tx.create(db.collection("matter_parties").doc(uniq("party")), { firmId, role: "opposing", name: "Omer Daryani", ...stamp("Omer Daryani", state.nameIndexGen) })
           stageRegistryWrite(tx, firmId, state, ["Haris Qalbani", "Omer Daryani"])
         })
       )
