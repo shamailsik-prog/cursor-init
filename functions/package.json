@@ -6,6 +6,14 @@
   "engines": {
     "node": "22"
   },
+  "packageManager": "npm@10.9.9",
+  "devEngines": {
+    "packageManager": {
+      "name": "npm",
+      "version": "~10.9.0",
+      "onFail": "error"
+    }
+  },
   "scripts": {
     "build": "node build.mjs",
     "jobs:backfill": "node lib/cli/jobsBackfill.js",
