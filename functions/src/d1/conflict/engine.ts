@@ -95,52 +95,107 @@ function partyKeys(raw: unknown): Keys {
 
 const isKeyName = (v: unknown): v is KeyName => typeof v === "string" && (KEY_FIELDS as readonly string[]).includes(v)
 
-/** `entity_links` rows for screening, resolved at `nowMs` (shared by loadRegistry and transactional re-reads). */
-export function linkRowsFromSnap(linkSnap: QuerySnapshot, nowMs: number, enabled: boolean): LinkRow[] {
+/** One stored row: its document id and data. */
+export type Row = { id: string; data: DocumentData }
+
+/** `entity_links` rows for screening, resolved at `nowMs`, in the order given. */
+export function linkRowsOf(rows: readonly Row[], nowMs: number, enabled: boolean): LinkRow[] {
   const links: LinkRow[] = []
-  for (const d of linkSnap.docs) {
-    const row = d.data()
+  for (const { id, data: row } of rows) {
     if (typeof row.leftId !== "string" || typeof row.rightId !== "string" || !isKeyName(row.key)) continue
     const state = effectiveLinkState(row, nowMs, enabled)
     // P2-29: a rejected pair is neither relied on nor unresolved (with the flag off nothing reads as rejected).
     if (state === "rejected") continue
-    links.push({ id: d.id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
+    links.push({ id, leftId: row.leftId, rightId: row.rightId, key: row.key, confirmed: isConfirmedState(state) })
   }
   return links
 }
 
-/** The firm's registry for screening, read at `now`. */
+const rowsOf = (snap: QuerySnapshot): Row[] => snap.docs.map((d) => ({ id: d.id, data: d.data() }))
+
+/** `entity_links` rows for screening, resolved at `nowMs` (shared by loadRegistry and transactional re-reads). */
+export function linkRowsFromSnap(linkSnap: QuerySnapshot, nowMs: number, enabled: boolean): LinkRow[] {
+  return linkRowsOf(rowsOf(linkSnap), nowMs, enabled)
+}
+
+/** The firm's transliteration map (`transliteration_map` rows): script → Roman spellings, rows merged in the order given. */
+export function firmMapOf(rows: readonly Row[]): Map<string, string[]> {
+  const firmMap = new Map<string, string[]>()
+  for (const { data } of rows) {
+    const { script, roman } = data
+    if (typeof script !== "string" || script === "" || !Array.isArray(roman)) continue
+    const spellings = roman.filter((r): r is string => typeof r === "string" && r.trim() !== "")
+    if (spellings.length > 0) firmMap.set(script, [...(firmMap.get(script) ?? []), ...spellings])
+  }
+  return firmMap
+}
+
+/** The firm doc read for the L17.2 flag: `ok: false` when the read failed (the flag then fails toward off). */
+export type FirmRead = { ok: boolean; data: DocumentData | undefined }
+
+/** The firm doc for the L17.2 flag; a failed read is logged and returned as `ok: false`, never thrown. */
+export async function readFirmForFlag(firmId: string): Promise<FirmRead> {
+  return adminDb()
+    .collection("firms")
+    .doc(firmId)
+    .get()
+    .then((s): FirmRead => ({ ok: true, data: s.data() }))
+    .catch((err: unknown): FirmRead => {
+      logFailure("conflict flag read failed", err)
+      return { ok: false, data: undefined }
+    })
+}
+
+/**
+ * The rows a registry is built from. Each list must be in document-id order (the order a Firestore query
+ * with equality filters only returns), so candidates, links and therefore hits keep one order whether the
+ * rows came from the full scan or from the candidate loader (F37). `parties` are opposing parties only.
+ */
+export type RegistryRows = {
+  firm: FirmRead
+  clients: readonly Row[]
+  matters: readonly Row[]
+  parties: readonly Row[]
+  links: readonly Row[]
+  maps: readonly Row[]
+}
+
+/**
+ * The firm's whole registry for screening, read at `now`: every client, matter, opposing party, entity
+ * link and transliteration row. Since F37 no production path calls it (screens use the candidate loader,
+ * `candidates.ts`); it is the full-scan oracle the recall tests compare against, and the reference for
+ * what a screen reads (`REGISTRY_SCOPE`).
+ */
 export async function loadRegistry(firmId: string, now: Date): Promise<Registry> {
   const db = adminDb()
   const byFirm = (name: string) => db.collection(name).where("firmId", "==", firmId).get()
-  const [firmSnap, clientSnap, matterSnap, partySnap, linkSnap, mapSnap] = await Promise.all([
-    db
-      .collection("firms")
-      .doc(firmId)
-      .get()
-      .then((s) => ({ ok: true as const, data: s.data() }))
-      .catch((err: unknown) => {
-        logFailure("conflict flag read failed", err)
-        return { ok: false as const, data: undefined }
-      }),
+  const [firm, clientSnap, matterSnap, partySnap, linkSnap, mapSnap] = await Promise.all([
+    readFirmForFlag(firmId),
     byFirm("clients"),
     byFirm("matters"),
     db.collection("matter_parties").where("firmId", "==", firmId).where("role", "==", "opposing").get(),
     byFirm("entity_links"),
     byFirm("transliteration_map"),
   ])
-  const enabled = l17_2Enabled(firmSnap.data, firmSnap.ok)
+  return buildRegistry(
+    { firm, clients: rowsOf(clientSnap), matters: rowsOf(matterSnap), parties: rowsOf(partySnap), links: rowsOf(linkSnap), maps: rowsOf(mapSnap) },
+    now
+  )
+}
+
+/**
+ * Builds the screening registry from its rows (pure). One candidate per (client, matter), or per client
+ * with no matter, and one per opposing party; each candidate's link state starts at "none" (tailor decides
+ * it per subject). A candidate needs only its own rows: a client's matters, a party's matter, and the
+ * links touching its entity, so a subset of the firm's rows that holds those for every candidate it
+ * contains builds exactly those candidates of the full registry, in the same order.
+ */
+export function buildRegistry(rows: RegistryRows, now: Date): Registry {
+  const enabled = l17_2Enabled(rows.firm.data, rows.firm.ok)
   const nowMs = now.getTime()
+  const firmMap = firmMapOf(rows.maps)
 
-  const firmMap = new Map<string, string[]>()
-  for (const d of mapSnap.docs) {
-    const { script, roman } = d.data()
-    if (typeof script !== "string" || script === "" || !Array.isArray(roman)) continue
-    const spellings = roman.filter((r): r is string => typeof r === "string" && r.trim() !== "")
-    if (spellings.length > 0) firmMap.set(script, [...(firmMap.get(script) ?? []), ...spellings])
-  }
-
-  const links = linkRowsFromSnap(linkSnap, nowMs, enabled)
+  const links = linkRowsOf(rows.links, nowMs, enabled)
   const unresolvedByEntity = new Map<string, string[]>()
   for (const l of links) {
     if (l.confirmed) continue
@@ -150,8 +205,8 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
 
   type MatterInfo = { matterNo: string | null; classification: string; status: "live" | "closed"; clientId: unknown }
   const matters = new Map<string, MatterInfo>()
-  for (const d of matterSnap.docs) {
-    const m = d.data()
+  for (const d of rows.matters) {
+    const m = d.data
     matters.set(d.id, {
       matterNo: typeof m.matterNo === "string" ? m.matterNo : null,
       classification: knownOrHighest(m.classification),
@@ -172,8 +227,8 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
   }
 
   const candidates: BaseCandidate[] = []
-  for (const d of clientSnap.docs) {
-    const c = d.data()
+  for (const d of rows.clients) {
+    const c = d.data
     if (typeof c.canonicalName !== "string") continue
     const own = mattersByClient.get(d.id) ?? []
     const clientClass = knownOrHighest(c.classification)
@@ -201,8 +256,8 @@ export async function loadRegistry(firmId: string, now: Date): Promise<Registry>
     }
   }
 
-  for (const d of partySnap.docs) {
-    const p = d.data()
+  for (const d of rows.parties) {
+    const p = d.data
     if (typeof p.name !== "string") continue
     const matterId = typeof p.matterId === "string" && p.matterId !== "" ? p.matterId : null
     const matter = matterId ? matters.get(matterId) : undefined

@@ -8,13 +8,15 @@ import type { Caller } from "../../p5/auth"
 import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isFirestoreDocId, isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { checkPermission, requirePermission } from "../../p5/permission"
-import { loadRegistry, maxLabel, runEngine, unseenHits } from "../conflict/engine"
+import { maxLabel, runEngine, unseenHits } from "../conflict/engine"
+import { stageRegistryWrite } from "../conflict/nameIndex"
+import { screeningRegistry } from "../conflict/screening"
 import { nameForms } from "../conflict/normalise"
 import { reliedOnLinkIds, type Hit, type Subject } from "../conflict/match"
 import { isUnmergeInProgress } from "../entity/linkState"
 import { allocateNumber, formatMatterNo, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
-import { bumpRegistryVersion, readRegistryVersion, readRegistryVersionTx } from "../registryVersion"
+import { bumpRegistryVersion, readRegistryStateTx } from "../registryVersion"
 import { parseKeys, type Keys } from "../validate"
 
 /**
@@ -244,12 +246,14 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
     // No round starts once the deadline has passed: the call answers its 409 before the function times out.
     for (let round = 1; round <= OPEN_SCREEN_ROUNDS && !pastDeadline(); round++) {
       // Re-screen (spec P2-6, final review I5): the stored subjects against today's registry, through the
-      // same engine as runConflictCheck, after the same gate the transaction applies again below. The
-      // registry version is read first: a registry write the screen missed has bumped it by the transaction.
-      const version = await readRegistryVersion(caller.firmId)
+      // same engine and candidate loader as runConflictCheck (F37), after the same gate the transaction applies
+      // again below. The loader reads the registry version, with the name index state, before any registry row:
+      // a registry write the screen missed has bumped it by the transaction. An index that cannot be trusted
+      // refuses the open (503 screening_unavailable, nothing written).
       const pre = gateOpen(caller, (await checkRef.get()).data(), now)
       const preClient = clientOf(caller, (await db.collection("clients").doc(pre.clientId).get()).data())
-      const registry = await loadRegistry(caller.firmId, now)
+      const screen = await screeningRegistry(caller.firmId, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined)), now)
+      const { registry, version } = screen
       const fresh: Hit[] = runEngine(registry, pre.subjects, pre.subjects.map((_, i) => (i === 0 ? preClient.entityId : undefined))).hits
       await openMatterTestSeam.afterPreScreen?.(round)
 
@@ -258,7 +262,8 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
         async (tx) => {
           // Reads first: the registry version, the check, its client, the listed members, the prefixes, then the counter.
           // A moved version means the screen above may be out of date: write nothing (no audit row) and redo the round.
-          if ((await readRegistryVersionTx(tx, caller.firmId)) !== version) return REGISTRY_MOVED
+          const registryState = await readRegistryStateTx(tx, caller.firmId)
+          if (registryState.version !== version) return REGISTRY_MOVED
           const check = (await tx.get(checkRef)).data()
           const { subjects, clientId } = gateOpen(caller, check, now)
           const client = clientOf(caller, (await tx.get(db.collection("clients").doc(clientId))).data())
@@ -300,8 +305,10 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
             createdBy: caller.uid,
           }
           await audit.stage(tx, "allow", "ok")
-          // The new matter and its parties change the registry: a concurrent open re-screens against them.
-          bumpRegistryVersion(tx, caller.firmId)
+          // The new matter and its parties change the registry: a concurrent open re-screens against them. The opposing
+          // names the name index lacks join it here (F37); the version is the screen's, so the index is the one it read.
+          const newNames = subjects.filter((s) => s.role === "opposing" && !screen.indexedNames.has(s.name)).map((s) => s.name)
+          stageRegistryWrite(tx, caller.firmId, registryState, newNames)
           tx.create(matterRef, { ...matter, createdAt: FieldValue.serverTimestamp() })
           for (const uid of [caller.uid, ...memberIds]) {
             tx.create(members().doc(`${matterId}_${uid}`), {

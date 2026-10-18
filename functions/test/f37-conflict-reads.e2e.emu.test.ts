@@ -52,10 +52,11 @@ function token(rand: () => number): string {
 const titled = (t: string) => t[0].toUpperCase() + t.slice(1)
 const fillerName = (rand: () => number) => `${titled(token(rand))} ${titled(token(rand))}`
 
-/** N clients, each with one live matter and one opposing party on it, written in batches of 450 rows. */
-async function seedRegistry(firmId: string, n: number): Promise<void> {
+/** N clients, each with one live matter and one opposing party on it, written in batches of 450 rows. Returns the names written. */
+async function seedRegistry(firmId: string, n: number): Promise<Set<string>> {
   const db = adminDb()
   const rand = prng(0xf37 + n)
+  const names = new Set<string>()
   let batch = db.batch()
   let staged = 0
   const flush = async (force = false) => {
@@ -65,6 +66,10 @@ async function seedRegistry(firmId: string, n: number): Promise<void> {
       staged = 0
     }
   }
+  const note = (name: string) => {
+    names.add(name)
+    return name
+  }
   for (let i = 0; i < n; i++) {
     const clientRef = db.collection("clients").doc()
     const matterRef = db.collection("matters").doc()
@@ -72,7 +77,7 @@ async function seedRegistry(firmId: string, n: number): Promise<void> {
       firmId,
       clientCode: `SKD-2099-${String(i + 1).padStart(5, "0")}`,
       entityId: `ent-${clientRef.id}`,
-      canonicalName: fillerName(rand),
+      canonicalName: note(fillerName(rand)),
       type: "individual",
       primaryMobile: `+92399${String(1000000 + i).padStart(7, "0")}`,
       classification: "internal",
@@ -94,7 +99,7 @@ async function seedRegistry(firmId: string, n: number): Promise<void> {
       firmId,
       matterId: matterRef.id,
       role: "opposing",
-      name: fillerName(rand),
+      name: note(fillerName(rand)),
       keys: {},
       matterClassification: "confidential",
       matterStatus: "live",
@@ -105,13 +110,21 @@ async function seedRegistry(firmId: string, n: number): Promise<void> {
     await flush()
   }
   await flush(true)
+  return names
 }
 
-/** The production reconciliation, when this tree has the projection (F37); null on a tree without it. */
-async function reconciler(): Promise<((firmId: string, nowMs: number) => Promise<unknown>) | null> {
+type NameIndexModule = {
+  reconcileNameIndex(firmId: string): Promise<unknown>
+  readIndexedNames(firmId: string, state: unknown): Promise<Set<string>>
+}
+type RegistryVersionModule = { readRegistryState(firmId: string): Promise<unknown> }
+
+/** The production reconciliation and index reader, when this tree has the projection (F37); null on a tree without it. */
+async function projection(): Promise<{ index: NameIndexModule; registry: RegistryVersionModule } | null> {
   try {
-    const mod = (await import("../src/d1/conflict/nameIndex")) as { reconcileNameIndex?: (firmId: string, nowMs: number) => Promise<unknown> }
-    return mod.reconcileNameIndex ?? null
+    const index = (await import("../src/d1/conflict/nameIndex")) as unknown as NameIndexModule
+    const registry = (await import("../src/d1/registryVersion")) as unknown as RegistryVersionModule
+    return typeof index.reconcileNameIndex === "function" ? { index, registry } : null
   } catch {
     return null
   }
@@ -122,9 +135,15 @@ type Measure = { n: number; registryRows: number; check: ReadCount; open: ReadCo
 async function measure(n: number): Promise<Measure> {
   const firmId = uniq("f37firm")
   await adminDb().collection("firms").doc(firmId).set({ name: "F37 synthetic firm", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS" })
-  await seedRegistry(firmId, n)
-  const reconcile = await reconciler()
-  if (reconcile) await reconcile(firmId, Date.now())
+  const seeded = await seedRegistry(firmId, n)
+  const p = await projection()
+  if (p) {
+    await p.index.reconcileNameIndex(firmId)
+    // The index really holds the registry: every seeded name, so the screen's flat reads are not an empty index's.
+    const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
+    expect([...seeded].filter((name) => !indexed.has(name))).toEqual([])
+    expect(indexed.size).toBe(seeded.size)
+  }
   const partner = await mintIdToken(claims(firmId, "partner"))
   const client = await registerClient({
     token: partner.token,

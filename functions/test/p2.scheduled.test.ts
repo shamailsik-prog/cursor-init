@@ -69,6 +69,9 @@ describe("P2 scheduled jobs: period keys and range (P3-16)", () => {
       region: ["asia-south1"],
       scheduleTrigger: { schedule: "0 2 * * *", timeZone: "Asia/Karachi" },
     })
-    expect(SCHEDULED_JOBS).toEqual([{ jobType: "d1.autoconfirm", cron: "15 2 * * *", period: "day" }])
+    expect(SCHEDULED_JOBS).toEqual([
+      { jobType: "d1.autoconfirm", cron: "15 2 * * *", period: "day" },
+      { jobType: "d1.conflict.reindex", cron: "35 2 * * *", period: "day" },
+    ])
   })
 })

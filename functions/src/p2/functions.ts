@@ -10,6 +10,7 @@ import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./const
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
+import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
 import { scheduledJobFunction } from "./scheduled"
 import { sweep } from "./sweeper"
 import { runJobTask } from "./worker"
@@ -109,3 +110,6 @@ export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGI
 
 /** The daily auto-confirm tick (P3-43): enqueues `d1.autoconfirm` for every firm, once per PKT day. */
 export const d1AutoConfirmTick = scheduledJobFunction(AUTO_CONFIRM_SPEC)
+
+/** The daily conflict name index reconciliation tick (audit F37): enqueues `d1.conflict.reindex` for every firm, once per PKT day. */
+export const d1ConflictReindexTick = scheduledJobFunction(NAME_REINDEX_SPEC)
