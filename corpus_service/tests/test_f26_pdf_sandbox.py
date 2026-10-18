@@ -286,11 +286,14 @@ def test_r7_a_daemonic_worker_can_use_the_sandbox_where_stdlib_multiprocessing_c
 
 
 def test_r8_a_parse_past_the_wall_limit_is_killed_with_its_process_group(tmp_path):
+    """The worker's watchdog ends the parse at the wall limit (4 s here). The child's own alarm, at the
+    wall limit + 15 s, is only a backstop for an orphan, so the bound below (wall + 10 s, for a loaded
+    machine) fails if the watchdog does not act."""
     started = time.monotonic()
     exc = refused(tmp_path, F.slow_pdf(3_000_000), wall_seconds=4.0, cpu_seconds=60)
     elapsed = time.monotonic() - started
     assert exc.code == "pdf_parse_timeout", exc
-    assert elapsed < 4.0 + 15.0, f"refused after {elapsed:.1f} s"
+    assert elapsed < 4.0 + 10.0, f"refused after {elapsed:.1f} s"
     assert spawned_children() == [], "the killed child is still running"
 
 
