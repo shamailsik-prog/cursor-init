@@ -4,8 +4,14 @@ import logging, asyncio
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import ScraperSource
+from scraper.tasks import job_record, outcomes
 from scraper.trust import may_harvest, may_publish_directly
 logger = logging.getLogger(__name__)
+
+# Audit F28 (spec docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md): a run
+# that could not do its work ends as a Celery FAILURE and a `failed` scraper_jobs row; a run that
+# worked and found nothing is a success with a count. Every attempt is recorded (job_record), only a
+# transient fault is retried (outcomes.will_retry), with backoff 300, 600, 1200 s, at most 3 times.
 
 # What a harvester does with what it fetches (audit F20, PR #48 re-audit round 2):
 #   staging - writes scraper_staging rows only; promotion makes the trust decision later.
@@ -38,44 +44,97 @@ ROUTES = {
     "NationalAssembly": ("scraper.tasks.nationalassembly", "scrape_nationalassembly", ROUTE_DIRECT),
 }
 
-@shared_task(name="scraper.tasks.dispatcher.run_source_job", bind=True, max_retries=3)
+@shared_task(name="scraper.tasks.dispatcher.run_source_job", bind=True, max_retries=outcomes.MAX_RETRIES)
 def run_source_job(self, source_name: str):
-    logger.info(f"Dispatching job for {source_name}")
+    logger.info("Dispatching job for %s", source_name)
+    attempt = int(self.request.retries or 0)
+    # A direct call (no worker, no broker) cannot be retried, so its record says max_retries 0.
+    max_retries = 0 if self.request.called_directly else int(self.max_retries)
     try:
-        asyncio.run(_run_async(source_name))
+        return asyncio.run(job_record.in_task_loop(run_source(
+            source_name,
+            celery_task_id=self.request.id,
+            worker=self.request.hostname,
+            attempt=attempt,
+            max_retries=max_retries,
+        )))
     except Exception as e:
-        logger.error(f"Job failed for {source_name}: {e}")
-        raise self.retry(exc=e, countdown=300)
+        logger.error("Job failed for %s: %s", source_name, outcomes.describe_error(e))
+        if outcomes.will_retry(e, attempt, max_retries):
+            raise self.retry(exc=e, countdown=outcomes.retry_countdown(attempt))
+        raise
+
+
+async def run_source(source_name: str, *, celery_task_id=None, worker=None, attempt=0, max_retries=outcomes.MAX_RETRIES):
+    """One recorded attempt of a source job (F28 R1-R9). Returns the run summary, or raises the
+    failure after recording it: Celery decides on a retry from the same outcomes.will_retry."""
+    started = job_record.utcnow()
+    job_id = await job_record.start(
+        source_name, celery_task_id=celery_task_id, worker=worker, attempt=attempt, max_retries=max_retries
+    )
+    tally = outcomes.Tally()
+    try:
+        with outcomes.bind_run_tally(tally):
+            decision = await _run_async(source_name)
+        if isinstance(decision, outcomes.Refused):
+            raise outcomes.SourceRefused(source_name, decision.reason)
+        if not isinstance(decision, outcomes.Skipped) and not isinstance(decision, outcomes.HarvestResult):
+            raise outcomes.HarvesterContractError(source_name, decision)
+    except Exception as exc:
+        retry_in = outcomes.retry_countdown(attempt) if outcomes.will_retry(exc, attempt, max_retries) else None
+        await job_record.finish_failed(
+            job_id, source_name, exc, tally=tally, started=started, attempt=attempt, max_retries=max_retries,
+            retry_in=retry_in,
+        )
+        raise
+    # F28 R18 (Bugbot 4305696998; the isolation of the skip is Cursor's c6af66d): a run that
+    # succeeded or was skipped and whose record cannot be written is not a harvest failure. It never
+    # goes through finish_failed, never changes freshness and is never retried: RunRecordFailed.
+    outcome = outcomes.OUTCOME_SKIPPED if isinstance(decision, outcomes.Skipped) else decision.outcome
+    try:
+        if isinstance(decision, outcomes.Skipped):
+            return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
+        return await job_record.finish_completed(job_id, source_name, decision, started)
+    except Exception as exc:
+        logger.error(
+            "F28 run record failed: %s %s run could not be recorded (%s); not retried, freshness unchanged",
+            source_name, outcome, outcomes.describe_error(exc),
+        )
+        raise outcomes.RunRecordFailed(source_name) from exc
+
 
 async def _run_async(source_name: str):
+    """Decide whether the source runs, and run it. Returns ``outcomes.Skipped`` (a policy decision),
+    ``outcomes.Refused`` (the source cannot be run: F28 R5) or the harvester's own result; a harvest
+    failure propagates."""
     async with SessionLocal() as db:
         result = await db.execute(select(ScraperSource).where(ScraperSource.source_name==source_name))
         source = result.scalars().first()
         if not source:
             logger.error(f"Source {source_name} not found")
-            return
+            return outcomes.Refused("source_not_found")
         if not source.is_active:
             logger.info(f"{source_name} inactive, skip")
-            return
+            return outcomes.Skipped("inactive")
         # Audit F20: only trusted and review sources are harvested; blocked and any value outside
         # the vocabulary (an un-migrated or drifted row) fail closed.
         if not may_harvest(source.trust_level):
             logger.info("%s trust_level %r is not harvestable, skip", source_name, source.trust_level)
-            return
+            return outcomes.Skipped("trust_level_not_harvestable")
         route = ROUTES.get(source_name)
         if route is None:
             logger.info("%s has no harvester, skip", source_name)
-            return
+            return outcomes.Refused("no_harvester")
         if not (isinstance(route, tuple) and len(route) == 3 and route[2] in ROUTE_KINDS):
             kind = route[2] if isinstance(route, tuple) and len(route) == 3 else None
             logger.warning("%s route declares no valid kind (%r), refused", source_name, kind)
-            return
+            return outcomes.Refused("invalid_route_kind")
         module_name, function_name, kind = route
         if kind == ROUTE_DIRECT and not may_publish_directly(source.trust_level):
             logger.info(
                 "%s publishes to statutes_master/case_law_master directly; trust_level %r is not trusted, skip",
                 source_name, source.trust_level,
             )
-            return
+            return outcomes.Skipped("direct_route_needs_trusted")
         harvest = getattr(importlib.import_module(module_name), function_name)
-        await harvest(source, db)
+        return await harvest(source, db)
