@@ -46,6 +46,22 @@ OUTCOME_FAILED = "failed"
 REASON_LISTINGS_FAILED = "every listing request failed"
 REASON_DOCUMENTS_FAILED = "every document request failed"
 
+# Per-item error codes that are not an HTTP status or an exception (R3, R16).
+ERROR_NOT_PDF = "not_pdf"  # a body assumed to be a PDF does not start with the %PDF- signature
+ERROR_EMPTY_PDF_TEXT = "empty_pdf_text"  # a PDF whose extraction is empty or whitespace only
+
+PDF_SIGNATURE = b"%PDF-"
+
+
+def looks_like_pdf(content: Optional[bytes]) -> bool:
+    """R16: checked before extraction wherever a harvester assumes a body is a PDF."""
+    return bool(content) and content.startswith(PDF_SIGNATURE)
+
+
+def has_text(text: Optional[str]) -> bool:
+    """R16: an extraction that is empty or whitespace only is a parse failure, never progress."""
+    return bool(text) and bool(text.strip())
+
 # ---------------------------------------------------------------------------------------------
 # Retry policy (R7)
 # ---------------------------------------------------------------------------------------------

@@ -28,7 +28,16 @@ async def scrape_nationalassembly(source, db):
                 if rr.status_code != 200:
                     tally.item_failed(f"http_{rr.status_code}")
                     continue
+                # Audit F28 R16: the %PDF- signature before extraction, and text after it; an empty
+                # body or an unreadable PDF is a failed document, never an empty success.
+                if not outcomes.looks_like_pdf(rr.content):
+                    tally.item_failed(outcomes.ERROR_NOT_PDF)
+                    continue
                 txt = extract_pdf_text(rr.content)
+                if not outcomes.has_text(txt):
+                    logger.warning(f"NA pdf {full} has no extractable text; nothing written")
+                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
+                    continue
                 # naive split
                 rows = 0
                 for chunk in txt.split("\n\n")[:10]:

@@ -225,10 +225,16 @@ async def scrape_supremecourt(source, db):
                 if response.status_code != 200:
                     tally.item_failed(f"http_{response.status_code}")
                     continue
-                if response.content[:4] != b"%PDF":
-                    tally.item_failed("not_pdf")
+                if not outcomes.looks_like_pdf(response.content):
+                    tally.item_failed(outcomes.ERROR_NOT_PDF)
                     continue
                 text = extract_pdf_text(response.content)
+                if not outcomes.has_text(text):
+                    # Audit F28 R16: the signature but no text (parsing and OCR both failed) is a
+                    # failed document: never staged, never progress.
+                    logger.warning("PDF %s has no extractable text; not staged", pdf_url)
+                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
+                    continue
                 staging = ScraperStaging(
                     source_id=source.id,
                     source_site="SupremeCourt",
