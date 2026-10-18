@@ -110,3 +110,11 @@ Round-1 mutants (each snippet checked to occur once and to compile before the ru
 | RR1-M05 reclaim ignores expiry (restructured reclaim) | in-process R3 |
 | RR1-M06b no reclaim (restructured reclaim) | in-process R3 |
 | M23 interruption charged / M24 no release (give-back restructured) | F28's own unchanged r26 test |
+
+| Round-1 step | Result |
+| --- | --- |
+| Full suite at 8a36911 (corpus_service and postgres byte-identical at ed6cca2) | **1208 passed**, 3 warnings, 157 subtests, 0 failed, 0 skipped, 19 min 47 s (1168 + 40 F27 tests: 17 unit, 20 in process, 3 prefork) |
+| Merge origin/main c02ebbc (#84, F38: functions/ and docs only) | 6400414 |
+| CI (coordinator ruling): `gate-g0.yml` job `corpus-service` `timeout-minutes` 10 → 20 with the measured durations (main 8m03s; this branch 9m44s / 9m45s) | ed6cca2; YAML parses, the job reads 20 |
+| Gate G-0 at ed6cca2 | `=== Gate G-0 PASSED (static) ===` |
+| Claim gate at ed6cca2 | PASS |
