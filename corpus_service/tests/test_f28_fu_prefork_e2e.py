@@ -50,7 +50,8 @@ app = celery_app.app
 app.conf.update(
     broker_url="filesystem://", broker_use_ssl=None, redis_backend_use_ssl=None,
     broker_transport_options={"data_folder_in": ROOT + "/q", "data_folder_out": ROOT + "/q",
-                              "processed_folder": ROOT + "/done", "store_processed": False},
+                              "processed_folder": ROOT + "/done", "store_processed": False,
+                              "control_folder": ROOT + "/control"},
     result_backend="file://" + ROOT + "/results",
     task_soft_time_limit=3, task_time_limit=30, worker_hijack_root_logger=False,
 )
@@ -93,7 +94,7 @@ def prefork_worker(corpus_db, tmp_path, *, slow_mode="await", env=None):
     from celery import Celery
 
     root = tmp_path / "fs"
-    for d in ("q", "done", "results"):
+    for d in ("q", "done", "results", "control"):  # kombu's control folder too: never the working tree
         (root / d).mkdir(parents=True)
     slow(root, "crpc1898")  # the second statute, after the first has written its 3 sections
     (tmp_path / "f28_fu_prefork_app.py").write_text(APP_MODULE)
@@ -106,7 +107,7 @@ def prefork_worker(corpus_db, tmp_path, *, slow_mode="await", env=None):
     sender = Celery("f28-fu-sender", broker="filesystem://", backend=f"file://{root}/results", set_as_current=False)
     sender.conf.update(broker_transport_options={
         "data_folder_in": f"{root}/q", "data_folder_out": f"{root}/q",
-        "processed_folder": f"{root}/done", "store_processed": False,
+        "processed_folder": f"{root}/done", "store_processed": False, "control_folder": f"{root}/control",
     })
 
     def send(name, *args, slow_slug=None):
