@@ -157,3 +157,48 @@ Intent kept in every case; nothing skipped or weakened.
 - `p2.boot`, `p5.identity`, `g2.cross-firm` (`NOT_TENANT_ENDPOINTS`): the three trigger exports, with their region, document path and retry.
 - `p2.registry-discipline.emu.test.ts`, `setup/registryWriteRecorder.ts`: stamped creates carry `{ firmId, name, gen }`; two new cases; the F37 describes delete their firm's documents.
 - `f37-name-index.test.ts`: the verdict takes the current generation.
+
+### Review round 1 (PR #89): Codex 4307586920, Bugbot 4307596183 and 4307596177
+
+- [x] RED through the real routes on c3d91b0, the code before Bugbot Autofix (`functions/test/f37-fu-review1.emu.test.ts`, a3eac2c; C3 added in 0eb8993).
+- [x] Review the Bugbot Autofix commit 869bf10, and merge it (fe26ed5). Kept: the paged chunk scan and the transactional break. Replaced: its absolute `stored + 1` generation, which writes 1 over a malformed value. Fixed: its prefer-const lint error.
+- [x] Fix (4485f35):
+  - one break per trigger event, using a marker;
+  - the reindex run staged in the break's own transaction, keyed by the minute and the confirmation count;
+  - a paged id-range chunk read with canonical ids;
+  - an absolute generation, `max(stored, version) + 1`.
+- [x] Unit tests (ca30528), spec rulings 14 and 16, the P2 runbook and the code comments (e180ff3).
+
+| Thread | Test (`f37-fu-review1.emu.test.ts`) | c3d91b0 | 869bf10 (Autofix) | Branch |
+| --- | --- | --- | --- | --- |
+| Codex 4307586920 | A1: the same event again, after its minute's run | FAIL: `current=false pending=0` | FAIL | PASS: `current=true`, HIT |
+| | A2: a second break in the minute, after the run | FAIL: `pending=0` | FAIL | PASS: `pending=1`, healed |
+| | A3: a later break after a run that found the index already current | FAIL: `pending=0` | FAIL | PASS: `pending=1`, healed |
+| Bugbot 4307596183 | B1: a valid index, crowded by 401 chunks of firm `{firmId}_1` | FAIL: 503 | PASS | PASS: HIT |
+| | B2: a chunk beyond the pointer, crowded the same way | FAIL: **CLEAR** | PASS | PASS: 503, then healed |
+| Bugbot 4307596177 | C: `nameIndexGen` set to `"x"`, `1.5`, or a map | `1.5` FAIL (5.5 after four resets, stuck at 503); the other two PASS | PASS | PASS: generation 3, HIT |
+| | C2: a reset over a malformed generation, then a row restored with an old stamp | FAIL: **CLEAR** | FAIL: **CLEAR** | PASS: 503, then HIT |
+| | C3: the same with a break instead of a reset | FAIL: generation 1 | FAIL: generation 1 | PASS: generation 10, 503, then HIT |
+
+Overall: c3d91b0 failed 7 of 9 (then C3 failed too); the branch passes 10/10.
+
+Mutants R01 to R10, each one exact edit, are all killed, each by its intended test:
+
+| Mutant | What it breaks | Killed by |
+| --- | --- | --- |
+| R01 | no break dedupe | A1 |
+| R02 | the run key by minute only | A2 |
+| R03 | no count when the index is found current | A3 |
+| R04 | no count on the mark | A2 |
+| R05 | the old single limited chunk read | B1, B2 |
+| R06 | the reset writes `stored + 1` | C2 |
+| R07 | the reset increments the generation | C, C2 |
+| R08 | the next generation ignores the version | C2 |
+| R09 | leading-zero chunk ids accepted | unit test |
+| R10 | the break increments a malformed generation | C3 |
+
+Trigger pipeline at 0eb8993, with the break now a transaction: PASS, first 503 0.8 to 5.9 s after the write (load about 15).
+
+Changed test expectations:
+- `f37-screening-guards`: the job id is `reindexRunKey(minute, count)`. Reconciling a current index now records its confirmation count; the version and the index are unchanged, as before.
+- `tests/firestore.rules.d1-phase2a.test.ts`: `conflict_index_breaks` is server-only.
