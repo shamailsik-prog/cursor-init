@@ -11,7 +11,7 @@ import {
   setAuthorityStoreForTests,
   type AuthorityStore,
 } from "../src/d4/authority"
-import { AUTHORITY_BUDGET_MS, runGate, unpleadedChecks } from "../src/d4/gate"
+import { AUTHORITY_BUDGET_MS, budgetedStore, runGate, unpleadedChecks } from "../src/d4/gate"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { GATE_SEVERITY, type TemporalCheck } from "../src/d4/types"
 
@@ -700,6 +700,26 @@ describe("runGate: the per-run authority budget (F05, #51 R1 D-7, plan D24)", ()
     return store
   }
   const THREE = "See PLD 2099 SC 101, PLD 2099 SC 102 and PLD 2099 SC 103."
+
+  it("once the budget timer has fired the store is spent, even when the clock shows time left (a timer can fire before Date.now() catches up)", async () => {
+    // The clock never advances, so `used` alone would still show the whole budget left after the cut-off.
+    const frozen = () => 1_000
+    const inner = sectionStore()
+    inner.addJudgment("j_102", "PLD 2099 SC 102", "division")
+    const raw: AuthorityStore = {
+      findJudgment: (c) => (c === "PLD 2099 SC 101" ? never() : inner.findJudgment(c)),
+      listTreatments: (id) => inner.listTreatments(id),
+      getSectionAsAt: (s, d, j) => inner.getSectionAsAt(s, d, j),
+    }
+    const { store, calls } = spyStore(raw)
+    const budgeted = budgetedStore(store, 20, frozen)
+    await expect(budgeted.findJudgment("PLD 2099 SC 101")).rejects.toMatchObject({ name: "AuthorityUnavailableError", reason: "budget" })
+    await expect(budgeted.findJudgment("PLD 2099 SC 102")).rejects.toMatchObject({ name: "AuthorityUnavailableError", reason: "budget" })
+    await expect(budgeted.listTreatments("j_102")).rejects.toMatchObject({ name: "AuthorityUnavailableError", reason: "budget" })
+    // Nothing reaches the store after the cut-off.
+    expect(calls.findJudgment).toEqual(["PLD 2099 SC 101"])
+    expect(calls.listTreatments).toEqual([])
+  })
 
   it("AUTHORITY_BUDGET_MS is 60 s, at most half the function timeout", () => {
     expect(AUTHORITY_BUDGET_MS).toBe(60_000)
