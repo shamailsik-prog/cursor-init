@@ -40,7 +40,8 @@ Merges: origin/main a9a5256 (#81, F26) was merged as 6a75c21 before the RED run;
 | Gate G-0 | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===` (provider guard: the allowlisted `embeddings.py:openai` entry verified) |
 | RED / GREEN, R2 fencing test (added) | `-k r2_` on the in-process file | main: error, no `lease_owner` column (no main equivalent); branch: **1 passed** |
 | GREEN full suite at f278051 (+ README) | `python -m pytest corpus_service/tests -q` | **1197 passed**, 3 warnings, 157 subtests, 0 skipped, 24 min 08 s (main 1168 + the 29 F27 tests collected then) |
-| GREEN full suite at the final head | same | FINAL_FULL_SUITE |
+| GREEN full suite at 94d95f6 (the last code and test commit; later commits are documentation) | same | **1200 passed**, 3 warnings, 157 subtests, 0 skipped, 22 min 26 s (main 1168 + 32 F27 tests: 17 unit, 13 in process, 2 prefork) |
+| F31 runtime smoke (not required: no dependency added; run because it executes `scraper.migrate` with 004) | `CORPUS_TEST_DATABASE_URL=... bash corpus_service/tests/e2e/runtime_smoke.sh` | clean venv from `requirements.txt` (80 distributions): every check PASS, `== F31 runtime smoke: all checks passed`, rc 0 |
 | Compose e2e (`store_security_e2e.sh`, `upgrade_e2e.sh`) | | NOT DEMONSTRATED here: no Docker daemon in this session; CI's compose job runs them |
 
 ## Mutation check
