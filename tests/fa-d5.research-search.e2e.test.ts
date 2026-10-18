@@ -70,7 +70,7 @@ const BAIL_SOME = [
   ["j-2099-crpc-14", "Section 497 CrPC and the meaning of reasonable grounds"],
   ["j-2099-crpc-15", "Section 497 CrPC read with section 498"],
 ] as const
-const RELEVANT = [...BAIL_ALL, ...BAIL_SOME].map(([id]) => id)
+const RELEVANT: string[] = [...BAIL_ALL, ...BAIL_SOME].map(([id]) => id)
 const KHULA = Array.from({ length: 40 }, (_, i) => [`j-2099-khula-${String(i).padStart(2, "0")}`, `Khula decree in a family suit with dower returned, synthetic case ${i}`] as const)
 const LARGER = ["j-2099-larger-01", "Larger bench reference on custody of minors"] as const
 

@@ -72,7 +72,7 @@ Each ruling records the decision and the reason (owner's standing instruction).
 
 **R5. Bounds. A bad value is refused with a `PublicError` (a clean 400 at any route), never clamped.**
 - `k`: a safe integer from 1 to 50 (`RESEARCH_MAX_K`). The default is 10 (`RESEARCH_DEFAULT_K`). A non-number, 0, a negative, a fraction, NaN, or 10^9 is refused.
-- `text`: a string that is at most 500 characters (`RESEARCH_QUERY_MAX_CHARS`) after folding and whitespace collapse, and that leaves at least one search term after R4. An empty text, or one that is only punctuation or stop words, is refused as "no search terms".
+- `text`: a string of at most 500 characters (`RESEARCH_QUERY_MAX_CHARS`), counted in Unicode code points after trimming and collapsing whitespace, and before folding, so an over-long input is refused before any folding work. It must leave at least one search term after R4. An empty text, or one that is only punctuation or stop words, is refused as "no search terms".
 - `embedding.vector`: an array of exactly 1536 finite numbers, the dimension the corpus metadata declares, with a non-zero norm.
 - `embedding.model`: it must equal the live `corpus_metadata.embedding_model`.
 - A query that is not an object, or that has neither leg, is refused.

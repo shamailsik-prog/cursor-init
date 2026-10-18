@@ -1,5 +1,7 @@
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { listMattersForUser } from "@/services/d1-2/matters"
+import type { CitationVerdict } from "@/services/d4-2/citationVerdict"
+import { searchCorpus } from "@/services/d5-1/research"
 import type { SpineStore } from "@/platform/spine/store"
 
 /**
@@ -7,10 +9,12 @@ import type { SpineStore } from "@/platform/spine/store"
  * each. The court-ops route validates and dispatches through this table, and
  * Gate G-2 (tests/g2.cross-firm.test.ts) reads it to inventory the channel's
  * read commands, so a command cannot be added without the gate seeing it.
+ * A row whose pattern has a capture group takes an argument (the `/research`
+ * query); `whatsAppCommandArgument` reads it through the table.
  */
 export const WHATSAPP_COMMANDS = [
   { name: "matters", usage: "/matters", pattern: /^\/matters$/i },
-  { name: "research", usage: "/research <query>", pattern: /^\/research\s+.+/i },
+  { name: "research", usage: "/research <query>", pattern: /^\/research\s+([\s\S]+)/i },
   { name: "ops", usage: "/ops queue", pattern: /^\/ops\s+queue$/i },
 ] as const
 
@@ -25,11 +29,28 @@ export function whatsAppCommandName(command: string): WhatsAppCommandName | unde
   return WHATSAPP_COMMANDS.find((c) => c.pattern.test(text))?.name
 }
 
+/** The argument a command carries (its pattern's capture group, trimmed), or "" when it carries none. */
+export function whatsAppCommandArgument(command: string): string {
+  const text = command.trim()
+  const row = WHATSAPP_COMMANDS.find((c) => c.pattern.test(text))
+  return row?.pattern.exec(text)?.[1]?.trim() ?? ""
+}
+
+/** One line of the `/research` reply: a numbered list (L18 §8), each authority with its Module 33 treatment. */
+export type WhatsAppResearchItem = {
+  n: number
+  entityId: string
+  title: string
+  citation: string | null
+  treatment: CitationVerdict
+  score: number
+}
+
 export type WhatsAppResult = {
   ok: boolean
   denied?: boolean
   matters?: { id: string; title: string }[]
-  research?: string[]
+  research?: WhatsAppResearchItem[]
 }
 
 export function handleWhatsApp(
@@ -48,9 +69,22 @@ export function handleWhatsApp(
     return { ok: true, matters }
   }
   if (name === "research") {
+    // P5 first (R-1, L19.10), before the query or the corpus is read: a denied caller learns nothing, whatever it sent.
     const perm = checkPermission(store, userId, "research")
     if (!perm.allow) return { ok: false, denied: true }
-    return { ok: true, research: [] }
+    // D5-1 search (audit FA-D2WA-001): the query decides the reply. A refused query or corpus throws a PublicError,
+    // which the court-ops route answers with a 400 carrying the fixed message.
+    const query = whatsAppCommandArgument(command)
+    const found = searchCorpus(store, { text: query })
+    const research = found.items.map((hit, i) => ({
+      n: i + 1,
+      entityId: hit.entityId,
+      title: hit.title,
+      citation: hit.citation,
+      treatment: hit.treatment,
+      score: hit.score,
+    }))
+    return { ok: true, research }
   }
   return { ok: false, denied: true }
 }

@@ -178,6 +178,8 @@ describe("searchCorpus: ranking", () => {
     expect(out.mode).toBe("keyword")
     expect(out.items[0]).toMatchObject({ entityId: "j-497", title: "Bail under section 497 CrPC", citation: "2099 SCMR 497", benchType: "single" })
     expect(out.items).toHaveLength(9)
+    // Strictly above, not a tie-break: one match each, but "497" is rare and "state" is in eight judgments.
+    expect(out.items[1].score as number).toBeLessThan(out.items[0].score as number)
     expect(out.items.map((h) => h.entityId)).not.toContain("j-khula")
     const scores = out.items.map((h) => h.score as number)
     for (let i = 1; i < scores.length; i++) expect(scores[i - 1]).toBeGreaterThanOrEqual(scores[i])
