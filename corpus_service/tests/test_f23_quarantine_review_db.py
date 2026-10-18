@@ -34,6 +34,8 @@ OTHER_REVIEWER = "Reviewer F23-B (synthetic)"
 REASON = "Checked against the certified copy (synthetic 2099 fixture)"
 
 REVIEW_SOURCE = "NasirLawSite"  # seeded review by migrate (F20)
+LABELLED_SOURCE = "SindhHighCourtPublic"  # seeded review; shc.py stages its rows under the label below
+FAMILY_LABEL = "SindhHighCourt"
 TRUSTED_SOURCE = "PakistanLawSite"  # seeded trusted by migrate (F20)
 BLOCKED_SOURCE = "F23BlockedSource"  # inserted blocked below
 LATER_BLOCKED_SOURCE = "F23LaterBlocked"  # review when quarantined, blocked before the review
@@ -57,7 +59,11 @@ STAGED = {
     "later": (LATER_BLOCKED_SOURCE, "2099 SCMR 2306", "F23 Later Blocked v. The State", 0.9, "review_source"),
     "unknown": (MISSING_SOURCE, "2099 SCMR 2307", "F23 Unknown Source v. The State", 0.9, "unknown_source"),
     "reject_me": (REVIEW_SOURCE, "2099 SCMR 2308", "F23 Rejected Party v. The State", 0.9, "review_source"),
+    "labelled": (LABELLED_SOURCE, "2099 SCMR 2309", "F23 Labelled Source v. The State", 0.9, "review_source"),
+    "collide": (REVIEW_SOURCE, "2099 SCMR 2310", "F23 Identity Collision v. The State", 0.9, "review_source"),
 }
+# The staging source_site label, where a harvester writes one that is not the source's own name.
+SITE_LABEL = {"labelled": FAMILY_LABEL}
 
 
 @dataclass(frozen=True)
@@ -162,7 +168,8 @@ def seed(corpus_db):
                    "extracted_citation, extracted_title, confidence_score, normalised, parsing_metadata) "
                    "SELECT s.id, :site, :url, :body, '<p>synthetic</p>', :citation, :title, :conf, true, "
                    "CAST(:meta AS jsonb) FROM scraper_sources s WHERE s.source_name = CAST(:sname AS text)")
-        statements.append((sql, dict(site=source, sname=source, url=f"https://example.invalid/f23/{label}",
+        statements.append((sql, dict(site=SITE_LABEL.get(label, source), sname=source,
+                                     url=f"https://example.invalid/f23/{label}",
                                      body=f"F23 SYNTHETIC JUDGMENT TEXT {label} (2099)", citation=citation,
                                      title=title, conf=confidence, meta=json.dumps(metadata))))
     _admin_run(corpus_db, statements)
@@ -500,7 +507,7 @@ def test_e_an_untrusted_source_is_refused(client, review, corpus_db):
     records, _user, _pw = review
     x(corpus_db, "UPDATE scraper_sources SET trust_level = 'blocked' WHERE source_name = :n", n=LATER_BLOCKED_SOURCE)
     refused = {label: decide(client, records[label].qid, "promote") for label in ("blocked", "later", "unknown")}
-    allowed = {label: decide(client, records[label].qid, "promote") for label in ("lowconf", "alpha")}
+    allowed = {label: decide(client, records[label].qid, "promote") for label in ("lowconf", "alpha", "labelled")}
     observed = {
         label: {
             "status": res.status_code,
@@ -514,6 +521,9 @@ def test_e_an_untrusted_source_is_refused(client, review, corpus_db):
     observed["allowed"] = {label: res.status_code for label, res in allowed.items()}
     observed["trusted low confidence published as"] = [
         r["source_site"] for r in master_rows(corpus_db, citation=records["lowconf"].citation)]
+    # Ruling 8: source_site names the source whose trust was verified, not the staging label.
+    observed["labelled record published as"] = [
+        r["source_site"] for r in master_rows(corpus_db, citation=records["labelled"].citation)]
     observed["decisions"] = decision_count(corpus_db)
     expected = {
         "blocked": {"status": 409, "error": "source_not_promotable", "trust reason": "blocked_source",
@@ -522,9 +532,10 @@ def test_e_an_untrusted_source_is_refused(client, review, corpus_db):
                   "master rows": 0, "still pending": True},
         "unknown": {"status": 409, "error": "source_not_promotable", "trust reason": "unknown_source",
                     "master rows": 0, "still pending": True},
-        "allowed": {"lowconf": 200, "alpha": 200},
+        "allowed": {"lowconf": 200, "alpha": 200, "labelled": 200},
         "trusted low confidence published as": [TRUSTED_SOURCE],
-        "decisions": 2,
+        "labelled record published as": [LABELLED_SOURCE],
+        "decisions": 3,
     }
     assert observed == expected
 
@@ -557,3 +568,93 @@ def test_f_the_embedding_outbox_row_exists_exactly_once(client, review, corpus_d
         "decision names the outbox row": True,
     }
     assert observed == expected
+
+
+# ---------------------------------------------------------------------------------------------
+# (g) the identity backstop: a collision the checks cannot see is 409, never 500, never a write
+# ---------------------------------------------------------------------------------------------
+def test_g_an_identity_collision_is_409_and_writes_nothing(client, review, corpus_db):
+    records, _user, _pw = review
+    collide = records["collide"]
+    # A row already holds the id this record would publish under (ruling 4), with another citation,
+    # so neither the state check nor the citation check sees it; only the primary key does.
+    x(corpus_db,
+      "INSERT INTO case_law_master (id, citation, case_title, source_site, is_promoted) "
+      "VALUES (:id, '2099 SCMR 2390', 'F23 Squatter v. The State', :site, false)",
+      id=published_id(collide.qid), site=REVIEW_SOURCE)
+    res = decide(client, collide.qid, "promote")
+    observed = {
+        "status": res.status_code,
+        "error": error_code(res),
+        "still pending": is_pending(queue_row(corpus_db, collide.qid)),
+        "staging promoted": staging_row(corpus_db, collide.staging_id)["promoted"],
+        "master rows with its citation": len(master_rows(corpus_db, citation=collide.citation)),
+        "outbox rows": len(outbox_rows(corpus_db)),
+        "decisions": decision_count(corpus_db),
+    }
+    expected = {
+        "status": 409,
+        "error": "conflict",
+        "still pending": True,
+        "staging promoted": False,
+        "master rows with its citation": 0,
+        "outbox rows": 0,
+        "decisions": 0,
+    }
+    assert observed == expected
+
+
+# ---------------------------------------------------------------------------------------------
+# (h) migration 002: append-only for every role, idempotent, and self-repairing
+# ---------------------------------------------------------------------------------------------
+TRIGGERS_SQL = (
+    "SELECT tgname, tgenabled::text AS tgenabled, tgfoid::regprocedure::text AS fn FROM pg_trigger "
+    "WHERE tgrelid = to_regclass(:t) AND NOT tgisinternal ORDER BY tgname"
+)
+TRIGGER_OIDS_SQL = "SELECT oid FROM pg_trigger WHERE tgrelid = to_regclass(:t) AND NOT tgisinternal ORDER BY tgname"
+
+
+def _sqlstate_of(exc):
+    orig = getattr(exc, "orig", None)
+    return getattr(orig, "sqlstate", None) or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+
+
+def test_h_migration_002_is_append_only_idempotent_and_restores_a_dropped_trigger(corpus_db):
+    first = corpus_db.migrate()
+    assert first.returncode == 0, first.stderr[-3000:]
+    assert has_decisions_table(corpus_db), f"no {DECISIONS} table after migrate"
+    triggers = [dict(r) for r in q(corpus_db, TRIGGERS_SQL, t=DECISIONS)]
+    oids = q(corpus_db, TRIGGER_OIDS_SQL, t=DECISIONS)
+    assert triggers == [
+        {"tgname": "quarantine_decisions_no_truncate", "tgenabled": "O", "fn": "quarantine_decisions_append_only()"},
+        {"tgname": "quarantine_decisions_no_update_delete", "tgenabled": "O",
+         "fn": "quarantine_decisions_append_only()"},
+    ], triggers
+
+    # Even the admin (a superuser here) cannot TRUNCATE, UPDATE or DELETE a decision.
+    x(corpus_db,
+      f"INSERT INTO {DECISIONS} (id, quarantine_id, decision, reviewer, reviewer_auth, reason, prior_state, "
+      "new_state) VALUES (gen_random_uuid(), gen_random_uuid(), 'rejected', 'Reviewer F23-H (synthetic)', "
+      "'shared_admin_key', 'synthetic', CAST('{}' AS jsonb), CAST('{}' AS jsonb))")
+    codes = {}
+    for sql in (f"TRUNCATE {DECISIONS}", f"UPDATE {DECISIONS} SET reason = 'x'", f"DELETE FROM {DECISIONS}"):
+        try:
+            x(corpus_db, sql)
+            codes[sql.split()[0]] = "allowed"
+        except Exception as exc:  # noqa: BLE001 - classified by SQLSTATE
+            codes[sql.split()[0]] = _sqlstate_of(exc)
+    assert codes == {"TRUNCATE": APPEND_ONLY_SQLSTATE, "UPDATE": APPEND_ONLY_SQLSTATE, "DELETE": APPEND_ONLY_SQLSTATE}
+    assert decision_count(corpus_db) == 1
+
+    # A second migrate leaves a current database untouched.
+    second = corpus_db.migrate()
+    assert second.returncode == 0, second.stderr[-3000:]
+    assert q(corpus_db, TRIGGER_OIDS_SQL, t=DECISIONS) == oids
+    assert "append-only trigger already current" in second.stderr + second.stdout
+
+    # A dropped or disabled trigger is put back by the next migrate.
+    x(corpus_db, f"DROP TRIGGER quarantine_decisions_no_update_delete ON {DECISIONS}")
+    x(corpus_db, f"ALTER TABLE {DECISIONS} DISABLE TRIGGER quarantine_decisions_no_truncate")
+    third = corpus_db.migrate()
+    assert third.returncode == 0, third.stderr[-3000:]
+    assert [dict(r) for r in q(corpus_db, TRIGGERS_SQL, t=DECISIONS)] == triggers
