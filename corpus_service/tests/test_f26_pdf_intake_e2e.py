@@ -22,6 +22,8 @@ tests/fixtures/f26 were produced by main's unmodified in-process extractor. Cita
 import contextlib
 import dataclasses
 import hashlib
+import os
+import select
 import ssl
 import stat
 import threading
@@ -295,6 +297,77 @@ def test_b_a_parse_past_the_wall_limit_is_killed_and_the_run_goes_on(corpus_db, 
     budget = (limits.wall_seconds if limits else 10.0) + 50.0
     checks(elapsed < budget, f"the run took {elapsed:.1f} s; the slow document is bounded by the 10 s wall limit")
     checks(sha256(slow) + ".pdf" in stored_objects(court.vault), "the slow PDF was not kept before parsing")
+    checks.verify()
+
+
+@contextlib.contextmanager
+def worker_output_counted():
+    """Points this process's fds 1 and 2 at a pipe and counts every byte written to it while the
+    block runs. In a Celery worker those descriptors are the container's log (Docker's json-file
+    driver; compose sets no rotation), and a spawned sandbox child inherits them. billiard's
+    semaphore tracker, which a first spawn starts with the same descriptors, is started first so it
+    keeps the real ones."""
+    from billiard import semaphore_tracker
+
+    semaphore_tracker.ensure_running()
+    written = [0]
+    read_fd, write_fd = os.pipe()
+    stop = threading.Event()
+
+    def _drain():
+        while True:
+            ready, _, _ = select.select([read_fd], [], [], 0.2)
+            if ready:
+                chunk = os.read(read_fd, 1 << 20)
+                if not chunk:
+                    return
+                written[0] += len(chunk)
+            elif stop.is_set():
+                return
+
+    drain = threading.Thread(target=_drain, name="f26-worker-output", daemon=True)
+    drain.start()
+    saved = (os.dup(1), os.dup(2))
+    os.dup2(write_fd, 1)
+    os.dup2(write_fd, 2)
+    os.close(write_fd)
+    try:
+        yield written
+    finally:
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        for fd in saved:
+            os.close(fd)
+        stop.set()
+        drain.join(30)
+        if not drain.is_alive():
+            os.close(read_fd)
+
+
+def test_b_a_pdf_that_floods_the_parser_s_log_writes_nothing_to_the_worker_s_output(corpus_db, monkeypatch, tmp_path):
+    """FA-corpus-009, the re-audit's MEDIUM: a 2,777-byte PDF whose form XObject makes pdfminer log a
+    warning, quoting a 100 KB string, at each of 200,000 invocations. The re-audit measured 7,241 MiB
+    written to the worker's stderr in 300 s under the production limits. Spec R16: the child's
+    fds 1 and 2 are /dev/null and its logging is off, so the worker's own stdout and stderr receive
+    at most 64 KiB during the whole run; the document still ends at the wall limit (here 8 s) as
+    `pdf_parse_timeout` and the next judgment is staged."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    sandbox_limits(monkeypatch, wall_seconds=8.0, cpu_seconds=8)
+    flood = F.log_flood_pdf()
+    golden = golden_pdf("golden-one-page")
+    with lhc_court(monkeypatch, tmp_path, [("flood", flood), ("normal", golden)]) as court:
+        with worker_output_counted() as written:
+            result = fire(ENTRY)
+
+    checks = Checks()
+    checks(len(flood) == 2777, f"the flood PDF is {len(flood)} bytes, not the re-audit's 2,777")
+    checks(written[0] <= 64 * 1024,
+           f"the worker's stdout and stderr received {written[0]:,} bytes ({written[0] / MIB:.1f} MiB) during the run; "
+           f"the bound is 64 KiB")
+    checks(result.state == "SUCCESS", f"task state {result.state}: {result.result!r}")
+    run_record(checks, status="completed", extracted=1, failed=1, errors={"pdf_parse_timeout": 1}, outcome="partial")
+    staged_only(checks, court.urls[1], "golden-one-page")
+    print(f"F26-FU: the worker's stdout and stderr received {written[0]} bytes during the flood run")  # evidence log
     checks.verify()
 
 
