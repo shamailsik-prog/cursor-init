@@ -101,7 +101,8 @@ Gates:
   `SIKANDER_LIVE=1` also runs the live checks when `ci_gates/gate_g0_live.sh` exists.
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
-  (`packageManager` + `devEngines.packageManager`, `onFail: error`, one pin for every manifest), and no workflow,
+  (`packageManager` + `devEngines.packageManager`, `onFail: error`, one pin for every manifest), no directory holds
+  two lockfiles, the root and every directory an install surface runs `npm ci` in has one, and no workflow,
   `.cursor/environment.json`, `.claude/hooks/*` or package script installs without the lockfile. With `--npm-ci`
   (`npm run gate:lockfiles`, and a step in the CI gates job) it also checks that the running npm is inside the pin and
   runs `npm ci --dry-run --ignore-scripts` for each lockfile: npm's own validator, which catches an override added,

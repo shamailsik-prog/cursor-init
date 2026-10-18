@@ -90,12 +90,12 @@ Both manifests gain:
 `ci_gates/check_lockfiles.py [--root DIR] [--npm-ci] [--npm CMD]`. It finds every `package.json` and lockfile under the root (skipping `node_modules`, `.git`, `.next`, `.stryker-tmp`, `.eve`, `.vercel`, `.turbo` and `fixtures` directories, and any nested repository or worktree, that is a directory holding its own `.git`, such as `.claude/worktrees/*`) and fails closed.
 
 Static checks (G-0 check [18], offline, milliseconds):
-1. The root has a `package.json`. Every `package.json` that declares dependencies or overrides (the root's included) has a lockfile beside it, and every lockfile has a `package.json` beside it. A `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` or `bun.lockb` fails (the pinned package manager is npm).
+1. The root has a `package.json` and a lockfile, whatever it declares (ruling R3b). Every `package.json` that declares dependencies or overrides has a lockfile beside it, and every lockfile has a `package.json` beside it. A directory holding both `npm-shrinkwrap.json` and `package-lock.json` fails, and the shrinkwrap is the one checked (ruling R3a). A `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` or `bun.lockb` fails (the pinned package manager is npm).
 2. Each lockfile is `lockfileVersion` 3 with a `packages` map and a root entry (`packages[""]`).
 3. The root entry equals the manifest for every field npm copies into it: `name`, `version`, `dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, `peerDependenciesMeta`, `bundleDependencies` (or `bundledDependencies`), `engines`, `os`, `cpu`, `workspaces` (an empty object or list counts as absent). This catches what `npm ci` tolerates: a range edited in `package.json` that the locked version still satisfies (seeded: `zod` `4.5.4` to `^4.5.4`, `npm ci` exit 0).
 4. Every direct dependency has an entry at `node_modules/<name>` in the lock.
 5. Every manifest with a lockfile declares the pin of ruling 2: `packageManager` `npm@X.Y.Z` and `devEngines.packageManager` `{ name: "npm", version: "~X.Y.0" or "X.Y.Z", onFail: "error" }`, with the `packageManager` version inside the range, and all manifests declare the same pin.
-6. No install surface runs a non-frozen npm install: `.github/workflows/*.yml`/`*.yaml`, `.cursor/environment.json`, `.claude/hooks/*` and every manifest's `scripts`. A violation is an `npm` command whose subcommand is `install` or one of its aliases (`i`, `add`, `in`, `ins`, `inst`, `insta`, `instal`, `isnt`, `isnta`, `isntal`, `isntall`), `install-test`/`it`, `update` (`up`, `upgrade`, `udpate`), `uninstall` (`un`, `unlink`, `remove`, `rm`, `r`) or `dedupe` (`ddp`), unless it is global (`-g`, `--global`, `--location=global`), or any `--package-lock=false` / `--no-package-lock`. Full-line comments are skipped.
+6. No install surface runs a non-frozen npm install: `.github/workflows/*.yml`/`*.yaml`, `.cursor/environment.json`, `.claude/hooks/*` and every manifest's `scripts`. A violation is an `npm` command whose subcommand is `install` or one of its aliases (`i`, `add`, `in`, `ins`, `inst`, `insta`, `instal`, `isnt`, `isnta`, `isntal`, `isntall`), `install-test`/`it`, `update` (`up`, `upgrade`, `udpate`), `uninstall` (`un`, `unlink`, `remove`, `rm`, `r`) or `dedupe` (`ddp`), unless it is global (`-g`, `--global`, `--location=global`), or any `--package-lock=false` / `--no-package-lock`. Every directory a surface runs `npm ci` in must hold a `package.json` and a lockfile (ruling R3b). Full-line comments are skipped.
 
 Dynamic checks (`--npm-ci`):
 7. The npm that runs (`npm --version`, or `--npm CMD`) is inside the pin.
@@ -124,6 +124,18 @@ The audit's correction ends "require a clean npm ci plus an artifact provenance 
 - RED on main: the guard does not exist, so every guard case fails (each asserts the guard's own message, not only a non-zero exit, so a missing script cannot pass a "must fail" case); (c) fails because main's checked-in lock is rejected by npm 11.19.1; (d) fails because main has no pin (npm 11 reports `EUSAGE`, not `EBADDEVENGINES`).
 - `tests/g0-gate-e2e.test.ts`: the minimal tree G-0 accepts now includes `package-lock.json` beside the `package.json` it already copied, because check [18] requires a root lockfile. No case is removed or weakened.
 
+## 3a. Review round (Codex P2 x2 on PR #66, head fd31e77)
+
+### Ruling R3a: two lockfiles in one directory fail; the shrinkwrap is the one checked (thread 4305265180)
+
+The guard keyed lockfiles by directory, so with both `npm-shrinkwrap.json` and `package-lock.json` present it kept `package-lock.json` (the later name) and never checked the shrinkwrap, which is the file `npm ci` uses when both exist. Codex's case, a valid `package-lock.json` beside a shrinkwrap at `lockfileVersion` 2, exited 0. Ruling: a directory holding both fails ("two lockfiles in one directory; npm ci uses npm-shrinkwrap.json and ignores package-lock.json (keep one)"), because a second lockfile that `npm ci` silently ignores is drift by definition; and the shrinkwrap is the file paired with the manifest and checked, so its own defects are reported as well. A shrinkwrap on its own stays allowed and is checked like a `package-lock.json` (this repository has none).
+
+### Ruling R3b: the root always needs a lockfile, and so does every directory an install surface runs `npm ci` in (thread 4305265184)
+
+The lockfile requirement followed the manifest's declarations, so a root `package.json` with no dependencies and no lockfile passed although `npm ci` fails there. Ruling: the root needs a lockfile whatever it declares. For other manifests the rule is tied to what is installed, not to every `package.json`: every directory an install surface runs `npm ci` in (any `ci` alias, including `install-ci-test`) must hold a `package.json` and a lockfile. The target is the command's `--prefix` or `-C` value, else the root; a package script's `npm ci` runs in its own package's directory. A target held in a variable or command substitution (`.claude/hooks/session-start.sh` loops `npm ci --prefix "$dir"`) is not guessed. A manifest that declares nothing and that no surface installs (for example one that only sets `"type": "module"`) still needs no lockfile. Not read: a step's `working-directory:` or a preceding `cd`; such an `npm ci` is attributed to the root (residual 6).
+
+Tests (`tests/f39-lockfile-guard.test.ts`, "review round"): six cases. RED against fd31e77's guard: 4 failed / 43 passed (47); each of the four defect cases ended `=== lockfile guard PASSED ===`; the two controls (a shrinkwrap alone is checked; `npm ci` where lockfiles exist, with a variable prefix, passes) passed already. GREEN after the fix: 47/47.
+
 ## 4. Adversarial check
 
 - **Steelman of a reviewer: "the finding says repair the lockfile; you changed package.json."** The lock has no field for overrides, and with main's override no lock satisfies both npm 10 and npm >= 11.2 (both directions measured), so a lock-only repair can only choose which half of the npm versions fails. The manifest change is the narrowest one that makes a single lock valid everywhere, and it leaves the resolved tree identical.
@@ -139,6 +151,7 @@ The audit's correction ends "require a clean npm ci plus an artifact provenance 
 3. **Third-party builders** (a Functions or hosting build on Node 24 / npm 11) are refused by the pin. No deployment manifest exists in the repository (F32), so none could be tested here.
 4. **npm < 10.9 ignores `devEngines`.** On such an npm only the guard (in CI) enforces the pin; the repaired lock is valid under npm 9.2.0 and 10.8.2 too (measured).
 5. **The override is still needed.** It disappears when eve pins undici >= 8.10.2 (`known-advisories.md`). F40 (dev-dependency advisories, 35 findings) is unchanged.
+6. **`npm ci` targets are read from the command only** (ruling R3b): a `working-directory:` or a `cd` before `npm ci` is not followed, and a variable target is not guessed. Every `npm ci` in this repository targets the root or `functions/` (directly, or through the session hook's `$dir` loop over those two), both of which have lockfiles, so none is missed today.
 
 ## 6. Files
 

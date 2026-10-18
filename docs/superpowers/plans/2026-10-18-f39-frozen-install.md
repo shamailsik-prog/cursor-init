@@ -96,3 +96,16 @@ Verification at the branch head:
 - Dependency-audit gate (`node ci_gates/check_known_advisories.mjs` on `npm audit --omit=dev --json`, root and functions): PASS, 0 gating advisories; full `npm audit` 35 (12 moderate, 20 high, 3 critical), as on main.
 - `actionlint` 1.7.7 on `.github/workflows/gate-g0.yml`: exit 0.
 - After main moved to 04d388f (F25, #65; no file in common), it was merged in (merge commit, no force push) and `npm run test:unit` (197 files, 5661 passed, 54 skipped), both typechecks, lint (0 errors), G-0 and the guard with `--npm-ci` were run again on the merge: same results.
+
+### Review round (Codex P2 x2 on PR #66, head fd31e77; spec section 3a)
+
+- [x] P2-1 (thread 4305265180), ruling R3a: a directory holding both `npm-shrinkwrap.json` and `package-lock.json` fails; the shrinkwrap is the lockfile paired and checked.
+- [x] P2-2 (thread 4305265184), ruling R3b: the root needs a lockfile unconditionally; every directory an install surface runs `npm ci` in needs a `package.json` and a lockfile.
+
+| step | commit | command | result |
+| --- | --- | --- | --- |
+| RED | 04d81a8 (six new cases, fd31e77's guard) | `npx vitest run tests/f39-lockfile-guard.test.ts` | **4 failed / 43 passed (47)**. The four defect cases (shrinkwrap at `lockfileVersion` 2 beside a valid `package-lock.json`; both valid; a bare root `package.json` with no lockfile; `npm ci` in `tools/site` with no lockfile and in `tools/docs` with no `package.json`) each ended `=== lockfile guard PASSED ===`. The two controls passed |
+| GREEN | 5c7c332 | `npx vitest run tests/f39-lockfile-guard.test.ts` | **47/47** |
+| GREEN | 5c7c332 | `npx vitest run tests/f39-lockfile-guard.test.ts tests/f39-frozen-install.e2e.test.ts tests/g0-gate-e2e.test.ts` | 71/71 (47 + 4 + 20) |
+| Gates | 5c7c332 | `BASE=origin/main bash ci_gates/gate_g0.sh`; `npm run gate:lockfiles` | G-0 PASSED; guard with `--npm-ci` PASSED (both `npm ci --dry-run`) |
+| Checks | 5c7c332 | `npx eslint tests/f39-lockfile-guard.test.ts`; `npm run typecheck:tests` | exit 0; exit 0 |
