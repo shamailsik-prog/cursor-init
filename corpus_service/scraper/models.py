@@ -15,6 +15,7 @@ Tables:
 - quarantine_decisions (audit F23, append-only)
 - corpus_lifecycle_transitions (audit F21, one row per lifecycle move)
 - embedding_queue
+- embedding_attempts (audit F27, the queue's provider attempt receipts)
 
 FINAL_2: no limitation_periods table (legal rules are not held here).
 
@@ -799,6 +800,34 @@ class CorpusLifecycleTransition(Base):
 # ---------------------------------------------------------------------------
 # 9. EmbeddingQueue - Async OpenAI embedding generation queue
 # ---------------------------------------------------------------------------
+# Audit F27 (docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md, R2, R4, R9, R14):
+# the queue's lease, operation and dead-letter rules and its claim / lease / backlog indexes. The model
+# and migrations/004_embedding_queue_leases.py build them from these same strings, so a migrated queue
+# and a new one are identical.
+EMBEDDING_QUEUE_F27_COLUMNS = {
+    "lease_owner": "UUID",
+    "lease_expires_at": "TIMESTAMP WITH TIME ZONE",
+    "operation_id": "VARCHAR(64)",
+    "stored_operation_id": "VARCHAR(64)",
+}
+EMBEDDING_QUEUE_F27_CHECKS = {
+    # A row is `processing` exactly while a batch holds its lease (R2).
+    "ck_embedding_lease_held": "(status = 'processing') = (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
+    "ck_embedding_operation_ids": (
+        "(operation_id IS NULL OR operation_id ~ '^[0-9a-f]{64}$') AND "
+        "(stored_operation_id IS NULL OR stored_operation_id ~ '^[0-9a-f]{64}$')"
+    ),
+    # A dead letter always says why (R9).
+    "ck_embedding_dead_letter_reason": "status <> 'dead_letter' OR error_type IS NOT NULL",
+}
+# name: (column list, WHERE predicate)
+EMBEDDING_QUEUE_F27_INDEXES = {
+    "ix_embedding_claim_order": ("priority DESC, created_at, id", "status = 'pending'"),
+    "ix_embedding_lease_expiry": ("lease_expires_at", "status = 'processing'"),
+    "ix_embedding_waiting_created": ("created_at", "status IN ('pending', 'processing')"),
+}
+
+
 class EmbeddingQueue(Base):
     __tablename__ = "embedding_queue"
     __table_args__ = (
@@ -811,6 +840,11 @@ class EmbeddingQueue(Base):
         Index("ix_embedding_status_priority_created", "status", "priority", "created_at"),
         CheckConstraint("status IN ('pending','processing','completed','failed','dead_letter')", name="ck_embedding_status_values"),
         CheckConstraint("attempts >=0", name="ck_embedding_attempts_nonneg"),
+        *(CheckConstraint(sql, name=name) for name, sql in EMBEDDING_QUEUE_F27_CHECKS.items()),
+        *(
+            Index(name, *(text(c.strip()) for c in columns.split(",")), postgresql_where=text(where))
+            for name, (columns, where) in EMBEDDING_QUEUE_F27_INDEXES.items()
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -838,6 +872,13 @@ class EmbeddingQueue(Base):
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     processing_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Audit F27: the batch holding the row (a token per batch) and until when (R1, R2); the operation
+    # of the current attempt and the one whose vector the record holds (R4, R6).
+    lease_owner: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    operation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    stored_operation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -845,6 +886,74 @@ class EmbeddingQueue(Base):
 
     def __repr__(self) -> str:
         return f"<EmbeddingQueue id={self.id} table={self.table_name} record={self.record_id} status={self.status}>"
+
+
+# ---------------------------------------------------------------------------
+# 9b. EmbeddingAttempt - one provider attempt for an embedding operation (audit F27)
+# ---------------------------------------------------------------------------
+EMBEDDING_ATTEMPT_OUTCOMES = ("started", "answered", "stored", "failed", "superseded", "abandoned", "interrupted")
+
+
+class EmbeddingAttempt(Base):
+    """The receipt of one provider attempt (audit F27, spec R5), written by scraper.tasks.embeddings.
+
+    `started` is committed before the request and `answered` (with the token count and the vector)
+    right after it, so a worker killed in between, or before its store commits, leaves a record of the
+    paid request. The vector is held only while the receipt is `answered` and is cleared when it is
+    stored or superseded; a later batch stores a held vector instead of paying again (R6), at most
+    STORE_RETRY_LIMIT times automatically (`store_failures`, review round 2). At most one
+    unresolved (`started` or `answered`) receipt exists per operation. No input text, key or provider
+    message is kept: `error_type` is the error class or code only. No foreign key to the queue row:
+    the receipt outlives it.
+    """
+
+    __tablename__ = "embedding_attempts"
+    __table_args__ = (
+        Index(
+            "ux_embedding_attempts_unresolved_operation", "operation_id", unique=True,
+            postgresql_where=text("outcome IN ('started', 'answered')"),
+        ),
+        Index("ix_embedding_attempts_queue_id", "queue_id"),
+        Index("ix_embedding_attempts_record", "table_name", "record_id"),
+        Index("ix_embedding_attempts_started_open", "started_at", postgresql_where=text("outcome = 'started'")),
+        CheckConstraint(
+            "outcome IN (" + ", ".join(f"'{o}'" for o in EMBEDDING_ATTEMPT_OUTCOMES) + ")",
+            name="ck_embedding_attempts_outcome",
+        ),
+        CheckConstraint("operation_id ~ '^[0-9a-f]{64}$'", name="ck_embedding_attempts_operation_id"),
+        CheckConstraint("embedding IS NULL OR outcome = 'answered'", name="ck_embedding_attempts_vector_held"),
+        CheckConstraint("outcome <> 'answered' OR answered_at IS NOT NULL", name="ck_embedding_attempts_answered"),
+        CheckConstraint("attempt >= 1", name="ck_embedding_attempts_attempt"),
+        CheckConstraint("token_count IS NULL OR token_count >= 0", name="ck_embedding_attempts_tokens"),
+        CheckConstraint("store_failures >= 0", name="ck_embedding_attempts_store_failures"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    operation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    queue_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_owner: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    answered_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    reconciled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
+    # Review round 2: failed stores of this receipt's held answer (a store the database refused, or a
+    # batch lost while storing it); at scraper.tasks.embeddings.STORE_RETRY_LIMIT the row is dead-lettered
+    # (`store_failed`) with the answer kept for a requeue.
+    store_failures: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(1536), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<EmbeddingAttempt id={self.id} operation={self.operation_id[:12]} outcome={self.outcome}>"
 
 
 # ---------------------------------------------------------------------------

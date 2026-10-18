@@ -100,6 +100,11 @@ Gates:
   (default `origin/main`; CI passes the pull request's base commit and checks out full history). In a shallow clone, or
   one without `origin/main`, set `BASE` to a commit you have, for example `BASE=$(git merge-base origin/main HEAD)`.
   `SIKANDER_LIVE=1` also runs the live checks when `ci_gates/gate_g0_live.sh` exists.
+- **Next/eve AI egress guard (audit F18):** `python3 ci_gates/check_next_ai_egress.py` is G-0 check [19]: outside
+  `functions/` (the control plane) and `corpus_service/` (the F27 lane), no JS/TS imports the `ai` SDK, an `@ai-sdk/*`
+  package other than `@ai-sdk/provider` or a provider SDK, names a provider key (except `platform/p1/providerKeyGuard.ts`)
+  or names a provider host, and no deploy surface (`.env*`, App Hosting, Vercel, Docker, compose, and workflow jobs that
+  build, start or deploy the Next/eve service) binds a provider key. No allowlist.
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

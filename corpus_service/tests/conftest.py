@@ -42,12 +42,13 @@ REPO_ROOT = PROJECT_ROOT.parent
 ANNEX_A_DDL = ("001_corpus_contract.sql", "003_corpus_publication.sql", "004_authority_read_views.sql")
 # The application's own (ORM) tables: the runtime role's DML grant covers exactly these, never Annex A
 # (mirrors PR 2b's provisioning, where the migration role's default privileges grant it on every table
-# that role creates). quarantine_decisions is audit F23's append-only decision table;
-# corpus_lifecycle_transitions is audit F21's lifecycle move log.
+# that role creates). quarantine_decisions is audit F23's append-only decision table; embedding_attempts
+# is audit F27's receipt table for the embedding queue; corpus_lifecycle_transitions is audit F21's
+# lifecycle move log.
 ORM_TABLES = (
     "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
     "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue", "quarantine_decisions",
-    "corpus_lifecycle_transitions",
+    "embedding_attempts", "corpus_lifecycle_transitions",
 )
 
 

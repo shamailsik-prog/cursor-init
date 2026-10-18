@@ -1,6 +1,7 @@
 import { defineAgent } from "eve"
 import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"
 import { COMMITTEE_BRAIN_CONTEXT_WINDOW_TOKENS } from "../platform/p1/constants"
+import { assertNoProviderKeyAtStartup } from "../platform/p1/providerKeyGuard"
 
 /**
  * SIKANDER Committee Brain (eve). Identity is package.json name `sikander-ai`.
@@ -10,7 +11,15 @@ import { COMMITTEE_BRAIN_CONTEXT_WINDOW_TOKENS } from "../platform/p1/constants"
  *
  * defaultTools: false — web_fetch / web_search / bash would bypass P1 and
  * the L4.9 allowlist. Authored tools under agent/tools/ remain.
+ *
+ * Audit F18 (spec ruling R5): eve refuses to start under NODE_ENV=production
+ * when a provider API key is in its environment. The P1 bridge has no provider
+ * transport, but eve's framework has model calls of its own (its default
+ * agent, self-modification) that read the AI Gateway key from the environment
+ * directly; refusing to start is the only control that covers them.
  */
+assertNoProviderKeyAtStartup("eve")
+
 export default defineAgent({
   model: committeeBrainLanguageModel,
   modelContextWindowTokens: COMMITTEE_BRAIN_CONTEXT_WINDOW_TOKENS,
