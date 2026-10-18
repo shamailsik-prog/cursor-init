@@ -132,8 +132,11 @@ async function triggers(): Promise<Triggers | null> {
   }
 }
 
-/** Applies a write outside functions/src and delivers the document event the platform delivers to the F37 triggers. */
-async function outOfBand(ref: DocumentReference, write: () => Promise<unknown>): Promise<void> {
+/**
+ * Applies a write outside functions/src and delivers the document event the platform delivers to the F37 triggers.
+ * A trigger that breaks the index also enqueues its rebuild, before any screen asks (when the tree has triggers).
+ */
+async function outOfBand(ref: DocumentReference, write: () => Promise<unknown>, firmId?: string): Promise<void> {
   const before = (await ref.get()).data()
   await write()
   const after = (await ref.get()).data()
@@ -141,6 +144,7 @@ async function outOfBand(ref: DocumentReference, write: () => Promise<unknown>):
   if (!t) return
   if (ref.parent.id === "conflict_name_index") await t.nameIndexChunkWritten(ref.id, before, after, Date.now())
   else await t.registryRowWritten(ref.parent.id, ref.id, before, after, Date.now())
+  if (firmId !== undefined) expect((await reindexJobs(firmId)).length).toBeGreaterThanOrEqual(1)
 }
 
 describe.skipIf(!EMULATORS)("FA-D1C-001: an index pointer that understates the chunks is never read as complete", () => {
@@ -172,7 +176,7 @@ describe.skipIf(!EMULATORS)("FA-D1C-002: registry writes made outside functions/
   it("O1: a registered client renamed by the Admin SDK to the conflicting name", async () => {
     const f = await registeredFirm(["Zubair Hashmi"])
     const ref = adminDb().collection("clients").doc(f.clients["Zubair Hashmi"])
-    await outOfBand(ref, () => ref.update({ canonicalName: CONFLICT }))
+    await outOfBand(ref, () => ref.update({ canonicalName: CONFLICT }), f.firmId)
     await expectRefusedThenHealed(f, screenAsOpposing)
   }, 180_000)
 
@@ -264,11 +268,64 @@ describe.skipIf(!EMULATORS)("FA-D1C-003: a rebuild completing between a screen's
   }, 600_000)
 })
 
+describe.skipIf(!EMULATORS)("FA-D1C-003: a reset and a partial rebuild between the counter read and the chunk read never give CLEAR", () => {
+  it("the index is reset and its chunk 0 rewritten with part of the names (a rebuild's first batch) right after the screen reads the counter", async () => {
+    const f = await registeredFirm([CONFLICT])
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(true)
+    const counterPath = registryVersionRef(f.firmId).path
+    const refProto = DocumentReference.prototype as unknown as { get: (...a: unknown[]) => Promise<unknown> }
+    const txProto = Transaction.prototype as unknown as { get: (...a: unknown[]) => Promise<unknown> }
+    const refGet = refProto.get
+    const txGet = txProto.get
+    let armed = true
+    // What a reset and the first append batch of the rebuild leave: chunk 0 holding only some names, the state reset
+    // (no schema, pointer 0, the batch's bytes) with the registry version moved. Every chunk check passes against the
+    // counter the screen already read; only a read of both at one snapshot keeps them consistent.
+    const inject = async () => {
+      armed = false
+      const chunk0 = (await nameIndexChunkRef(f.firmId, 0).get()).data() ?? {}
+      const before = (await registryVersionRef(f.firmId).get()).data()?.version as number
+      const batch = adminDb().batch()
+      batch.set(nameIndexChunkRef(f.firmId, 0), { ...chunk0, names: [SUBJECT] })
+      batch.update(registryVersionRef(f.firmId), { version: before + 1, nameIndex: { version: before + 1, chunk: 0, bytes: Buffer.byteLength(SUBJECT) + 1 } })
+      await batch.commit()
+    }
+    refProto.get = async function (this: DocumentReference, ...args: unknown[]) {
+      const out = await refGet.apply(this, args)
+      if (armed && this.path === counterPath) await inject()
+      return out
+    }
+    txProto.get = async function (this: Transaction, ...args: unknown[]) {
+      const out = await txGet.apply(this, args)
+      if (armed && args[0] instanceof DocumentReference && args[0].path === counterPath) await inject()
+      return out
+    }
+    let during: string
+    try {
+      const c = await screenAsOpposing(f)
+      during = `${c.result}${hitsConflict(c) ? "+HIT" : ""}`
+    } catch (err) {
+      if (!(err instanceof ApiError)) throw err
+      during = `ERR ${err.status} ${err.code}`
+    } finally {
+      refProto.get = refGet
+      txProto.get = txGet
+    }
+    console.log(`F37-FU partial rebuild race: during=${during}`)
+    expect(armed).toBe(false)
+    expect(during === "ERR 503 screening_unavailable" || during.endsWith("+HIT")).toBe(true)
+    // The (schema-less) state refuses until the reconciliation rebuilds it whole.
+    expectKind(await apiErrorOf(screenAsOpposing(f)), "unavailable", "screening_unavailable")
+    await reconcileNameIndex(f.firmId)
+    expect(hitsConflict(await screenAsOpposing(f))).toBe(true)
+  }, 180_000)
+})
+
 describe.skipIf(!EMULATORS)("FA-D1C-004: a name removed from inside an otherwise valid chunk makes the screen refuse", () => {
   it("CT2: the conflicting name removed from chunk 0 out of band", async () => {
     const f = await registeredFirm([CONFLICT])
     const ref = nameIndexChunkRef(f.firmId, 0)
-    await outOfBand(ref, () => ref.update({ names: FieldValue.arrayRemove(CONFLICT) }))
+    await outOfBand(ref, () => ref.update({ names: FieldValue.arrayRemove(CONFLICT) }), f.firmId)
     await expectRefusedThenHealed(f, screenAsOpposing)
   }, 180_000)
 })
