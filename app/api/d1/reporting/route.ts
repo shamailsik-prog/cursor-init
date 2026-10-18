@@ -139,10 +139,15 @@ function buildRelevanceSnapshot(
   }
 }
 
-async function resolveActor(actorId: string, store: ReturnType<typeof getRuntimeStore>, repos: Awaited<ReturnType<typeof getRuntimeRepositories>>): Promise<User | null> {
+async function resolveActor(
+  actorId: string,
+  firmId: string,
+  store: ReturnType<typeof getRuntimeStore>,
+  repos: Awaited<ReturnType<typeof getRuntimeRepositories>>
+): Promise<User | null> {
   const local = store.users.get(actorId)
   if (local) return local
-  const persisted = await repos.users.get(actorId)
+  const persisted = await repos.users.get(actorId, firmId)
   if (!persisted) return null
   store.users.set(persisted.id, persisted)
   return persisted
@@ -150,12 +155,13 @@ async function resolveActor(actorId: string, store: ReturnType<typeof getRuntime
 
 async function resolveMatter(
   matterId: string,
+  firmId: string,
   store: ReturnType<typeof getRuntimeStore>,
   repos: Awaited<ReturnType<typeof getRuntimeRepositories>>
 ): Promise<Matter | null> {
   const local = store.matters.get(matterId)
   if (local) return local
-  const persisted = await repos.matters.get(matterId)
+  const persisted = await repos.matters.get(matterId, firmId)
   if (!persisted) return null
   store.matters.set(persisted.id, persisted)
   return persisted
@@ -189,8 +195,8 @@ async function ensureMatterReportingRows(params: {
   const now = Date.now()
   const exportId = reportExportAnalyticsId(matter.id)
   const relevanceId = reportRelevanceSnapshotId(matter.id)
-  const existingExport = await repos.matterReportExportAnalytics.get(exportId)
-  const existingRelevance = await repos.matterReportRelevanceSnapshots.get(relevanceId)
+  const existingExport = await repos.matterReportExportAnalytics.get(exportId, matter.firmId)
+  const existingRelevance = await repos.matterReportRelevanceSnapshots.get(relevanceId, matter.firmId)
   const exportAnalytics =
     existingExport ??
     ({
@@ -268,7 +274,12 @@ async function handleGet(request: Request) {
   if (!actorId) {
     return NextResponse.json({ error: "actorId is required" }, { status: 400 })
   }
-  const actor = await resolveActor(actorId, store, repos)
+  const actor = await resolveActor(
+    actorId,
+    store.users.get(actorId)?.firmId ?? "",
+    store,
+    repos
+  )
   if (!actor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
@@ -433,7 +444,12 @@ async function handlePost(request: Request) {
     return NextResponse.json({ error: "matterId is required" }, { status: 400 })
   }
 
-  const actor = await resolveActor(actorId, store, repos)
+  const actor = await resolveActor(
+    actorId,
+    store.users.get(actorId)?.firmId ?? "",
+    store,
+    repos
+  )
   if (!actor) {
     return NextResponse.json({ error: "unknown actor" }, { status: 404 })
   }
@@ -444,7 +460,7 @@ async function handlePost(request: Request) {
   await syncFirmUsers(store, repos, actor.firmId)
   // Audit F14 R2-D1: the reporting rows seeded below take the matter's current label, not a cached one.
   await syncFirmMatters(store, repos, actor.firmId)
-  const matter = await resolveMatter(matterId, store, repos)
+  const matter = await resolveMatter(matterId, actor.firmId, store, repos)
   if (!matter || matter.firmId !== actor.firmId) {
     return NextResponse.json({ error: "unknown matter" }, { status: 404 })
   }
