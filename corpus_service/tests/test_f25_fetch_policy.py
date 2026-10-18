@@ -403,8 +403,10 @@ def test_post_is_never_redirected(servers):
 
 def test_the_transport_checks_requests_that_bypass_the_helper(servers):
     """A caller using the underlying client directly (follow_redirects on, even) is still checked on
-    every request that reaches the transport, before any DNS lookup."""
-    resolver = _resolver(["93.184.215.14"])
+    every request that reaches the transport, before any DNS lookup. (The resolver answers
+    loopback, so the allowlisted source origin is reachable through the loopback hook and the
+    redirect is what gets checked; nothing here may dial a real address.)"""
+    resolver = _resolver(["127.0.0.1"])
     servers.source.routes["/r"] = (302, {"Location": f"http://127.0.0.1:{servers.internal.port}/x"}, b"")
 
     async def direct(url, **kw):
