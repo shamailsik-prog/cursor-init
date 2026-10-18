@@ -198,7 +198,9 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
     let semantic = 0
     const stored = unitQuery ? vectors.get(judgment.id) : undefined
     if (unitQuery && stored) semantic = Math.max(0, cosine(unitQuery, stored))
-    const score = mode === "blended" ? SEMANTIC_WEIGHT * semantic + KEYWORD_WEIGHT * keyword : mode === "keyword" ? keyword : semantic
+    const raw = mode === "blended" ? SEMANTIC_WEIGHT * semantic + KEYWORD_WEIGHT * keyword : mode === "keyword" ? keyword : semantic
+    // Rounded before the hit test, so a relevance too small to show at 6 decimals is not a hit that reads as 0.
+    const score = Math.round(raw * 1e6) / 1e6
     if (score > 0) scored.push({ judgment, size: docTerms[i].size, score })
   })
 
@@ -218,7 +220,7 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
       title: judgment.title,
       citation: judgment.citation ?? null,
       benchType: judgment.benchType,
-      score: Math.round(score * 1e6) / 1e6,
+      score,
       treatment: verdicts.get(judgment.id) ?? "UNVERIFIED",
     })),
   }

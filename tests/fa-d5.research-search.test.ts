@@ -196,6 +196,13 @@ describe("searchCorpus: ranking", () => {
     expect(out.items[1].score).toBeCloseTo(0.5 / norm, 5)
   })
 
+  it("a similarity too small to show at 6 decimals is not a hit: no returned score is 0", () => {
+    const store = bailCorpus(20)
+    const out = searchCorpus(store, { embedding: { model: LIVE, vector: vec({ 4: 1, 9: 1e-7 }) }, k: 5 })
+    expect(out.items.map((h) => h.entityId)).toEqual(["j-004"])
+    expect(out.items.every((h) => (h.score as number) > 0)).toBe(true)
+  })
+
   it("blended: 0.6 semantic + 0.4 keyword; strong on both legs beats strong on one", () => {
     const store = newStore()
     addJudgment(store, "j-both", "Bail on further inquiry", "2099 SCMR 1", unit(0))
