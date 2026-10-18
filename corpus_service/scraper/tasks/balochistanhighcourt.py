@@ -175,6 +175,8 @@ async def _request_with_retries(
             return await client.get(url)
         except fetch_policy.FetchRefused:
             raise  # Audit F25: a refused URL is never retried
+        except outcomes.INTERRUPTIONS:
+            raise  # Audit F28 R23: the time limit ends the run; it is never a reason to retry the URL
         except Exception as exc:  # pragma: no cover - depends on network path.
             last_error = exc
             if attempt < attempts:
@@ -183,7 +185,7 @@ async def _request_with_retries(
     raise last_error
 
 
-async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
+async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[str], dict[str, str]]:
     pdf_sources: dict[str, str] = {}
     visited_listing_urls: set[str] = set()
     listing_queue = deque(BHC_LISTING_SEED_URLS)
@@ -232,6 +234,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
         len(pdf_sources),
     )
     listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    if tally is not None:
+        # Audit F28 R30: the failed listing pages are recorded in the run (listing:<key>), not partial (R17).
+        tally.add_listing_failures(listings)
     return list(pdf_sources.keys()), pdf_sources
 
 
@@ -242,7 +247,7 @@ async def scrape_balochistanhighcourt(source, db):
     from scraper.source_identity import stamp_metadata
 
     tally = outcomes.run_tally()
-    pdf_urls, pdf_sources = await _discover_pdf_urls()
+    pdf_urls, pdf_sources = await _discover_pdf_urls(tally=tally)
     if not pdf_urls:
         logger.warning(
             "BalochistanHighCourt: no PDF links discovered from configured listing URLs"
