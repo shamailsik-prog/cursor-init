@@ -6,9 +6,11 @@ lockfile drifts from its package.json, when npm is not pinned, when an install s
 and (with --npm-ci) when the pinned npm's own `npm ci` validator rejects a lockfile.
 
 Static checks (Gate G-0 check [18]; offline):
-  1. The root has package.json and package-lock.json. Every lockfile has a package.json beside it, and every
-     package.json that declares dependencies or overrides has a lockfile beside it. yarn/pnpm/bun lockfiles fail: the
-     pinned package manager is npm.
+  1. The root has package.json and a lockfile, whatever it declares (npm ci fails without one). Every lockfile has a
+     package.json beside it, and every package.json that declares dependencies or overrides has a lockfile beside it.
+     A directory with both npm-shrinkwrap.json and package-lock.json fails (npm ci uses the shrinkwrap and ignores the
+     other); a shrinkwrap on its own is the lockfile checked. yarn/pnpm/bun lockfiles fail: the pinned package
+     manager is npm.
   2. Each lockfile is lockfileVersion 3 with a root entry (packages[""]).
   3. The root entry equals the manifest for every field npm copies into it (name, version, the dependency maps,
      engines, os, cpu, workspaces); an empty map or list counts as absent. npm never writes `overrides` into a
@@ -18,8 +20,9 @@ Static checks (Gate G-0 check [18]; offline):
      {name "npm", version "~X.Y.Z" or "X.Y.Z", onFail "error"}, packageManager inside that range, one pin for all.
   6. No install surface (.github/workflows/*.yml|yaml, .cursor/environment.json, .claude/hooks/*, package.json
      scripts) runs a non-frozen npm command (install and its aliases, install-test, update, uninstall, dedupe; a
-     global install is allowed) or skips the lockfile (--package-lock=false, --no-package-lock). Full-line comments
-     are skipped.
+     global install is allowed) or skips the lockfile (--package-lock=false, --no-package-lock), and every directory
+     a surface runs `npm ci` in (the --prefix or -C value, else the root; a script's own package directory) holds a
+     package.json and a lockfile. A target held in a variable is not guessed. Full-line comments are skipped.
 Dynamic checks (--npm-ci):
   7. The npm that runs (`npm --version`, or --npm CMD) is inside the pin.
   8. `npm ci --dry-run --ignore-scripts --no-audit --no-fund --prefix <dir>` exits 0 for every lockfile directory: npm's
@@ -79,6 +82,10 @@ NON_FROZEN = frozenset(
         "uninstall", "un", "unlink", "remove", "rm", "r",
         "dedupe", "ddp",
     }
+)
+# `npm ci` and its aliases (npm lib/utils/cmd-list.js), including install-ci-test, which runs ci first.
+CI_COMMANDS = frozenset(
+    {"ci", "clean-install", "ic", "install-clean", "isntall-clean", "install-ci-test", "cit", "clean-install-test", "sit"}
 )
 # npm options that take a separate value, so the value is not read as the subcommand.
 VALUE_OPTIONS = frozenset(
@@ -281,9 +288,9 @@ def surface_lines(root: Path) -> list[tuple[str, int, str]]:
     return lines
 
 
-def non_frozen_commands(text: str) -> list[str]:
-    """Every npm command in `text` that installs without the lockfile or rewrites it, as written."""
-    found: list[str] = []
+def npm_commands(text: str) -> list[tuple[str, str | None, list[str]]]:
+    """Every npm command in `text`: (the command as written, its subcommand, its argument tokens)."""
+    commands: list[tuple[str, str | None, list[str]]] = []
     for match in NPM_COMMAND_RE.finditer(text):
         rest = text[match.end():]
         end = COMMAND_END_RE.search(rest)
@@ -304,14 +311,62 @@ def non_frozen_commands(text: str) -> list[str]:
                 continue
             subcommand = token
             break
+        commands.append((f"npm {segment.strip()}", subcommand, tokens))
+    return commands
+
+
+def non_frozen_commands(text: str) -> list[str]:
+    """Every npm command in `text` that installs without the lockfile or rewrites it, as written."""
+    found: list[str] = []
+    for command, subcommand, tokens in npm_commands(text):
         if subcommand not in NON_FROZEN:
             continue
         is_global = any(t in ("-g", "--global", "--location=global") for t in tokens) or any(
             a == "--location" and b == "global" for a, b in zip(tokens, tokens[1:])
         )
         if not is_global:
-            found.append(f"npm {segment.strip()}")
+            found.append(command)
     return found
+
+
+def npm_ci_targets(text: str) -> list[str]:
+    """The directory (relative, as written) of every `npm ci` in `text` whose target can be read without a shell:
+    the value of --prefix or -C, or "." when there is none. A target held in a variable or command substitution, or
+    cut off by a quote, is not guessed."""
+    targets: list[str] = []
+    for _command, subcommand, tokens in npm_commands(text):
+        if subcommand not in CI_COMMANDS:
+            continue
+        target: str | None = "."
+        for i, token in enumerate(tokens):
+            if token in ("--prefix", "-C"):
+                target = tokens[i + 1] if i + 1 < len(tokens) else None
+            elif token.startswith(("--prefix=", "-C=")):
+                target = token.split("=", 1)[1]
+        if target and not re.search(r"[$`*?~]", target):
+            targets.append(target)
+    return targets
+
+
+def lockfile_in(directory: Path) -> Path | None:
+    """The lockfile npm ci would use in `directory` (npm-shrinkwrap.json first), or None."""
+    for name in LOCK_NAMES:
+        if (directory / name).is_file():
+            return directory / name
+    return None
+
+
+def check_ci_targets(root: Path, base: Path, where: str, text: str, problems: Problems) -> None:
+    """Every directory an install surface runs `npm ci` in must hold a package.json and a lockfile."""
+    for target in npm_ci_targets(text):
+        directory = Path(os.path.normpath(base / target))
+        if os.path.isabs(target) or not (directory == root or root in directory.parents):
+            continue
+        shown = rel(root, directory) if directory != root else "."
+        if not (directory / "package.json").is_file():
+            problems.add(f"{where}: npm ci runs in {shown}, which has no package.json")
+        elif lockfile_in(directory) is None:
+            problems.add(f"{where}: npm ci runs in {shown}, which has no lockfile (npm ci fails without one)")
 
 
 def check_surfaces(root: Path, manifests: list[tuple[Path, dict]], problems: Problems) -> bool:
@@ -321,6 +376,7 @@ def check_surfaces(root: Path, manifests: list[tuple[Path, dict]], problems: Pro
             problems.add(f"{surface}:{number}: non-frozen npm command {json.dumps(command)} (install with npm ci)")
         for flag in LOCK_SKIP_RE.findall(line):
             problems.add(f"{surface}:{number}: {json.dumps(flag)} skips the lockfile (install with npm ci)")
+        check_ci_targets(root, root, f"{surface}:{number}", line, problems)
     for path, manifest in manifests:
         scripts = manifest.get("scripts")
         if not isinstance(scripts, dict):
@@ -332,6 +388,8 @@ def check_surfaces(root: Path, manifests: list[tuple[Path, dict]], problems: Pro
                 problems.add(f"{rel(root, path)}: scripts.{name}: non-frozen npm command {json.dumps(found)} (install with npm ci)")
             for flag in LOCK_SKIP_RE.findall(command):
                 problems.add(f"{rel(root, path)}: scripts.{name}: {json.dumps(flag)} skips the lockfile (install with npm ci)")
+            # A script runs in its own package's directory.
+            check_ci_targets(root, path.parent, f"{rel(root, path)}: scripts.{name}", command, problems)
     return len(problems.items) == before
 
 
@@ -405,9 +463,21 @@ def main(argv: list[str] | None = None) -> int:
         if manifest is not None:
             loaded.append((path, manifest))
 
-    # Check 1: pairs.
+    # Check 1: pairs. A directory with both lockfiles fails (review round, Codex P2-1): npm ci uses
+    # npm-shrinkwrap.json and ignores package-lock.json, so the shrinkwrap is the one checked below.
     pairs: list[tuple[Path, Path]] = []
-    lock_by_dir = {lock.parent: lock for lock in locks}
+    locks_by_dir: dict[Path, list[Path]] = {}
+    for lock in locks:
+        locks_by_dir.setdefault(lock.parent, []).append(lock)
+    lock_by_dir: dict[Path, Path] = {}
+    for directory, dir_locks in sorted(locks_by_dir.items()):
+        names = {lock.name: lock for lock in dir_locks}
+        if len(names) > 1:
+            problems.add(
+                f"{rel(root, names['npm-shrinkwrap.json'])} and {rel(root, names['package-lock.json'])}: two lockfiles in "
+                "one directory; npm ci uses npm-shrinkwrap.json and ignores package-lock.json (keep one)"
+            )
+        lock_by_dir[directory] = names.get("npm-shrinkwrap.json") or names["package-lock.json"]
     for lock in locks:
         if not (lock.parent / "package.json").is_file():
             problems.add(f"{rel(root, lock)}: no package.json beside it")
@@ -417,6 +487,9 @@ def main(argv: list[str] | None = None) -> int:
             pairs.append((lock, path))
         elif declares_dependencies(manifest):
             problems.add(f"{rel(root, path)}: declares dependencies but has no package-lock.json beside it")
+        elif path == root_manifest:
+            # Review round, Codex P2-2: npm ci needs a lockfile even when the root declares nothing.
+            problems.add("package.json: no lockfile at the repository root (npm ci fails without one)")
 
     # Checks 2-4.
     consistent = [rel(root, lock) for lock, manifest_path in pairs if check_lock(root, lock, manifest_path, problems)]
