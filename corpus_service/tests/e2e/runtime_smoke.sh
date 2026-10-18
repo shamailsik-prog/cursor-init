@@ -11,8 +11,8 @@
 # usage: CORPUS_TEST_DATABASE_URL=postgresql+asyncpg://<superuser>:<password>@<host>:<port>/<db> \
 #          bash corpus_service/tests/e2e/runtime_smoke.sh
 #   PYTHON            interpreter that builds the venv (default python3.12, else python3; the image runs 3.12)
-#   F31_RUNTIME_VENV  where to build it; it must not exist yet (default: a new temporary directory,
-#                     removed afterwards)
+#   F31_RUNTIME_VENV  where to build it: absolute, relative to the caller's directory, or ~/...;
+#                     it must not exist yet (default: a new temporary directory, removed afterwards)
 # The database URL needs a role that may CREATE DATABASE and CREATE EXTENSION (each run creates and
 # drops its own database). CI: .github/workflows/gate-g0.yml, job corpus-runtime.
 # Spec: docs/superpowers/specs/2026-10-18-f31-corpus-runtime-dependencies-design.md (R4, R5).
@@ -23,9 +23,31 @@ PROJECT=$(cd "$HERE/../.." && pwd)
 : "${CORPUS_TEST_DATABASE_URL:?set CORPUS_TEST_DATABASE_URL to a superuser postgresql+asyncpg:// URL (PostgreSQL 16 + pgvector)}"
 PY=${PYTHON:-$(command -v python3.12 || command -v python3)}
 
+# Absolute form of a user-supplied path, fixed before anything is created: the script cds into
+# corpus_service/ before it runs the venv's interpreter, so a relative or "~" path must already
+# point where the caller meant (review round, Copilot thread 4305672181). "~" and "~/..." expand to
+# $HOME; a relative path is taken from the caller's directory; "~user" is refused.
+absolute_path() {
+  local p=$1
+  case "$p" in
+    "~") p=$HOME ;;
+    "~/"*) p="$HOME/${p#"~/"}" ;;
+    "~"*)
+      echo "FAIL  F31_RUNTIME_VENV=$p: ~user paths are not supported; give an absolute or relative path" >&2
+      return 1 ;;
+  esac
+  case "$p" in
+    /*) printf '%s\n' "$p" ;;
+    *) printf '%s\n' "$PWD/$p" ;;
+  esac
+}
+
 cleanup=""
 if [ -n "${F31_RUNTIME_VENV:-}" ]; then
-  venv=$F31_RUNTIME_VENV
+  if ! venv=$(absolute_path "$F31_RUNTIME_VENV" 2>&1); then
+    echo "$venv"
+    exit 2
+  fi
   if [ -e "$venv" ]; then
     echo "FAIL  $venv already exists: the smoke needs a clean venv"
     exit 2
