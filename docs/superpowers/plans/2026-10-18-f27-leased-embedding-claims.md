@@ -81,3 +81,32 @@ Every valid mutant was killed; none survived.
 
 - The prefork concurrency expectation was corrected (see the ledger): SKIP LOCKED guarantees disjoint claims, not that one claim takes the whole window. Spec R1 now says so.
 - Three tests were added because the mutation plan showed gaps: R10's charge-and-give-back with the held vector, R10's `interrupted` receipt, and R2's fencing.
+
+## Review round 1 (PR #87)
+
+Threads: Codex P2 4307196399 (reclaim dead-letters a row on its last attempt with its paid answer held); Bugbot 4307237209 (its duplicate); Bugbot 4307214719 (give-back labels a charged receipt `interrupted`); Bugbot 4307214725 (a failed batch skips its alerts); Bugbot 4307237211 (Autofix c2266ae's `finally` lets an alert error replace the batch's own). Spec amendments: R3, R10, R11, R12, residuals.
+
+Foreign commits (Cursor Bugbot Autofix), each reviewed and merged, never rebased:
+- c2266ae: the R10 half (charged row's `started` receipt becomes `failed` with the row's error type; `interrupted` only when uncharged) is correct and covered by the RED test; kept. The R11 half (alerts in a `finally` on the batch's own session) let an alert error replace the batch's exception; replaced (merge 3a353c6, test 37af993, fix bb02611).
+- 6cbed24: the same reclaim rule as bb02611, but it skipped the orphan-receipt sweep whenever nothing expired and queried per row, so bb02611's version was kept in the merge (3a9f29e). Its success-path alert containment was right and was adopted test-first (444c631).
+
+| Step | Result |
+| --- | --- |
+| RED, fa56eee code (d51dd41, 7ba1cac) | prefork SIGKILL after the answer, last attempt: `('dead_letter', 5, 'max_attempts')`, receipt `answered` with the vector held, 1 request in total (stranded); first attempt: `('pending', 1, 'lease_expired')` (charged although paid). In process, last attempt: `dead_letter`, vector stranded, 0 requests; text changed since the answer: the stale vector held forever; `started` only: passes (pin). Charged receipt: `('interrupted', no error type)` against row `('pending', 1, 'IntegrityError')`. Failed batch: `alerts: []`. |
+| RED, merge with c2266ae (37af993) | an alert query that fails (22012) replaced the batch's IntegrityError: Celery and the record got `DBAPIError` |
+| RED, bb02611 (444c631's test) | a successful batch was turned into a FAILURE by an alert query that fails |
+| GREEN | F27 unit + in-process: 37 passed; prefork F27 (concurrency, kill at the first and the last attempt) + F28's five files unchanged: 148 passed (before 444c631); after 444c631: prefork + F28 embedding cases 9 passed |
+
+Round-1 mutants (each snippet checked to occur once and to compile before the run; scratch copy; `pytest -x`): all **10 killed**.
+
+| Mutant | Killed by |
+| --- | --- |
+| RR1-M1 the reclaim's unconditional charge restored | in-process R3 (row 2's paid answer charged, not stored) |
+| RR1-M2 spare any row with a held answer, without matching its current operation | in-process R3 |
+| RR1-M3 no supersede of stale held answers | text-changed test (stale vector still held) |
+| RR1-M4 a charged receipt labelled `interrupted` | charged-failure receipt test |
+| RR1-M5 a failed batch skips its alerts | failed-batch alerts test (`alerts: []`) |
+| RR1-M6 an alert error not contained | alert-failure test (DBAPIError replaced the batch's IntegrityError) |
+| RR1-M05 reclaim ignores expiry (restructured reclaim) | in-process R3 |
+| RR1-M06b no reclaim (restructured reclaim) | in-process R3 |
+| M23 interruption charged / M24 no release (give-back restructured) | F28's own unchanged r26 test |

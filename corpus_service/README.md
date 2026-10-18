@@ -366,7 +366,9 @@ Spec: `docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md`.
   without a second request (`reconciled`).
 - **Retries.** A failed request sets `next_attempt_at` 300, 600, 1200, 2400 s ahead (then 3600) and,
   at the row's `max_attempts` (default 5), moves it to `dead_letter` (`error_type = max_attempts`).
-  A row whose lease expired (a killed worker) goes back to `pending` with one attempt counted.
+  A row whose lease expired (a killed worker) goes back to `pending` with one attempt counted, unless
+  the provider had already answered and the receipt holds the vector for the row's current text: then
+  it is not charged and the next claim stores that answer with no new request.
 - **Dead letters.** `error_type` says why: `unknown_table`, `unsupported_model`, `record_missing`,
   `empty_text`, `malformed_text`, `max_attempts`. A dead letter is never claimed again. To retry one
   after fixing its cause:
