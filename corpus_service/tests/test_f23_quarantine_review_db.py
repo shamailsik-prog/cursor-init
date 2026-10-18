@@ -626,8 +626,8 @@ def test_h_migration_002_is_append_only_idempotent_and_restores_a_dropped_trigge
     triggers = [dict(r) for r in q(corpus_db, TRIGGERS_SQL, t=DECISIONS)]
     oids = q(corpus_db, TRIGGER_OIDS_SQL, t=DECISIONS)
     assert triggers == [
-        {"tgname": "quarantine_decisions_no_truncate", "tgenabled": "O", "fn": "quarantine_decisions_append_only()"},
-        {"tgname": "quarantine_decisions_no_update_delete", "tgenabled": "O",
+        {"tgname": "quarantine_decisions_no_truncate", "tgenabled": "A", "fn": "quarantine_decisions_append_only()"},
+        {"tgname": "quarantine_decisions_no_update_delete", "tgenabled": "A",
          "fn": "quarantine_decisions_append_only()"},
     ], triggers
 
@@ -658,3 +658,134 @@ def test_h_migration_002_is_append_only_idempotent_and_restores_a_dropped_trigge
     third = corpus_db.migrate()
     assert third.returncode == 0, third.stderr[-3000:]
     assert [dict(r) for r in q(corpus_db, TRIGGERS_SQL, t=DECISIONS)] == triggers
+
+
+# ---------------------------------------------------------------------------------------------
+# (i) review round (Copilot thread 4305754687): migrate repairs every drift of the triggers or the
+# function, and the triggers fire in every session_replication_role
+# ---------------------------------------------------------------------------------------------
+ROW_TRIGGER_NAME = "quarantine_decisions_no_update_delete"
+TRUNCATE_TRIGGER_NAME = "quarantine_decisions_no_truncate"
+APPEND_ONLY_FUNCTION = "quarantine_decisions_append_only"
+# What pg_get_triggerdef renders for the two triggers after migrate (PostgreSQL 16, public schema).
+EXPECTED_TRIGGER_DEFS = {
+    ROW_TRIGGER_NAME: (
+        f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE DELETE OR UPDATE ON public.{DECISIONS} "
+        f"FOR EACH ROW EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()"),
+    TRUNCATE_TRIGGER_NAME: (
+        f"CREATE TRIGGER {TRUNCATE_TRIGGER_NAME} BEFORE TRUNCATE ON public.{DECISIONS} "
+        f"FOR EACH STATEMENT EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()"),
+}
+_RECREATE_ROW_TRIGGER = f"DROP TRIGGER {ROW_TRIGGER_NAME} ON {DECISIONS}"
+# Each drift is applied by the admin after a first migrate. "bypass" says whether, before the next
+# migrate, the runtime role can then rewrite a decision (the drift is a real hole, not just a change).
+DRIFTS = {
+    "when_false": ([
+        _RECREATE_ROW_TRIGGER,
+        f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OR DELETE ON {DECISIONS} FOR EACH ROW WHEN (false) "
+        f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+    ], True),
+    "update_of_reason": ([
+        _RECREATE_ROW_TRIGGER,
+        f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OF reason OR DELETE ON {DECISIONS} FOR EACH ROW "
+        f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+    ], True),
+    "for_each_statement": ([
+        _RECREATE_ROW_TRIGGER,
+        f"CREATE TRIGGER {ROW_TRIGGER_NAME} BEFORE UPDATE OR DELETE ON {DECISIONS} FOR EACH STATEMENT "
+        f"EXECUTE FUNCTION {APPEND_ONLY_FUNCTION}()",
+    ], False),
+    "no_op_function": ([
+        f"CREATE OR REPLACE FUNCTION {APPEND_ONLY_FUNCTION}() RETURNS trigger LANGUAGE plpgsql AS "
+        "$noop$ BEGIN IF TG_OP = 'DELETE' THEN RETURN OLD; END IF; RETURN NEW; END $noop$",
+    ], True),
+    # No drift at all: the triggers must not be skipped by a session in replica mode.
+    "replica_mode": ([], False),
+}
+
+
+def _attempts(corpus_db, url, decision_id, *, replica=False):
+    """SQLSTATE (or "allowed") of each write attempt on one decision, each in its own transaction that
+    is always rolled back, so an allowed attempt changes nothing for the next one."""
+    statements = {
+        "UPDATE reviewer": f"UPDATE {DECISIONS} SET reviewer = 'rewritten' WHERE id = :id",
+        "UPDATE reason": f"UPDATE {DECISIONS} SET reason = 'rewritten' WHERE id = :id",
+        "DELETE": f"DELETE FROM {DECISIONS} WHERE id = :id",
+        "TRUNCATE": f"TRUNCATE {DECISIONS}",
+    }
+
+    async def go():
+        eng = corpus_db.engine_for(url)
+        out = {}
+        try:
+            for name, sql in statements.items():
+                async with eng.connect() as conn:
+                    tx = await conn.begin()
+                    try:
+                        if replica:
+                            await conn.execute(text("SET LOCAL session_replication_role = replica"))
+                        await conn.execute(text(sql), {"id": decision_id})
+                        out[name] = "allowed"
+                    except Exception as exc:  # noqa: BLE001 - classified by SQLSTATE
+                        out[name] = _sqlstate_of(exc)
+                    finally:
+                        await tx.rollback()
+        finally:
+            await eng.dispose()
+        return out
+
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("drift", sorted(DRIFTS))
+def test_i_migrate_repairs_every_drift_and_the_triggers_fire_in_every_replication_role(corpus_db, drift):
+    first = corpus_db.migrate()
+    assert first.returncode == 0, first.stderr[-3000:]
+    decision_id = str(uuid.uuid4())
+    x(corpus_db,
+      f"INSERT INTO {DECISIONS} (id, quarantine_id, decision, reviewer, reviewer_auth, reason, prior_state, "
+      "new_state) VALUES (:id, gen_random_uuid(), 'rejected', 'Reviewer F23-I (synthetic)', 'shared_admin_key', "
+      "'synthetic', CAST('{}' AS jsonb), CAST('{}' AS jsonb))", id=decision_id)
+    user, password = corpus_db.runtime_role(corpus_writer="none")
+    runtime_url = corpus_db.url_as(user, password)
+    statements, bypass = DRIFTS[drift]
+    for sql in statements:
+        x(corpus_db, sql)
+    if bypass:  # the drift really opens a hole before migrate runs (the test is not vacuous)
+        before = _attempts(corpus_db, runtime_url, decision_id)
+        assert before["UPDATE reviewer"] == "allowed", before
+
+    repaired = corpus_db.migrate()
+    assert repaired.returncode == 0, repaired.stderr[-3000:]
+    logs = repaired.stderr + repaired.stdout
+    if statements:
+        assert "made append-only" in logs and "append-only trigger already current" not in logs, logs[-2000:]
+
+    observed = {
+        "runtime role": _attempts(corpus_db, runtime_url, decision_id),
+        "superuser": _attempts(corpus_db, corpus_db.url, decision_id),
+        "superuser in replica mode": _attempts(corpus_db, corpus_db.url, decision_id, replica=True),
+        "triggers": {
+            r["tgname"]: (r["tgenabled"], r["def"])
+            for r in q(corpus_db,
+                       "SELECT tgname, tgenabled::text AS tgenabled, pg_get_triggerdef(oid) AS def FROM pg_trigger "
+                       "WHERE tgrelid = to_regclass(:t) AND NOT tgisinternal", t=DECISIONS)
+        },
+        "function": [dict(r) for r in q(corpus_db,
+            "SELECT l.lanname, p.prorettype::regtype::text AS rettype, p.prosecdef, p.proconfig IS NULL AS no_config, "
+            "p.prosrc LIKE '%RAISE EXCEPTION%restrict_violation%' AS raises FROM pg_proc p "
+            "JOIN pg_language l ON l.oid = p.prolang WHERE p.proname = :f", f=APPEND_ONLY_FUNCTION)],
+    }
+    refused = {"UPDATE reviewer": APPEND_ONLY_SQLSTATE, "UPDATE reason": APPEND_ONLY_SQLSTATE,
+               "DELETE": APPEND_ONLY_SQLSTATE, "TRUNCATE": APPEND_ONLY_SQLSTATE}
+    expected = {
+        # The runtime role holds no TRUNCATE privilege (DML only), so its TRUNCATE stops at 42501
+        # before the trigger; the superuser's shows the trigger itself.
+        "runtime role": {**refused, "TRUNCATE": "42501"},
+        "superuser": refused,
+        "superuser in replica mode": refused,
+        "triggers": {name: ("A", definition) for name, definition in EXPECTED_TRIGGER_DEFS.items()},
+        "function": [{"lanname": "plpgsql", "rettype": "trigger", "prosecdef": False, "no_config": True,
+                      "raises": True}],
+    }
+    assert observed == expected
