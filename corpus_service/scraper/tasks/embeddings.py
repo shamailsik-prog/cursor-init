@@ -253,6 +253,10 @@ INTERRUPT_RECEIPTS_SQL = """
 UPDATE embedding_attempts SET outcome = 'interrupted', finished_at = now()
  WHERE lease_owner = :owner AND outcome = 'started'"""
 
+FAIL_STARTED_RECEIPTS_SQL = """
+UPDATE embedding_attempts SET outcome = 'failed', error_type = :error_type, finished_at = now()
+ WHERE lease_owner = :owner AND outcome = 'started' AND queue_id = :queue_id"""
+
 ALERT_STATE_SQL = """
 SELECT now(),
        (SELECT min(created_at) FROM embedding_queue WHERE status IN ('pending', 'processing')),
@@ -345,7 +349,8 @@ class _Batch:
                     self.counts.tally.item_failed(exc)
                 await self._give_back(exc)
                 raise
-            await self._alerts()
+            finally:
+                await self._alerts()
 
     # -- R3 ------------------------------------------------------------------------------------
     async def _reclaim(self) -> None:
@@ -535,7 +540,12 @@ class _Batch:
                     except LeaseLost:
                         logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
                 released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
-                await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
+                if charge is not None:
+                    await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
+                        "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
+                    })
+                else:
+                    await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
                 await db.commit()
                 self.counts.released = len(released)
         except Exception as cleanup:
