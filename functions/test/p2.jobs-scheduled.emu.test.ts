@@ -69,7 +69,10 @@ describe.skipIf(!EMULATORS)("P2 scheduled jobs (P3-16)", () => {
     await enqueueAt(diagSpec(firmId, { behaviour: "succeed" }, { jobType: "test.scheduled", idempotencyKey: runKey, runKey, payload: { period: key, other: true } }), T0)
   }
 
-  it("a failing firm does not starve the others; the tick reports the failure", async () => {
+  // The three tests below also walk every firm left in the shared emulator (a tick, a backfill over
+  // three days, and two CLI backfills), so they take the same 120 s bound as the tests above: they
+  // exceeded the 15 s default when this file ran late (PR #84 at a89eaa9). Assertions are unchanged.
+  it("a failing firm does not starve the others; the tick reports the failure", { timeout: 120_000 }, async () => {
     const bad = await newFirm()
     await poison(bad, "2026-11-20")
     await expect(enqueueScheduledRuns(spec, Date.parse("2026-11-20T09:00:00Z"), { pageSize: 2 })).rejects.toBeInstanceOf(ScheduledRunsFailedError)
@@ -78,7 +81,7 @@ describe.skipIf(!EMULATORS)("P2 scheduled jobs (P3-16)", () => {
     }
   })
 
-  it("backfill continues past a failing firm and then reports failure", async () => {
+  it("backfill continues past a failing firm and then reports failure", { timeout: 120_000 }, async () => {
     const bad = await newFirm()
     await poison(bad, "2026-11-22")
     await expect(backfillScheduledRuns(spec, "2026-11-21", "2026-11-23", T0)).rejects.toMatchObject({ failed: 1 })
@@ -89,7 +92,7 @@ describe.skipIf(!EMULATORS)("P2 scheduled jobs (P3-16)", () => {
     }
   })
 
-  it("the CLI exits 0 on success, 1 on a failing firm, and 1 with a clear line for an unregistered handler", async () => {
+  it("the CLI exits 0 on success, 1 on a failing firm, and 1 with a clear line for an unregistered handler", { timeout: 120_000 }, async () => {
     const lines: string[] = []
     const deps = { schedules: [spec], now: () => T0, out: (l: string) => void lines.push(l) }
     expect(await runBackfill(["test.scheduled", "2026-11-25", "2026-11-26"], deps)).toBe(0)

@@ -2,6 +2,8 @@
 
 Date: 2026-10-10. Status: rulings made under the owner's standing autonomy instruction (7 October 2026); pending the partner's signature with Erratum Set No. 2.
 
+**Amended by audit F38 (2026-10-18; `docs/superpowers/specs/2026-10-18-f38-auto-confirm-progress-design.md`).** The fixed 2,000-row window gives way to a per-firm frontier cursor, deferral records with rechecks, continuation runs and a backlog alert. That closes the starvation note under O-50. P3-53 keeps its positional ids and its bound of 48. On a retry, though, the chunk at a position an earlier attempt recorded now moves to the next position instead of waiting a day (F38 R8).
+
 Separate from #19's Phase 3c close-out (`docs/superpowers/specs/2026-10-11-phase3c-closeout-design.md`: P3-51, P3-52, E-46, the scheduled-tick retry that closed O-43), which landed first; these rulings were renumbered after it (P3-51..P3-57 became P3-53..P3-59, E-46 became E-47).
 
 ## Why

@@ -9,6 +9,7 @@ A handler is registered in `registry.ts` as `{ jobType, saga, errorCodes, parse,
 - `parse(payload)` validates the payload; any rejection is the permanent `invalid_payload`.
 - `run(ctx)` returns `{ apply?(tx), outputRefs? }`. `apply` stages Firestore writes (no reads) that commit with `done`, once. A write Firestore rejects at commit (for example `tx.create` on an existing doc) is recorded as the retryable `internal` failure and nothing of the result is written.
 - `ctx.runFenced(stepId, fn)` runs `fn(tx)` in a transaction that checks the claim's lease fence and records `stepId` on the job in the same commit. A step already recorded (by an earlier attempt that crashed or failed, or before a manual requeue) is skipped and returns `undefined`, so a fenced effect commits exactly once per job. Use a fixed, distinct step id per effect (`[A-Za-z0-9_-]{1,100}`, not `__..__`, at most 50 per job; violations are permanent `invalid_fenced_step` / `fenced_step_limit`). Derive later steps from Firestore state, not from a skipped step's return value.
+- `ctx.checkFence(tx)` makes the same fence check inside the caller's own transaction, with no step recorded; it throws `LeaseLostError` once the claim no longer holds. It is for a write that is safe to repeat but must not commit after the claim is lost, such as auto-confirm's checkpoint (audit F38). Call it before the transaction's writes.
 - Handlers must be idempotent: delivery is at least once, and effects outside Firestore happen at least once and should carry the job id or a key.
 
 ## Scheduled jobs
@@ -43,6 +44,20 @@ A job that exhausts its attempts becomes `dead_lettered` and the engine writes o
     logger.error("job.deadLettered", { jobId, firmId, jobType, code, ... })
 
 carrying codes only, never payload values. Create the log-based alert policy at deploy (open item O-30): filter on `severity=ERROR` and `jsonPayload.message="job.deadLettered"` (or the log message `job.deadLettered`), notify the on-call channel. To recover: read the job (`getJob`), fix the cause, then call `retryFailedJob` (up to 3 manual retries per job). A job that should not run again is closed with `cancelJob`.
+
+## Auto-confirm progress and the backlog alert (F38)
+
+Spec `docs/superpowers/specs/2026-10-18-f38-auto-confirm-progress-design.md`. A `d1.autoconfirm` run walks the firm's aged candidate rows from a cursor that only moves forward (`counters/{firmId}_autoconfirm.cursor`). A pair it cannot confirm is passed once and recorded in `autoconfirm_deferrals` with a reason code (`young_row`, `confirmed_row`, `rejected_row`, `disputed_row`, `unmerge_in_progress`, `invalid_row`, `entity_missing`, `entity_other_firm`, `event_exists`) and a due time (`recheckAt`). Once the cursor reaches the end, the run re-checks the records that are due. A run that leaves work enqueues a continuation of itself: payload `{ period, continuation }`, run key `d1.autoconfirm:<period>:c<n>`, at most 23 per period. Bounds per run: 2,000 rows, 48 steps of 10 pairs, 480 due records.
+
+The progress doc records each run (`lastRun.outcome`: `drained`, `continued` or `backlog_remaining`) and the backlog (`backlog.pendingSince`, `source`, `ageMs`, `alert`). A `done` auto-confirm job therefore does not by itself mean the backlog is done: read `lastRun.outcome`. Three log lines carry codes and ids only:
+
+    logger.error("autoconfirm.backlog_stale", { firmId, jobId, source, ageMs })   // pending work due more than 36 h ago
+    logger.info("autoconfirm.backlog_cleared", { firmId, jobId })                 // the first run after a stale one that is not stale
+    logger.warn("autoconfirm.backlog_remaining", { firmId, jobId, period, continuation })  // the period's continuations are spent
+
+At deploy, create a log-based alert policy on `severity=ERROR` and `jsonPayload.message="autoconfirm.backlog_stale"`, notifying the on-call channel as for `job.deadLettered`. Also deploy the composite index `autoconfirm_deferrals (firmId, recheckAt)` (`firebase deploy --only firestore:indexes`) before the first run: without it the recheck query fails and the job dead-letters. No backfill is required. The first run after the deploy walks the existing backlog from the oldest row, continuing the same day, and the stale alert may fire until it drains. To start before the next 02:15 tick: `npm --prefix functions run jobs:backfill -- d1.autoconfirm <today> <today>`.
+
+Diagnosing a stuck backlog: list the firm's `autoconfirm_deferrals` (`firmId ==`), grouped by `reason`; `since`, `checks` and `rowId` show how long and which row. To have the job re-check a pair you have repaired, set its record's `recheckAt` to now. Do not delete records: a repaired pair whose record was deleted, and whose rows are all behind the cursor, is reached again only through a new record.
 
 ## Backfill
 
