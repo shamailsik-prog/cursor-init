@@ -36,41 +36,62 @@
 
 **Files:** create `tests/f39-lockfile-guard.test.ts`, `tests/f39-frozen-install.e2e.test.ts`.
 
-- [ ] Guard fixture tests: consistent pair passes; each drift class, pin defect and non-frozen install form fails with the guard's own message; allowed forms pass; `--npm-ci` with an npm outside the pin fails before running `npm ci`.
-- [ ] E2E (a)-(d) per spec ruling 6, on a clean copy of the checked-in manifests and install surfaces.
-- [ ] Run both files on the branch before any fix and record RED (ledger below). Commit and push.
+- [x] Guard fixture tests: consistent pair passes; each drift class, pin defect and non-frozen install form fails with the guard's own message; allowed forms pass; `--npm-ci` with an npm outside the pin fails before running `npm ci`.
+- [x] E2E (a)-(d) per spec ruling 6, on a clean copy of the checked-in manifests and install surfaces.
+- [x] Run both files on the branch before any fix and record RED (ledger below). Commit and push.
 
 ### Task 3: the guard
 
 **Files:** create `ci_gates/check_lockfiles.py`.
 
-- [ ] Static checks 1-6 and dynamic checks 7-8 (spec ruling 3). Fails closed: no root manifest or lock, an unreadable or non-JSON file, an npm whose version cannot be read.
-- [ ] `tests/f39-lockfile-guard.test.ts` GREEN.
+- [x] Static checks 1-6 and dynamic checks 7-8 (spec ruling 3). Fails closed: no root manifest, a manifest with dependencies and no lock, an unreadable or non-JSON file, an npm whose version cannot be read.
+- [x] `tests/f39-lockfile-guard.test.ts` GREEN.
 
 ### Task 4: repair and pin
 
 **Files:** modify `package.json`, `functions/package.json`; regenerate `package-lock.json`.
 
-- [ ] Override key `"undici@8.9.0"`; `packageManager` and `devEngines` in both manifests; `gate:lockfiles` script.
-- [ ] `npx -y npm@10.9.9 install --package-lock-only --ignore-scripts` at the root and in `functions/`; confirm the tree is unchanged and a second run is byte-stable.
-- [ ] `tests/f39-frozen-install.e2e.test.ts` GREEN.
+- [x] Override key `"undici@8.9.0"`; `packageManager` and `devEngines` in both manifests; `gate:lockfiles` script.
+- [x] `npx -y npm@10.9.9 install --package-lock-only --ignore-scripts` at the root and in `functions/`; confirm the tree is unchanged and a second run is byte-stable.
+- [x] `tests/f39-frozen-install.e2e.test.ts` GREEN.
 
 ### Task 5: wiring and docs
 
 **Files:** modify `ci_gates/gate_g0.sh`, `.github/workflows/gate-g0.yml`, `tests/g0-gate-e2e.test.ts`, `README.md`, `docs/architecture/README.md`, `docs/audits/known-advisories.md`.
 
-- [ ] G-0 check [18] (static); gates-job step `python3 ci_gates/check_lockfiles.py --npm-ci` after "Gate G-0 static".
-- [ ] G-0 e2e base tree copies `package-lock.json`; `tests/g0-gate-e2e.test.ts` GREEN.
-- [ ] README "Run locally" uses `npm ci`; the pin and the Node 24 / eve route documented; the guard in the gates table; the keyed override in known-advisories.
+- [x] G-0 check [18] (static); gates-job step `python3 ci_gates/check_lockfiles.py --npm-ci` after "Gate G-0 static".
+- [x] G-0 e2e base tree copies `package-lock.json`; `tests/g0-gate-e2e.test.ts` GREEN.
+- [x] README "Run locally" uses `npm ci`; the pin and the Node 24 / eve route documented; the guard in the gates table; the keyed override in known-advisories.
 
 ### Task 6: verification
 
-- [ ] `npm run test:unit`, `npm run typecheck`, `npm run typecheck:tests`, `npm run lint`, `npm --prefix functions run typecheck`.
-- [ ] `BASE=origin/main bash ci_gates/gate_g0.sh`; `python3 ci_gates/check_lockfiles.py --npm-ci` on the real tree.
-- [ ] Clean `npm ci` at the root and in `functions/` on a fresh extraction of the branch head; `npm ci --dry-run` across npm versions.
-- [ ] Dependency-audit gate on the regenerated lock (`ci_gates/check_known_advisories.mjs`).
-- [ ] PR body through `ci_gates/check_pr_phase_claims.py`.
+- [x] `npm run test:unit`, `npm run typecheck`, `npm run typecheck:tests`, `npm run lint`, `npm --prefix functions run typecheck`.
+- [x] `BASE=origin/main bash ci_gates/gate_g0.sh`; `python3 ci_gates/check_lockfiles.py --npm-ci` on the real tree.
+- [x] Clean `npm ci` at the root and in `functions/` on a fresh extraction of the branch head; `npm ci --dry-run` across npm versions.
+- [x] Dependency-audit gate on the regenerated lock (`ci_gates/check_known_advisories.mjs`).
+- [x] PR body through `ci_gates/check_pr_phase_claims.py`.
 
 ## RED / GREEN ledger
 
-Filled in from runs, with exact commands and counts, as each task lands.
+All runs on Node 22.22.2 / npm 10.9.7 unless the row names another npm.
+
+| step | commit | command | result |
+| --- | --- | --- | --- |
+| Reproduce | origin/main 1f0cc27 | `npx -y npm@<v> ci --dry-run --ignore-scripts` on clean extractions | root exit 0 on npm 9.2.0, 10.9.7, 10.9.9, 11.0.0, 11.1.0; exit 1 `Missing: undici@8.11.2 from lock file` on 11.2.0 to 11.21.1 (sampled) and 12.2.0; functions exit 0 everywhere. Real `npx -y npm@11.19.1 ci`: exit 1, same message |
+| RED | 01169e0 (main + spec/plan + tests) | `npx vitest run tests/f39-lockfile-guard.test.ts tests/f39-frozen-install.e2e.test.ts` | **45 failed / 0 passed**. (c): npm 11.19.1 rejects main's checked-in lock, `Missing: undici@8.11.2 from lock file`; (d): `EUSAGE`, no pin; every guard case: the guard does not exist |
+| Guard | 59eff9d | `npx vitest run tests/f39-lockfile-guard.test.ts` | 41/41 passed. The guard on main's manifests: only the four missing pin fields fail |
+| GREEN | 79b23d5 (repair + pin + lock) | both F39 files | **45/45 passed** |
+| Lock | 79b23d5 | `npx -y npm@10.9.9 install --package-lock-only --ignore-scripts`, twice | root: +66 lines (six bundled `inBundle` entries), no entry of main's lock changed, second run byte-identical; functions: byte-identical |
+| Wiring | 0ba2c1c | `npx vitest run tests/g0-gate-e2e.test.ts` | 20/20. Without `package-lock.json` in its base tree the control case fails: `package.json: declares dependencies but has no package-lock.json beside it` |
+| Mutation | working tree, reverted | nested-`.git` skip removed from the guard, `-t "nested git worktrees"` | 1 failed (the worktree's drifted pair, foreign lock and missing pin reported); restored, 41/41 |
+
+Verification at the branch head:
+
+- `npm run test:unit`: 197 files, 5661 passed, 54 skipped (5715). All 54 skips are in `tests/f16-injection-structure.test.ts` (pre-existing); the F39 files and `g0-gate-e2e` have none.
+- `npm run typecheck`, `npm run typecheck:tests`, `npm --prefix functions run typecheck`: exit 0. `npm run lint`: 0 errors, 89 warnings, none in a touched file.
+- `BASE=origin/main bash ci_gates/gate_g0.sh`: Gate G-0 PASSED, [18] PASS (2 lockfiles, pin in 2 manifests, install surfaces frozen).
+- `python3 ci_gates/check_lockfiles.py --npm-ci` on the real tree: PASSED.
+- Clean frozen install of a fresh extraction of 0ba2c1c: root `npm ci` exit 0 (1484 packages), `functions/` exit 0 (580), guard `--npm-ci` PASSED there. Against main's install: same version for every package in both; four wasm-only optional dev helpers no longer extracted (spec ruling 1).
+- Branch head across npm versions (`npm ci --dry-run`, root and functions): as checked in, npm 9.2.0 and 10.9.9 exit 0, npm 11.2.0, 11.19.1 and 12.2.0 exit 1 `EBADDEVENGINES`; with `devEngines` taken out of the copy, all five exit 0.
+- Dependency-audit gate (`node ci_gates/check_known_advisories.mjs` on `npm audit --omit=dev --json`, root and functions): PASS, 0 gating advisories; full `npm audit` 35 (12 moderate, 20 high, 3 critical), as on main.
+- `actionlint` 1.7.7 on `.github/workflows/gate-g0.yml`: exit 0.

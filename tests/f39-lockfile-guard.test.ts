@@ -263,14 +263,24 @@ describe("F39 lockfile guard: manifests and lockfiles agree (ci_gates/check_lock
     expectFail(root, "package.json: declares dependencies but has no package-lock.json beside it")
   })
 
-  it("skips node_modules, build caches and test fixture directories", () => {
+  it("skips node_modules, build caches, test fixture directories and nested git worktrees", () => {
     const root = tree()
     const drifted = { name: "x", version: "1.0.0", dependencies: { ms: "^2.1.3" } }
-    for (const dir of ["node_modules/eve", "functions/node_modules/pg", ".next", ".stryker-tmp/sandbox-1", "tests/fixtures/app"]) {
+    const skipped = [
+      "node_modules/eve",
+      "functions/node_modules/pg",
+      ".next",
+      ".stryker-tmp/sandbox-1",
+      "tests/fixtures/app",
+      ".claude/worktrees/agent-1",
+    ]
+    for (const dir of skipped) {
       write(root, `${dir}/package.json`, drifted)
       write(root, `${dir}/package-lock.json`, lockFor({ ...drifted, dependencies: { ms: "2.1.3" } }))
       write(root, `${dir}/yarn.lock`, "# yarn\n")
     }
+    // A git worktree (or nested repository) holds its own .git; it is another checkout, not part of this tree.
+    write(root, ".claude/worktrees/agent-1/.git", "gitdir: /elsewhere/.git/worktrees/agent-1\n")
     const r = guard(root)
     expect(r.out).toContain("PASS: 2 lockfiles match their manifests")
     expect(r.code).toBe(0)
