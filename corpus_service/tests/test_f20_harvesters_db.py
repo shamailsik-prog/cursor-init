@@ -1,7 +1,9 @@
 """Audit F20 re-audit round 1 (PR #48): harvesters, end to end against real Postgres.
 
-The real dispatcher (`_run_async`) runs the real harvesters; only the network is replaced: httpx's
-AsyncClient, each court module's listing discovery, PDF text extraction and the politeness sleeps.
+The real dispatcher (`_run_async`) runs the real harvesters; only the network is replaced: the fetch
+boundary's client factory (`scraper.net.fetch_policy.fetcher_for`, audit F25; before F25 this
+replaced httpx.AsyncClient, which no connector builds any more), each court module's listing
+discovery, PDF text extraction and the politeness sleeps.
 
 * MEDIUM-1: every staging row a harvester writes carries the scraper_sources row it came from
   (source_id plus parsing_metadata source_id / source_name), so promotion never resolves it by a
@@ -48,19 +50,26 @@ COURT_MODULES = sorted(set(STAGING_ROUTES.values()) - {"nasirlawsite"})
 
 
 class _Resp:
-    def __init__(self, body: bytes, status: int = 200):
+    def __init__(self, body: bytes, status: int = 200, url: str = ""):
         self.status_code = status
         self.content = body
         self.text = body.decode("latin-1")
         self.headers = {}
+        self.url = url
 
 
-class FakeAsyncClient:
-    """Stands in for httpx.AsyncClient. Each listing links one synthetic document; every PDF is a
-    stub. Nothing leaves the process."""
+class FakeFetcher:
+    """Stands in for the fetch boundary's client (``fetch_policy.fetcher_for(name)``). Each listing
+    links one synthetic document; every PDF is a stub. Nothing leaves the process. ``allows`` is
+    the source's real registered policy."""
 
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, name, *args, **kwargs):
+        from scraper.net import fetch_policy
+
+        self.policy = fetch_policy.policy_for(name)
+
+    def allows(self, url):
+        return self.policy.allows(url)
 
     async def __aenter__(self):
         return self
@@ -71,26 +80,25 @@ class FakeAsyncClient:
     async def get(self, url, *args, **kwargs):
         url = str(url)
         if url.lower().endswith(".pdf"):
-            return _Resp(PDF)
+            return _Resp(PDF, url=url)
         if "pakistancode.gov.pk" in url:
             if url.endswith("/federal"):
-                return _Resp(b"<html></html>")
+                return _Resp(b"<html></html>", url=url)
             return _Resp(b"<html><h1>Test Act 2099</h1><div class='section'>1. Short title. This Act may be "
-                         b"called the Test Act 2099 (synthetic F20 fixture).</div></html>")
+                         b"called the Test Act 2099 (synthetic F20 fixture).</div></html>", url=url)
         if "na.gov.pk" in url:
-            return _Resp(b"<html><a href='/uploads/test-act-2099.pdf'>Test Act 2099</a></html>")
+            return _Resp(b"<html><a href='/uploads/test-act-2099.pdf'>Test Act 2099</a></html>", url=url)
         if url in NASIR_REPORTERS:
-            return _Resp(b"<html><title>F20 fixture</title><a href='f20-fixture-case.htm'>case</a></html>")
-        return _Resp(b"<html><body>Synthetic F20 fixture judgment text.</body></html>")
+            return _Resp(b"<html><title>F20 fixture</title><a href='f20-fixture-case.htm'>case</a></html>", url=url)
+        return _Resp(b"<html><body>Synthetic F20 fixture judgment text.</body></html>", url=url)
 
 
 def install_offline_harvesters(monkeypatch):
-    import httpx
-
     import scraper.parsers.pdf_extractor as pdf_extractor
     import scraper.tasks.nationalassembly as nationalassembly
+    from scraper.net import fetch_policy
 
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(fetch_policy, "fetcher_for", lambda name, *a, **kw: FakeFetcher(name))
     monkeypatch.setattr(pdf_extractor, "extract_pdf_text", lambda content, *a, **k: "Synthetic F20 judgment text.")
     monkeypatch.setattr(
         nationalassembly, "extract_pdf_text",

@@ -4,8 +4,9 @@ import re
 from collections import deque
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
+
+from scraper.net import fetch_policy
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +99,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
     visited_listing_urls: set[str] = set()
     listing_queue = deque(LHC_LISTING_SEED_URLS)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        follow_redirects=True,
-    ) as client:
+    # Audit F25: listing pages are external input. Every request (and every redirect hop)
+    # goes through the LahoreHighCourt fetch policy: https, its hosts on 443, public addresses only.
+    async with fetch_policy.fetcher_for("LahoreHighCourt") as client:
         while listing_queue and len(visited_listing_urls) < 25:
             listing_url = listing_queue.popleft()
             if listing_url in visited_listing_urls:
@@ -152,7 +152,7 @@ async def scrape_lahorehighcourt(source, db):
             )
             return
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with fetch_policy.fetcher_for("LahoreHighCourt") as client:
             for pdf_url in pdf_urls[:20]:
                 try:
                     response = await client.get(pdf_url)
