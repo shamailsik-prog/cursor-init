@@ -7,6 +7,7 @@ from scraper.parsers.citation_extractor import extract_citations, score_confiden
 from scraper.database import SessionLocal
 from scraper.models import ScraperStaging
 from scraper.source_identity import stamp_metadata
+from scraper.tasks import outcomes
 logger = logging.getLogger(__name__)
 
 REPORTER_URLS = [
@@ -39,6 +40,12 @@ def _resolve_link(page_url: str, href: str) -> str | None:
 
 
 async def scrape_nasirlawsite(source, db):
+    # Audit F28: reporter pages are the run's listings and case pages its documents. Each is counted;
+    # a case page answering anything but 200 is a failure, never staged; a database error fails
+    # the run at once; a run whose every reporter page, or every case page, failed raises
+    # SourceRunFailed.
+    tally = outcomes.run_tally()
+    listings = outcomes.Tally()
     # Audit F25: every request goes through the NasirLawSite fetch policy (https, Nasir hosts on
     # 443, public addresses only, each redirect re-checked). Reporter-page links are external
     # input: a link the policy refuses is logged by the boundary and never requested.
@@ -46,13 +53,22 @@ async def scrape_nasirlawsite(source, db):
         for url in REPORTER_URLS:
             try:
                 r = await client.get(url)
+                if r.status_code != 200:
+                    logger.error(f"Nasir reporter {url} returned status {r.status_code}")
+                    listings.item_failed(f"http_{r.status_code}")
+                    continue
                 soup = BeautifulSoup(r.text, "html.parser")
                 hrefs = [a.get("href") for a in soup.find_all("a", href=True) if "case" in a.get("href","").lower() or ".htm" in a.get("href","")]
                 links = [full for full in (_resolve_link(r.url, href) for href in hrefs) if full and client.allows(full)]
+                listings.item_ok()
                 # follow individual case pages (limit for demo)
                 for full in links[:20]:
                     try:
                         cr = await client.get(full)
+                        if cr.status_code != 200:
+                            logger.error(f"Nasir case {full} returned status {cr.status_code}")
+                            tally.item_failed(f"http_{cr.status_code}")
+                            continue
                         raw_html = cr.text
                         cleaned = clean_html(raw_html)
                         cits = extract_citations(cleaned)
@@ -71,9 +87,18 @@ async def scrape_nasirlawsite(source, db):
                         )
                         db.add(staging)
                         await db.commit()
+                        tally.item_ok(1)
                         await asyncio.sleep(1)
                     except Exception as e:
+                        if outcomes.is_database_error(e):
+                            raise
                         logger.error(f"Nasir case error {full}: {e}")
+                        tally.item_failed(e)
                 await asyncio.sleep(2)
             except Exception as e:
+                if outcomes.is_database_error(e):
+                    raise
                 logger.error(f"Nasir reporter {url} error {e}")
+                listings.item_failed(e)
+    listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    return tally.finish()
