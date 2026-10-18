@@ -538,3 +538,162 @@ describe("F39 lockfile guard: review round (Codex P2 x2 on PR #66)", () => {
     expect(r.code).toBe(0)
   })
 })
+
+describe("F39 lockfile guard: review round 2 (Copilot, thread 4305283954): quoting and npm ci targets", () => {
+  const ALLOWLIST = "ci_gates/lockfile_install_allowlist.json"
+  const workflowWith = (...lines: string[]) =>
+    ["name: X", "jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:", "      - uses: actions/checkout@v4", ...lines, ""].join("\n")
+  const vouch = (root: string, entries: Json[]) => write(root, ALLOWLIST, { entries })
+
+  // A quote must never end the command before the subcommand is read (the guard used to stop at the first quote).
+  it.each([
+    ["npm --prefix \"functions\" install", 'non-frozen npm command "npm --prefix functions install"'],
+    ["npm --prefix '$dir' i", 'non-frozen npm command "npm --prefix $dir i"'],
+    ['npm -C "x" add foo', 'non-frozen npm command "npm -C x add foo"'],
+    ['npm "install"', 'non-frozen npm command "npm install"'],
+    ['npm --prefix "a\\"b" install', 'non-frozen npm command "npm --prefix a\\"b install"'],
+    ['bash -c "npm ci && npm install"', 'non-frozen npm command "npm install"'],
+    ['bash -c "true; npm i left-pad"', 'non-frozen npm command "npm i left-pad"'],
+    ['bash -c "echo y | npm add left-pad"', 'non-frozen npm command "npm add left-pad"'],
+    ["sh -c 'cd functions && npm update'", 'non-frozen npm command "npm update"'],
+  ])("a workflow running `%s` fails", (run, message) => {
+    const root = tree()
+    write(root, ".github/workflows/x.yml", workflowWith(`      - run: ${run}`))
+    expectFail(root, `.github/workflows/x.yml:7: ${message}`)
+  })
+
+  it("a quoted option value does not hide an install in a hook, the Cursor environment or a package script", () => {
+    const root = tree()
+    write(root, ".claude/hooks/session-start.sh", '#!/bin/bash\nnpm --prefix "$dir" install\n')
+    write(root, ".cursor/environment.json", { install: 'npm --prefix "functions" install' })
+    editManifest(root, "package.json", (m) => {
+      ;(m.scripts as Record<string, string>).setup = 'npm --prefix "functions" install'
+    })
+    expectFail(
+      root,
+      '.claude/hooks/session-start.sh:2: non-frozen npm command "npm --prefix $dir install"',
+      '.cursor/environment.json:2: non-frozen npm command "npm --prefix functions install"',
+      'package.json: scripts.setup: non-frozen npm command "npm --prefix functions install"',
+    )
+  })
+
+  it("fails closed on a line that mentions npm but cannot be read as shell (unbalanced quote)", () => {
+    const root = tree()
+    write(root, ".github/workflows/x.yml", workflowWith('      - run: npm ci "unterminated'))
+    expectFail(root, ".github/workflows/x.yml:7: cannot read this line as shell commands")
+  })
+
+  it("follows a step's working-directory, inline and in a run block", () => {
+    const root = tree()
+    write(root, "tools/site/package.json", { name: "site", version: "1.0.0", private: true })
+    write(
+      root,
+      ".github/workflows/x.yml",
+      workflowWith(
+        "      - name: inline",
+        "        working-directory: tools/site",
+        "        run: npm ci",
+        "      - name: block",
+        "        working-directory: ./tools/site/",
+        "        run: |",
+        "          echo installing",
+        "          npm ci --no-audit",
+        "      - working-directory: functions",
+        "        run: npm ci",
+      ),
+    )
+    const out = expectFail(
+      root,
+      ".github/workflows/x.yml:9: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+      ".github/workflows/x.yml:14: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+    )
+    expect(out).not.toContain("x.yml:16")
+  })
+
+  it("follows a preceding cd in the same run block, and a cd it cannot read makes the target unknown", () => {
+    const root = tree()
+    write(root, "tools/site/package.json", { name: "site", version: "1.0.0", private: true })
+    write(
+      root,
+      ".github/workflows/x.yml",
+      workflowWith(
+        "      - run: cd tools/site && npm ci",
+        "      - run: cd functions && npm ci",
+        "      - run: |",
+        "          cd tools",
+        "          cd site",
+        "          npm ci",
+        '      - run: cd "$GITHUB_WORKSPACE/app" && npm ci',
+      ),
+    )
+    const out = expectFail(
+      root,
+      ".github/workflows/x.yml:7: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+      ".github/workflows/x.yml:12: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+      ".github/workflows/x.yml:13: npm ci target cannot be read (the working directory comes from cd $GITHUB_WORKSPACE/app)",
+    )
+    expect(out).not.toContain("x.yml:8")
+  })
+
+  it("a job-level default working-directory, or a --prefix held in a variable, is an unknown target that fails closed", () => {
+    const root = tree()
+    write(
+      root,
+      ".github/workflows/x.yml",
+      [
+        "name: X",
+        "jobs:",
+        "  a:",
+        "    runs-on: ubuntu-latest",
+        "    defaults:",
+        "      run:",
+        "        working-directory: functions",
+        "    steps:",
+        "      - run: npm ci",
+        '      - run: npm ci --prefix "$PKG"',
+        "",
+      ].join("\n"),
+    )
+    expectFail(
+      root,
+      ".github/workflows/x.yml:9: npm ci target cannot be read (a workflow or job default working-directory is not followed)",
+      ".github/workflows/x.yml:10: npm ci target cannot be read (--prefix $PKG is held in a variable)",
+    )
+  })
+
+  it("an unknown target passes only when the allowlist vouches for it, and the vouched directories are checked", () => {
+    const hook = '#!/bin/bash\ninstall_pkg() {\n  npm ci --prefix "$1" --no-audit\n}\ninstall_pkg .\ninstall_pkg functions\n'
+    const entry = {
+      surface: ".claude/hooks/session-start.sh",
+      command: "npm ci --prefix $1 --no-audit",
+      directories: [".", "functions"],
+      reason: "install_pkg is called for . and functions",
+    }
+
+    const unvouched = tree()
+    write(unvouched, ".claude/hooks/session-start.sh", hook)
+    expectFail(unvouched, ".claude/hooks/session-start.sh:3: npm ci target cannot be read (--prefix $1 is held in a variable)")
+
+    const vouched = tree()
+    write(vouched, ".claude/hooks/session-start.sh", hook)
+    vouch(vouched, [entry])
+    const ok = guard(vouched)
+    expect(ok.out).toContain("PASS: install surfaces install frozen (npm ci)")
+    expect(ok.code).toBe(0)
+
+    const wrongDir = tree()
+    write(wrongDir, ".claude/hooks/session-start.sh", hook)
+    vouch(wrongDir, [{ ...entry, directories: [".", "tools/site"] }])
+    expectFail(wrongDir, ".claude/hooks/session-start.sh:3: npm ci runs in tools/site (vouched in ci_gates/lockfile_install_allowlist.json), which has no package.json")
+  })
+
+  it("a stale or malformed allowlist entry fails", () => {
+    const stale = tree()
+    vouch(stale, [{ surface: ".claude/hooks/session-start.sh", command: "npm ci --prefix $dir", directories: ["."], reason: "gone" }])
+    expectFail(stale, 'ci_gates/lockfile_install_allowlist.json: stale entry for .claude/hooks/session-start.sh "npm ci --prefix $dir"')
+
+    const malformed = tree()
+    vouch(malformed, [{ surface: ".claude/hooks/session-start.sh", command: "npm ci --prefix $dir", directories: ["."] }])
+    expectFail(malformed, "ci_gates/lockfile_install_allowlist.json: entry 1 needs surface, command, directories and reason")
+  })
+})
