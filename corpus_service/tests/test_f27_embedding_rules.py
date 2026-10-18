@@ -81,3 +81,12 @@ def test_r13_each_batch_is_bounded():
 
 def test_r11_the_backlog_alert_age_is_a_day():
     assert embeddings.BACKLOG_ALERT_SECONDS == 24 * 3600
+
+
+def test_r10_a_held_answer_is_stored_at_most_three_times_before_its_row_is_dead_lettered():
+    """Review round 2 (Bugbot 4307417933, 4307442945): the bound on failed stores of one paid answer."""
+    assert embeddings.STORE_RETRY_LIMIT == 3 and embeddings.STORE_FAILED == "store_failed"
+
+
+def test_r15_the_pause_after_each_provider_request_keeps_to_100_a_minute():
+    assert embeddings.PACE_SECONDS == 0.6

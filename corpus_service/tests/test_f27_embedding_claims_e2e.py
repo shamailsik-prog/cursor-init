@@ -579,9 +579,10 @@ def test_r10_a_batch_failed_by_the_database_keeps_its_paid_answer_and_gives_back
     rows = queue_by_row()
     assert (rows[1], rows[2], rows[3]) == (
         ("completed", 0, None, True), ("pending", 0, "IntegrityError", False), ("pending", 0, None, False)), rows
-    due = run(fetch("SELECT q.next_attempt_at IS NULL FROM embedding_queue q "
-                    "JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = 's2'"))[0][0]
-    assert due, "the held answer's store is retried at once"
+    wait = run(fetch("SELECT round(extract(epoch FROM q.next_attempt_at - now())) FROM embedding_queue q "
+                     "JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = 's2'"))[0][0]
+    assert wait is not None and BACKOFF[0] - 10 <= wait <= BACKOFF[0], (
+        f"the held answer's store waits R8's first delay ({BACKOFF[0]} s), not 'always due': {wait}")
     assert [r[:3] for r in receipts()] == [("stored", TOKENS, False), ("answered", TOKENS, True)], receipts()
     summary_row = jobs("embedding_queue", job_type="embed")[0].result_summary
     assert (summary_row["claimed"], summary_row["completed"], summary_row["failed"], summary_row["released"]) == (3, 1, 1, 1), summary_row
@@ -616,8 +617,9 @@ def test_r10_a_store_that_fails_on_the_last_attempt_keeps_the_row_and_its_paid_a
     answers, the `answered` receipt commits, then the database refuses the vector write (a trigger,
     SQLSTATE 23514: a database error inside `_store`). At 132957c the give-back charged the row, which
     sent it to the dead letter with the paid vector held in a receipt nothing claims. Now a failed
-    store of a held answer does not charge the row: it is due again at once, and once the database
-    accepts the write the answer is stored with no new request."""
+    store of a held answer does not charge the row: the failure is counted on the receipt, the row
+    waits R8's delay, and once the database accepts the write the answer is stored with no new
+    request."""
     migrated(corpus_db)
     seed_statutes(1, 1)
     run(execute("UPDATE embedding_queue SET attempts = max_attempts - 1"))
@@ -633,6 +635,7 @@ def test_r10_a_store_that_fails_on_the_last_attempt_keeps_the_row_and_its_paid_a
         f"the paid answer was stranded: row {queue_by_row()[1]}, receipts {receipts()}")
     assert store_failures() == [1]
     corpus_db.admin("DROP TRIGGER f27_refuse_vector ON statutes_master")
+    make_due()
     done = summary(fire("process-embeddings"))
     assert (queue_by_row()[1], len(provider.calls), done.get("reused")) == (
         ("completed", MAX_ATTEMPTS - 1, None, True), 1, 1), done
@@ -640,25 +643,33 @@ def test_r10_a_store_that_fails_on_the_last_attempt_keeps_the_row_and_its_paid_a
 
 
 def test_r10_a_paid_answer_the_database_keeps_refusing_is_dead_lettered_after_three_stores_and_kept(corpus_db, monkeypatch):
-    """Review round 2: the bound. The database refuses the vector write every time (a deterministic
-    refusal). Each batch retries the store of the held answer, uncharged, with no new request; the
-    third failed store sends the row to the dead letter as `store_failed`, its attempts untouched and
-    the vector kept in the `answered` receipt. No retry-forever loop (with Autofix ee8ee02's uncharged
-    give-back the row went back to pending after every failure). After the operator fixes the cause
-    and requeues the row (README), the kept answer is stored with no new request."""
+    """Review round 2: the bound (Bugbot 4307417933 and 4307442945). The database refuses the vector
+    write every time (a deterministic refusal). The store of the held answer is retried, uncharged and
+    with no new request, after R8's delay, so the next batch is not failed by it back to back (with
+    Autofix ee8ee02's give-back the row was due at once and never charged, so it failed every later
+    batch); the third failed store sends the row to the dead letter as `store_failed`, its attempts
+    untouched and the vector kept in the `answered` receipt. After the operator fixes the cause and
+    requeues the row (README), the kept answer is stored with no new request."""
     migrated(corpus_db)
     seed_statutes(1, 1)
     corpus_db.admin(*REFUSE_VECTOR)
     provider = Provider().install(monkeypatch)
     no_sleep(monkeypatch)
 
-    runs = [fire("process-embeddings") for _ in range(STORE_RETRY_LIMIT)]
+    runs = [fire("process-embeddings")]
+    waiting = fire("process-embeddings")
+    assert (waiting.state, summary(waiting).get("claimed")) == ("SUCCESS", 0), (
+        f"the row whose store failed is due again at once and fails the next batch: {waiting.state} {waiting.result!r}")
+    for _ in range(STORE_RETRY_LIMIT - 1):
+        make_due()
+        runs.append(fire("process-embeddings"))
 
     assert [r.state for r in runs] == ["FAILURE"] * STORE_RETRY_LIMIT, [repr(r.result) for r in runs]
     assert (queue_by_row()[1], receipts(), len(provider.calls)) == (
         ("dead_letter", 0, "store_failed", False), [("answered", 7, True, False, None)], 1), (
         f"row {queue_by_row()[1]}, receipts {receipts()}, {len(provider.calls)} requests")
     assert store_failures() == [STORE_RETRY_LIMIT]
+    make_due()
     assert summary(fire("process-embeddings")).get("claimed") == 0, "a dead letter is never claimed again"
     corpus_db.admin("DROP TRIGGER f27_refuse_vector ON statutes_master")
     run(execute(REQUEUE))
@@ -689,6 +700,138 @@ def test_r3_a_row_whose_storing_batch_was_lost_three_times_is_dead_lettered_with
     run(execute(REQUEUE))
     done = summary(fire("process-embeddings"))
     assert (queue_by_row()[1], len(provider.calls), done.get("reused")) == (("completed", 0, None, True), 0, 1), done
+
+
+def test_r2_a_failed_store_gives_back_nothing_of_a_row_another_batch_holds_now(corpus_db, monkeypatch):
+    """Review round 2 (Bugbot 4307442940). While the request is out, another batch takes the row's
+    lease (and holds it while the failed batch gives back); then the database refuses the vector write
+    (SQLSTATE 23514, after the `answered` receipt committed). The give-back must not write to the row:
+    every write is fenced on the failed batch's token. Autofix ee8ee02's give-back reset the row by id
+    alone (`pending`, lease cleared), taking it from the batch that holds it. Here the row, its lease
+    and its expiry stay the holder's, nothing is charged or counted, and the answer stays held."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    corpus_db.admin(*REFUSE_VECTOR)
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+    holder = uuid.uuid4()
+
+    async def taken_over(marker):
+        await execute("UPDATE embedding_queue SET lease_owner = :o, lease_expires_at = now() + interval '30 minutes'",
+                      params={"o": holder})
+
+    provider.during_call = taken_over
+
+    failed = fire("process-embeddings")
+
+    row = run(fetch("SELECT status, attempts, error_type, lease_owner, lease_expires_at > now() + interval '25 minutes', "
+                    "next_attempt_at FROM embedding_queue"))[0]
+    assert failed.state == "FAILURE", repr(failed.result)
+    assert tuple(row) == ("processing", 0, None, holder, True, None), (
+        f"the failed batch wrote over the row another batch holds: {tuple(row)}")
+    assert (receipts(), store_failures()) == ([("answered", TOKENS, True, False, None)], [0]), (receipts(), store_failures())
+
+
+def test_r3_rows_a_dead_batch_never_reached_are_given_back_uncharged(corpus_db, monkeypatch):
+    """Review round 2 (auditor finding 5, A2/P3). A batch claimed rows 1-3, each on its last attempt
+    (4 of 5), and died while row 1's request was out (a `started` receipt under its lease); it never
+    reached rows 2 and 3. At 132957c the reclaim charged all three, so rows 2 and 3 went to the dead
+    letter (`max_attempts`) with no request ever made for that attempt. Now only the row the dead
+    batch reached is charged (row 1: its outcome is unknown, so its last attempt is spent); rows 2 and
+    3 go back uncharged, due at once, and the same batch pays for each once. Row 4's answer was paid
+    by an earlier batch (its receipt is under another lease) and the dead batch never reached it: it is
+    not counted as a lost store either, and is stored from its receipt with no request."""
+    migrated(corpus_db)
+    seed_statutes(1, 4)
+    ids = {marker_of(t): i for i, t in run(fetch("SELECT id, section_text FROM statutes_master"))}
+    dead = uuid.uuid4()
+    run(execute(
+        "UPDATE embedding_queue SET status = 'processing', attempts = max_attempts - 1, lease_owner = :dead, "
+        "lease_expires_at = now() - interval '1 minute', last_attempt_at = now() - interval '70 minutes'",
+        "INSERT INTO embedding_attempts (operation_id, queue_id, table_name, record_id, model, dimensions, "
+        "lease_owner, attempt, outcome, started_at) SELECT :op1, id, table_name, record_id, :model, :dims, :dead, "
+        "max_attempts, 'started', now() - interval '70 minutes' FROM embedding_queue WHERE record_id = :r1",
+        "INSERT INTO embedding_attempts (operation_id, queue_id, table_name, record_id, model, dimensions, "
+        "lease_owner, attempt, outcome, started_at, answered_at, token_count, embedding) "
+        "SELECT :op4, id, table_name, record_id, :model, :dims, gen_random_uuid(), max_attempts - 1, 'answered', "
+        "now() - interval '3 hours', now() - interval '3 hours', 7, CAST(:vec AS vector) "
+        "FROM embedding_queue WHERE record_id = :r4",
+        params={"dead": dead, "r1": ids[1], "r4": ids[4], "model": MODEL, "dims": DIMENSIONS,
+                "op1": operation_id("statutes_master", ids[1], statute_text(1)),
+                "op4": operation_id("statutes_master", ids[4], statute_text(4)),
+                "vec": json.dumps(vector_for(statute_text(4)), separators=(",", ":"))},
+    ))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    result = summary(fire("process-embeddings"))
+
+    rows = queue_by_row()
+    assert (rows[1], rows[2], rows[3], rows[4]) == (
+        ("dead_letter", MAX_ATTEMPTS, "max_attempts", False), ("completed", MAX_ATTEMPTS - 1, None, True),
+        ("completed", MAX_ATTEMPTS - 1, None, True), ("completed", MAX_ATTEMPTS - 1, None, True)), (
+        f"rows the dead batch never reached were charged: {rows}")
+    assert (provider.per_row(), result.get("reclaimed"), result.get("reclaimed_unreached"), result.get("reused"),
+            result.get("dead_letter_reasons")) == ({2: 1, 3: 1}, 4, 3, 1, {"max_attempts": 1}), result
+    lost = run(fetch("SELECT store_failures FROM embedding_attempts WHERE record_id = :r", r=ids[4]))
+    assert [n for (n,) in lost] == [0], f"a row the dead batch never reached was counted as a lost store: {lost}"
+
+
+def test_r6_a_held_answer_for_another_text_of_the_record_is_never_stored(corpus_db, monkeypatch):
+    """Review round 2 (auditor A6, mutant X14). An `answered` receipt holds a vector of the same record
+    but an older text, so another operation (R4). R6 (b) reuses only the exact operation: the batch
+    pays for the current text once, stores that vector, and drops the old one (R7)."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    record_id = run(fetch("SELECT id FROM statutes_master"))[0][0]
+    old_text = statute_text(1) + " OLD"
+    run(execute(
+        "INSERT INTO embedding_attempts (operation_id, queue_id, table_name, record_id, model, dimensions, "
+        "lease_owner, attempt, outcome, started_at, answered_at, token_count, embedding) "
+        "SELECT :op, id, table_name, record_id, :model, :dims, gen_random_uuid(), 1, 'answered', now(), now(), 7, "
+        "CAST(:vec AS vector) FROM embedding_queue WHERE record_id = :r",
+        params={"op": operation_id("statutes_master", record_id, old_text), "model": MODEL, "dims": DIMENSIONS,
+                "r": record_id, "vec": json.dumps(vector_for(old_text), separators=(",", ":"))},
+    ))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    fire("process-embeddings")
+
+    head = run(fetch("SELECT (embedding::real[])[1] FROM statutes_master"))[0][0]
+    assert provider.per_row() == {1: 1}, (provider.per_row(), receipts())
+    assert head is not None and abs(head - vector_for(statute_text(1))[0]) < 1e-6, (
+        f"stored {head}: the vector of the record's old text, not {vector_for(statute_text(1))[0]}")
+    assert sorted(r[0] for r in receipts()) == ["stored", "superseded"], receipts()
+
+
+def test_r15_the_batch_pauses_after_every_provider_request_and_only_then(corpus_db, monkeypatch):
+    """Review round 2 (auditor mutant X28). R15: 0.6 s after every provider request (100 a minute).
+    Rows 1 and 2 are paid; row 3's answer is held (R6 (b)), so it makes no request and no pause."""
+    migrated(corpus_db)
+    seed_statutes(1, 3)
+    record_id = run(fetch("SELECT id FROM statutes_master WHERE section_number = 's3'"))[0][0]
+    run(execute(
+        "INSERT INTO embedding_attempts (operation_id, queue_id, table_name, record_id, model, dimensions, "
+        "lease_owner, attempt, outcome, started_at, answered_at, token_count, embedding) "
+        "SELECT :op, id, table_name, record_id, :model, :dims, gen_random_uuid(), 1, 'answered', now(), now(), 7, "
+        "CAST(:vec AS vector) FROM embedding_queue WHERE record_id = :r",
+        params={"op": operation_id("statutes_master", record_id, statute_text(3)), "model": MODEL, "dims": DIMENSIONS,
+                "r": record_id, "vec": json.dumps(vector_for(statute_text(3)), separators=(",", ":"))},
+    ))
+    provider = Provider().install(monkeypatch)
+    pauses = []
+
+    async def paced(delay=0, result=None):
+        pauses.append(delay)
+        return await REAL_SLEEP(0, result)
+
+    monkeypatch.setattr(asyncio, "sleep", paced)
+
+    done = summary(fire("process-embeddings"))
+
+    assert (done.get("completed"), done.get("reused"), len(provider.calls)) == (3, 1, 2), done
+    assert [p for p in pauses if p] == [0.6, 0.6], f"pauses {pauses} for {len(provider.calls)} requests"
 
 
 def test_r10_an_interrupted_request_leaves_an_interrupted_receipt_and_its_row_uncharged(corpus_db, monkeypatch):
