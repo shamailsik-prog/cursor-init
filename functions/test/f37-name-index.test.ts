@@ -7,7 +7,7 @@ import type { RegistryState } from "../src/d1/registryVersion"
 
 /** Audit F37: the pure parts of the name index and the name tier (no emulator). */
 
-const state = (over: Partial<RegistryState> & { nameIndex?: Partial<RegistryState["nameIndex"]> } = {}): RegistryState => ({
+const state = (over: Omit<Partial<RegistryState>, "nameIndex"> & { nameIndex?: Partial<RegistryState["nameIndex"]> } = {}): RegistryState => ({
   exists: true,
   version: 7,
   ...over,
