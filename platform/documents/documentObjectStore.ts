@@ -380,6 +380,11 @@ export async function restoreDocumentObjectFile(
     await writeS3Payload(storagePath, payload)
     return
   }
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object restores require s3:// storage paths"
+    )
+  }
   const filePath = filesystemPathForStoragePath(storagePath)
   await mkdir(path.dirname(filePath), { recursive: true })
   await writeFile(filePath, payload, { flag: "wx" })
