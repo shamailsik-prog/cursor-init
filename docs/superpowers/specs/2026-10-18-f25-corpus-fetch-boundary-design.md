@@ -9,14 +9,14 @@
 | Path | Who picks the URL | Host control | Redirects | IP / DNS control |
 |---|---|---|---|---|
 | `scraper/tasks/nasirlawsite.py:31-41` | the reporter page (any `href` with `case` or `.htm`; absolute links taken as is) | none | not followed (httpx default) | none |
-| `scraper/tasks/nationalassembly.py:9-19` | the NA index page (any `.pdf` link whose text says Act/Ordinance; absolute links taken as is) | none | not followed | none |
+| `scraper/tasks/nationalassembly.py:8-19` | the NA index page (any `.pdf` link whose text says Act/Ordinance; absolute links taken as is) | none | not followed | none |
 | `scraper/tasks/pakistancode.py:9-18` | fixed URLs in code | n/a | not followed | none |
 | `scraper/tasks/shc.py:132, 184` | listing pages and inline scripts | `host.endswith("sindhhighcourt.gov.pk")` or `endswith("shc.gov.pk")` (no dot anchor), http allowed | **followed** (`follow_redirects=True`) to any host | none |
-| `scraper/tasks/supremecourt.py:366, 420` | listing pages, sitemap text | `endswith("supremecourt.gov.pk")`, http allowed | **followed** | none |
+| `scraper/tasks/supremecourt.py:157, 211` | listing pages, sitemap text | `endswith("supremecourt.gov.pk")`, http allowed | **followed** | none |
 | `scraper/tasks/lahorehighcourt.py:101, 155` | listing pages, inline text | `endswith("lhc.gov.pk")`, http allowed | discovery **followed**; PDFs not | none |
 | `scraper/tasks/peshawarhighcourt.py:183, 241` | listing pages | exact host set, http allowed, any port | **followed** | none |
-| `scraper/tasks/balochistanhighcourt.py` (same shape) | listing pages, `data-*` attributes | exact host set, any port | **followed** | none |
-| `scraper/tasks/islamabadhighcourt.py:456, 544` | listing pages, AJAX feed JSON (`ATTACHMENTS`) | exact host set, any port | **followed** (GET and POST) | none |
+| `scraper/tasks/balochistanhighcourt.py:187, 241` | listing pages, `data-*` attributes | exact host set, any port | **followed** | none |
+| `scraper/tasks/islamabadhighcourt.py:276, 364` | listing pages, AJAX feed JSON (`ATTACHMENTS`) | exact host set, any port | **followed** (GET and POST) | none |
 | `bootstrap_harvest.py:83` (operator script) | PakistanCode detail pages (PDF links, any host), NA index (PDF links, any host), Nasir pages (host-checked), `robots.txt` of **any** URL's origin before the URL is checked | partial | **followed** | none |
 | `scraper/parsers/pdf_extractor.py:308, 466` (no callers) | caller | none | **forced on** per request; `download_pdf_sync` builds its own client | none |
 
@@ -99,7 +99,9 @@ Positive controls prove the scanner catches each form. A second check requires e
 - `bootstrap_harvest.py`: its `robots.txt` lookup goes through the same per-source client, after the policy check.
 - `pdf_extractor.download_pdf` no longer forces redirects on, and `download_pdf_sync` no longer builds its own client. Both are unused; F26 will route PDFs.
 
-Connector discovery filters stay as they are. They are heuristics; the boundary is the fetcher. Nasir now resolves relative links against the page it actually fetched (`urljoin`). For the real reporter URLs that gives the same result as main's hard-coded prefix, and it stops `//host/x` from being glued onto the Nasir host. *Reason:* routing only Nasir would leave the redirect, IP and port holes in nine other paths. The per-connector diff is a constructor swap plus a refusal pass-through, which keeps it reviewable.
+Connector discovery filters stay as they are. They are heuristics; the boundary is the fetcher. Nasir now resolves relative links against the page it actually fetched (`urljoin`). For the real reporter URLs that gives the same result as main's hard-coded prefix, and it stops `//host/x` from being glued onto the Nasir host. Nasir drops refused links **before** taking its 20 per page, so hostile links cannot crowd out real ones.
+
+Two behaviour changes follow from routing, both deliberate: every GET now follows up to 5 *allowlisted* redirects, including Lahore's PDF fetch, which on main did not follow redirects at all; and a court link published over plain http is refused (R3, residual 3). *Reason:* routing only Nasir would leave the redirect, IP and port holes in nine other paths. The per-connector diff is a constructor swap plus a refusal pass-through, which keeps it reviewable.
 
 **R14. Network-layer egress is a residual, not part of this change.** Compose has no destination-IP egress filter. Doing it properly needs an egress proxy service with a CONNECT allowlist, or host firewall rules (the `DOCKER-USER` chain), and both are deploy infrastructure. Either would also rewire the F30-proven compose and its e2e (`corpus-compose-policy.yml`). The application-layer boundary is the closure for F25; the egress control is follow-up F25-FU1 (section 5). *Reason:* the brief allows documenting this as a residual when a compose change is not safe, and this one is not without a proxy design.
 
@@ -112,7 +114,10 @@ Connector discovery filters stay as they are. They are heuristics; the boundary 
 - `PolicyFetcher` is an async context manager with `allows`, `get(url, headers=None)` and `post(url, json=None, headers=None)`. Both return `FetchedResponse(url, status_code, headers, content, text)`.
 - `fetcher_for(name, *, headers=None)` is the production factory. Connectors look it up on the module at call time (`fetch_policy.fetcher_for`), so tests can substitute it.
 - `SyncPolicyFetcher` and `sync_fetcher_for(name, *, headers=None)` run the same async fetcher on a private event loop, so there is one enforcement implementation.
-- The transport replaces httpx's private `_pool` with an `httpcore.AsyncConnectionPool(network_backend=_GuardedBackend)`. Construction fails closed (`RuntimeError`) if httpx's layout changes. A unit test asserts that the pool uses the guarded backend, and the loopback e2e proves it end to end. httpx is pinned to 0.28.1 in `requirements-test.txt`.
+- `PolicyFetcher(policy, *, headers=None, max_bytes=MAX_BYTES, deadline=DEADLINE_SECONDS, max_redirects=MAX_REDIRECTS, _test_*=None)`; `get(url, *, headers=None)`, `post(url, *, json=None, headers=None)`. `redact_url(url)` is the one redaction used by the boundary's log line and by `bootstrap_harvest.py`'s provenance rows.
+- The transport replaces httpx's private `_pool` with an `httpcore.AsyncConnectionPool(network_backend=_GuardedBackend)`. Construction fails closed (`RuntimeError`) if httpx's layout changes. A unit test asserts that the pool uses the guarded backend, and the loopback e2e proves it end to end.
+
+**R15. httpx is pinned in the runtime set too.** `requirements-test.txt` already pinned `httpx==0.28.1`; `requirements.txt` (the image) did not. It now pins the same version. *Reason:* the guarded transport fails closed on any other httpx layout, so an unpinned image could pull a release that stops every harvester. 0.28.1 is the current PyPI release and has no OSV advisory (checked 2026-10-18), so the pin changes nothing installed today.
 
 ## 4. Tests
 
@@ -171,7 +176,9 @@ Connector discovery filters stay as they are. They are heuristics; the boundary 
 
 **Guard and registry: `corpus_service/tests/test_f25_fetch_guard.py`.** It covers R12, the scanner's positive controls, and the registry/seed consistency of R4.
 
-**Changed expectations.** `tests/test_f20_harvesters_db.py` replaced the network by monkeypatching `httpx.AsyncClient`. No connector constructs that any more, so its offline harness now substitutes the new seam, `fetch_policy.fetcher_for`, with the same canned responses (plus `allows`). Its assertions (source stamping, trusted-only direct writes) are unchanged.
+**Changed expectations.**
+- `tests/test_f20_harvesters_db.py` replaced the network by monkeypatching `httpx.AsyncClient`. No connector constructs that any more, so its offline harness now substitutes the new seam, `fetch_policy.fetcher_for`, with the same canned responses (plus `allows`, which is the source's real registered policy, and the response `url` Nasir now joins against). Its assertions (source stamping, trusted-only direct writes) are unchanged.
+- A defect in the RED commit's own test, found while going GREEN: `test_the_transport_checks_requests_that_bypass_the_helper` resolved the allowlisted source `localhost` to a real public address (93.184.215.14), so its second request dialled the internet and hit the connect timeout instead of reaching the check under test. Its resolver now answers loopback (reachable through the loopback hook). The assertions are unchanged.
 
 ## 5. Residuals and follow-ups
 
@@ -183,4 +190,5 @@ Connector discovery filters stay as they are. They are heuristics; the boundary 
 3. **Plain-http document links on court pages are refused** (R3). If a source turns out to publish documents only over http, the fix is an explicit http upgrade for that policy's hosts. Never a plaintext fetch.
 4. **NAT64/DNS64 hosts are refused** (R6a).
 5. **F26 stays open.** Parser isolation, decompressed, page and time limits on PDF parsing, and the bounded PDF downloader are F26. This change only bounds bytes and time at the fetch boundary.
-6. **Coupling to httpx internals.** The transport replaces httpx's private `_pool`. A future httpx release could move it; construction then raises, and the unit test and the e2e fail, so it cannot silently degrade.
+6. **Coupling to httpx internals.** The transport replaces httpx's private `_pool`. A future httpx release could move it; construction then raises, and the unit test and the e2e fail, so it cannot silently degrade. R15 pins the runtime to the proven version.
+7. **Connector log lines outside the boundary.** The boundary's own refusal line redacts userinfo. The court connectors' pre-existing `listing request failed <url>` lines still print the URL as discovered, so a page-planted `user:pass@` (which is refused, never sent) can appear there. Not a request path, so not F25; noted for the logging follow-up.
