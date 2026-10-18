@@ -232,11 +232,16 @@ def test_r6_the_child_holds_no_worker_secret_no_socket_and_its_limits(tmp_path, 
     listener.bind(("127.0.0.1", 0))
     listener.listen()
     try:
-        result = sandbox_parse(tmp_path, golden_pdf("golden-one-page"))
+        obj = stored(tmp_path, golden_pdf("golden-one-page"))
+        result = pdf_sandbox.parse(obj.path, obj.sha256, obj.size)
     finally:
         listener.close()
 
     assert result.text == golden_text("golden-one-page")
+    # The input is owner-only (0o400, the worker's uid). The child read it, and as root it then
+    # dropped to 65534, which could not have read it: the read happens before the drop (R6 step 4).
+    st = obj.path.stat()
+    assert (stat.S_IMODE(st.st_mode), st.st_uid) == (0o400, os.geteuid()), (oct(st.st_mode), st.st_uid)
     iso = result.isolation
     assert set(iso["env"]) - {"TESSDATA_PREFIX"} == {"PATH", "LANG", "LC_ALL", "OMP_THREAD_LIMIT", "HOME", "TMPDIR"}, iso["env"]
     assert iso["socket_fds"] == 0, iso
@@ -440,6 +445,20 @@ def test_r8_ocr_is_trimmed_to_the_first_pages_and_runs_under_a_time_limit(monkey
     assert result.text.count("Synthetic F26 OCR text") == 4
 
 
+def test_r8_ocr_text_is_held_to_the_text_cap(monkeypatch):
+    """Codex review (PR #76, thread 4306132184): OCR output counts against max_text_chars like a text
+    layer does; a stand-in tesseract returns 600 characters a page, the cap is 1,000."""
+    from scraper.parsers import pdf_extractor
+
+    fake = types.ModuleType("pytesseract")
+    fake.image_to_string = lambda image, config="", timeout=0, **kwargs: "Synthetic F26 OCR flood, 2099. " * 20
+    monkeypatch.setitem(sys.modules, "pytesseract", fake)
+    limits = dataclasses.replace(pdf_extractor.DEFAULT_LIMITS, max_text_chars=1000)
+    with pytest.raises(pdf_extractor.PdfLimitExceeded) as caught:
+        pdf_extractor.extract_pdf(F.blank_pdf(3), limits)
+    assert caught.value.code == "pdf_text_limit"
+
+
 def test_r8_a_page_too_large_to_render_is_not_rendered(monkeypatch):
     """A 20,000 x 20,000 point page at 300 dpi is 6.9 billion pixels: it is never rasterised."""
     from scraper.parsers import pdf_extractor
@@ -501,7 +520,7 @@ def test_r5_an_object_is_kept_once_read_only_under_its_sha256(tmp_path):
     assert (first.created, again.created) == (True, False)
     assert first.key == again.key == f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}/{digest}.pdf"
     path = tmp_path / first.key
-    assert path.read_bytes() == data and stat.S_IMODE(path.stat().st_mode) == 0o444
+    assert path.read_bytes() == data and stat.S_IMODE(path.stat().st_mode) == 0o400
     assert (tmp_path / "raw-pdf" / ".usage").read_text() == str(len(data))
     assert [p.name for p in (tmp_path / "raw-pdf").rglob("*.tmp")] == []
 
@@ -512,7 +531,7 @@ def test_r5_an_object_that_does_not_match_its_name_is_refused(tmp_path):
     data = golden_pdf("golden-one-page")
     obj = raw_store.put(data, root=tmp_path)
     path = tmp_path / obj.key
-    path.chmod(0o644)
+    path.chmod(0o600)
     path.write_bytes(data[:-1] + b"X")
     with pytest.raises(raw_store.StoreRefused) as caught:
         raw_store.put(data, root=tmp_path)
@@ -535,6 +554,98 @@ def test_r5_the_store_is_bounded_and_its_ledger_rebuilds(tmp_path, monkeypatch):
     monkeypatch.setattr(raw_store, "MIN_FREE_BYTES", 1 << 60)
     with pytest.raises(raw_store.StoreRefused) as caught:
         raw_store.put(golden_pdf("golden-deflated-special"), root=tmp_path)
+    assert caught.value.full is True
+
+
+def test_r5_the_store_is_owner_only_whatever_the_umask(tmp_path):
+    """CodeQL py/overly-permissive-file (PR #76): objects 0o400, the lock and the ledger 0o600, every
+    directory the store creates 0o700, even with a umask of 0. Nothing needs group or world access:
+    every container that mounts the vault runs as one uid (spec R14), and the sandbox reads its input
+    before it drops privileges."""
+    from scraper.parsers import raw_store
+
+    saved = os.umask(0)
+    try:
+        obj = raw_store.put(golden_pdf("golden-one-page"), root=tmp_path)
+    finally:
+        os.umask(saved)
+    store = tmp_path / "raw-pdf"
+    digest = obj.sha256
+    modes = {p.relative_to(tmp_path).as_posix(): stat.S_IMODE(p.stat().st_mode) for p in [store, *store.rglob("*")]}
+    assert modes == {
+        "raw-pdf": 0o700,
+        "raw-pdf/.lock": 0o600,
+        "raw-pdf/.usage": 0o600,
+        "raw-pdf/sha256": 0o700,
+        f"raw-pdf/sha256/{digest[:2]}": 0o700,
+        f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}": 0o700,
+        f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}/{digest}.pdf": 0o400,
+    }, {k: oct(v) for k, v in modes.items()}
+
+
+class _Killed(BaseException):
+    """Stands for the worker being killed: no handler in the store runs for it."""
+
+
+def test_r15_a_ledger_write_that_fails_leaves_no_uncounted_object(tmp_path, monkeypatch):
+    """Codex review (PR #76, thread 4306132181): the object was linked before the ledger was updated,
+    so a failed ledger write left an object the ledger did not count, a later put of the same bytes
+    took the existing-object branch without repairing it, and the store passed MAX_STORE_BYTES. Spec
+    R15: the ledger is written first; if that fails, nothing is stored."""
+    from scraper.parsers import raw_store
+
+    one, three, special = (golden_pdf(n) for n in GOLDEN)
+    monkeypatch.setattr(raw_store, "MAX_STORE_BYTES", len(one) + len(three) + 10)
+    raw_store.put(three, root=tmp_path)
+    real = raw_store._set_usage
+    failures = []
+
+    def _fails_once(store, used):
+        if not failures:
+            failures.append(used)
+            raise OSError(28, "synthetic F26 ledger failure")
+        return real(store, used)
+
+    monkeypatch.setattr(raw_store, "_set_usage", _fails_once)
+    with pytest.raises(raw_store.StoreRefused):
+        raw_store.put(one, root=tmp_path)
+    raw_store.put(one, root=tmp_path)  # a retry of the same document
+    with pytest.raises(raw_store.StoreRefused) as caught:
+        raw_store.put(special, root=tmp_path)  # one + three + special is over the cap
+    assert caught.value.full is True
+    on_disk = sum(p.stat().st_size for p in (tmp_path / "raw-pdf" / "sha256").rglob("*.pdf"))
+    assert on_disk == len(one) + len(three) <= raw_store.MAX_STORE_BYTES, on_disk
+    assert (tmp_path / "raw-pdf" / ".usage").read_text() == str(on_disk)
+
+
+def test_r15_a_writer_killed_after_the_ledger_overcounts_and_the_recount_corrects_it(tmp_path, monkeypatch):
+    """Spec R15: killed between the ledger write and the link, a writer leaves the ledger counting an
+    object that does not exist (the safe direction) and perhaps a temporary file. When the ledger
+    says a write would pass the cap, the store recounts its objects (and removes temporary files no
+    live writer can own: every writer holds the lock) before it refuses; the cap still holds."""
+    from scraper.parsers import raw_store
+
+    one, three, special = (golden_pdf(n) for n in GOLDEN)
+    monkeypatch.setattr(raw_store, "MAX_STORE_BYTES", len(three) + 10)
+
+    def _killed(*args, **kwargs):
+        raise _Killed()
+
+    monkeypatch.setattr(raw_store.os, "link", _killed)
+    with pytest.raises(_Killed):
+        raw_store.put(one, root=tmp_path)
+    monkeypatch.undo()
+    monkeypatch.setattr(raw_store, "MAX_STORE_BYTES", len(three) + 10)
+    store = tmp_path / "raw-pdf"
+    assert int((store / ".usage").read_text()) == len(one), "the ledger must count the interrupted write"
+    stale = store / "sha256" / "00" / "00" / ".dead.1.tmp"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"left by a killed writer")
+    stored = raw_store.put(three, root=tmp_path)  # fits only once the phantom object is recounted away
+    assert stored.created and (store / ".usage").read_text() == str(len(three))
+    assert not stale.exists(), "a temporary file no writer can own was left behind"
+    with pytest.raises(raw_store.StoreRefused) as caught:
+        raw_store.put(special, root=tmp_path)
     assert caught.value.full is True
 
 

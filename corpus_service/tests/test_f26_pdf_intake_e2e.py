@@ -323,7 +323,7 @@ def test_c_normal_judgments_are_staged_with_exactly_the_text_main_extracted(corp
 # (d) raw bytes are stored once, by hash, before parsing
 # ---------------------------------------------------------------------------------------------
 def test_d_raw_bytes_are_kept_once_by_hash_and_every_row_points_at_them(corpus_db, monkeypatch, tmp_path):
-    """The same judgment at two URLs, harvested by two runs: one read-only object named by its sha256
+    """The same judgment at two URLs, harvested by two runs: one owner-read-only object named by its sha256
     under raw-pdf/sha256/<aa>/<bb>/, written once (the second run neither rewrites nor replaces it), and
     all four staging rows carry its key, the page count, `ocr_applied` false and the sha256 (spec R5).
     On main nothing is kept."""
@@ -343,7 +343,7 @@ def test_d_raw_bytes_are_kept_once_by_hash_and_every_row_points_at_them(corpus_d
     if after_first:
         rel, mode, _inode, _mtime, body = after_first.get(digest + ".pdf") or next(iter(after_first.values()))
         checks(rel == key, f"object path: want {key}, got {rel}")
-        checks(mode == 0o444, f"object mode: want 0o444 (read-only), got {oct(mode)}")
+        checks(mode == 0o400, f"object mode: want 0o400 (owner read-only), got {oct(mode)}")
         checks(body == golden, "the stored bytes differ from the bytes served")
     checks(after_second == after_first, "the second run rewrote or replaced the stored object")
     rows = staged()
