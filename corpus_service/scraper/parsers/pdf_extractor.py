@@ -353,10 +353,11 @@ async def download_pdf(
 
     try:
         # Use stream=True pattern for large PDFs - prevents buffering entire file in memory at HTTP layer
+        # Audit F25: redirects are never forced on here; the caller's client decides, and a
+        # corpus fetch client (scraper.net.fetch_policy) re-checks every hop itself.
         async with client.stream(
             "GET",
             url,
-            follow_redirects=True,
             timeout=httpx.Timeout(timeout, connect=30.0),
             headers=headers,
         ) as response:
@@ -473,19 +474,14 @@ def download_pdf_sync(
     Synchronous version for Celery workers or non-async contexts.
     Maintains same streaming + size-limit behavior.
 
-    If client not supplied, creates temporary client and closes it.
+    Audit F25: the caller supplies the client. This function no longer builds an HTTP client of
+    its own (with redirects on and no host or address control); corpus fetches go through
+    scraper.net.fetch_policy.
     """
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"Invalid url: {url}")
-
-    need_close = False
     if client is None:
-        client = httpx.Client(
-            headers={"User-Agent": DEFAULT_UA},
-            follow_redirects=True,
-            timeout=httpx.Timeout(timeout, connect=30.0),
-        )
-        need_close = True
+        raise ValueError("an HTTP client is required for download_pdf_sync (audit F25)")
 
     try:
         with client.stream("GET", url, headers={"User-Agent": DEFAULT_UA}) as resp:
@@ -505,6 +501,3 @@ def download_pdf_sync(
             return data
     except httpx.HTTPStatusError as e:
         raise PDFDownloadError(f"HTTP {e.response.status_code} for {url}") from e
-    finally:
-        if need_close:
-            client.close()

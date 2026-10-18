@@ -1,5 +1,7 @@
-import httpx, re, asyncio, logging
+import re, asyncio, logging
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup
+from scraper.net import fetch_policy
 from scraper.parsers.text_cleaner import clean_html, extract_summary
 from scraper.parsers.citation_extractor import extract_citations, score_confidence
 from scraper.database import SessionLocal
@@ -27,16 +29,28 @@ def _citation_to_str(citation) -> str | None:
     return str(citation)[:500]
 
 
+def _resolve_link(page_url: str, href: str) -> str | None:
+    """A page link resolved against the page actually fetched (so ``//host/x`` is never glued
+    onto the Nasir host); None if it cannot be parsed."""
+    try:
+        return urljoin(page_url, href.strip())
+    except ValueError:
+        return None
+
+
 async def scrape_nasirlawsite(source, db):
-    async with httpx.AsyncClient(timeout=30, headers={"User-Agent":"Mozilla/5.0"}) as client:
+    # Audit F25: every request goes through the NasirLawSite fetch policy (https, Nasir hosts on
+    # 443, public addresses only, each redirect re-checked). Reporter-page links are external
+    # input: a link the policy refuses is logged by the boundary and never requested.
+    async with fetch_policy.fetcher_for("NasirLawSite", headers={"User-Agent": "Mozilla/5.0"}) as client:
         for url in REPORTER_URLS:
             try:
                 r = await client.get(url)
                 soup = BeautifulSoup(r.text, "html.parser")
-                links = [a.get("href") for a in soup.find_all("a", href=True) if "case" in a.get("href","").lower() or ".htm" in a.get("href","")]
+                hrefs = [a.get("href") for a in soup.find_all("a", href=True) if "case" in a.get("href","").lower() or ".htm" in a.get("href","")]
+                links = [full for full in (_resolve_link(r.url, href) for href in hrefs) if full and client.allows(full)]
                 # follow individual case pages (limit for demo)
-                for link in links[:20]:
-                    full = link if link.startswith("http") else f"https://www.nasirlawsite.com/case/{link}" if not link.startswith("/") else f"https://www.nasirlawsite.com{link}"
+                for full in links[:20]:
                     try:
                         cr = await client.get(full)
                         raw_html = cr.text
@@ -59,7 +73,7 @@ async def scrape_nasirlawsite(source, db):
                         await db.commit()
                         await asyncio.sleep(1)
                     except Exception as e:
-                        logger.error(f"Nasir case error {link}: {e}")
+                        logger.error(f"Nasir case error {full}: {e}")
                 await asyncio.sleep(2)
             except Exception as e:
                 logger.error(f"Nasir reporter {url} error {e}")
