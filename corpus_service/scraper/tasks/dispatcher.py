@@ -76,11 +76,9 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
     try:
         with outcomes.bind_run_tally(tally):
             decision = await _run_async(source_name)
-        if isinstance(decision, outcomes.Skipped):
-            return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
         if isinstance(decision, outcomes.Refused):
             raise outcomes.SourceRefused(source_name, decision.reason)
-        if not isinstance(decision, outcomes.HarvestResult):
+        if not isinstance(decision, outcomes.Skipped) and not isinstance(decision, outcomes.HarvestResult):
             raise outcomes.HarvesterContractError(source_name, decision)
     except Exception as exc:
         retry_in = outcomes.retry_countdown(attempt) if outcomes.will_retry(exc, attempt, max_retries) else None
@@ -89,6 +87,11 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
             retry_in=retry_in,
         )
         raise
+    if isinstance(decision, outcomes.Skipped):
+        try:
+            return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
+        except Exception as exc:
+            raise outcomes.RunRecordFailed(source_name) from exc
     try:
         return await job_record.finish_completed(job_id, source_name, decision, started)
     except Exception as exc:
