@@ -2,7 +2,8 @@ import { FieldValue, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onDocumentWritten } from "firebase-functions/v2/firestore"
 import { REGION } from "../../health"
-import { nameIndexGenOf, registryVersionRef } from "../registryVersion"
+import { adminDb } from "../../admin"
+import { nameIndexGenOf, registryStateOf, registryVersionRef } from "../registryVersion"
 import { sameKey, screenedKeyOf, stampOf } from "./screenedName"
 import { requestReindex } from "./screening"
 
@@ -79,10 +80,16 @@ export function chunkWriteVerdict(before: DocumentData | undefined, after: Docum
  * redelivered event bumps again, which only breaks the mirror again.
  */
 export async function breakNameIndex(firmId: string, nowMs: number, cause: Record<string, string>): Promise<void> {
-  await registryVersionRef(firmId).set(
-    { firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1), nameIndexGen: FieldValue.increment(1) },
-    { merge: true }
-  )
+  const ref = registryVersionRef(firmId)
+  await adminDb().runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    const state = registryStateOf(snap.exists, snap.data())
+    tx.set(
+      ref,
+      { firmId, kind: "registry", classification: "internal", version: FieldValue.increment(1), nameIndexGen: state.nameIndexGen + 1 },
+      { merge: true }
+    )
+  })
   logger.warn("conflict.name_index_broken", { firmId, ...cause })
   await requestReindex(firmId, nowMs)
 }

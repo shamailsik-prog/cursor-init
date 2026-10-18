@@ -51,8 +51,6 @@ const RECONCILE_APPEND_BYTES = 256 * 1024
  * and resetting a damaged index takes one round before the rebuild.
  */
 export const RECONCILE_ROUNDS = 4
-/** Chunk documents one reset deletes at most (the cap on a sound index, with room for strays). */
-const RESET_CHUNKS = NAME_INDEX_MAX_CHUNKS + 50
 const SCAN_PAGE = 500
 
 export const nameIndexChunkRef = (firmId: string, chunk: number) => adminDb().collection(NAME_INDEX_COLLECTION).doc(`${firmId}_${chunk}`)
@@ -165,9 +163,26 @@ export type ChunkDoc = { id: string; data: DocumentData | undefined }
 /** True when `id` is one of the firm's chunk document ids (`{firmId}_{n}`), not a longer firm id's. */
 export const isChunkIdOf = (firmId: string, id: string): boolean => id.startsWith(`${firmId}_`) && /^\d+$/.test(id.slice(firmId.length + 1))
 
-/** Every document whose id starts with `{firmId}_` (the firm's chunks, at most `limit`); other firms' ids are filtered by `isChunkIdOf`. */
-const firmChunksQuery = (firmId: string, limit: number): Query =>
-  adminDb().collection(NAME_INDEX_COLLECTION).orderBy(FieldPath.documentId()).startAt(`${firmId}_`).endAt(`${firmId}_\uf8ff`).limit(limit)
+/** One page of documents whose ids start with `{firmId}_` (the firm's chunks and longer firm ids that share the prefix). */
+const firmChunksPage = (firmId: string, limit: number, startAfter?: string): Query => {
+  let q = adminDb().collection(NAME_INDEX_COLLECTION).orderBy(FieldPath.documentId()).startAt(`${firmId}_`).endAt(`${firmId}_\uf8ff`).limit(limit)
+  return startAfter === undefined ? q : q.startAfter(startAfter)
+}
+
+/** Every chunk document of the firm in `tx`, paging the prefix scan so another firm's id cannot crowd out this firm's later chunks. */
+async function firmChunkDocsTx(tx: Transaction, firmId: string): Promise<ChunkDoc[]> {
+  const out: ChunkDoc[] = []
+  let last: string | undefined
+  for (;;) {
+    const page = await tx.get(firmChunksPage(firmId, SCAN_PAGE, last))
+    for (const d of page.docs) {
+      if (isChunkIdOf(firmId, d.id)) out.push({ id: d.id, data: d.data() })
+    }
+    if (page.size < SCAN_PAGE) break
+    last = page.docs[page.size - 1].id
+  }
+  return out
+}
 
 /**
  * Every name in the index described by `state`, from all of the firm's chunk documents `chunks` (pure), read whole or
@@ -218,10 +233,10 @@ export async function readNameIndex(firmId: string, opts: { probeEmpty?: boolean
   return adminDb().runTransaction(
     async (tx) => {
       const counter = await tx.get(registryVersionRef(firmId))
-      const found = await tx.get(firmChunksQuery(firmId, NAME_INDEX_MAX_CHUNKS + 2))
       const state = registryStateOf(counter.exists, counter.data())
+      const chunks = await firmChunkDocsTx(tx, firmId)
       const registryEmpty = opts.probeEmpty && !counter.exists ? await firmRegistryEmpty(firmId, tx) : null
-      return { state, chunks: found.docs.map((d) => ({ id: d.id, data: d.data() })), registryEmpty }
+      return { state, chunks, registryEmpty }
     },
     { readOnly: true }
   )
@@ -282,13 +297,11 @@ export const reconcileTestSeam: { afterScan?: (round: number) => Promise<void>; 
  */
 async function resetNameIndex(firmId: string, start: RegistryState): Promise<boolean> {
   const db = adminDb()
-  const chunks = firmChunksQuery(firmId, RESET_CHUNKS).select()
   return db.runTransaction(async (tx) => {
     const state = await readRegistryStateTx(tx, firmId)
     if (state.version !== start.version) return false
-    const found = await tx.get(chunks)
-    for (const d of found.docs) if (isChunkIdOf(firmId, d.id)) tx.delete(d.ref)
-    bumpResettingNameIndex(tx, firmId, state.version)
+    for (const c of await firmChunkDocsTx(tx, firmId)) tx.delete(nameIndexChunkRef(firmId, Number(c.id.slice(firmId.length + 1))))
+    bumpResettingNameIndex(tx, firmId, state.version, state.nameIndexGen + 1)
     return true
   })
 }
