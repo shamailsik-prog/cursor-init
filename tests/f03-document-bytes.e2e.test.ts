@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -62,6 +63,12 @@ function requireFilesystemObjectBackend() {
   vi.stubEnv("VITEST", "false")
   process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "fs"
   process.env.SIKANDER_PERSISTENCE_MODE = "memory"
+}
+
+/** Every stored object under the filesystem vault root. */
+function encFiles(): string[] {
+  if (!objectRoot) return []
+  return (readdirSync(objectRoot, { recursive: true }) as string[]).filter((f) => f.endsWith(".enc"))
 }
 
 function seedMatter() {
@@ -333,5 +340,66 @@ describe("F03: uploaded document bytes are retained and integrity-checked", () =
     for (const id of ids) {
       expect(await repos.documents.get(id)).toBeNull()
     }
+  })
+
+  // FA-D16-003: the verify step's hash check threw before the cleanup, so the object stayed behind.
+  it("FA-D16-003: an upload whose round-trip hash check fails leaves no object on disk and no row", async () => {
+    requireFilesystemObjectBackend()
+    const matterId = seedMatter()
+    const store = getRuntimeStore()
+    const realHash = store.hashKey.bind(store)
+    let calls = 0
+    // 1: the upload's own hash; 2: the store's check before writing; 3: the check of the bytes read back.
+    vi.spyOn(store, "hashKey").mockImplementation((firmId: string, bytes: Buffer) => {
+      calls += 1
+      return calls === 3 ? "not-the-written-hash" : realHash(firmId, bytes)
+    })
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const res = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: Buffer.from("%PDF-FA-D16-003 round trip%").toString("base64"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "b1f03f03-f03f-4111-8111-f03f03f0d163"
+    )
+    expect(res.status).toBe(400)
+    expect(calls).toBe(3)
+    expect(store.documents.size).toBe(0)
+    expect(encFiles()).toEqual([])
+  })
+
+  // FA-D16-002: Buffer.from(hex) stops at the first bad pair, so a 65-character or junk-suffixed key
+  // passed the 32-byte check, and a one-byte-repeated key was accepted.
+  it.each([
+    ["65 hex characters", "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00f"],
+    ["64 hex characters and junk", "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00zz"],
+    ["all-ff", "f".repeat(64)],
+  ])("FA-D16-002: an encryption key of %s refuses the upload with 503 and writes nothing", async (_label, key) => {
+    requireFilesystemObjectBackend()
+    vi.stubEnv("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY", key)
+    const matterId = seedMatter()
+    const res = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: Buffer.from("%PDF-bad-key%").toString("base64"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      randomUUID()
+    )
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY/)
+    expect(body.error).not.toContain(key)
+    expect(getRuntimeStore().documents.size).toBe(0)
+    expect(encFiles()).toEqual([])
   })
 })

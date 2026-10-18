@@ -31,9 +31,14 @@ export default defineConfig({
             "tests/postgres.ddl.integration.test.ts",
             "tests/probe-fa-data-001.regression.test.ts",
           ]),
+      // The S3 vault suites need MinIO (and the e2e also the Firestore emulator); they run through
+      // `npm run test:document-object-s3`.
       ...(process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT
         ? []
         : ["tests/f03-document-object-store.s3.integration.test.ts"]),
+      ...(process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT && process.env.FIRESTORE_EMULATOR_HOST
+        ? []
+        : ["tests/f03-r2-document-vault.e2e.firestore.test.ts"]),
       ...(process.env.FIRESTORE_EMULATOR_HOST
         ? []
         : [
