@@ -12,8 +12,9 @@ import { assertNoProviderKeyAtStartup } from "../platform/p1/providerKeyGuard"
  * defaultTools: false — web_fetch / web_search / bash would bypass P1 and
  * the L4.9 allowlist. Authored tools under agent/tools/ remain.
  *
- * Audit F18 (spec ruling R5): eve refuses to start under NODE_ENV=production
- * when a provider API key is in its environment. The P1 bridge has no provider
+ * Audit F18 (spec ruling R5, as amended by the re-audit follow-up): eve
+ * refuses to start when a provider API key is in its environment, unless
+ * NODE_ENV is exactly `development` or `test`. The P1 bridge has no provider
  * transport, but eve's framework has model calls of its own (its default
  * agent, self-modification) that read the AI Gateway key from the environment
  * directly; refusing to start is the only control that covers them.

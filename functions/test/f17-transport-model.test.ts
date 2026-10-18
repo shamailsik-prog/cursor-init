@@ -1,7 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { gatewayTransport } from "../src/p1/transport"
+import { gatewayTransport, setPaidTransportAllowedForTests } from "../src/p1/transport"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
+
+// Audit F18 re-audit follow-up (spec ruling R13): the real transport against a loopback server, outside the Functions
+// bundle, so the explicit test-only allowance (NODE_ENV=test only); the shared tripwire refuses everything else.
+const tripwire = installNetworkTripwire()
 
 /**
  * Audit F17, spec ruling 4: the Gateway transport returns the model the provider reports (the OpenAI-compatible body's
@@ -23,11 +28,15 @@ beforeAll(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  setPaidTransportAllowedForTests(true)
 })
 
 afterAll(async () => {
+  setPaidTransportAllowedForTests(false)
   server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
+  tripwire.uninstall()
+  expect(tripwire.refused, "non-loopback requests attempted by this file").toEqual([])
 })
 
 beforeEach(() => {

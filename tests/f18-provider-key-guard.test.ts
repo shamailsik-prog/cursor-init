@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
 
 /**
  * Audit F18, spec ruling R5: a provider key in the Next or eve runtime. Under NODE_ENV=production every P1 call is refused
@@ -8,9 +9,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
  * The guard is loaded dynamically, so on main this file runs and fails on its absence. Values are obviously fake.
  *
  * No request can leave: the legacy provider boundary (the `ai` SDK's `createGateway`/`generateText`, which main's
- * platform/p1/gatewayTransport.ts calls when a key is set) is a counting fake, and a fetch tripwire refuses and counts
- * every non-loopback request. (An intermediate run of this file without either, on a tree that still had the transport,
- * let that transport attempt a call with the fake key: see the F18 evidence log. Both guards close that.)
+ * platform/p1/gatewayTransport.ts calls when a key is set) is a counting fake, and the shared network tripwire
+ * (tests/helpers/network-tripwire.ts), installed when this file loads and before any suite runs, refuses and records
+ * every fetch and every socket to a host that is not loopback, and to the agent proxy's port. (An intermediate run of
+ * this file without either, on a tree that still had the transport, let that transport attempt a call with the fake
+ * key: see the F18 evidence log. Both guards close that.)
+ *
+ * Re-audit follow-up (FA-F18-005, spec R5 as amended): a key is tolerated, with its alert line, only when NODE_ENV is
+ * exactly `development` or `test`; every other value, unset included, refuses as production does.
  */
 
 const direct = vi.hoisted(() => ({ calls: 0 }))
@@ -26,23 +32,11 @@ vi.mock("ai", async (importActual) => {
   }
 })
 
-const egress: string[] = []
-const realFetch = globalThis.fetch
-
-beforeAll(() => {
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    const host = url.hostname.replace(/^\[|\]$/g, "")
-    if (!(host === "localhost" || host === "::1" || /^127\./.test(host))) {
-      egress.push(url.host)
-      throw new TypeError(`F18 tripwire: request to ${url.host} refused`)
-    }
-    return realFetch(input, init)
-  }) as typeof fetch
-})
+const tripwire = installNetworkTripwire()
+const egress = tripwire.refused
 
 afterAll(() => {
-  globalThis.fetch = realFetch
+  tripwire.uninstall()
   expect(egress, "non-loopback requests attempted by this file").toEqual([])
 })
 
@@ -114,6 +108,42 @@ describe("audit F18: the provider-key guard (R5)", () => {
     expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "production" })).not.toThrow()
     expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "development", GROQ_API_KEY: FAKE })).not.toThrow()
   })
+
+  // Re-audit follow-up FA-F18-005: Next keeps a non-standard NODE_ENV at runtime, so `=== "production"` let a key through
+  // under `staging`. Only the two values a developer's or the test runner's process carries tolerate a key.
+  const REFUSING_NODE_ENVS: (string | undefined)[] = ["production", "staging", "prod", "Production", "preview", "development ", " test", "", undefined]
+
+  it.each(REFUSING_NODE_ENVS.map((v) => [JSON.stringify(v) ?? "unset", v] as const))("NODE_ENV %s with a key: refuses, with the alert line", async (_label, nodeEnv) => {
+    const { checkProviderKeys } = await guard()
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    const env: Record<string, string | undefined> = { DEEPL_AUTH_KEY: FAKE }
+    if (nodeEnv !== undefined) env.NODE_ENV = nodeEnv
+    expect(checkProviderKeys("p1-call", env)).toEqual({ names: ["DEEPL_AUTH_KEY"], refuse: true })
+    expect(alertLines(spy)).toHaveLength(1)
+    expect(alertLines(spy)[0]).not.toContain(FAKE)
+  })
+
+  it.each(["development", "test"])("NODE_ENV %s with a key: alerts and does not refuse", async (nodeEnv) => {
+    const { checkProviderKeys } = await guard()
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    expect(checkProviderKeys("p1-call", { NODE_ENV: nodeEnv, DEEPL_AUTH_KEY: FAKE })).toEqual({ names: ["DEEPL_AUTH_KEY"], refuse: false })
+  })
+
+  it("eve refuses to start with a key under NODE_ENV=staging and with NODE_ENV unset", async () => {
+    const { assertNoProviderKeyAtStartup, PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "staging", AI_GATEWAY_API_KEY: FAKE })).toThrow(PROVIDER_KEY_IN_RUNTIME_REASON)
+    expect(() => assertNoProviderKeyAtStartup("eve", { AI_GATEWAY_API_KEY: FAKE })).toThrow(PROVIDER_KEY_IN_RUNTIME_REASON)
+    expect(() => assertNoProviderKeyAtStartup("eve", { NODE_ENV: "staging" })).not.toThrow()
+  })
+
+  it("with no key, no NODE_ENV value refuses (next build and next start run with production and no key)", async () => {
+    const { checkProviderKeys } = await guard()
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    for (const nodeEnv of ["production", "staging", "development", "test"]) expect(checkProviderKeys("next", { NODE_ENV: nodeEnv })).toEqual({ names: [], refuse: false })
+    expect(checkProviderKeys("next", {})).toEqual({ names: [], refuse: false })
+    expect(spy).not.toHaveBeenCalled()
+  })
 })
 
 describe("audit F18: callCommitteeBrain under the guard (R2, R5)", () => {
@@ -123,6 +153,18 @@ describe("audit F18: callCommitteeBrain under the guard (R2, R5)", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined)
     vi.stubEnv("NODE_ENV", "production")
     vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
+    expect(direct.calls, "calls through the legacy provider boundary").toBe(0)
+    expect(egress).toEqual([])
+    expect(result).toMatchObject({ blocked: true, event: "ai.call.blocked", reason: PROVIDER_KEY_IN_RUNTIME_REASON })
+  })
+
+  it("under NODE_ENV=staging with a key: blocked with the documented reason (FA-F18-005), nothing dispatched", async () => {
+    const { PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "staging")
+    vi.stubEnv("OPENAI_API_KEY", FAKE)
     const result = await callCommitteeBrain({ body: "Summarise the order.", classification: "public", provider: "ai-gateway", purpose: "summarise" })
     expect(direct.calls, "calls through the legacy provider boundary").toBe(0)
     expect(egress).toEqual([])

@@ -11,9 +11,26 @@ import { MAX_OUTPUT_TOKENS, REQUEST_OVERHEAD_TOKENS, costMicroUsd, estimateToken
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
 import { COMMIT_ATTEMPT_SLACK_MS, COMMIT_BACKOFF_CAP_MS, COMMIT_DEADLINE_MS, callP1, p1TestSeam, type P1Request, type P1Result } from "../src/p1/gateway"
 import { OPIK_TIMEOUT_MS, setOpikFetchForTests } from "../src/p1/opik"
-import { P1TransportError, TRANSPORT_TIMEOUT_MS, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import { P1TransportError, TRANSPORT_TIMEOUT_MS, gatewayTransport, setP1TransportForTests, setPaidTransportAllowedForTests, type P1Transport } from "../src/p1/transport"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
 import { recordSent, type Sent } from "./sent"
 import { EMULATORS, uniq } from "./emu"
+
+// Audit F18 re-audit follow-up (spec ruling R13): two tests send through the real Gateway transport to a loopback
+// server, outside the Functions bundle, so this file opts in with the explicit test-only allowance (NODE_ENV=test only).
+// The shared tripwire, installed when this file loads, refuses every non-loopback fetch and socket (the emulators are
+// loopback).
+const tripwire = installNetworkTripwire()
+
+beforeAll(() => {
+  setPaidTransportAllowedForTests(true)
+})
+
+afterAll(() => {
+  setPaidTransportAllowedForTests(false)
+  tripwire.uninstall()
+  expect(tripwire.refused, "non-loopback requests attempted by this file").toEqual([])
+})
 
 /**
  * Phase 3d Task 2 (spec P3-61, P3-63..P3-66, P3-69): `callP1` over the Firestore emulator, with a fake

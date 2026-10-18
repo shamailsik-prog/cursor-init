@@ -11,8 +11,17 @@
 // `createGateway`/`generateText`, is replaced by a fake that counts direct calls. A fetch tripwire refuses and counts any
 // request to a non-loopback host, so nothing can reach a real provider. The provider key is an obviously fake value.
 //
-// The file imports nothing that is new in F18, so it runs on main too; the documented reasons and codes are literals.
+// The file imports nothing that is new in F18 statically, so it runs on main too; the documented reasons and codes are
+// literals. Every module new in F18 or in its re-audit follow-up is loaded with `await import(...).catch(() => ({}))`
+// (FA-F18-003: review round 1's static import of platform/p1/functionsCommitteeBrain was a collection error on main).
 // Every document and Auth user it creates is deleted after each test, and the last test asserts that none is left.
+//
+// Re-audit follow-up (spec "Re-audit follow-up"): the Functions fake transport is installed through
+// functions/src/p1/transportTestSeam.ts, the one Functions P1 module G-0 [19]'s allowlist lets this file import (never
+// the transport or the gateway); the network tripwire is the shared one (tests/helpers/network-tripwire.ts), installed
+// when this file loads, before any suite runs, and it refuses fetch and sockets to every host that is not loopback and
+// to the agent proxy's port. Rows (l) and (m) are new: the Functions router imported outside the Functions runtime with
+// a key (FA-F18-001b), and a key under NODE_ENV=staging (FA-F18-005).
 import { randomUUID } from "node:crypto"
 import { FieldValue, type DocumentReference } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -24,12 +33,20 @@ import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFi
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { ROUTES, createRouter } from "@/functions/src/http/router"
-import { setP1TransportForTests } from "@/functions/src/p1/transport"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
 import { closedLoopbackPort, startFunctionsRouterServer, type FunctionsRouterServer } from "@/tests/helpers/functions-router-server"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
 import { FUNCTION_TIMEOUT_SECONDS } from "@/functions/src/health"
-import * as forwardModule from "@/platform/p1/functionsCommitteeBrain"
+
+/** Refuses and records every non-loopback fetch and socket, and the proxy's port, from here on (before any suite). */
+const tripwire = installNetworkTripwire()
+
+type FunctionsTransportSeam = { setP1TransportForTests?: (t: { send: (req: unknown) => Promise<{ text: string; inputTokens: number; outputTokens: number }> } | null) => void }
+/** The Functions P1 fake-transport seam (re-audit follow-up). Absent on main, where Next never forwards (c02ebbc). */
+const functionsSeam = (await import("@/functions/src/p1/transportTestSeam").catch(() => ({}))) as FunctionsTransportSeam
+/** platform/p1/functionsCommitteeBrain.ts (F18). Loaded loosely: absent on main (FA-F18-003). */
+const forwardModule = (await import("@/platform/p1/functionsCommitteeBrain").catch(() => ({}))) as Record<string, unknown>
 
 requireAuthFirestoreEmulators("F18 legacy AI path e2e")
 
@@ -239,13 +256,8 @@ const sanctioned = { calls: 0, delayMs: 0 }
 type ForwardSeams = { setForwardTimeoutForTests?: (ms: number | null) => void; FORWARD_TIMEOUT_MS?: number }
 /** The forward-deadline seam (review round 1). Read loosely, so this file still runs where it does not exist. */
 const forwardSeams = forwardModule as unknown as ForwardSeams
-const egress: string[] = []
-const realFetch = globalThis.fetch
-
-function isLoopback(hostname: string): boolean {
-  const h = hostname.replace(/^\[|\]$/g, "")
-  return h === "localhost" || h === "::1" || /^127\./.test(h)
-}
+/** What the tripwire refused: `fetch:<host>` or `socket:<host>:<port>`. */
+const egress = tripwire.refused
 
 function errorLines(spy: { mock: { calls: unknown[][] } }): string[] {
   return spy.mock.calls.map((args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
@@ -319,20 +331,12 @@ async function eveAsk(): Promise<{ text: string; finish: string | undefined }> {
 
 describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Next or eve runtime outside Functions P1", { timeout: E2E_TIMEOUT_MS }, () => {
   beforeAll(async () => {
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-      if (!isLoopback(url.hostname)) {
-        egress.push(url.host)
-        throw new TypeError(`F18 e2e tripwire: request to ${url.host} refused`)
-      }
-      return realFetch(input, init)
-    }) as typeof fetch
     server = await startFunctionsRouterServer(createRouter(ROUTES) as never)
   }, E2E_TIMEOUT_MS)
 
   afterAll(async () => {
     await server?.close()
-    globalThis.fetch = realFetch
+    tripwire.uninstall()
   }, E2E_TIMEOUT_MS)
 
   beforeEach(() => {
@@ -343,7 +347,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     egress.length = 0
     server.received.length = 0
     // Set while NODE_ENV is still "test": the seam refuses to be set in production, and is read at call time.
-    setP1TransportForTests({
+    functionsSeam.setP1TransportForTests?.({
       async send() {
         sanctioned.calls += 1
         if (sanctioned.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, sanctioned.delayMs))
@@ -371,7 +375,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     useEmulatorVerifier(false)
     setFirestorePersistenceForTests(null)
     vi.unstubAllEnvs()
-    setP1TransportForTests(null)
+    functionsSeam.setP1TransportForTests?.(null)
     forwardSeams.setForwardTimeoutForTests?.(null)
     restart()
     await sweep()
@@ -588,6 +592,58 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     expect(sanctioned.calls, "no second provider call").toBe(1)
     expect(await costRows(member.firmId)).toHaveLength(1)
     expect(direct.generateText + direct.createGateway).toBe(0)
+  })
+
+  // Re-audit follow-up, FA-F18-001(b) (spec ruling R13). This process is not the Functions runtime: it imports the
+  // Functions router the way P17's Next route imported the transport. With a key in its environment and no fake
+  // transport, the router's callP1 must build no paid transport: the call is blocked no_credentials, with the alert line,
+  // and the tripwire sees nothing. (On main the router's transport is built and its POST to the Gateway is refused by
+  // the tripwire before any I/O.)
+  it("(l) the Functions router outside the Functions runtime, with a key and no fake transport: no paid transport is built; blocked and alerted; nothing leaves", async () => {
+    vi.stubEnv("NODE_ENV", "test")
+    functionsSeam.setP1TransportForTests?.(null)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_PROVIDER_KEY)
+    const { member, matterId } = await firmWithMatter()
+
+    const res = await fetch(`${server.baseUrl}/api/platform/brain/committeeBrain`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${member.token}`,
+        "x-firm-id": member.firmId,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ matterId, body: "Draft a reply to the notice for the client.", purpose: "committee-brain", classification: "internal", partyNames: [] }),
+    })
+    const json = (await res.json()) as Record<string, unknown>
+    await measure("(l)", { status: res.status, json, result: json }, member.firmId)
+
+    expect(egress, "non-loopback requests").toEqual([])
+    expect(sanctioned.calls + direct.generateText + direct.createGateway).toBe(0)
+    expect(res.status, JSON.stringify(json)).toBe(200)
+    expect(json).toMatchObject({ blocked: true, reason: "no_credentials" })
+    expect(errorLines(errorSpy).some((line) => line.includes(KEY_ALERT) && line.includes("AI_GATEWAY_API_KEY") && !line.includes(FAKE_PROVIDER_KEY))).toBe(true)
+    expect(await costRows(member.firmId)).toEqual([expect.objectContaining({ outcome: "blocked", blockReason: "no_credentials", costMicroUsd: 0 })])
+  })
+
+  // Re-audit follow-up, FA-F18-005 (spec R5 as amended): Next keeps a non-standard NODE_ENV at runtime; a key under any
+  // value other than `development` or `test` refuses as production does, before anything is forwarded.
+  it("(m) a provider key under NODE_ENV=staging: refused as in production; nothing forwarded, nothing leaves", async () => {
+    vi.stubEnv("NODE_ENV", "staging")
+    vi.stubEnv("OPENAI_API_KEY", FAKE_PROVIDER_KEY)
+    const { member, matterId } = await firmWithMatter()
+
+    const answer = await ask(member, matterId)
+    await measure("(m)", answer, member.firmId)
+
+    expect(direct.generateText + direct.createGateway, "direct provider calls from Next").toBe(0)
+    expect(egress).toEqual([])
+    expect(answer.status, JSON.stringify(answer.json)).toBe(200)
+    expect(answer.result?.blocked).toBe(true)
+    expect(String(answer.result?.reason)).toMatch(KEY_REFUSAL)
+    expect(server.received, "nothing forwarded while a key is present").toEqual([])
+    expect(sanctioned.calls).toBe(0)
   })
 
   it("leaves nothing behind: every document and Auth user the suite created is gone", async () => {

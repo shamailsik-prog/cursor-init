@@ -1,12 +1,31 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
 
 /**
  * Audit F18, spec rulings R1, R4, R7 and R8: the Next side's only client for committee work,
  * platform/p1/functionsCommitteeBrain.ts. It sends a committee request to the Cloud Functions P1 route
  * (`/api/platform/brain/committeeBrain`) with the caller's own credentials and the same Idempotency-Key, and nowhere else.
  *
- * The module is loaded dynamically, so on main this file runs and fails on its absence. No network: `fetch` is a fake.
+ * The module is loaded dynamically, so on main this file runs and fails on its absence. No network: `fetch` is a fake
+ * passed in, the `ai` SDK is a fake, and the shared tripwire refuses every non-loopback fetch and socket from the moment
+ * this file loads (re-audit follow-up).
  */
+
+vi.mock("ai", async (importActual) => {
+  const actual = await importActual<Record<string, unknown>>()
+  return {
+    ...actual,
+    createGateway: () => ({ languageModel: (id: string) => ({ fakeModelId: id }) }),
+    generateText: async () => ({ text: "Answer from the fake provider." }),
+  }
+})
+
+const tripwire = installNetworkTripwire()
+
+afterAll(() => {
+  tripwire.uninstall()
+  expect(tripwire.refused, "non-loopback requests attempted by this file").toEqual([])
+})
 
 type Forward = typeof import("@/platform/p1/functionsCommitteeBrain")
 
@@ -17,6 +36,7 @@ async function forward(): Promise<Forward> {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
@@ -116,6 +136,31 @@ describe("audit F18: forwardCommitteeBrain (R1, R4, R6, R7)", () => {
     expect(limited).toEqual({ kind: "refused", status: 429, code: "rate_limited", retryAfter: "30" })
     const opaque = await forwardCommitteeBrain("https://fn.example.test", REQUEST, { fetch: fakeFetch(() => new Response("upstream down", { status: 500 })).fetch })
     expect(opaque).toEqual({ kind: "refused", status: 500, code: "p1_functions_error" })
+  })
+
+  // Re-audit follow-up FA-F18-004, mutant M15: a refusal's code is relayed only when it is a short lower-case identifier,
+  // so nothing Functions (or anything answering in its place) puts there reaches the caller as text.
+  it("relays a refusal code only when it is a short lower-case identifier; anything else is p1_functions_error", async () => {
+    const { forwardCommitteeBrain } = await forward()
+    const refusedWith = async (code: unknown) =>
+      forwardCommitteeBrain("https://fn.example.test", REQUEST, { fetch: fakeFetch(() => json(400, { error: { code } })).fetch })
+    for (const unsafe of ["Bearer emulator-id-token", "<script>alert(1)</script>", "Rate_Limited", "9_lives", "rate-limited", "a".repeat(65), "", 42, null]) {
+      expect(await refusedWith(unsafe), JSON.stringify(unsafe)).toEqual({ kind: "refused", status: 400, code: "p1_functions_error" })
+    }
+    expect(await refusedWith("a".repeat(64))).toEqual({ kind: "refused", status: 400, code: "a".repeat(64) })
+    expect(await refusedWith("matter_required")).toEqual({ kind: "refused", status: 400, code: "matter_required" })
+  })
+
+  // Re-audit follow-up FA-F18-004, mutant M18: the forward-deadline seam is test-only.
+  it("refuses to shorten the forward deadline in production", async () => {
+    const { setForwardTimeoutForTests } = await forward()
+    vi.stubEnv("NODE_ENV", "production")
+    try {
+      expect(() => setForwardTimeoutForTests(1)).toThrow("setForwardTimeoutForTests is test-only")
+    } finally {
+      vi.unstubAllEnvs()
+      setForwardTimeoutForTests(null)
+    }
   })
 
   it("fails closed with an alert line when Functions is unreachable, slow or answers something that is not a committee answer", async () => {

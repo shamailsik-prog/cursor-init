@@ -5,6 +5,32 @@
  * records the fixed `transport_error` and charges the call by the error's `billable` flag (I1).
  */
 
+import { PROVIDER_KEY_ALERT } from "@/platform/p1/providerKeyGuard"
+import { installedTestTransport } from "./transportTestSeam"
+
+/**
+ * Audit F18 re-audit follow-up, FA-F18-001(b) (spec ruling R13): the paid transport is built only inside the Cloud
+ * Functions runtime. The signal is a compile-time constant: functions/build.mjs defines it (functions/runtime-define.mjs)
+ * in the bundles it builds, lib/index.js (which the deployed `api` function and the emulator load) and the operator
+ * CLIs. No environment variable can set it, so it cannot be true by accident in a Next process (which G-0 [19] also
+ * forbids to import this module) or in a test runner; FUNCTION_TARGET, K_SERVICE and FIREBASE_CONFIG were not chosen
+ * because Cloud Run and App Hosting set them for a Next service too, and any variable can be copied with a key.
+ */
+declare const __SIKANDER_FUNCTIONS_RUNTIME__: boolean | undefined
+
+/** True only in a bundle functions/build.mjs built. */
+export function inFunctionsRuntime(): boolean {
+  return typeof __SIKANDER_FUNCTIONS_RUNTIME__ === "boolean" && __SIKANDER_FUNCTIONS_RUNTIME__
+}
+
+/** Why `gatewayTransport` refused: fixed text, never a key or a value. */
+export const PAID_TRANSPORT_OUTSIDE_FUNCTIONS_REASON =
+  "P1: the Gateway transport is built only in the Cloud Functions runtime; nothing was built or sent"
+
+function paidTransportAllowed(): boolean {
+  return inFunctionsRuntime() || (paidTransportAllowedForTests && process.env.NODE_ENV === "test")
+}
+
 /**
  * What a call answered. `responseId` is the provider's own response id (the OpenAI-compatible body's `id`) and
  * `requestId` the request-id header the Gateway answered with; each is present only when it is a plain id (audit F08,
@@ -130,6 +156,7 @@ function isAbort(err: unknown): boolean {
 const timedOut = () => new P1TransportError("gateway_timeout", { billable: true })
 
 export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts?: { timeoutMs?: number }): P1Transport {
+  if (!paidTransportAllowed()) throw new Error(PAID_TRANSPORT_OUTSIDE_FUNCTIONS_REASON)
   return {
     async send(req) {
       let res: Response
@@ -178,17 +205,32 @@ export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts
   }
 }
 
-let testTransport: P1Transport | null = null
+export { setP1TransportForTests } from "./transportTestSeam"
 
-/** Test-only. Refused in production, like `platform/p1/internalAICaller.ts`'s `setTransportForTests`. */
-export function setP1TransportForTests(t: P1Transport | null): void {
-  if (process.env.NODE_ENV === "production") throw new Error("setP1TransportForTests is test-only")
-  testTransport = t
+/** Test-only (NODE_ENV=test): lets a suite outside the Functions bundle build the real transport (spec ruling R13). */
+let paidTransportAllowedForTests = false
+
+/**
+ * Test-only. Lets the suites that exercise the real transport against a loopback server (functions/test/p1.transport,
+ * f17-transport-model, p1.gateway.emu; the live F16 evaluation) build it outside the Functions bundle. Accepted only
+ * under NODE_ENV=test, and it counts only while NODE_ENV is still "test", so it is inert in production.
+ */
+export function setPaidTransportAllowedForTests(on: boolean): void {
+  if (process.env.NODE_ENV !== "test") throw new Error("setPaidTransportAllowedForTests is test-only")
+  paidTransportAllowedForTests = on
 }
 
 /** The test transport if one is set, else the Gateway when `AI_GATEWAY_API_KEY` is non-empty, else null (P3-68). */
 export function activeTransport(): P1Transport | null {
-  if (testTransport) return testTransport
+  const test = installedTestTransport()
+  if (test) return test
   const key = process.env.AI_GATEWAY_API_KEY?.trim()
-  return key ? gatewayTransport(key) : null
+  if (!key) return null
+  // Re-audit follow-up (FA-F18-001b, attack P17): a key outside the Functions runtime builds nothing; it is a
+  // deployment error, alerted by name only, like the Next runtime's guard (platform/p1/providerKeyGuard.ts).
+  if (!paidTransportAllowed()) {
+    console.error(`[p1] ALERT ${PROVIDER_KEY_ALERT}`, { runtime: "functions-transport-outside-functions", keys: ["AI_GATEWAY_API_KEY"], refused: true })
+    return null
+  }
+  return gatewayTransport(key)
 }

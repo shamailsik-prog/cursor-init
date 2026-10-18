@@ -11,7 +11,7 @@ import {
   forwardCommitteeBrain,
   functionsP1BaseUrl,
 } from "@/platform/p1/functionsCommitteeBrain"
-import { checkProviderKeys, providerKeysPresent } from "@/platform/p1/providerKeyGuard"
+import { checkProviderKeys, providerKeysRefused } from "@/platform/p1/providerKeyGuard"
 import { rankOf, rankOfStoredOrMax, type CommitteeBrainOutput } from "@/platform/spine/store"
 import {
   CommitteeScopeError,
@@ -154,13 +154,14 @@ type Dispatch = { kind: "functions"; baseUrl: string; authorization: string } | 
  * has no provider transport and so records a blocked row:
  *   - an insecure-dev session (local and tests only; it has no ID token to forward);
  *   - no usable Functions base URL (an alert line in production);
- *   - a provider key in this runtime under NODE_ENV=production (callCommitteeBrain refuses it with its alert line).
+ *   - a provider key in this runtime unless NODE_ENV is exactly `development` or `test` (re-audit follow-up FA-F18-005;
+ *     callCommitteeBrain refuses it with its alert line).
  */
 function chooseDispatch(request: Request, session: HandlerSession | null): Dispatch {
   if (session?.mode !== "firebase") return { kind: "local" }
   const authorization = request.headers.get("authorization")
   if (!authorization) return { kind: "local" }
-  if (process.env.NODE_ENV === "production" && providerKeysPresent().length > 0) return { kind: "local" }
+  if (providerKeysRefused()) return { kind: "local" }
   const baseUrl = functionsP1BaseUrl()
   if (!baseUrl) {
     if (process.env.NODE_ENV === "production") {
@@ -168,7 +169,7 @@ function chooseDispatch(request: Request, session: HandlerSession | null): Dispa
     }
     return { kind: "local" }
   }
-  // Outside production a key is not refused (no paid path exists here), but its alert line is still logged.
+  // Under NODE_ENV development or test a key is not refused (no paid path exists here), but its alert line is logged.
   checkProviderKeys("next")
   return { kind: "functions", baseUrl, authorization }
 }

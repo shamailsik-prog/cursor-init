@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import { committeeBrainLanguageModel } from "@/platform/p1/committeeBrainModel"
 import {
   callCommitteeBrain,
@@ -10,6 +10,26 @@ import type { OutboundRequest } from "@/platform/p1/internalAICaller"
 import { providerKeysPresent } from "@/platform/p1/providerKeyGuard"
 import committeeAgent from "@/agent/agent"
 import { classificationPolicy, maskPreview, normaliseCaseNumber } from "@/platform/p1/eveTools"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
+
+// Audit F18 re-audit follow-up: nothing here may reach a provider. The `ai` SDK is a fake, and the shared tripwire,
+// installed when this file loads (before any suite), refuses fetch and sockets to every host that is not loopback, and
+// to the agent proxy's port.
+vi.mock("ai", async (importActual) => {
+  const actual = await importActual<Record<string, unknown>>()
+  return {
+    ...actual,
+    createGateway: () => ({ languageModel: (id: string) => ({ fakeModelId: id }) }),
+    generateText: async () => ({ text: "Answer from the fake provider." }),
+  }
+})
+
+const tripwire = installNetworkTripwire()
+
+afterAll(() => {
+  tripwire.uninstall()
+  expect(tripwire.refused, "non-loopback requests attempted by this file").toEqual([])
+})
 
 afterEach(() => {
   setTransportForTests(null)

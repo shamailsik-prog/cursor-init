@@ -97,6 +97,9 @@ If any of them is non-blank in the Next or eve environment under `NODE_ENV=produ
 
 Outside production the alert line is logged and nothing is refused, because no paid path exists there to refuse.
 
+*Amended by the re-audit follow-up (R5-FU below, FA-F18-005): "production" now means every `NODE_ENV` other than exactly
+`development` or `test`, unset included.*
+
 **R5, review round 1 (PR #88, Codex P2, thread 4307495841).** The key check now runs first on every path through P1 in this
 runtime, so its alert line is logged whatever the input. It runs as the first statement of `callCommitteeBrain`, before:
 - the missing-classification throw;
@@ -168,6 +171,11 @@ job that deploys through a command or action outside that list passes [19] (text
 The gate has no allowlist. It runs in `gate_g0.sh`, which the Gates job of `.github/workflows/gate-g0.yml` runs. G-0 [3] is
 unchanged: it still lists which trees may hold a provider SDK at all; [19] is stricter for the Next and eve runtime.
 `--print-key-names` prints the gate's key list, and a test holds it equal to the TypeScript guard's list.
+
+*Amended by the re-audit follow-up (R9-FU and R13 below, FA-F18-001a, FA-F18-002): [19] also forbids any JS/TS outside
+`functions/` to import the Functions tree, with one allowlist (root test files only, never the transport or the gateway);
+reads workflows at any indentation; covers `.envrc`, string `model:` values under `agent/`, symlinked directories and five
+more provider SDKs; and its residuals are listed in R9-FU.*
 
 **R10. The secrets template.** `.env.example` no longer offers `AI_GATEWAY_API_KEY=` / `VERCEL_AI_GATEWAY_API_KEY=` as an
 "optional P1 live path". It says the Next and eve runtime must hold no provider key, and that the key belongs only to the
@@ -271,3 +279,188 @@ client: URL rules, redirect refusal, timeout and answer mapping.
 - Narrow G-0 [3]'s `ALLOWED_PREFIXES` to `functions/src/p1/` now that [19] forbids provider code in `platform/p1`.
 - Update `agent/instructions.md` ("Public may leave once a Gateway key exists") with its F16 digest re-pin.
 - FA-D3C-002 (`corpus_service` embeddings): F27's lane.
+
+## Re-audit follow-up (2026-10-18)
+
+PR #88 merged as ac69873. The independent re-audit of that code was FAIL 7/10. The core path held (the e2e was RED on main
+and GREEN on the head; 27 of 32 mutants were killed), but one MEDIUM was open: Next code could import the Functions P1
+transport. This section records the rulings that close FA-F18-001 to FA-F18-005. It also records FA-F18-006 and
+FA-F18-007, which are not fixed here.
+
+**What the re-audit showed (FA-F18-001, MEDIUM).** Attack P17 was a Next route with
+`import { activeTransport } from "@/functions/src/p1/transport"`:
+- [19] exited 0;
+- under `NODE_ENV=production` with a fake `AI_GATEWAY_API_KEY`, `activeTransport()` called from root code returned the
+  Gateway transport;
+- its `send()` built a POST to `ai-gateway.vercel.sh` with `Bearer <key>`;
+- no alert was logged.
+
+R5's premise ("the gate proves no other Next code can use a key") was false: [19] banned SDK packages, key names and hosts,
+and `functions/` was exempt as a whole, so a specifier into it was never examined.
+
+**R9-FU. [19] forbids the Functions tree outside `functions/` (FA-F18-001a).** Rule (f): no JS/TS outside `functions/`,
+root `tests/` included, may import a module under `functions/`. The rule resolves, from literal specifiers:
+- `@/functions/...` (the repository's `@` alias is applied even when no tsconfig names it);
+- relative paths;
+- every `paths` alias and `baseUrl` of the root `tsconfig*.json` / `jsconfig.json`, read as JSON with comments and trailing
+  commas;
+- bare `functions/...`.
+
+It reads every loading form:
+- `import`, `export ... from` and `import()`;
+- `require()`, `require.resolve()` and createRequire loaders;
+- vitest/jest `importActual`, `requireActual`, `importMock` and `requireMock`.
+
+A root tsconfig that does not parse fails the gate (rule (i)), because its aliases could not be checked.
+
+There is one allowlist, `FUNCTIONS_IMPORT_ALLOWLIST` in the gate. Each entry is (root test file, Functions module) with a
+one-line reason. The gate refuses:
+- an entry naming `functions/src/p1/transport` or `functions/src/p1/gateway`;
+- an entry for a file outside `tests/`;
+- an entry without a reason;
+- a stale entry, whose file exists but no longer imports its module.
+
+The entries:
+
+| Importer | Module | Why |
+|---|---|---|
+| `tests/f18-legacy-ai-path.e2e.firestore.test.ts` | `functions/src/http/router` | the e2e serves the real `api` router in process |
+| same | `functions/src/health` | pins the `api` timeout below the forward deadline |
+| same | `functions/src/p1/transportTestSeam` | installs the Functions fake transport; no paid code |
+| `tests/helpers/functions-router-fetch.ts` | `functions/src/http/router`, `functions/test/emu` | the F02 console e2e helper (not this lane; unchanged) |
+| `tests/p5.identity-policy.parity.test.ts` | `functions/src/p5/auth` | P5 parity |
+| `tests/p5.permission-decision.parity.test.ts` | `functions/src/p5/permission` | P5 parity |
+
+The router is not a pure module: it reaches the gateway and the transport transitively. It is allowlisted for the two
+in-process e2e harnesses only. That is safe because R13 makes the transport build nothing paid outside the Functions bundle,
+whatever imports it. `vi.mock(...)` and `vi.doMock(...)` are not counted: with a factory they replace the module and load
+none of it.
+
+Rule (g) is new: no JS/TS outside `functions/` may name the runtime marker (R13), so no Next code or root test can set it as
+a global.
+
+**R9-FU, F16's live block (decision).** `tests/f16-injection-structure.test.ts` imported the transport and `costTable` for its
+live block, which runs only with a key. Three options were weighed:
+- allowlist `costTable`: this does not help, because the block also needs `gatewayTransport`, which can never be allowlisted;
+- a test seam: this would put a paid path within reach of a root test;
+- move the block into `functions/test/` (chosen): the transport legitimately lives there.
+
+The live block is now `functions/test/f16-injection-live.test.ts`. It sends `requestMessages(toolPrompt(c))`
+(`tests/fixtures/f16-injection-prompts.ts`), which is the bridge's two building steps, `promptToTurns` then `buildOutbound`.
+The root structure suite now asserts, for each of the 54 cases, that `requestMessages` equals the request the bridge itself
+builds. So the move keeps (b)'s coverage: a live run sends exactly what the bridge would. Without a key the live block
+reports NOT RUN, as before. With a key it opts in through R13's test allowance.
+
+**R13. The Functions transport refuses outside the Functions runtime (FA-F18-001b, defence in depth).** `gatewayTransport()`
+throws `PAID_TRANSPORT_OUTSIDE_FUNCTIONS_REASON` unless it runs in the Functions runtime. `activeTransport()` with a key
+outside the runtime returns no transport, and logs
+`[p1] ALERT p1.provider_key_in_next_runtime { runtime: "functions-transport-outside-functions", keys: ["AI_GATEWAY_API_KEY"], refused: true }`.
+That alert names the variable and never its value. `callP1` then records `no_credentials`, as it does without a key.
+
+- **The signal.** It is the compile-time constant `__SIKANDER_FUNCTIONS_RUNTIME__`. `functions/runtime-define.mjs` exports
+  it, and `functions/build.mjs` defines it for:
+  - `lib/index.js`: the deployed `api` function, which the emulator also loads;
+  - the operator CLIs: `eval:committee-live` sends through the transport.
+
+  Why not `FUNCTION_TARGET`, `K_SERVICE` or `FIREBASE_CONFIG`: Cloud Run and App Hosting set `K_SERVICE` and
+  `FIREBASE_CONFIG` for a Next service too. Any environment variable can also be copied into the Next service along with
+  the key, which is the very deployment error F18 is about. A constant compiled into the Functions bundle cannot be set by
+  any deployment setting. Rule (g) stops Next code or a root test from naming it.
+- **The test allowance.** `setPaidTransportAllowedForTests(on)` is accepted only under `NODE_ENV=test`. It counts only while
+  `NODE_ENV` is still `test`, so it is inert in production even if it was set earlier. It is used explicitly by:
+  - the Functions suites that drive the real transport against a loopback server: `p1.transport`, `f17-transport-model`
+    and `p1.gateway.emu`;
+  - the live F16 block.
+
+  The fake-transport slot moved to `functions/src/p1/transportTestSeam.ts`. `transport.ts` re-exports its setter, so the
+  Functions suites are unchanged. The F18 e2e imports the seam, never the transport. It serves the router in process and
+  installs its fake there; the fake takes precedence, as before.
+- **Lane deviation.** `functions/build.mjs` and the new `functions/runtime-define.mjs` are outside the stated lane
+  (`functions/src/p1/transport*`). They were changed because the build is the only place the signal can come from.
+- **Proof.** `functions/test/f18-transport-runtime.test.ts` covers four things:
+  - outside the bundle, with a key under production: no transport, the alert, and nothing sent;
+  - `gatewayTransport()` refuses;
+  - the allowance's rules;
+  - bundled with `FUNCTIONS_RUNTIME_DEFINE`, the transport is built and sends to the Gateway URL with the bearer key (to a
+    local recorder); `build.mjs` applies the define to the index and CLI builds.
+
+  E2E row (l): the Functions router, imported by this non-Functions process with a key and no fake, records
+  `no_credentials` with the alert, and the tripwire sees nothing. On main, the transport was built there, and its POST to
+  the Gateway was refused by the tripwire.
+
+**R9-FU, deploy-surface gaps (FA-F18-002).** Fixed:
+- workflows are read at any indentation: a job starts at the indentation of the first content line under `jobs:`, and
+  top-level sections after `jobs:` count as workflow level (P27);
+- `.envrc` and `.envrc.*` are env files (P33);
+- rule (e): a string `model:` value under `agent/` fails. This covers JS/TS quotes and template literals, and `model:` in
+  front matter, YAML or JSON (P39);
+- rule (h): a symlinked directory anywhere outside `node_modules`, `.git` and `.next` fails, because the walkers do not
+  follow links (P40);
+- five SDK packages are added: `@anthropic-ai/vertex-sdk`, `@anthropic-ai/bedrock-sdk`, `@langchain/openai`,
+  `@langchain/anthropic` and `@aws-sdk/client-bedrock-agent-runtime` (P35 to P37);
+- a root tsconfig alias that resolves into `node_modules/<banned package>` (P12) is now caught, as a side effect of the
+  alias resolution.
+
+The auditor's 40 attacks: 19 caught on main ac69873, 28 caught on the branch.
+
+**R9-FU, residuals ([19] is text analysis).** Each of these passes [19]:
+- computed specifiers, hosts and key names (P8, P9, P19, P21);
+- `package.json` `imports` maps (P13) and npm alias dependencies (P14);
+- SDKs not on the lists;
+- aliases set only in JS config (vitest, next, webpack);
+- provider hosts in non-JS config files (P20);
+- flow-style or anchored workflow YAML;
+- jobs that deploy through `gcloud run deploy`, `docker build` or `pnpm build` (P28 to P30);
+- shell scripts (P38).
+
+The runtime layers stand behind the gate for these cases:
+- the Next tree has no transport (R2);
+- the key guard (R5);
+- the Functions transport refuses outside its runtime (R13).
+
+**R5-FU. A key refuses unless `NODE_ENV` is exactly `development` or `test` (FA-F18-005).** Next keeps a non-standard
+`NODE_ENV` at run time. With `NODE_ENV=staging` and a key, eve started and the route forwarded. Now
+`keyRefusingNodeEnv(env)` is true for every value but those two, unset included. Under it:
+- `checkProviderKeys` refuses;
+- eve refuses to start;
+- the route's dispatch (`providerKeysRefused()`) keeps the call local.
+
+E2E row (m) covers staging.
+
+`next build` and `next start` run with `NODE_ENV=production`. With no key, nothing is refused under any value, and [19]
+proves that no workflow job that serves Next holds a key. The guard runs only on a P1 call or at eve start-up, never at
+build. A local `next build` is NOT DEMONSTRATED: Turbopack refuses this worktree's symlinked `node_modules`. CI runs it on
+the PR.
+
+Two rules are deliberately unchanged:
+- The Functions emulator-host rule in `functionsP1BaseUrl` stays "never under production". An emulator URL is loopback and
+  carries no paid path, and changing it would change R8's tested contract without a finding.
+- The `set*ForTests` seams keep their production refusal.
+
+The R5 review-round sentence "the gate (R9) proves no other Next code can use a key" is withdrawn. The gate now forbids the
+import of the Functions tree (R9-FU), and the transport refuses outside its runtime (R13).
+
+**FA-F18-003.** The e2e loads every module that is new in F18 or in this follow-up with `await import(...).catch(() => ({}))`:
+- `platform/p1/functionsCommitteeBrain`;
+- `functions/src/p1/transportTestSeam`.
+
+It now runs on c02ebbc (main before F18) with real RED results. It uses the shared network tripwire
+(`tests/helpers/network-tripwire.ts`), installed when the file loads. The tripwire refuses fetch and sockets (`net`, `tls`,
+the agents' `path: null` form) to every non-loopback host, and the agent proxy's port. `tests/f18-network-tripwire.test.ts`
+proves it first. Every root test file that could reach a transport mocks `ai` and installs it, as do the Functions suites
+that build the real transport.
+
+**FA-F18-004.** Tests now kill the five surviving mutants:
+- M2: a pinned 21-name list, held equal in the gate and the guard;
+- M15: unsafe refusal codes become `p1_functions_error`;
+- M18: `setForwardTimeoutForTests` refuses in production;
+- M27: a `firebase deploy --only hosting` job with a key;
+- M31: `platform/p1/other.ts` naming a key.
+
+**FA-F18-006 (recorded, not fixed; F02's lane).**
+- The ops console and the foundation console post to Functions without `matterId`, and get 400 on main too.
+- The foundation console expects `outbound`, and would throw on render.
+- A 304 from Functions maps to 400.
+
+**FA-F18-007 (recorded).** `maxDuration = 130` against the deploy target is [REQUIRES VERIFICATION] until F32 declares a
+target.

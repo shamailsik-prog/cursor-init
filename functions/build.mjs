@@ -3,6 +3,7 @@ import { rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { FUNCTIONS_RUNTIME_DEFINE } from "./runtime-define.mjs"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "..")
@@ -37,7 +38,9 @@ await build({
   // Defence in depth: the deployed bundle is production whatever the host's NODE_ENV, so the test seams that
   // check it (p1TestSeam, p1OpsTestSeam; the set*ForTests refusals) stay inert. The route check and the
   // operator CLI are not deployed and keep the runtime value.
-  define: { "process.env.NODE_ENV": '"production"' },
+  // Audit F18 re-audit follow-up (spec ruling R13): FUNCTIONS_RUNTIME_DEFINE marks this bundle as the Functions runtime,
+  // the only place functions/src/p1/transport.ts builds a paid transport.
+  define: { "process.env.NODE_ENV": '"production"', ...FUNCTIONS_RUNTIME_DEFINE },
   logLevel: "info",
 })
 
@@ -54,6 +57,8 @@ for (const cli of ["jobsBackfill", "committeeEval"]) {
     sourcemap: true,
     external: EXTERNAL,
     alias: { "@": repoRoot },
+    // The live evaluation (`eval:committee-live`) sends through the Gateway transport: a Functions bundle too (R13).
+    define: FUNCTIONS_RUNTIME_DEFINE,
     logLevel: "info",
   })
 }

@@ -3,7 +3,22 @@ import type { AddressInfo } from "node:net"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { MAX_OUTPUT_TOKENS } from "../src/p1/costTable"
 import { OPIK_TIMEOUT_MS, exportTrace, setOpikFetchForTests, type OpikConfig, type TraceRecord } from "../src/p1/opik"
-import { GATEWAY_URL, P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, gatewayTransport, setP1TransportForTests, type P1Transport } from "../src/p1/transport"
+import {
+  GATEWAY_URL,
+  P1TransportError,
+  TRANSPORT_TIMEOUT_MS,
+  activeTransport,
+  gatewayTransport,
+  setP1TransportForTests,
+  setPaidTransportAllowedForTests,
+  type P1Transport,
+} from "../src/p1/transport"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
+
+// Audit F18 re-audit follow-up (spec ruling R13): this suite exercises the real Gateway transport against a loopback
+// server, outside the Functions bundle, so it opts in with the explicit test-only allowance (accepted only under
+// NODE_ENV=test). The shared tripwire, installed when this file loads, refuses every non-loopback fetch and socket.
+const tripwire = installNetworkTripwire()
 
 type Seen = { method: string | undefined; url: string | undefined; headers: IncomingMessage["headers"]; body: string }
 
@@ -25,11 +40,15 @@ beforeAll(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  setPaidTransportAllowedForTests(true)
 })
 
 afterAll(async () => {
+  setPaidTransportAllowedForTests(false)
   server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
+  tripwire.uninstall()
+  expect(tripwire.refused, "non-loopback requests attempted by this file").toEqual([])
 })
 
 beforeEach(() => {

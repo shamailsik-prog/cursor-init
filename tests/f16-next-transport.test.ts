@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
+import { installNetworkTripwire } from "@/tests/helpers/network-tripwire"
 
 /**
  * Audit F16 (ruling 1) tested the Next legacy transport, `platform/p1/gatewayTransport.ts`: role-separated messages and
@@ -30,23 +31,13 @@ vi.mock("ai", async (importActual) => {
   }
 })
 
-const egress: string[] = []
-const realFetch = globalThis.fetch
-
-beforeAll(() => {
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    const host = url.hostname.replace(/^\[|\]$/g, "")
-    if (!(host === "localhost" || host === "::1" || /^127\./.test(host))) {
-      egress.push(url.host)
-      throw new TypeError(`F18 tripwire: request to ${url.host} refused`)
-    }
-    return realFetch(input, init)
-  }) as typeof fetch
-})
+// Audit F18 re-audit follow-up: the shared tripwire, installed when this file loads (before any suite), refuses fetch
+// and sockets to every host that is not loopback, and to the agent proxy's port.
+const tripwire = installNetworkTripwire()
+const egress = tripwire.refused
 
 afterAll(() => {
-  globalThis.fetch = realFetch
+  tripwire.uninstall()
 })
 
 afterEach(() => {
