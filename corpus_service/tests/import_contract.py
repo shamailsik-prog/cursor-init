@@ -53,8 +53,10 @@ LOADED_BY_NAME: Dict[str, str] = {
     "uvicorn": "the compose api command: uvicorn scraper.main:app",
 }
 
-# file (relative to corpus_service/) -> (number of non-literal dynamic imports, reason). A
-# non-literal importlib.import_module()/__import__() anywhere else is refused.
+# file (relative to corpus_service/) -> (number of lines with a dynamic import the check cannot
+# resolve, reason). Such a line anywhere else is refused: a loader call with a computed target, a
+# loader reference that escapes (into a container, an argument, an attribute), getattr()/globals()
+# with a computed name on a loader's module, or exec()/eval().
 DYNAMIC_IMPORT_SITES: Dict[str, Tuple[int, str]] = {
     "scraper/tasks/dispatcher.py": (
         1,
@@ -138,44 +140,313 @@ def iter_runtime_files(project_root: Path, roots: Sequence[str] = RUNTIME_ROOTS)
             raise ContractError(f"runtime root {rel!r} does not exist under {project_root} (fail closed)")
 
 
-def _is_dynamic_import(func: ast.expr) -> bool:
-    if isinstance(func, ast.Name):
-        return func.id in {"__import__", "import_module"}
-    if isinstance(func, ast.Attribute):
-        return func.attr in {"import_module", "__import__"}
-    return False
+# -- dynamic imports, by the loader's identity -----------------------------------------------------
+# Review round (Copilot thread 4305672214): a loader is recognised by what it IS, not how it is
+# spelled. `from importlib import import_module as load; load("x")` is the same call as
+# `importlib.import_module("x")`. The scanner follows, per file and across the scanned first-party
+# modules, every name bound to a loader or to a loader's module: import and from-import (with
+# `as`), star imports, plain / chained / annotated / tuple / walrus assignment, getattr() and
+# globals()/vars()/__dict__ with a literal name, and re-exports between first-party modules
+# (from-import, relative import, module objects, dotted chains). Bindings are flow-insensitive: a
+# name bound to a loader anywhere in a file is a loader everywhere in it.
+
+# The callables whose first argument (or name=) names a module, by their home module.
+LOADERS: Dict[str, frozenset] = {
+    "importlib": frozenset({"import_module", "__import__"}),
+    "importlib.util": frozenset({"find_spec"}),
+    "builtins": frozenset({"__import__"}),
+}
+# What `from <module> import *` binds to a loader: importlib.__all__ holds import_module and
+# __import__; importlib.util has no __all__, so every public name, of which find_spec is the loader.
+STAR_LOADERS: Dict[str, frozenset] = {
+    "importlib": frozenset({"import_module", "__import__"}),
+    "importlib.util": frozenset({"find_spec"}),
+}
+# Builtins that run arbitrary code, and so arbitrary imports: never resolvable.
+CODE_RUNNERS = frozenset({"exec", "eval"})
+# After a star import the check cannot enumerate, these names may be loaders: count them as such.
+_STAR_UNKNOWN_LOADERS = frozenset({"import_module", "find_spec"})
+
+_LOADER, _RUNNER, _UNRESOLVED = "loader", "runner", "unresolved"
+_SYS, _SYS_MODULES = "sys", "sys.modules"  # the sys module; its module table (any module by name)
+_MOD, _FP = "mod:", "fp:"  # a loader's home module ("mod:importlib"); a scanned first-party module
+
+
+def _is_ref(kind: Optional[str]) -> bool:
+    return kind in (_LOADER, _RUNNER, _SYS, _SYS_MODULES) or (kind is not None and kind.startswith((_MOD, _FP)))
+
+
+def _scope_of(mod: "_Module", node: ast.AST) -> Optional[ast.AST]:
+    """The function, lambda, class or module whose namespace a binding at ``node`` lands in."""
+    parent = mod.parents.get(id(node))
+    while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                                                         ast.ClassDef, ast.Module)):
+        parent = mod.parents.get(id(parent))
+    return parent
+
+
+class _Module:
+    def __init__(self, rel: str, tree: ast.Module):
+        self.rel = rel
+        self.tree = tree
+        parts = list(Path(rel).with_suffix("").parts)
+        is_package = parts[-1] == "__init__"
+        if is_package:
+            parts = parts[:-1]
+        self.dotted = ".".join(parts)
+        self.package = self.dotted if is_package else self.dotted.rpartition(".")[0]
+        # Names that hold a loader, a code runner, a loader's module or a first-party module.
+        self.bindings: Dict[str, str] = {"__import__": _LOADER, "__builtins__": _MOD + "builtins",
+                                         "exec": _RUNNER, "eval": _RUNNER}
+        self.star_unknown = False
+        self.consumed: Set[int] = set()  # id() of value nodes bound by an alias statement
+        self.parents: Dict[int, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                self.parents[id(child)] = node
+
+    def lookup(self, name: str) -> Optional[str]:
+        kind = self.bindings.get(name)
+        if kind is None and self.star_unknown and name in _STAR_UNKNOWN_LOADERS:
+            return _LOADER
+        return kind
+
+
+def _alias_pairs(target: ast.expr, value: ast.expr) -> List[Tuple[str, ast.expr]]:
+    if isinstance(target, ast.Name):
+        return [(target.id, value)]
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)) \
+            and len(target.elts) == len(value.elts):
+        return [pair for t, v in zip(target.elts, value.elts) for pair in _alias_pairs(t, v)]
+    return []
+
+
+class _Analyzer:
+    """Loader identity across one set of files (the scanned tree)."""
+
+    def __init__(self, sources: Mapping[str, str]):
+        # A syntax error propagates: a file the check cannot read is not a pass.
+        self.modules = [_Module(rel, ast.parse(text, filename=rel)) for rel, text in sources.items()]
+        self.index = {m.dotted: m for m in self.modules}
+        self.packages = {".".join(m.dotted.split(".")[:i]) for m in self.modules for i in range(1, m.dotted.count(".") + 1)}
+        self.packages |= {m.dotted for m in self.modules if m.dotted == m.package}
+        changed = True
+        while changed:  # monotone: a binding is only ever added or upgraded to a loader
+            changed = any([self._bind(m) for m in self.modules])
+
+    # -- resolution ------------------------------------------------------------------------------
+    def _module_kind(self, dotted: Optional[str]) -> Optional[str]:
+        if dotted in LOADERS:
+            return _MOD + dotted
+        if dotted == "sys":
+            return _SYS
+        if dotted and (dotted in self.index or dotted in self.packages):
+            return _FP + dotted
+        return None
+
+    def _member(self, base: Optional[str], attr: str) -> Optional[str]:
+        if base is None:
+            return None
+        if base == _SYS:
+            return _SYS_MODULES if attr == "modules" else None
+        if base.startswith(_MOD):
+            home = base[len(_MOD):]
+            if attr in LOADERS.get(home, ()):
+                return _LOADER
+            if home == "builtins" and attr in CODE_RUNNERS:
+                return _RUNNER
+            if home == "importlib" and attr == "util":
+                return _MOD + "importlib.util"
+            return None
+        if base.startswith(_FP):
+            dotted = base[len(_FP):]
+            sub = f"{dotted}.{attr}"
+            if sub in self.index or sub in self.packages:
+                return _FP + sub
+            source = self.index.get(dotted)
+            return source.lookup(attr) if source else None
+        return None
+
+    def kind(self, mod: _Module, node: ast.AST) -> Optional[str]:
+        if isinstance(node, ast.Name):
+            return mod.lookup(node.id)
+        if isinstance(node, ast.Attribute):
+            return self._member(self.kind(mod, node.value), node.attr)
+        if isinstance(node, ast.NamedExpr):
+            return self.kind(mod, node.value)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" \
+                and self.kind(mod, node.func.value) == _SYS_MODULES:
+            key = node.args[0] if node.args else None
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                return self._module_kind(key.value)
+            return _UNRESOLVED
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr" \
+                and len(node.args) >= 2:
+            base = self.kind(mod, node.args[0])
+            if base is None or not base.startswith((_MOD, _FP)):
+                return None
+            name = node.args[1]
+            if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                return self._member(base, name.value)
+            return _UNRESOLVED
+        if isinstance(node, ast.Subscript):
+            key = node.slice
+            literal = key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
+            box = node.value
+            if self.kind(mod, box) == _SYS_MODULES:
+                return self._module_kind(literal) if literal is not None else _UNRESOLVED
+            if isinstance(box, ast.Call) and isinstance(box.func, ast.Name) \
+                    and box.func.id in ("globals", "locals", "vars") and not box.args:
+                return mod.lookup(literal) if literal is not None else _UNRESOLVED
+            base = None
+            if isinstance(box, ast.Call) and isinstance(box.func, ast.Name) and box.func.id == "vars" \
+                    and len(box.args) == 1:
+                base = self.kind(mod, box.args[0])
+            elif isinstance(box, ast.Attribute) and box.attr == "__dict__":
+                base = self.kind(mod, box.value)
+            if base is not None and base.startswith((_MOD, _FP)):
+                return self._member(base, literal) if literal is not None else _UNRESOLVED
+        return None
+
+    def _from_target(self, mod: _Module, node: ast.ImportFrom) -> Optional[str]:
+        if node.level == 0:
+            return node.module
+        base = mod.package.split(".") if mod.package else []
+        if node.level > 1:
+            base = base[: max(0, len(base) - (node.level - 1))]
+        return ".".join(base + ([node.module] if node.module else [])) or None
+
+    # -- binding (one pass; True when anything changed) -----------------------------------------
+    def _bind(self, mod: _Module) -> bool:
+        changed = False
+
+        def put(name: str, kind: Optional[str]) -> None:
+            nonlocal changed
+            if not _is_ref(kind):
+                return
+            old = mod.bindings.get(name)
+            if old is None or (kind in (_LOADER, _RUNNER) and old not in (_LOADER, _RUNNER)):
+                mod.bindings[name] = kind
+                changed = True
+
+        for node in ast.walk(mod.tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.asname:
+                        put(a.asname, self._module_kind(a.name))
+                    else:
+                        top = a.name.split(".")[0]
+                        put(top, self._module_kind(top))
+            elif isinstance(node, ast.ImportFrom):
+                target = self._from_target(mod, node)
+                for a in node.names:
+                    if a.name != "*":
+                        put(a.asname or a.name, self._member(self._module_kind(target), a.name))
+                    elif target in STAR_LOADERS:
+                        for name in STAR_LOADERS[target]:
+                            put(name, _LOADER)
+                    elif target in self.index:
+                        source = self.index[target]
+                        for name, kind in list(source.bindings.items()):
+                            put(name, kind)
+                        if source.star_unknown and not mod.star_unknown:
+                            mod.star_unknown = changed = True
+                    elif target != "builtins" and not mod.star_unknown:  # builtins' star binds no _names
+                        mod.star_unknown = changed = True
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and node.value is not None \
+                    and not isinstance(_scope_of(mod, node), ast.ClassDef):
+                # A class-body alias is reached as an attribute (C.load, self.load), which the
+                # check does not follow: it is not consumed here, so it fails closed as an escape.
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    for name, value in _alias_pairs(target, node.value):
+                        kind = self.kind(mod, value)
+                        if _is_ref(kind):
+                            put(name, kind)
+                            mod.consumed.add(id(value))
+        return changed
+
+    # -- classification ----------------------------------------------------------------------------
+    @staticmethod
+    def _loader_target(call: ast.Call) -> Optional[ast.expr]:
+        if call.args:
+            return None if isinstance(call.args[0], ast.Starred) else call.args[0]
+        for kw in call.keywords:
+            if kw.arg == "name":
+                return kw.value
+        return None
+
+    def _contained(self, mod: _Module, node: ast.expr, kind: str) -> bool:
+        """A loader, runner or loader-module reference the check has accounted for: called, bound
+        by an alias statement, or (a module) used for an attribute, getattr() or vars()."""
+        if id(node) in mod.consumed:
+            return True
+        parent = mod.parents.get(id(node))
+        if isinstance(parent, ast.Call) and parent.func is node:
+            return True
+        if isinstance(parent, ast.NamedExpr) and parent.value is node:
+            return True
+        if kind.startswith(_MOD):
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                return True
+            if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name) \
+                    and parent.func.id in ("getattr", "hasattr", "vars") and parent.args and parent.args[0] is node:
+                return True
+        if kind == _SYS_MODULES:
+            if isinstance(parent, (ast.Attribute, ast.Subscript)) and parent.value is node:
+                return True
+        return False
+
+    def classify(self, mod: _Module) -> Tuple[List[ImportSite], List[int]]:
+        imports: List[ImportSite] = []
+        dynamic: Set[int] = set()
+        for node in ast.walk(mod.tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    imports.append(ImportSite(a.name.split(".")[0], mod.rel, node.lineno))
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    imports.append(ImportSite(node.module.split(".")[0], mod.rel, node.lineno))
+            if not isinstance(node, ast.expr) or isinstance(getattr(node, "ctx", None), (ast.Store, ast.Del)):
+                continue
+            if isinstance(node, ast.Call):
+                callee = self.kind(mod, node.func)
+                if callee == _LOADER:
+                    target = self._loader_target(node)
+                    if isinstance(target, ast.Constant) and isinstance(target.value, str) and target.value \
+                            and not target.value.startswith("."):
+                        imports.append(ImportSite(target.value.split(".")[0], mod.rel, node.lineno))
+                    else:
+                        dynamic.add(node.lineno)
+                elif callee in (_RUNNER, _UNRESOLVED):
+                    dynamic.add(node.lineno)
+            kind = self.kind(mod, node)
+            if kind == _UNRESOLVED:
+                dynamic.add(node.lineno)
+            elif kind is not None and kind != _SYS and not kind.startswith(_FP) \
+                    and not self._contained(mod, node, kind):
+                dynamic.add(node.lineno)  # a reference that escapes where the check cannot follow it
+        return imports, sorted(dynamic)
 
 
 def scan_source(text: str, rel: str) -> Tuple[List[ImportSite], List[int]]:
-    """Absolute imports (top-level names) and the lines of non-literal dynamic imports in one file.
-    A syntax error propagates: a file the check cannot read is not a pass."""
-    tree = ast.parse(text, filename=rel)
-    imports: List[ImportSite] = []
-    dynamic: List[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(ImportSite(alias.name.split(".")[0], rel, node.lineno))
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module:
-                imports.append(ImportSite(node.module.split(".")[0], rel, node.lineno))
-        elif isinstance(node, ast.Call) and _is_dynamic_import(node.func):
-            target = node.args[0] if node.args else None
-            if isinstance(target, ast.Constant) and isinstance(target.value, str) and target.value and not target.value.startswith("."):
-                imports.append(ImportSite(target.value.split(".")[0], rel, node.lineno))
-            else:
-                dynamic.append(node.lineno)
-    return imports, dynamic
+    """Absolute imports (top-level names, literal dynamic targets included) and the lines of dynamic
+    imports the check cannot resolve, in one file on its own."""
+    analyzer = _Analyzer({rel: text})
+    return analyzer.classify(analyzer.modules[0])
 
 
 def scan_tree(project_root: Path, roots: Sequence[str] = RUNTIME_ROOTS) -> ScanResult:
-    result = ScanResult()
+    sources = {}
     for path in iter_runtime_files(project_root, roots):
-        rel = path.relative_to(project_root).as_posix()
-        imports, dynamic = scan_source(path.read_text(encoding="utf-8"), rel)
+        sources[path.relative_to(project_root).as_posix()] = path.read_text(encoding="utf-8")
+    analyzer = _Analyzer(sources)
+    result = ScanResult()
+    for mod in analyzer.modules:
+        imports, dynamic = analyzer.classify(mod)
         result.imports.extend(imports)
         if dynamic:
-            result.dynamic[rel] = dynamic
+            result.dynamic[mod.rel] = dynamic
     return result
 
 

@@ -280,10 +280,20 @@ _LOADER_CASES = {
         {"scraper/a.py": 'from os.path import *\nimport_module("missing_dep")\nfind_spec(name)\n'},
         [("dynamic", "scraper/a.py", "3"), ("import", "missing_dep", "scraper/a.py:2")],
     ),
+    "an alias in a class body is reached as an attribute: fails closed": (
+        {"scraper/a.py": 'import importlib\nclass C:\n    load = importlib.import_module\nC.load("missing_dep")\n'},
+        [("dynamic", "scraper/a.py", "3")],
+    ),
+    "sys.modules": (
+        {"scraper/a.py": 'import sys\nsys.modules["importlib"].import_module("missing_dep")\n'
+                         "sys.modules[name].import_module(x)\n"},
+        [("dynamic", "scraper/a.py", "3"), ("import", "missing_dep", "scraper/a.py:2")],
+    ),
     "no false positives": (
         {"scraper/a.py": "import importlib\nimport re\nimportlib.reload(re)\nre.compile('x')\n"
                          "getattr(settings, 'X')\ndef load(name):\n    return name\nload('not_an_import')\n"
-                         "import_module = 3\nimportlib.invalidate_caches()\n"},
+                         "import_module = 3\nimportlib.invalidate_caches()\nhasattr(importlib, 'import_module')\n"
+                         "sys.modules.get('x')\n"},
         [],
     ),
 }
