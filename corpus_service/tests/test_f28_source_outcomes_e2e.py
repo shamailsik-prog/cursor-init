@@ -794,7 +794,10 @@ def test_p2_an_ihc_run_with_one_failed_feed_and_one_working_feed_is_partial(corp
     assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 0)], rows
     summary = rows[0].result_summary
     assert summary["outcome"] == "partial", summary
-    assert (summary["discovery_failed"], summary["discovery_errors"]) == (1, {"feed_unparseable": 1}), summary
+    # R30 (re-audit round 2) adds the four seed listings that answer 404 under listing: keys; they
+    # do not count in discovery_failed, which stays the one failed feed (R17).
+    assert (summary["discovery_failed"], summary["discovery_errors"]) == (
+        1, {"feed_unparseable": 1, "listing:http_404": 4}), summary
 
 
 # Bugbot (thread 4305696998): a run's record write fails. The database refuses the closing UPDATE
@@ -904,7 +907,10 @@ def test_copilot_ihc_feed_failures_with_markup_pdfs_found_are_partial_not_failed
     rows = jobs("IslamabadHighCourtPublic")
     assert [(r.status, r.records_extracted) for r in rows] == [("completed", 1)], rows
     summary = rows[0].result_summary
-    assert summary["outcome"] == "partial" and summary["discovery_errors"] == {"http_503": 1}, summary
+    # R30 (re-audit round 2) adds the five seed listings that answer 404 under listing: keys; the
+    # feed failure alone counts in discovery_failed (R17).
+    assert summary["outcome"] == "partial" and summary["discovery_failed"] == 1, summary
+    assert summary["discovery_errors"] == {"http_503": 1, "listing:http_404": 5}, summary
 
 
 def test_copilot_a_failed_embedding_batch_record_keeps_the_counts_of_items_before_the_failure(corpus_db, monkeypatch):
