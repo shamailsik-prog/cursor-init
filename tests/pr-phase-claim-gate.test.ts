@@ -568,6 +568,45 @@ describe("PR phase claim gate hardening", () => {
     })
   })
 
+  describe("Cursor Bugbot's generated summary block is not the author's claim", () => {
+    const FLAGS = ["| Flag | Value |", "| --- | --- |", "| backend_real | true |", "| frontend_real | false |", "| transport_stub | true |"]
+    // The block Bugbot appends to PR bodies; its prose is generated from the diff (PR #72's said "cannot complete").
+    const summary = (prose: string) =>
+      ["<!-- CURSOR_SUMMARY -->", "---", "", "> [!NOTE]", "> **Medium Risk**", `> ${prose}`, "<!-- /CURSOR_SUMMARY -->"].join("\n")
+    const run = (body: string) => {
+      const repo = makeRepo({ "README.md": "base\n" }, { "README.md": "head\n" })
+      return runGate(repo.root, { PR_TITLE: "fix(F28): end failed corpus jobs as failures", PR_BODY: body, BASE_SHA: repo.baseSha, HEAD_SHA: repo.headSha })
+    }
+
+    it("passes when only the bot summary uses the word complete", () => {
+      const body = [...FLAGS, "", "Not a COMPLETE / product-done claim.", "", summary("Corpus work that cannot complete now surfaces as a Celery FAILURE.")].join("\n")
+      const result = run(body)
+      expect(result.stdout).toContain("PASS: PR phase-claim gate.")
+      expect(result.status).toBe(0)
+    })
+
+    it("still fails a COMPLETE claim the author makes outside the bot summary", () => {
+      const body = [...FLAGS, "", "Phase complete.", "", summary("Corpus work that cannot complete now surfaces as a Celery FAILURE.")].join("\n")
+      const result = run(body)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("PR claims COMPLETE/product-done while frontend_real=false.")
+    })
+
+    it("does not count flags declared only inside the bot summary", () => {
+      const inside = ["Body text.", "", "<!-- CURSOR_SUMMARY -->", ...FLAGS, "<!-- /CURSOR_SUMMARY -->"].join("\n")
+      const result = run(inside)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("(missing: backend_real, frontend_real, transport_stub)")
+    })
+
+    it("reads an unterminated summary marker as ordinary text (fails closed)", () => {
+      const body = [...FLAGS, "", "Not a COMPLETE / product-done claim.", "", "<!-- CURSOR_SUMMARY -->", "> Phase complete."].join("\n")
+      const result = run(body)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain("PR claims COMPLETE/product-done while frontend_real=false.")
+    })
+  })
+
   it("passes with required flags and evidence for ops changes", () => {
     const repo = makeRepo(
       {
