@@ -89,3 +89,89 @@ All runs: Python 3.12.3 venv with `corpus_service/requirements-test.txt` (httpx 
 - `tests/test_f25_fetch_policy.py::test_the_transport_checks_requests_that_bypass_the_helper` (a defect in the RED commit): its resolver sent the allowlisted `localhost` to a real public IP, so the request timed out on the internet instead of reaching the check. It now answers loopback. Assertions unchanged.
 
 **Not run:** `npm run test:unit` (no TypeScript touched).
+
+---
+
+## Re-audit round (FAIL 7/10)
+
+**Branch:** `claude/remediate-f25-r2`, from origin/main 04d388f (#65 merged). **Spec:** section 6, rulings R17-R22.
+
+### Task R1: RED for every re-audit finding
+- [x] `tests/test_f25_reaudit.py`:
+  - MEDIUM bombs (stacked, unsupported, single coding at a small cap and at the production cap), each with a tracemalloc peak bound;
+  - trailing and truncated gzip;
+  - a chunked body over the cap; a declared length over the cap;
+  - LOW 4 memory; LOW 3 malformed redirects, through a real court helper;
+  - LOW 5 backend hooks; LOW 7 pdf_writer; LOW 8 upgrade;
+  - mutant killers (M07, M09, M16, M25, M31, M32, M35, M43, M45).
+- [x] `tests/test_f25_fetch_guard.py`: the 20 probe forms plus further bypass forms (positive) and real-code negatives.
+- [x] `tests/test_f25_fetch_boundary_e2e.py`: `except ImportError` (LOW 6).
+- [x] Commit 6a23472 (RED), pushed.
+
+### Task R2: GREEN
+- [x] `fetch_policy.py`:
+  - `_BoundedDecoder`, raw reads, the coding policy and forced `Accept-Encoding: gzip` (R17);
+  - `_hold_location` and conversion of httpx URL errors (R18);
+  - a single-copy body and lazy `text` (R19);
+  - gated backend hooks (R20);
+  - read-only `SOURCE_POLICIES` (R21);
+  - `upgrade_http` (R22).
+- [x] Guard scanner rewrite (R21); `pdf_writer` escaping (LOW 7).
+- [x] Commit 5a9d4ea, pushed. Then 834d453 (RED) and d434a9e (GREEN): the guard also refuses `exec`/`eval`/`compile`, `sys.modules`, `__builtins__`, ctypes and cffi. Then 7cc0cc2: tests for the three round-2 mutants that survived the first mutation run.
+
+### Task R3: verification and docs
+- [x] Full suite, G-0, gitleaks, the auditor's bomb cases and probe file, the mutation re-run.
+- [x] Spec section 6, this ledger, the PR body, the claim gate.
+
+### Round-2 ledger
+
+All runs as above (private PG16 + pgvector at 127.0.0.1:55441, Annex A applied, `CI=1`, proxies unset).
+
+| Command (`python -m pytest … -q`) | RED (main 04d388f code) | GREEN |
+|---|---|---|
+| `corpus_service/tests/test_f25_reaudit.py` | 92 failed, 13 passed (the 13 are the mutant killers, which pass on correct code by design) | 105 passed at 5a9d4ea; 111 passed at 7cc0cc2 (6 mutant killers added) |
+| `corpus_service/tests/test_f25_fetch_guard.py` | 38 failed, 43 passed (the PR #65 scanner catches only the probe's p18 control); then 7 failed, 82 passed for the exec/eval/ctypes controls (834d453) | 89 passed (d434a9e) |
+| `corpus_service/tests/test_f25_fetch_policy.py` | 139 passed (one changed expectation, R18) | 139 passed |
+| `corpus_service/tests/test_f25_fetch_boundary_e2e.py` | the pre-F25 tree with a leftover `scraper/net/__pycache__`: main's fallback is a collection `ImportError`; the new one reaches the RED assertion (the internal service reached) | 1 passed |
+| `corpus_service/tests/test_f20_harvesters_db.py` | 3 passed | 3 passed |
+| `corpus_service/tests` (full suite) | 393 passed | 561 passed, 3 warnings, 131 subtests (7cc0cc2) |
+
+**Memory, measured.**
+
+| Case | Main 04d388f | This branch |
+|---|---|---|
+| stacked bomb (< 8 KB), tracemalloc peak | 557.7 MiB | 1.8 MiB |
+| single gzip bomb, 2 MiB cap | 45.5 MiB | 2.5 MiB |
+| gzip of 256 MiB, production cap (100 MiB) | 142 MiB | 104.4 MiB |
+| 24 MiB in-cap body | 48.2 MiB | 26.6 MiB |
+
+The auditor's `bomb_case.py` (process RSS), against this branch:
+
+| Case | Re-audit (main) | This branch |
+|---|---|---|
+| stacked `gzip, gzip` / `gzip, gzip, gzip` / `deflate, deflate`, `br` | about 2,093 MiB | refused before decoding, about 45 MiB |
+| gzip aimed at 1 GiB / 3 GiB | MemoryError at 3 GiB | refused at the cap, 146 / 148 MiB |
+| 99 MiB in-cap body | about 477 MiB | about 102 MiB for the fetch (242 MiB peak, 140 MiB before it) |
+| gztrail, endless chunked | — | refused (`content_encoding_refused`; `too_large` on the wire) |
+
+**Mutation re-run** (scratch exports, never the worktree; the F25 files and F20 as the suite; helper `f25r2-mutate.py` reads the re-audit's `mutate.py` without editing it):
+- **The re-audit's 47:** 43 killed (the re-audit: 34). M06, M14, M17 and M30 survive and are equivalent (spec section 6).
+- **17 new mutants (N01–N17):** all killed. N04 (data after the stream end), N08 (httpx URL errors not converted) and N15 (wire cap off) survived the first run against 5a9d4ea and are killed against 7cc0cc2.
+- **Killed now, having survived the re-audit:** M07, M09, M16, M25, M31, M32, M35, M43, M45.
+- **G-0** static: PASSED. **gitleaks 8.30.1** on `origin/main..HEAD`: no leaks. **Claim gate:** PASS (see the PR body).
+
+**Review round (Codex P2 + Copilot ×3), spec section 6:**
+
+| Thread | RED | GREEN | Fix |
+|---|---|---|---|
+| Codex 4305386005 and Copilot 4305395619 | 245a08e: 5 failed | 84b5ddb | raw deflate decided on its first two bytes, prefix replayed |
+| Copilot 4305395602 | 9a13709: 12 failed | fcee71a | hooks gated by identity; `upgrade_http` must be a bool |
+| Copilot 4305395582 | 9a13709: 10 failed | 9331dba | the guard checks calls in annotations, defaults and string annotations |
+| (merge with main 9ee7854: F24's `anyio.move_on_after`) | a827f88: 2 failed | 647398d | anyio allowed; its network and process APIs banned by name |
+| (load-independent declared-length test) | n/a | f9c9de6 | M32 re-checked: killed |
+
+At 9331dba: `test_f25_reaudit.py` 150 passed, `test_f25_fetch_guard.py` 105, `test_f25_fetch_policy.py` 139, e2e 1, F20 3; full suite 616 passed, 3 warnings; G-0 PASSED.
+- **Final counts:**
+  - **f9c9de6:** full suite 627 passed (3 warnings, 131 subtests).
+  - **This branch merged with origin/main 9ee7854 (F24, #64):** 793 passed (3 warnings, 157 subtests). That run is on a full-tree export of the merge, since the golden-citation tests read `tests/fixtures/corpus/` at the repo root.
+

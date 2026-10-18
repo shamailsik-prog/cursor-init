@@ -402,8 +402,8 @@ def test_post_is_never_redirected(servers):
 
 
 def test_the_transport_checks_requests_that_bypass_the_helper(servers):
-    """A caller using the underlying client directly (follow_redirects on, even) is still checked on
-    every request that reaches the transport, before any DNS lookup. (The resolver answers
+    """A caller using the underlying client directly is still checked on every request that reaches
+    the transport, before any DNS lookup, and cannot make httpx follow a redirect. (The resolver answers
     loopback, so the allowlisted source origin is reachable through the loopback hook and the
     redirect is what gets checked; nothing here may dial a real address.)"""
     resolver = _resolver(["127.0.0.1"])
@@ -415,7 +415,12 @@ def test_the_transport_checks_requests_that_bypass_the_helper(servers):
 
     assert _refusal(direct("https://evil.example/x")).reason == fp.HOST_NOT_ALLOWED
     assert resolver.calls == []
-    assert _refusal(direct(f"{servers.origin}/r", follow_redirects=True)).reason == fp.SCHEME
+    # Re-audit round (R18): the boundary holds every redirect Location back from httpx, so httpx
+    # cannot follow one even when a caller asks it to; the 302 comes back unfollowed ...
+    response = asyncio.run(direct(f"{servers.origin}/r", follow_redirects=True))
+    assert response.status_code == 302 and "location" not in response.headers
+    # ... and the hop's URL, sent directly, is refused by the transport before any lookup.
+    assert _refusal(direct(f"http://127.0.0.1:{servers.internal.port}/x")).reason == fp.SCHEME
     assert servers.internal.connections == 0
 
 

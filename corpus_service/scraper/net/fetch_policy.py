@@ -1,6 +1,7 @@
 """Audit F25: the one fetch boundary for every corpus source.
 
-Spec: docs/superpowers/specs/2026-10-18-f25-corpus-fetch-boundary-design.md (rulings R1-R14).
+Spec: docs/superpowers/specs/2026-10-18-f25-corpus-fetch-boundary-design.md (rulings R1-R15, and
+R17-R22 from the re-audit round).
 
 Source pages are external input. A link on a page is a request the page asks us to make, so no
 connector may fetch it on its own judgement. Every outbound request a corpus source makes goes
@@ -11,10 +12,12 @@ Enforcement is layered (R2):
 
 1. ``PolicyFetcher.get`` / ``post`` check the URL against the source's ``FetchPolicy`` before
    sending, follow at most ``MAX_REDIRECTS`` redirects themselves (each hop re-checked, an
-   https -> http hop refused as a downgrade), re-check the final origin, and bound the body size
-   and the total time. A refusal is logged once and raised as ``FetchRefused``.
+   https -> http hop refused as a downgrade, a malformed ``Location`` refused), re-check the final
+   origin, and bound the body (R17) and the total time. A refusal is logged once and raised as
+   ``FetchRefused``; httpx's own URL errors inside the boundary become refusals too (R18).
 2. ``_GuardedTransport`` re-checks every request URL that reaches the wire, so a caller that uses
-   the underlying client directly (even with ``follow_redirects=True``) is still checked.
+   the underlying client directly is still checked. A response hook holds every redirect
+   ``Location`` back from httpx, so httpx itself never builds or follows a redirect.
 3. ``_GuardedBackend`` resolves the hostname itself, refuses unless every resolved address is
    public, and connects to the vetted IP address, never to the name. There is no window for DNS
    rebinding between the check and the connect. TLS still verifies the certificate and SNI against
@@ -32,21 +35,31 @@ does not depend on the Python patch version; IPv6 must also be inside 2000::/3.
 The environment is ignored (R9): no proxy, no .netrc, no SSL_CERT_FILE; certificates verify
 against certifi.
 
-Test-only hooks (R11) are keyword arguments of ``PolicyFetcher`` that start with ``_test_``. The
-production factories ``fetcher_for`` and ``sync_fetcher_for`` accept none of them, no setting turns
-them on, and the constructor refuses them unless ENVIRONMENT is explicitly ``development``.
+Bodies (R17): only identity or a single gzip/deflate content coding is accepted, and the boundary
+inflates it itself in bounded steps (``zlib.decompressobj(...).decompress(chunk, max_length)``);
+stacked, brotli, zstd and unknown codings are refused before any decoding. Both the bytes on the
+wire and the decoded bytes are capped at ``max_bytes``. The body is held once; ``text`` is decoded
+only when a caller asks for it (R19). ``Accept-Encoding: gzip`` is sent on every request.
+
+Test-only hooks (R11, R20) are keyword arguments of ``PolicyFetcher`` that start with ``_test_``,
+and ``_GuardedBackend``'s ``resolver`` / ``loopback_origins`` / ``inner``. The production factories
+``fetcher_for`` and ``sync_fetcher_for`` accept none of them, no setting turns them on, and both
+constructors refuse them unless ENVIRONMENT is explicitly ``development``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import ipaddress
 import logging
 import os
 import re
 import socket
 import ssl
+import types
 import typing
+import zlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -75,6 +88,7 @@ UNIX_SOCKET = "unix_socket"
 TOO_MANY_REDIRECTS = "too_many_redirects"
 TOO_LARGE = "too_large"
 DEADLINE = "deadline_exceeded"
+CONTENT_ENCODING = "content_encoding_refused"
 
 # ---------------------------------------------------------------------------------------------
 # Bounds (R7, R8)
@@ -86,6 +100,10 @@ DEADLINE_SECONDS = 300.0  # one fetch, redirects and body included
 TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=30.0)
 _LOG_URL_LIMIT = 2048
+ACCEPT_ENCODING = "gzip"  # the only coding advertised (R17); identity and a lone deflate are accepted too
+_DECODE_STEP = 64 * 1024  # most bytes one inflate step may produce
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+_HELD_LOCATION = "f25.held_location"  # response extension holding the Location httpx never sees
 
 
 # ---------------------------------------------------------------------------------------------
@@ -171,12 +189,17 @@ def _effective_port(port: int | None) -> int:
 class FetchPolicy:
     """What one source may fetch: exact hostnames, dot-anchored suffixes (``.lhc.gov.pk`` admits
     ``sys.lhc.gov.pk``, never ``evillhc.gov.pk``) and ports. Reviewed configuration in code, never
-    page content or the database (R4)."""
+    page content or the database (R4).
+
+    ``upgrade_http`` (R22): a plain-http link to an allowlisted host on the default port is fetched
+    as https on 443 by ``PolicyFetcher``. ``check_url`` and ``allows`` here stay strict (https only);
+    the upgrade is a rewrite before that check, never a plaintext fetch."""
 
     name: str
     hosts: frozenset
     host_suffixes: tuple = ()
     ports: frozenset = frozenset({DEFAULT_PORT})
+    upgrade_http: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hosts", frozenset(h.lower() for h in self.hosts))
@@ -184,6 +207,8 @@ class FetchPolicy:
         object.__setattr__(self, "ports", frozenset(int(p) for p in self.ports))
         if any(not s.startswith(".") for s in self.host_suffixes):
             raise ValueError(f"{self.name}: host suffixes must be dot-anchored, got {self.host_suffixes}")
+        if not isinstance(self.upgrade_http, bool):  # a switch, never a truthy object (Copilot review)
+            raise TypeError(f"{self.name}: upgrade_http must be True or False, got {self.upgrade_http!r}")
 
     def host_allowed(self, host: str) -> bool:
         host = host.lower()
@@ -235,6 +260,20 @@ class FetchPolicy:
         if _effective_port(parsed.port) not in self.ports:
             raise self._refuse(PORT_NOT_ALLOWED, raw)
         return parsed.copy_with(fragment=None)
+
+    def https_upgrade(self, url: typing.Any) -> str | None:
+        """The https form of a plain-http ``url`` on the default port, if this policy upgrades;
+        otherwise None. Only the scheme changes (and an explicit :80 goes); the result still has to
+        pass ``check_url``."""
+        if not self.upgrade_http:
+            return None
+        try:
+            parsed = httpx.URL(str(url))
+        except Exception:
+            return None
+        if parsed.scheme != "http" or parsed.port not in (None, 80):
+            return None
+        return str(parsed.copy_with(scheme="https", port=None))
 
     def allows(self, url: typing.Any) -> bool:
         """Pure check (no logging); ``PolicyFetcher.allows`` is the logged form."""
@@ -291,18 +330,21 @@ _GLOBAL_UNICAST_V6 = ipaddress.ip_network("2000::/3")
 AddressLike = typing.Union[str, ipaddress.IPv4Address, ipaddress.IPv6Address]
 
 
+def _listed_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Blocked by the explicit lists alone (and, for IPv6, a scope or anything outside 2000::/3),
+    whatever this Python's ``is_global`` says."""
+    if ip.version == 6:
+        return bool(ip.scope_id) or ip not in _GLOBAL_UNICAST_V6 or any(ip in n for n in _BLOCKED_V6)
+    return any(ip in n for n in _BLOCKED_V4)
+
+
 def is_public_address(address: AddressLike) -> bool:
     """True only for a globally routable unicast address outside every blocked range."""
     try:
         ip = address if isinstance(address, (ipaddress.IPv4Address, ipaddress.IPv6Address)) else ipaddress.ip_address(str(address))
     except ValueError:
         return False
-    if ip.version == 6:
-        if ip.scope_id or ip not in _GLOBAL_UNICAST_V6 or any(ip in n for n in _BLOCKED_V6):
-            return False
-    elif any(ip in n for n in _BLOCKED_V4):
-        return False
-    return bool(ip.is_global)
+    return not _listed_non_public(ip) and bool(ip.is_global)
 
 
 def _is_loopback(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -330,19 +372,32 @@ class _GuardedBackend(httpcore.AsyncNetworkBackend):
     closed: a name that mixes public and private records is suspect), then connects to the vetted
     addresses in turn. The socket goes to the address that was checked, so a rebinding name cannot
     swap it. ``loopback_origins`` (tests only, R11) admits a loopback address for those exact
-    (host, port) origins and nothing else."""
+    (host, port) origins and nothing else.
+
+    ``resolver``, ``loopback_origins`` and ``inner`` are test hooks: refused outside
+    ENVIRONMENT=development, exactly like ``PolicyFetcher``'s ``_test_*`` arguments (R20)."""
 
     def __init__(
         self,
         policy_name: str,
         *,
         resolver: Resolver | None = None,
-        loopback_origins: typing.AbstractSet = frozenset(),
+        loopback_origins: typing.Iterable | None = None,
         inner: httpcore.AsyncNetworkBackend | None = None,
     ):
+        # Identity, never truthiness (Copilot review): a hook object whose __bool__ is False is still
+        # a hook, and the origins are materialised once, so what is gated is what gets installed.
+        origins = tuple(loopback_origins) if loopback_origins is not None else ()
+        hooks = [
+            name
+            for name, present in (("resolver", resolver is not None), ("loopback_origins", len(origins) > 0), ("inner", inner is not None))
+            if present
+        ]
+        if hooks and not _hooks_permitted():
+            raise RuntimeError(f"F25: test-only backend hooks {hooks} are refused outside ENVIRONMENT=development")
         self._policy_name = policy_name
-        self._resolver = resolver or _system_resolve
-        self._loopback = frozenset((str(h).lower(), int(p)) for h, p in loopback_origins)
+        self._resolver = resolver if resolver is not None else _system_resolve
+        self._loopback = frozenset((str(h).lower(), int(p)) for h, p in origins)
         self._inner = inner if inner is not None else httpcore.AnyIOBackend()
 
     def _refuse(self, reason: str, detail: str) -> FetchRefused:
@@ -419,23 +474,131 @@ class _GuardedTransport(httpx.AsyncHTTPTransport):
 # ---------------------------------------------------------------------------------------------
 # The fetcher connectors use
 # ---------------------------------------------------------------------------------------------
-@dataclass(frozen=True)
 class FetchedResponse:
-    """A fully read, size-bounded response. ``url`` is the final URL (after any redirects)."""
+    """A fully read, size-bounded response. ``url`` is the final URL (after any redirects).
 
-    url: str
-    status_code: int
-    headers: httpx.Headers
-    content: bytes
-    text: str
+    The body is held once, as ``content`` (R19). ``text`` decodes it on each access and keeps no
+    copy, so a PDF fetch never pays for a text copy of its bytes."""
+
+    __slots__ = ("url", "status_code", "headers", "content", "encoding")
+
+    def __init__(self, url: str, status_code: int, headers: httpx.Headers, content: bytes, encoding: str = "utf-8"):
+        self.url = url
+        self.status_code = status_code
+        self.headers = headers
+        self.content = content
+        self.encoding = encoding
+
+    @property
+    def text(self) -> str:
+        try:
+            return self.content.decode(self.encoding, errors="replace")
+        except LookupError:
+            return self.content.decode("utf-8", errors="replace")
+
+    def __repr__(self) -> str:
+        return f"FetchedResponse(url={self.url!r}, status_code={self.status_code}, bytes={len(self.content)})"
 
 
-def _decode(response: httpx.Response, content: bytes) -> str:
-    encoding = response.charset_encoding or "utf-8"
-    try:
-        return content.decode(encoding, errors="replace")
-    except LookupError:
-        return content.decode("utf-8", errors="replace")
+def _content_coding(headers: httpx.Headers) -> tuple[str | None, str]:
+    """(coding, detail): coding is "identity", "gzip" or "deflate", or None (refused) with why."""
+    codings = [c.strip().lower() for c in headers.get_list("Content-Encoding", split_commas=True)]
+    codings = [c for c in codings if c and c != "identity"]
+    if not codings:
+        return "identity", ""
+    if len(codings) > 1:
+        return None, f"stacked content codings {', '.join(codings)}"
+    if codings[0] in ("gzip", "x-gzip"):
+        return "gzip", ""
+    if codings[0] == "deflate":
+        return "deflate", ""
+    return None, f"unsupported content coding {codings[0][:40]!r}"
+
+
+_ZLIB_HEADER_BYTES = 2
+
+
+def _is_zlib_header(head: bytes) -> bool:
+    """The RFC 1950 header test zlib's inflate applies to the first two bytes: compression method
+    8 (deflate), window bits <= 15 (CINFO <= 7), and (CMF * 256 + FLG) % 31 == 0."""
+    cmf, flg = head[0], head[1]
+    return (cmf & 0x0F) == 8 and (cmf >> 4) <= 7 and ((cmf << 8) | flg) % 31 == 0
+
+
+class _BoundedDecoder:
+    """Turns raw body chunks into the body, never holding more than ``limit`` decoded bytes (R17).
+
+    identity: chunks are kept as they come. gzip / deflate: ``zlib.decompressobj`` inflates each
+    chunk in steps of at most ``_DECODE_STEP`` bytes (``decompress(data, max_length)`` plus
+    ``unconsumed_tail``), so a 1 KB bomb can never expand past the cap in one call. Data after the
+    end of the compressed stream, and a stream that never ends, are refused.
+
+    deflate is the zlib format; a raw deflate stream (no zlib header) is accepted too, as httpx
+    does. Which one it is gets decided on the first two bytes, with zlib's own header test, before
+    anything is inflated: until two bytes have arrived, the (at most one byte) prefix is held and
+    then replayed into the chosen decoder. So the decision never depends on how the server split
+    its chunks (Codex P2 on #67: a one-byte first chunk used to lock in the zlib decoder)."""
+
+    def __init__(self, coding: str, limit: int, refuse: typing.Callable[[str, str], FetchRefused]):
+        self._coding = coding
+        self._limit = limit
+        self._refuse = refuse
+        self._out = io.BytesIO()
+        self.size = 0
+        self._identity = coding == "identity"
+        self._prefix = b"" if coding == "deflate" else None  # deflate only: format not yet decided
+        self._z = zlib.decompressobj(16 + zlib.MAX_WBITS) if coding == "gzip" else None
+
+    def _emit(self, data: bytes) -> None:
+        if self.size + len(data) > self._limit:
+            raise self._refuse(TOO_LARGE, f"decoded body over {self._limit} bytes")
+        self.size += len(data)
+        self._out.write(data)
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        if self._identity:
+            self._emit(chunk)
+            return
+        if self._prefix is not None:
+            data = self._prefix + chunk
+            if len(data) < _ZLIB_HEADER_BYTES:
+                self._prefix = data  # never more than one byte
+                return
+            self._prefix = None
+            self._z = zlib.decompressobj(zlib.MAX_WBITS if _is_zlib_header(data) else -zlib.MAX_WBITS)
+            self._inflate(data)
+            return
+        if self._z.eof:
+            raise self._refuse(CONTENT_ENCODING, f"data after the end of the {self._coding} stream")
+        self._inflate(chunk)
+
+    def _inflate(self, data: bytes) -> None:
+        while True:
+            try:
+                piece = self._z.decompress(data, _DECODE_STEP)
+            except zlib.error as exc:
+                raise self._refuse(CONTENT_ENCODING, f"corrupt {self._coding} stream: {exc}") from None
+            if piece:
+                self._emit(piece)
+            if self._z.eof:
+                if self._z.unused_data or self._z.unconsumed_tail:
+                    raise self._refuse(CONTENT_ENCODING, f"data after the end of the {self._coding} stream")
+                return
+            data = self._z.unconsumed_tail
+            if not data and len(piece) < _DECODE_STEP:
+                return
+
+    def finish(self) -> bytes:
+        if not self._identity:
+            if self._prefix is not None:  # a deflate body shorter than any deflate stream
+                raise self._refuse(CONTENT_ENCODING, f"truncated {self._coding} stream")
+            if not self._z.eof:
+                self._inflate(b"")  # pending output, still in bounded steps
+            if not self._z.eof:
+                raise self._refuse(CONTENT_ENCODING, f"truncated {self._coding} stream")
+        return self._out.getvalue()  # no copy: the buffer is handed over
 
 
 def _hooks_permitted() -> bool:
@@ -449,6 +612,30 @@ def _hooks_permitted() -> bool:
 
 def _verified_ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
+
+
+def _with_accept_encoding(headers: typing.Mapping[str, str] | None) -> httpx.Headers:
+    """``headers`` with Accept-Encoding forced to ``ACCEPT_ENCODING``: no caller re-opens br/zstd."""
+    merged = httpx.Headers(headers or {})
+    if "accept-encoding" in merged:
+        del merged["accept-encoding"]
+    merged["Accept-Encoding"] = ACCEPT_ENCODING
+    return merged
+
+
+async def _hold_location(response: httpx.Response) -> None:
+    """Response hook: move a redirect's ``Location`` out of the headers before httpx sees it.
+
+    httpx builds a ``next_request`` for every redirect response even with follow_redirects off, and
+    a malformed Location (``https:127.0.0.1:1/x``) makes that raise ``httpx.InvalidURL`` inside
+    ``send`` (re-audit LOW 3). With the header held back httpx never interprets it; the boundary
+    resolves and checks it itself, and restores it on a 3xx it returns."""
+    if response.status_code in _REDIRECT_CODES and "location" in response.headers:
+        response.extensions[_HELD_LOCATION] = response.headers.get_list("location")
+        del response.headers["location"]
+
+
+_SCHEME_WITHOUT_AUTHORITY = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:(?!//)")
 
 
 class PolicyFetcher:
@@ -482,16 +669,15 @@ class PolicyFetcher:
         self.deadline = float(deadline)
         self.max_redirects = int(max_redirects)
         ssl_context = _test_ssl_context if _test_ssl_context is not None else _verified_ssl_context()
-        backend = _GuardedBackend(
-            policy.name, resolver=_test_resolver, loopback_origins=frozenset(_test_loopback_origins or ())
-        )
+        backend = _GuardedBackend(policy.name, resolver=_test_resolver, loopback_origins=_test_loopback_origins)
         self._transport = _GuardedTransport(policy, ssl_context=ssl_context, backend=backend)
         self._client = httpx.AsyncClient(
             transport=self._transport,
-            headers=headers,
+            headers=_with_accept_encoding(headers),
             timeout=TIMEOUT,
             follow_redirects=False,
             trust_env=False,
+            event_hooks={"response": [_hold_location]},
         )
 
     async def __aenter__(self) -> "PolicyFetcher":
@@ -510,10 +696,24 @@ class PolicyFetcher:
             "F25 fetch boundary refused %s (%s) under policy %s", exc.url or "<unknown url>", what, exc.policy or self.policy.name
         )
 
-    def allows(self, url: typing.Any) -> bool:
-        """Whether ``url`` passes the URL policy. A refusal is logged; nothing is requested."""
+    def _admit(self, url: typing.Any) -> httpx.URL:
+        """The URL to request for a link: ``check_url``, after the policy's http->https upgrade
+        (R22) when the link is plain http. A link that fails either way is refused as written."""
         try:
-            self.policy.check_url(url)
+            return self.policy.check_url(url)
+        except FetchRefused as exc:
+            upgraded = self.policy.https_upgrade(url) if exc.reason == SCHEME else None
+            if upgraded is None:
+                raise
+            try:
+                return self.policy.check_url(upgraded)
+            except FetchRefused:
+                raise exc from None
+
+    def allows(self, url: typing.Any) -> bool:
+        """Whether ``url`` would be requested. A refusal is logged; nothing is requested."""
+        try:
+            self._admit(url)
         except FetchRefused as exc:
             self._log(exc)
             return False
@@ -538,6 +738,11 @@ class PolicyFetcher:
                 exc.url = redact_url(url)
             self._log(exc)
             raise
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol, httpx.TooManyRedirects) as error:
+            # httpx's own URL handling inside the boundary: a refusal, never retried (R18).
+            exc = FetchRefused(UNPARSEABLE, url, self.policy.name, f"{type(error).__name__}: {error}")
+            self._log(exc)
+            raise exc from None
         except TimeoutError:
             if not timer.expired():
                 raise
@@ -546,6 +751,7 @@ class PolicyFetcher:
             raise exc from None
 
     async def _send(self, method: str, url: httpx.URL, **kwargs) -> httpx.Response:
+        kwargs["headers"] = _with_accept_encoding(kwargs.get("headers"))
         request = self._client.build_request(method, url, **kwargs)
         try:
             return await self._client.send(request, stream=True)
@@ -554,53 +760,84 @@ class PolicyFetcher:
                 exc.url = redact_url(url)
             raise
 
+    def _redirect_target(self, current: httpx.URL, locations: list) -> httpx.URL:
+        """The next hop, from the held ``Location`` values, refusing anything parsers disagree on."""
+        if len(locations) != 1:
+            raise FetchRefused(AMBIGUOUS, current, self.policy.name, f"{len(locations)} Location headers")
+        location = locations[0]
+        if (
+            location != location.strip()
+            or "\\" in location
+            or not location.isprintable()
+            or _SCHEME_WITHOUT_AUTHORITY.match(location)
+        ):
+            # e.g. "https:127.0.0.1:1/x" (httpx joins it onto this origin, its own redirect builder
+            # reads a host) or "/\\host/x" (a browser reads "\\" as "/"): refused, not interpreted.
+            raise FetchRefused(AMBIGUOUS, location, self.policy.name, f"redirect from {current}")
+        try:
+            return current.join(location)
+        except Exception as exc:  # httpx.InvalidURL
+            raise FetchRefused(UNPARSEABLE, location, self.policy.name, f"redirect from {current}: {exc}") from None
+
     async def _get(self, url: typing.Any, headers) -> FetchedResponse:
-        current = self.policy.check_url(url)
+        current = self._admit(url)
         hops = 0
         while True:
             response = await self._send("GET", current, headers=headers)
-            if not response.has_redirect_location:
+            locations = response.extensions.get(_HELD_LOCATION)
+            if locations is None:
                 return await self._finish(response)
-            location = response.headers.get("Location", "")
             await response.aclose()
-            try:
-                target = current.join(location)
-            except Exception as exc:  # httpx.InvalidURL
-                raise FetchRefused(UNPARSEABLE, location, self.policy.name, f"redirect from {current}: {exc}") from None
+            target = self._redirect_target(current, locations)
             if hops >= self.max_redirects:
                 raise FetchRefused(TOO_MANY_REDIRECTS, target, self.policy.name, f"more than {self.max_redirects} redirects")
             current = self.policy.check_url(str(target), previous=current)
             hops += 1
 
     async def _post(self, url: typing.Any, json: typing.Any, headers) -> FetchedResponse:
-        target = self.policy.check_url(url)
+        target = self._admit(url)
         return await self._finish(await self._send("POST", target, json=json, headers=headers))
 
     async def _finish(self, response: httpx.Response) -> FetchedResponse:
         try:
-            content = await self._read_capped(response)
+            content = await self._read_body(response)
         finally:
             await response.aclose()
         final = self.policy.check_url(str(response.url))  # the final origin, once more
+        headers = response.headers
+        held = response.extensions.get(_HELD_LOCATION)
+        if held:  # a 3xx returned as is (a POST): give the caller the header the server sent
+            headers["Location"] = ", ".join(held)
         return FetchedResponse(
             url=str(final),
             status_code=response.status_code,
-            headers=response.headers,
+            headers=headers,
             content=content,
-            text=_decode(response, content),
+            encoding=response.charset_encoding or "utf-8",
         )
 
-    async def _read_capped(self, response: httpx.Response) -> bytes:
+    async def _read_body(self, response: httpx.Response) -> bytes:
+        """The body, decoded by ``_BoundedDecoder``, reading raw bytes (httpx decodes nothing).
+        Refused: an unsupported or stacked coding, a declared or actual size over ``max_bytes`` on
+        the wire, or a decoded size over ``max_bytes``."""
+
+        def refuse(reason: str, detail: str) -> FetchRefused:
+            return FetchRefused(reason, response.url, self.policy.name, detail)
+
+        coding, why = _content_coding(response.headers)
+        if coding is None:
+            raise refuse(CONTENT_ENCODING, why)
         declared = response.headers.get("Content-Length", "")
         if declared.isdigit() and int(declared) > self.max_bytes:
-            raise FetchRefused(TOO_LARGE, response.url, self.policy.name, f"Content-Length {declared} > {self.max_bytes}")
-        chunks, total = [], 0
-        async for chunk in response.aiter_bytes():  # decoded bytes: a gzip bomb counts by output
-            total += len(chunk)
-            if total > self.max_bytes:
-                raise FetchRefused(TOO_LARGE, response.url, self.policy.name, f"body over {self.max_bytes} bytes")
-            chunks.append(chunk)
-        return b"".join(chunks)
+            raise refuse(TOO_LARGE, f"Content-Length {declared} > {self.max_bytes}")
+        decoder = _BoundedDecoder(coding, self.max_bytes, refuse)
+        received = 0
+        async for chunk in response.aiter_raw():
+            received += len(chunk)
+            if received > self.max_bytes:
+                raise refuse(TOO_LARGE, f"body over {self.max_bytes} bytes on the wire")
+            decoder.feed(chunk)
+        return decoder.finish()
 
 
 class SyncPolicyFetcher:
@@ -650,10 +887,12 @@ class SyncPolicyFetcher:
 # The source registry (R4): one policy per connector, hostnames on 443 only
 # ---------------------------------------------------------------------------------------------
 def _policy(name: str, hosts: typing.Iterable[str], suffixes: typing.Iterable[str] = ()) -> FetchPolicy:
-    return FetchPolicy(name=name, hosts=frozenset(hosts), host_suffixes=tuple(suffixes))
+    # upgrade_http (R22): an http link to one of these hosts on the default port is fetched as https.
+    return FetchPolicy(name=name, hosts=frozenset(hosts), host_suffixes=tuple(suffixes), upgrade_http=True)
 
 
-SOURCE_POLICIES: typing.Dict[str, FetchPolicy] = {
+# Read-only (R21): no module can add or widen a policy at run time.
+SOURCE_POLICIES: typing.Mapping[str, FetchPolicy] = types.MappingProxyType({
     p.name: p
     for p in (
         _policy("NasirLawSite", {"www.nasirlawsite.com", "nasirlawsite.com"}),
@@ -671,7 +910,7 @@ SOURCE_POLICIES: typing.Dict[str, FetchPolicy] = {
         _policy("BalochistanHighCourt", {"bhc.gov.pk", "www.bhc.gov.pk", "portal.bhc.gov.pk"}),
         _policy("IslamabadHighCourt", {"ihc.gov.pk", "www.ihc.gov.pk", "mis.ihc.gov.pk", "www.mis.ihc.gov.pk"}),
     )
-}
+})
 
 
 def policy_for(name: str) -> FetchPolicy:

@@ -35,7 +35,9 @@ from test_f20_trust_policy_db import assert_migrated, fetch, run
 
 try:  # the F25 boundary; absent on a pre-F25 tree (see the module docstring)
     from scraper.net import fetch_policy
-except ModuleNotFoundError:  # pragma: no cover - only on the RED run against main
+except ImportError:  # pragma: no cover - only on the RED run against a pre-F25 tree
+    # ImportError, not only ModuleNotFoundError: a leftover scraper/net/ directory (say, only a
+    # __pycache__) is a namespace package, and "cannot import name 'fetch_policy'" is an ImportError.
     fetch_policy = None
 
 CASE_TEXT = "Synthetic F25 fixture judgment {n}. 2099 SCMR {n}01. Not a real judgment."
