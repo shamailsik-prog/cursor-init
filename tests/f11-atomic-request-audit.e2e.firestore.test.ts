@@ -408,6 +408,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F11: a crashed request's committed
   afterAll(async () => {
     // The reconciler's backlog state (spec ruling 9), written by the runs above.
     await instanceB().collection("platform").doc("auditOutboxBacklog").delete()
+    await instanceB().collection("platform").doc("auditOutboxSweepCursor").delete()
     if (appB && getApps().includes(appB)) await deleteApp(appB)
   })
 
@@ -530,6 +531,38 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F11: a crashed request's committed
     expect(entities).toHaveLength(1)
     expect(named).toHaveLength(1)
     expect(named[0]?.operationId).toBe(after.committed)
+    expect(await rowsWhere(db, "audit_outbox", firmId)).toEqual([])
+  })
+
+  it("review round 1 (P1): a later write fails after the entity commits: the entity keeps its outbox entry and gets exactly one audit row", async () => {
+    const firmId = await provisionFirm()
+    const partner = await provisionUser(firmId)
+    const body = clientBody(partner)
+    // The entity commits; the database then refuses the search-index commit. The route answers its catch-all 400 and
+    // never pushes `client_create`; the request's flush has no row to fail on.
+    instanceDies(adminDb(), { before: (paths) => (paths.some((p) => p.startsWith("matter_client_search_index/")) ? "refuse" : undefined) })
+    const answer = await send(partner, body, randomUUID())
+    restoreFirestore()
+    const db = adminDb()
+    const entities = await entitiesNamed(db, firmId, body.canonicalName)
+    expect(entities).toHaveLength(1)
+    expect([answer.status, answer.json.code]).toEqual([400, "REQUEST_FAILED"])
+    const entityPath = `entities/${entities[0]!.id}`
+    const staged = await rowsWhere(db, "audit_outbox", firmId)
+    const auditBefore = naming(await rowsWhere(db, "audit_log", firmId), entityPath)
+
+    await recoverAfterGrace(db)
+    const rows = await rowsWhere(db, "audit_log", firmId)
+    evidence("later-write-fails", {
+      status: answer.status,
+      entities: entities.length,
+      stagedEntriesAfterResponse: staged.length,
+      auditRowsNamingEntityBeforeRecovery: auditBefore.length,
+      auditRowsNamingEntityAfterRecovery: naming(rows, entityPath).length,
+    })
+    expect(staged.map((entry) => entry.effectPaths)).toEqual([[entityPath]])
+    expect(naming(rows, entityPath)).toHaveLength(1)
+    expect(naming(rows, entityPath)[0]?.operationId).toBe(answer.committed)
     expect(await rowsWhere(db, "audit_outbox", firmId)).toEqual([])
   })
 

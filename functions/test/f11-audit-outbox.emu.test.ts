@@ -68,6 +68,7 @@ describe.skipIf(!EMULATORS)("F11 audit-outbox reconciler (Functions firebase-adm
     }
     for (const id of entries.splice(0)) await db.collection("audit_outbox").doc(id).delete()
     await db.collection(BACKLOG_STATE_COLLECTION).doc(BACKLOG_STATE_DOC).delete()
+    await db.collection(BACKLOG_STATE_COLLECTION).doc("auditOutboxSweepCursor").delete()
   })
 
   it("publishes once (runs racing), dead-letters the poisoned row under the entry's firm, and deletes the entry", async () => {

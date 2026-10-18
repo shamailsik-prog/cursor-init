@@ -8,9 +8,10 @@
 // The F11 modules are loaded loosely so that each test fails on its own assertion against main.
 // Spec: docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md.
 import { randomUUID } from "node:crypto"
-import type { DocumentReference, Firestore, Transaction } from "firebase-admin/firestore"
+import { FieldValue, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { beginIdempotentRequest, recordExternalEffect, resetIdempotencyForTests } from "@/platform/http/idempotency"
+import { checkPermission } from "@/platform/p5/checkPermission"
 import { withSession } from "@/platform/http/withSession"
 import { deleteDoc, doc, runTransaction, setDoc, updateDoc } from "@/platform/persistence/firestoreDbModular"
 import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
@@ -27,7 +28,7 @@ const PAST_GRACE = () => Date.now() + GRACE_MS + 60_000
 
 type Row = Record<string, unknown> & { id: string }
 type Log = { info(message: string, data?: unknown): void; warn(message: string, data?: unknown): void; error(message: string, data?: unknown): void }
-type Backlog = { firing: boolean; transition: "fired" | "cleared" | null; oldestAgeMs: number | null; stale: number }
+type Backlog = { firing: boolean; transition: "fired" | "cleared" | null; oldestAgeMs: number | null; stale: number; unreadable?: number }
 type ReconcileResult = { published: string[]; deadLettered: string[]; deferred: string[]; counted: string[]; backlog: Backlog }
 type Reconcile = (deps: { db: unknown; now?: () => number; log?: Log }) => Promise<ReconcileResult>
 
@@ -82,9 +83,13 @@ async function cleanUp(): Promise<void> {
 type Probe = { res: Response; route: string }
 
 /** Runs `handler` as one request through withSession. `flushFails`: the end-of-request audit flush fails (503). */
-async function inRequest(handler: (request: Request) => Promise<Response | void>, opts: { flushFails?: boolean } = {}): Promise<Probe> {
+async function inRequest(
+  handler: (request: Request) => Promise<Response | void>,
+  opts: { flushFails?: boolean; method?: "GET" | "POST" } = {}
+): Promise<Probe> {
   const path = `/api/f11-probe/${randomUUID()}`
-  const route = `POST ${path}`
+  const method = opts.method ?? "POST"
+  const route = `${method} ${path}`
   routes.push(route)
   if (opts.flushFails) {
     setRequestAuditSinkForTests(async () => {
@@ -92,14 +97,15 @@ async function inRequest(handler: (request: Request) => Promise<Response | void>
     })
   }
   try {
-    const res = await withSession(
-      new Request(`http://127.0.0.1${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actorId: "partner_a", action: "probe" }),
-      }),
-      async (request) => (await handler(request)) ?? Response.json({ ok: true })
-    )
+    const request =
+      method === "GET"
+        ? new Request(`http://127.0.0.1${path}?actorId=partner_a`)
+        : new Request(`http://127.0.0.1${path}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ actorId: "partner_a", action: "probe" }),
+          })
+    const res = await withSession(request, async (req) => (await handler(req)) ?? Response.json({ ok: true }))
     return { res, route }
   } finally {
     setRequestAuditSinkForTests(null)
@@ -168,6 +174,17 @@ async function auditLogOf(firmId: string): Promise<Row[]> {
   return docsWhere("audit_log", "firmId", firmId)
 }
 
+/** The database, except that every transaction is refused at once with UNAVAILABLE (retryable, never counted). */
+function transactionsDown(real: Firestore): Firestore {
+  return new Proxy(real, {
+    get(target, prop) {
+      if (prop === "runTransaction") return async () => Promise.reject(Object.assign(new Error("unavailable"), { code: 14 }))
+      const value = Reflect.get(target, prop, target) as unknown
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value
+    },
+  })
+}
+
 /** The database, except that the audit log refuses every create with `error` (inside the reconciler's transactions). */
 function auditLogRefusing(real: Firestore, error: () => Error): Firestore {
   const wrapTx = (tx: Transaction) =>
@@ -224,7 +241,9 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
   })
 
   afterAll(async () => {
+    // The reconciler's backlog state and sweep cursor (spec rulings 9 and 19), written by the runs above.
     await db().collection("platform").doc("auditOutboxBacklog").delete()
+    await db().collection("platform").doc("auditOutboxSweepCursor").delete()
   })
 
   describe("staging: the entry commits with the effect, or neither does", () => {
@@ -362,6 +381,101 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
     })
   })
 
+  // Review round 1 (Codex P1): the request deleted its entries whenever its flush succeeded, so a request that committed
+  // an early write and then failed before pushing its action row (or pushed only decision rows) lost the only durable
+  // record of that write. An entry is now released only when the request reached its audited end (spec ruling 18).
+  describe("review round 1 (P1): a request releases its entries only when it reached its audited end", () => {
+    const keptAfter = async (handler: (request: Request) => Promise<Response | void>, method: "GET" | "POST" = "POST") => {
+      const { res, route } = await inRequest(handler, { method })
+      return { status: res.status, entries: (await entriesOf(route)).length }
+    }
+
+    it("a write, then the route's own refusal (400): kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async (request) => {
+        await claim(request)
+        await setDoc(ref, { n: 1 })
+        return Response.json({ error: "a later step refused", code: "REQUEST_FAILED" }, { status: 400 })
+      })
+      expect(out).toEqual({ status: 400, entries: 1 })
+    })
+
+    it("a write, then a throw: kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async (request) => {
+        await claim(request)
+        await setDoc(ref, { n: 1 })
+        throw new Error("a later step failed")
+      })
+      // F10 answers a throw after a committed effect with its terminal 409.
+      expect(out).toEqual({ status: 409, entries: 1 })
+    })
+
+    it("a write, a 2xx and a completed claim, but only decision rows (no action row): kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async (request) => {
+        const c = await claim(request)
+        expect(checkPermission(getRuntimeStore(), "partner_a", "list_matters").allow).toBe(true)
+        await setDoc(ref, { n: 1 })
+        c.complete({ ok: true })
+      })
+      expect(out).toEqual({ status: 200, entries: 1 })
+    })
+
+    it("a write, an action row and a 2xx, but the claim never completed: kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async (request) => {
+        await claim(request)
+        await setDoc(ref, { n: 1 })
+        pushRow("f11_action")
+      })
+      expect(out).toEqual({ status: 200, entries: 1 })
+    })
+
+    it("a read whose derived write is followed by a refusal (404): kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async () => {
+        await setDoc(ref, { n: 1 })
+        return Response.json({ error: "unknown matter" }, { status: 404 })
+      }, "GET")
+      expect(out).toEqual({ status: 404, entries: 1 })
+    })
+
+    it("controls: a completed action (its row pushed after its writes), and a read's derived write, are released", async () => {
+      const [a, b, c] = [probeRef(), probeRef(), probeRef()]
+      const action = await keptAfter(async (request) => {
+        const held = await claim(request)
+        await setDoc(a, { n: 1 })
+        await setDoc(b, { n: 1 })
+        pushRow("f11_action")
+        held.complete({ ok: true })
+      })
+      const read = await keptAfter(async () => {
+        await setDoc(c, { n: 1 })
+      }, "GET")
+      expect([action, read]).toEqual([
+        { status: 200, entries: 0 },
+        { status: 200, entries: 0 },
+      ])
+    })
+
+    it("a kept entry is published by the reconciler: the committed write gets its recovered row", async () => {
+      const reconcile = await reconciler()
+      const ref = probeRef()
+      const { route } = await inRequest(async (request) => {
+        await claim(request)
+        await setDoc(ref, { n: 1 })
+        return Response.json({ error: "a later step refused", code: "REQUEST_FAILED" }, { status: 400 })
+      })
+      const [entry] = await entriesOf(route)
+      expect(entry).toBeDefined()
+      created.push({ collection: "audit_log", id: `aud_outbox_${entry!.id}` })
+      await reconcile({ db: db(), now: PAST_GRACE, log: recordingLog() })
+      const recovered = await docsWhere("audit_log", "requestId", entry!.requestId)
+      expect(recovered.map((r) => [r.action, r.target])).toEqual([["request_effect_recovered", ref.path]])
+    })
+  })
+
   describe("the reconciler", () => {
     it("publishes a crashed request's staged rows and one recovered row, exactly once, however many runs race", async () => {
       const reconcile = await reconciler()
@@ -479,6 +593,48 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       expect(attempts).toEqual([1, 2, "gone"])
       expect(await auditLogOf(firmId)).toEqual([])
       expect((await docsWhere("audit_dead_letter", "outboxId", failingEntry)).map((l) => l.reason)).toEqual(["publish_failed"])
+    })
+
+    // Review round 1 (Codex P2): an entry whose stagedAt is missing or not a timestamp is invisible to the stagedAt range
+    // query and to the backlog queries, so it was never dead-lettered and never counted (spec ruling 19).
+    it("review round 1 (P2): an entry with no stagedAt, or a non-timestamp one, is dead-lettered by the sweep", async () => {
+      const reconcile = await reconciler()
+      const firmId = newFirm()
+      const missing = await stageEntry(firmId, [auditRow(firmId)])
+      await db().collection("audit_outbox").doc(missing).update({ stagedAt: FieldValue.delete() })
+      const text = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: "yesterday" })
+      const present = async () =>
+        (await Promise.all([missing, text].map(async (id) => (await db().collection("audit_outbox").doc(id).get()).exists))).filter(Boolean).length
+      // The sweep reads a bounded page per run from a cursor that wraps; leftovers of other files may come first.
+      let runs = 0
+      while ((await present()) > 0 && runs < 25) {
+        await reconcile({ db: db(), log: recordingLog() })
+        runs += 1
+      }
+      expect(await present()).toBe(0)
+      const letters = [...(await docsWhere("audit_dead_letter", "outboxId", missing)), ...(await docsWhere("audit_dead_letter", "outboxId", text))]
+      expect(letters.map((l) => [l.reason, l.firmId])).toEqual([
+        ["entry_malformed", firmId],
+        ["entry_malformed", firmId],
+      ])
+      expect(await auditLogOf(firmId)).toEqual([])
+    })
+
+    it("review round 1 (P2): such an entry that cannot be dead-lettered counts toward the backlog alert", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      const firmId = newFirm()
+      const entryId = await stageEntry(firmId, [auditRow(firmId)])
+      await db().collection("audit_outbox").doc(entryId).update({ stagedAt: FieldValue.delete() })
+      // The cursor may sit anywhere: run until the sweep reaches the entry (the outbox holds only it after the drain).
+      let fired: ReconcileResult | undefined
+      const log = recordingLog()
+      for (let i = 0; i < 3 && !fired?.backlog.firing; i += 1) fired = await reconcile({ db: transactionsDown(db()), log })
+      expect([fired?.backlog.firing, fired?.backlog.unreadable]).toEqual([true, 1])
+      expect(log.lines.some((l) => l.level === "error" && l.message === "audit.outbox_backlog_stale")).toBe(true)
+      const cleared = await reconcile({ db: db(), log: recordingLog() })
+      expect(cleared.deadLettered).toContain(entryId)
+      expect([cleared.backlog.firing, cleared.backlog.unreadable]).toEqual([false, 0])
     })
 
     it("the backlog alert fires while the oldest entry is older than 20 minutes and clears when the outbox drains", async () => {
