@@ -120,9 +120,9 @@ def _const_str(node):
     return None
 
 
-def _annotation_nodes(tree):
-    """ids of every node inside a type annotation (references there open nothing)."""
-    ids = set()
+def _annotation_roots(tree):
+    """Every annotation expression: parameters (incl. *args, **kwargs, keyword-only), returns, and
+    variable annotations at module, class or function level."""
     roots = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -134,9 +134,35 @@ def _annotation_nodes(tree):
                 roots.append(node.returns)
         elif isinstance(node, ast.AnnAssign):
             roots.append(node.annotation)
+    return roots
+
+
+def _exempt_in_annotations(roots):
+    """ids of bare type references inside annotations (``x: httpx.Response``), which open nothing.
+
+    Not exempt: anything under a call inside an annotation. Annotations are evaluated at import on
+    Python 3.12 (and on demand via get_type_hints under PEP 563), so ``x: httpx.get(url)`` is code
+    (Copilot review)."""
+    exempt = set()
     for root in roots:
-        ids.update(id(n) for n in ast.walk(root))
-    return ids
+        called = set()
+        for node in ast.walk(root):
+            if isinstance(node, ast.Call):
+                called.update(id(n) for n in ast.walk(node))
+        exempt.update(id(n) for n in ast.walk(root) if id(n) not in called)
+    return exempt
+
+
+def _string_annotations(roots, exempt):
+    """(constant, parsed expression) for each string annotation (``x: "httpx.get(url)"``):
+    get_type_hints evaluates them, so they are checked like the code they spell."""
+    for root in roots:
+        for node in ast.walk(root):
+            if id(node) in exempt and isinstance(node, ast.Constant) and isinstance(node.value, str):
+                try:
+                    yield node, ast.parse(node.value.strip(), mode="eval")
+                except SyntaxError:
+                    continue
 
 
 def scan_source(source, where="<snippet>"):
@@ -146,8 +172,8 @@ def scan_source(source, where="<snippet>"):
     aliases = {}
     found = []
 
-    def flag(node, message):
-        found.append(f"{where}:{getattr(node, 'lineno', 0)} {message}")
+    def flag(node, message, line=None):
+        found.append(f"{where}:{line or getattr(node, 'lineno', 0)} {message}")
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -164,53 +190,58 @@ def scan_source(source, where="<snippet>"):
                 if why:
                     flag(node, f"imports {full} ({why})")
 
-    in_annotation = _annotation_nodes(tree)
-    parents = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parents[id(child)] = node
+    def check(root, exempt, line=None):
+        parents = {}
+        for node in ast.walk(root):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+        for node in ast.walk(root):
+            # References: the longest dotted chain at each spot, except bare type annotations.
+            if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in exempt:
+                parent = parents.get(id(node))
+                if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                    dotted = _dotted(node, aliases)
+                    why = _forbidden(dotted)
+                    if why:
+                        flag(node, f"references {dotted} ({why})", line)
+                    elif dotted and _under(dotted, OPAQUE_NAMES):
+                        flag(node, f"references {dotted} (a module or builtin lookup the guard cannot follow)", line)
+            # Writes to the boundary or a network module (monkeypatching a factory, widening the registry).
+            if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                target = _dotted(node if isinstance(node, ast.Attribute) else node.value, aliases)
+                if target and _under(target, NETWORK_ROOTS):
+                    flag(node, f"modifies {target}", line)
+            if not isinstance(node, ast.Call):
+                continue
+            dotted = _dotted(node.func, aliases)
+            if dotted in OPAQUE_CALLS:
+                flag(node, f"calls {dotted} (code the guard cannot read)", line)
+            if dotted in DYNAMIC_IMPORTS:
+                name = _const_str(node.args[0]) if node.args else None
+                if name is None:
+                    if where not in DYNAMIC_IMPORT_ALLOWLIST:
+                        flag(node, f"imports a module by a computed name via {dotted}", line)
+                elif _forbidden(name) or _under(name, NETWORK_ROOTS):
+                    flag(node, f"imports {name} via {dotted}", line)
+            if dotted in {"getattr", "setattr", "delattr", "vars", "hasattr"} and node.args:
+                target = _dotted(node.args[0], aliases)
+                if target and _under(target, NETWORK_ROOTS):
+                    flag(node, f"calls {dotted} on {target}", line)
+            if dotted == "urllib.robotparser.RobotFileParser" and (node.args or node.keywords):
+                flag(node, "gives RobotFileParser a URL (it fetches with urllib)", line)
+            if isinstance(node.func, ast.Attribute) and node.func.attr in NETWORK_METHODS:
+                flag(node, f"calls .{node.func.attr}() (a raw connection)", line)
+            for kw in node.keywords:
+                if kw.arg == "follow_redirects" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
+                    flag(node, f"passes follow_redirects={ast.unparse(kw.value)}", line)
+                if kw.arg and (kw.arg.startswith("_test_") or kw.arg in FORBIDDEN_KEYWORDS):
+                    flag(node, f"passes the test-only hook {kw.arg}", line)
 
-    for node in ast.walk(tree):
-        # References: the longest dotted chain at each spot, outside annotations.
-        if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in in_annotation:
-            parent = parents.get(id(node))
-            if not (isinstance(parent, ast.Attribute) and parent.value is node):
-                dotted = _dotted(node, aliases)
-                why = _forbidden(dotted)
-                if why:
-                    flag(node, f"references {dotted} ({why})")
-                elif dotted and _under(dotted, OPAQUE_NAMES):
-                    flag(node, f"references {dotted} (a module or builtin lookup the guard cannot follow)")
-        # Writes to the boundary or a network module (monkeypatching a factory, widening the registry).
-        if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            target = _dotted(node if isinstance(node, ast.Attribute) else node.value, aliases)
-            if target and _under(target, NETWORK_ROOTS):
-                flag(node, f"modifies {target}")
-        if not isinstance(node, ast.Call):
-            continue
-        dotted = _dotted(node.func, aliases)
-        if dotted in OPAQUE_CALLS:
-            flag(node, f"calls {dotted} (code the guard cannot read)")
-        if dotted in DYNAMIC_IMPORTS:
-            name = _const_str(node.args[0]) if node.args else None
-            if name is None:
-                if where not in DYNAMIC_IMPORT_ALLOWLIST:
-                    flag(node, f"imports a module by a computed name via {dotted}")
-            elif _forbidden(name) or _under(name, NETWORK_ROOTS):
-                flag(node, f"imports {name} via {dotted}")
-        if dotted in {"getattr", "setattr", "delattr", "vars", "hasattr"} and node.args:
-            target = _dotted(node.args[0], aliases)
-            if target and _under(target, NETWORK_ROOTS):
-                flag(node, f"calls {dotted} on {target}")
-        if dotted == "urllib.robotparser.RobotFileParser" and (node.args or node.keywords):
-            flag(node, "gives RobotFileParser a URL (it fetches with urllib)")
-        if isinstance(node.func, ast.Attribute) and node.func.attr in NETWORK_METHODS:
-            flag(node, f"calls .{node.func.attr}() (a raw connection)")
-        for kw in node.keywords:
-            if kw.arg == "follow_redirects" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
-                flag(node, f"passes follow_redirects={ast.unparse(kw.value)}")
-            if kw.arg and (kw.arg.startswith("_test_") or kw.arg in FORBIDDEN_KEYWORDS):
-                flag(node, f"passes the test-only hook {kw.arg}")
+    roots = _annotation_roots(tree)
+    exempt = _exempt_in_annotations(roots)
+    check(tree, exempt)
+    for constant, expression in _string_annotations(roots, exempt):
+        check(expression, _exempt_in_annotations([expression.body]), line=constant.lineno)
     return list(dict.fromkeys(found))
 
 
