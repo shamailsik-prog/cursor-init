@@ -155,3 +155,62 @@ M05 and M12 were re-run after the ledger refactor (both killed). Not mutated: th
 - `BASE=origin/main bash ci_gates/gate_g0.sh`: `=== Gate G-0 PASSED (static) ===`.
 - gitleaks 8.30.1 over `git diff origin/main HEAD` (the F23 changes only), with the repository's `.gitleaks.toml` and with the default rules: no leaks found.
 - Claim gate (`ci_gates/check_pr_phase_claims.py`) on the PR body: PASS.
+
+## Review round (Copilot)
+
+Threads on PR #74: Copilot 4305754687 (HIGH: `is_current` accepts a WHEN (false) or `UPDATE OF reason` row trigger), Cursor Bugbot 4305785492 and 4305785497 (the RED commit's expectations: `'A'`, WHEN and column list), Cursor Bugbot 4305801306 (HIGH: the Cursor Agent's `'{}'::int2vector`). Spec section 6 has the rulings (R1 exact attribute comparison and rebuild from nothing; R2 ENABLE ALWAYS; R3 the agent's commits).
+
+### Tasks
+
+- [x] RED: e2e `test_i` (5 drift cases) and `test_h` expecting `'A'`, run on 869d041's code, committed alone (747ae02).
+- [x] Reproduce the CI failure of the agent's 2549328 locally; revert it with a new commit (36a7559).
+- [x] Fix on top of the agent's bd93eec (e8c1d45): exact function and trigger attributes, rebuild with `DROP FUNCTION ... CASCADE`, ENABLE ALWAYS; unit cases rewritten (29 single-attribute drifts, all of the agent's included).
+- [x] Mutation check of the new check (6 mutants).
+- [x] Merge main @ ae50c5b (F28 #72, claim gate #73); full suite, G-0, gitleaks, claim gate.
+
+### Ledger: RED (review round)
+
+`python -m pytest corpus_service/tests/test_f23_quarantine_review_db.py -q -rfE -k "test_h or test_i"` on 747ae02 (the code of 869d041): **6 failed**, all behavioural.
+
+| Case | Observed |
+| --- | --- |
+| `when_false`, `update_of_reason` | migrate logs `quarantine_decisions append-only trigger already current; nothing to upgrade` and leaves the drifted trigger (the runtime role's UPDATE was `allowed` before migrate, and stays so) |
+| `for_each_statement`, `no_op_function` | repaired (tgtype / body checks), but both triggers are `'O'`: a superuser session in `session_replication_role = replica` gets UPDATE, DELETE and TRUNCATE `allowed` |
+| `replica_mode` | the same replica-mode bypass with no drift at all |
+| `test_h` | triggers `'O'`, expected `'A'` |
+
+### Ledger: the Cursor Agent's commits
+
+| Commit | Local result (CI=1, real PG16, git archive of the commit) | CI | Action |
+| --- | --- | --- | --- |
+| 2549328 | F23 files: **6 failed, 31 passed, 7 errors**, every one `migrate failed ... invalid input syntax for type smallint: "{}"` (`SELECT '{}'::int2vector` fails the same way on its own) | `corpus_service pytest` failure; `policy-e2e` failure at step 8 (compose `store_security_e2e.sh`), which passed on 869d041 | reverted by 36a7559 |
+| bd93eec | F23 files: 44 passed | n/a | kept; e8c1d45 builds on it and supersedes its check |
+
+### Ledger: GREEN (review round)
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| F23 e2e | e8c1d45 | 13 passed (8 + `test_i` x5) |
+| F23 unit | e8c1d45 | 31 passed |
+| both F23 files | e8c1d45 | **44 passed** (94 s) |
+| full `corpus_service/tests`, as CI runs it | 57a2bb0 (e8c1d45 merged with main @ ae50c5b) | **916 passed, 157 subtests passed** (1129 s; 872 + 44), no skips |
+| collection count | main @ ae50c5b alone | 872 tests: the branch adds F23's 44 |
+
+### Ledger: mutation (review round)
+
+`scratchpad/f23_mutate_r2.py`, run against `test_h`, `test_i` and the two ledger unit tests: **6 killed, 0 survived**.
+
+| Mutant | Killed by |
+| --- | --- |
+| N1 WHEN clause not compared | unit (`test_i[when_false]` alone does not isolate it: the recreated trigger is also `'O'`, which forces the rebuild) |
+| N2 column list not compared | unit (same reason) |
+| N3 ENABLE ALWAYS statements removed | `test_h`, `test_i` x5, unit |
+| N4 function body not compared | `test_i[no_op_function]`, unit |
+| N5 `tgtype` not compared | unit |
+| N6 enabled flag not compared | unit |
+
+### Verification (review round)
+
+- `BASE=origin/main bash ci_gates/gate_g0.sh` at 57a2bb0: `=== Gate G-0 PASSED (static) ===`.
+- gitleaks 8.30.1 over `git diff origin/main` (the F23 changes only), with the repository's `.gitleaks.toml` and with the default rules: no leaks found.
+- Claim gate (`ci_gates/check_pr_phase_claims.py` as merged with #73) on the updated PR body: `PASS: PR phase-claim gate.`
