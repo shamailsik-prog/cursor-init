@@ -8,8 +8,9 @@ import { requirePermission } from "../../p5/permission"
 import { assertDailyConflictOpen, consumeDailyConflict } from "../dailyLimit"
 import { parseKeys, parseName } from "../validate"
 import { discloseFor, matterIdsOf, type DisclosedCheck, type StoredCheck, type Waiver } from "./disclosure"
-import { clientKeys, loadRegistry, runEngine } from "./engine"
+import { clientKeys, runEngine } from "./engine"
 import { summarise, type Hit, type Subject } from "./match"
+import { screeningRegistry } from "./screening"
 
 /**
  * Module 6 conflict check operations (spec P2-3..P2-6, P2-13, P2-15, P2-17, P2-19, P2-20).
@@ -108,7 +109,8 @@ const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 /**
  * runConflictCheck({ client: { clientId } | { name, keys? }, opposingParties: [{ name, keys? }] (1-20) })
  * → the caller's disclosed view of the new check. Screens every subject against the firm's clients
- * and opposing parties; one transaction counts the check against the firm's Karachi-day cap
+ * and opposing parties (through the F37 candidate loader: 503 screening_unavailable, nothing written, when
+ * the firm's name index cannot be trusted); one transaction counts the check against the firm's Karachi-day cap
  * (429 daily_limit), writes `conflict_checks`, a `conflict_events` `decided` row, the
  * `conflict.decided` event and the call's audit row.
  */
@@ -131,7 +133,9 @@ export const runConflictCheckOp: FirmOperation<DisclosedCheck> = {
 
     // A firm already at its cap is refused before the registry read; the transaction below stays authoritative.
     await assertDailyConflictOpen(caller.firmId, now)
-    const registry = await loadRegistry(caller.firmId, now)
+    // F37: the candidates that can hit these subjects, not the whole registry; 503 screening_unavailable (and a
+    // reconciliation job) when the firm's name index cannot be trusted.
+    const { registry } = await screeningRegistry(caller.firmId, subjects, subjectEntityIds, now)
     const { hits, result, identityBasis, classification } = runEngine(registry, subjects, subjectEntityIds)
     const decision = result === "CLEAR" ? "cleared" : "pending"
 

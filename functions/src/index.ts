@@ -12,5 +12,7 @@ export { api } from "./http/router"
 export { onJobCreated, onEventCreated, jobWorker, jobSweeper } from "./p2/functions"
 // Phase 3c (P3-43): the daily auto-confirm tick, 02:15 Asia/Karachi, one run per firm per day on the P2 engine.
 export { d1AutoConfirmTick } from "./p2/functions"
+// Audit F37: the daily conflict name index reconciliation tick, 02:35 Asia/Karachi, one run per firm per day on the P2 engine.
+export { d1ConflictReindexTick } from "./p2/functions"
 // Audit F07, F08: the P1 lease reconciler, every minute; settles or releases AI spend reservations whose lease lapsed.
 export { p1ReservationReconciler } from "./p1/reconciler"
