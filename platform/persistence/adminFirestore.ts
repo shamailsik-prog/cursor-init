@@ -1,4 +1,3 @@
-import "@google-cloud/firestore"
 import type { Firestore } from "firebase-admin/firestore"
 import { PersistenceConfigurationError } from "@/platform/persistence/errors"
 
