@@ -554,7 +554,8 @@ jobs:
     # (twice) to the service database first, which creates the cluster-global corpus roles once
     # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Measured: main c02ebbc 8m03s; F27 branch (#87) 9m44s / 9m45s after F27's leased-claim e2e and prefork tests.
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16
