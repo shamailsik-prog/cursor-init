@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import re
+import signal
 import sys
 import threading
 import types
@@ -438,6 +439,75 @@ def test_r3_an_expired_lease_is_reclaimed_once_and_an_answered_vector_is_stored_
     assert receipts() == [
         ("abandoned", None, False, False, None), ("stored", 7, False, True, None), ("stored", TOKENS, False, False, None),
     ], receipts()
+
+
+# ---------------------------------------------------------------------------------------------
+# R10: a batch that ends abnormally gives back what it holds
+# ---------------------------------------------------------------------------------------------
+def test_r10_a_batch_failed_by_the_database_charges_its_row_once_and_gives_back_the_rest(corpus_db, monkeypatch):
+    """Three rows; the database refuses row 2's vector write (a trigger, SQLSTATE 23514), after the
+    provider answered. The batch fails (F28 R4). On main row 2 stayed `pending` uncharged with nothing
+    kept, so the next batch paid for it again. Here row 2 is charged once (it may be the cause), row 3
+    goes back untouched, row 2's answered vector is kept in its receipt, and once due the next batch
+    stores it with no second request. Spec R10, R6, R5."""
+    migrated(corpus_db)
+    seed_statutes(1, 3)
+    corpus_db.admin(
+        "CREATE FUNCTION f27_refuse_row_2() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.embedding IS NOT NULL AND NEW.section_number = 's2' THEN "
+        "RAISE EXCEPTION 'synthetic F27 vector write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+        "CREATE TRIGGER f27_refuse_row_2 BEFORE UPDATE ON statutes_master FOR EACH ROW EXECUTE FUNCTION f27_refuse_row_2()",
+    )
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    failed = fire("process-embeddings")
+
+    assert failed.state == "FAILURE", repr(failed.result)
+    rows = queue_by_row()
+    assert (rows[1], rows[2][:2], rows[3]) == (("completed", 0, None, True), ("pending", 1), ("pending", 0, None, False)), rows
+    delay = run(fetch("SELECT extract(epoch FROM q.next_attempt_at - q.updated_at)::int FROM embedding_queue q "
+                      "JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = 's2'"))[0][0]
+    assert delay == BACKOFF[0], delay
+    assert [r[:3] for r in receipts()] == [("stored", TOKENS, False), ("answered", TOKENS, True)], receipts()
+    summary_row = jobs("embedding_queue", job_type="embed")[0].result_summary
+    assert (summary_row["claimed"], summary_row["completed"], summary_row["failed"], summary_row["released"]) == (3, 1, 1, 1), summary_row
+
+    corpus_db.admin("DROP TRIGGER f27_refuse_row_2 ON statutes_master")
+    make_due()
+    done = summary(fire("process-embeddings"))
+
+    assert (provider.per_row(), done.get("reused")) == ({1: 1, 2: 1, 3: 1}, 1), (
+        f"requests per row {provider.per_row()}: row 2's paid answer must be stored, not paid for again; {done}")
+    assert set(queue_by_row().values()) == {("completed", 0, None, True), ("completed", 1, None, True)}
+
+
+def test_r10_an_interrupted_request_leaves_an_interrupted_receipt_and_its_row_uncharged(corpus_db, monkeypatch):
+    """The soft time limit lands while the provider request is out (F28's SIGALRM emulation of
+    billiard's handler). F28 R26 already keeps the row `pending` with its attempt count; F27 adds the
+    receipt: the request was committed as `started` before it was sent, so the record shows a request
+    whose answer never came (it may have been billed), as `interrupted`. On main there was none."""
+    from test_f28_fu_e2e import soft_limit_on_sigalrm
+
+    migrated(corpus_db)
+    seed_statutes(1, 2)
+    provider = Provider().install(monkeypatch)
+
+    async def cut_off(marker):
+        signal.setitimer(signal.ITIMER_REAL, 0.3)
+        await REAL_SLEEP(3)
+        raise AssertionError("the time limit should have cut this request off")
+
+    provider.during_call = cut_off
+
+    with soft_limit_on_sigalrm():
+        result = fire("process-embeddings")
+
+    assert (result.state, type(result.result).__name__) == ("FAILURE", "SoftTimeLimitExceeded"), repr(result.result)
+    assert receipts() == [("interrupted", None, False, False, None)], receipts()
+    assert queue_by_row() == {1: ("pending", 0, None, False), 2: ("pending", 0, None, False)}, queue_by_row()
+    summary_row = jobs("embedding_queue", job_type="embed")[0].result_summary
+    assert (summary_row["claimed"], summary_row["released"], summary_row["interrupted_by"]) == (2, 2, "CancelledError"), summary_row
 
 
 # ---------------------------------------------------------------------------------------------
