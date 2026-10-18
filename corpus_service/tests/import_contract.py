@@ -403,6 +403,9 @@ class _Analyzer:
                     elif target in STAR_LOADERS:
                         for name in STAR_LOADERS[target]:
                             put(name, _LOADER)
+                    elif target in TRACKED_CALLABLES:
+                        for name in TRACKED_CALLABLES[target]:
+                            put(name, f"{_FN}{target}.{name}")
                     elif target in self.index:
                         source = self.index[target]
                         for name, kind in list(source.bindings.items()):
@@ -444,7 +447,13 @@ class _Analyzer:
             return True
         if isinstance(parent, ast.NamedExpr) and parent.value is node:
             return True
-        if kind.startswith(_MOD):
+        if isinstance(parent, ast.arg) and parent.annotation is node:
+            return True
+        if isinstance(parent, ast.AnnAssign) and parent.annotation is node:
+            return True
+        if isinstance(parent, ast.FunctionDef) and parent.returns is node:
+            return True
+        if kind.startswith((_MOD, _EXT)):
             if isinstance(parent, ast.Attribute) and parent.value is node:
                 return True
             if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name) \
@@ -547,7 +556,7 @@ class _Analyzer:
             kind = self.kind(mod, node)
             if kind == _UNRESOLVED:
                 dynamic.add(node.lineno)
-            elif kind is not None and kind != _SYS and not kind.startswith((_FP, _EXT, _FN)) \
+            elif kind is not None and kind != _SYS and not kind.startswith(_FP) \
                     and not self._contained(mod, node, kind):
                 dynamic.add(node.lineno)  # a reference that escapes where the check cannot follow it
         return imports, sorted(dynamic)
