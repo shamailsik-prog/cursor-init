@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "d1AutoConfirmTick", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -68,6 +68,10 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.p1ReservationReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
     expect(index.p1ReservationReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect([index.p1ReservationReconciler.__endpoint.httpsTrigger, index.p1ReservationReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
+    // Audit F11: the audit-outbox reconciler follows the same pattern.
+    expect(index.auditOutboxReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
+    expect(index.auditOutboxReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect([index.auditOutboxReconciler.__endpoint.httpsTrigger, index.auditOutboxReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
     // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
     expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")

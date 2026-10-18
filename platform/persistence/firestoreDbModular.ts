@@ -14,6 +14,7 @@ import {
   limit as clientLimit,
   type Firestore as ClientFirestore,
 } from "firebase/firestore"
+import { AUDIT_OUTBOX_COLLECTION, EXTERNAL_EFFECT_PREFIX, isEffectPath } from "@/platform/persistence/auditOutboxContract"
 
 /** Default cap for firm-scoped list queries (admin SDK must not scan whole collections). */
 export const FIRM_SCOPED_LIST_LIMIT = 500
@@ -163,6 +164,23 @@ export function withFirmQueryStartAfter(
  * `startAfter` it without reading the document again (F12 paging); test doubles may leave it out. */
 export type AdminQueryRow = { id: string; data: () => AdminDocumentData; cursor?: unknown }
 
+/**
+ * Rows whose `fieldPath` (a nested path such as `row.firmId` too) equals `value`: for stored shapes that keep the firm
+ * elsewhere than top-level `firmId` (F11: dead letters stored before the fix carry only `row.firmId`).
+ */
+export function queryByFieldEquals(
+  db: ClientFirestore | AdminFirestore,
+  collectionPath: string,
+  fieldPath: string,
+  value: string,
+  maxResults: number = FIRM_SCOPED_LIST_LIMIT
+): FirmIdQuery {
+  if (isAdminFirestore(db)) {
+    return db.collection(collectionPath).where(fieldPath, "==", value).limit(maxResults) as FirmIdQuery
+  }
+  return clientQuery(clientCollection(db, collectionPath), clientWhere(fieldPath, "==", value), clientLimit(maxResults))
+}
+
 export async function getDocs(query: FirmIdQuery | ReturnType<typeof collection>) {
   if ("get" in query && typeof query.get === "function") {
     const snap = await query.get()
@@ -200,6 +218,8 @@ export type FenceTransaction = {
 export type WriteFence = {
   covers(path: string): boolean
   transact<T>(db: unknown, stage: (tx: FenceTransaction, note: (path: string) => void) => Promise<T>): Promise<T>
+  /** The F10 operation of the claim (audit F11 records it on the outbox entry). */
+  readonly operationId?: string
 }
 
 let writeFence: () => WriteFence | null = () => null
@@ -207,6 +227,48 @@ let writeFence: () => WriteFence | null = () => null
 /** Installs the provider of the current request's write fence (platform/http/idempotency.ts). */
 export function installWriteFence(provider: () => WriteFence | null): void {
   writeFence = provider
+}
+
+/**
+ * Audit F11: the audit outbox of the current request, installed by platform/persistence/auditOutbox.ts. While a request
+ * runs inside withSession, each write through setDoc / updateDoc / deleteDoc / runTransaction that touches an effect
+ * path also writes one `audit_outbox` entry IN THE SAME COMMIT: inside the fence's transaction when the request holds
+ * a durable claim, in one batch with the write otherwise, at the end of a repository's own transaction. The entry carries
+ * the request's audit rows not yet staged, so a committed effect always has its audit in the database, even if the
+ * process dies before the end-of-request flush; the reconciler (functions/src/p5/auditOutbox.ts) publishes it.
+ * Spec: docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md.
+ */
+export type OutboxSession = {
+  /**
+   * The entry to stage with a write of `paths` to `db`, in this attempt (the same id on every attempt), or null when
+   * none of the paths is an effect.
+   */
+  entry(db: unknown, paths: readonly string[], operationId: string | undefined): { id: string; data: Record<string, unknown> } | null
+  /** The write committed: what the last `entry` staged is durable. */
+  committed(): void
+}
+
+/** An outbox entry staged in a transaction the helpers do not own (F10's marker transaction for an external effect). */
+export type OutboxStage = { stage(tx: FenceTransaction, db: unknown): void; committed(): void }
+
+let auditOutbox: () => OutboxSession | null = () => null
+
+/** Installs the provider of the current request's audit outbox (platform/persistence/auditOutbox.ts). */
+export function installAuditOutbox(provider: () => OutboxSession | null): void {
+  auditOutbox = provider
+}
+
+/**
+ * Audit F11: the outbox entry of an effect that is not a Firestore write (a provider dispatch, `external:<kind>`), to
+ * stage in the transaction that creates its F10 marker before the dispatch. Null outside a request.
+ */
+export function outboxForExternalEffect(kind: string, operationId: string | undefined): OutboxStage | null {
+  const outbox = auditOutbox()
+  if (outbox === null) return null
+  return {
+    stage: (tx, db) => stageOutbox(tx, db, outbox, [`${EXTERNAL_EFFECT_PREFIX}${kind}`], operationId),
+    committed: () => outbox.committed(),
+  }
 }
 
 type AdminStyleRef = { path: string; firestore: unknown }
@@ -226,54 +288,118 @@ function refuseUnfencedClientWrite(): void {
   }
 }
 
+/**
+ * Audit F11 (ruling 11): nor can a request with an audit outbox write an effect through it: there is no admin-style
+ * transaction or batch to stage the outbox entry in, and an effect must never commit without its entry.
+ */
+function refuseUnstagedClientWrite(path: unknown): void {
+  if (auditOutbox() !== null && (typeof path !== "string" || isEffectPath(path))) {
+    throw new Error("audit F11: an effect write inside a request needs an admin-style Firestore to stage its audit outbox")
+  }
+}
+
+/** One write staged on an admin-style batch (or a transaction): the shape both share. */
+type StagedWrites = {
+  set(ref: unknown, data: Record<string, unknown>): unknown
+  update(ref: unknown, data: Record<string, unknown>): unknown
+  delete(ref: unknown): unknown
+}
+
 export async function setDoc(ref: ReturnType<typeof doc>, data: unknown) {
   if ("set" in ref && typeof ref.set === "function") {
+    const outbox = auditOutbox()
     const fence = fenceFor(ref)
     if (fence) {
       await fence.transact((ref as unknown as AdminStyleRef).firestore, async (tx, note) => {
         note(ref.path)
         tx.set(ref, data as Record<string, unknown>)
+        stageOutbox(tx, (ref as unknown as AdminStyleRef).firestore, outbox, [ref.path], fence.operationId)
       })
+      outbox?.committed()
       return
     }
+    if (await commitWithOutbox(ref, outbox, (batch) => batch.set(ref, data as Record<string, unknown>))) return
     await ref.set(data as Record<string, unknown>)
     return
   }
   refuseUnfencedClientWrite()
+  refuseUnstagedClientWrite((ref as { path?: unknown }).path)
   await clientSetDoc(ref as never, data as never)
+}
+
+/** Audit F11: sets the request's outbox entry for a write of `paths` in `tx` (nothing when none of them is an effect). */
+function stageOutbox(
+  tx: Pick<StagedWrites, "set">,
+  db: unknown,
+  outbox: OutboxSession | null,
+  paths: readonly string[],
+  operationId: string | undefined
+): void {
+  if (outbox === null) return
+  const entry = outbox.entry(db, paths, operationId)
+  if (entry === null) return
+  tx.set((db as AdminFirestore).collection(AUDIT_OUTBOX_COLLECTION).doc(entry.id), entry.data)
+}
+
+/**
+ * Audit F11: an unfenced write inside a request commits in one batch with its outbox entry. False when there is nothing
+ * to stage (no request, or not an effect path): the caller then writes alone, as before.
+ */
+async function commitWithOutbox(ref: unknown, outbox: OutboxSession | null, write: (batch: StagedWrites) => void): Promise<boolean> {
+  if (outbox === null) return false
+  const { path, firestore } = ref as AdminStyleRef
+  const entry = outbox.entry(firestore, [path], undefined)
+  if (entry === null) return false
+  const db = firestore as { batch(): StagedWrites & { commit(): Promise<unknown> } } & Pick<AdminFirestore, "collection">
+  const batch = db.batch()
+  write(batch)
+  batch.set(db.collection(AUDIT_OUTBOX_COLLECTION).doc(entry.id), entry.data)
+  await batch.commit()
+  outbox.committed()
+  return true
 }
 
 export async function updateDoc(ref: ReturnType<typeof doc>, data: unknown) {
   if ("update" in ref && typeof ref.update === "function") {
+    const outbox = auditOutbox()
     const fence = fenceFor(ref)
     if (fence) {
       await fence.transact((ref as unknown as AdminStyleRef).firestore, async (tx, note) => {
         note(ref.path)
         tx.update(ref, data as Record<string, unknown>)
+        stageOutbox(tx, (ref as unknown as AdminStyleRef).firestore, outbox, [ref.path], fence.operationId)
       })
+      outbox?.committed()
       return
     }
+    if (await commitWithOutbox(ref, outbox, (batch) => batch.update(ref, data as Record<string, unknown>))) return
     await ref.update(data as Record<string, unknown>)
     return
   }
   refuseUnfencedClientWrite()
+  refuseUnstagedClientWrite((ref as { path?: unknown }).path)
   await clientUpdateDoc(ref as never, data as never)
 }
 
 export async function deleteDoc(ref: ReturnType<typeof doc>) {
   if ("delete" in ref && typeof ref.delete === "function") {
+    const outbox = auditOutbox()
     const fence = fenceFor(ref)
     if (fence) {
       await fence.transact((ref as unknown as AdminStyleRef).firestore, async (tx, note) => {
         note(ref.path)
         tx.delete(ref)
+        stageOutbox(tx, (ref as unknown as AdminStyleRef).firestore, outbox, [ref.path], fence.operationId)
       })
+      outbox?.committed()
       return
     }
+    if (await commitWithOutbox(ref, outbox, (batch) => batch.delete(ref))) return
     await ref.delete()
     return
   }
   refuseUnfencedClientWrite()
+  refuseUnstagedClientWrite((ref as { path?: unknown }).path)
   await clientDeleteDoc(ref as never)
 }
 
@@ -301,16 +427,56 @@ function wrapTransaction(tx: FenceTransaction, note?: (path: string) => void): T
   }
 }
 
+/**
+ * Audit F11: runs a repository's transaction function, then stages the request's outbox entry for every path it wrote,
+ * in the same transaction (a write after the function's reads, as the Admin SDK requires).
+ */
+async function stagedRun<T>(
+  tx: FenceTransaction,
+  db: unknown,
+  fn: (tx: TransactionWrap) => Promise<T>,
+  outbox: OutboxSession,
+  note?: (path: string) => void,
+  operationId?: string
+): Promise<T> {
+  const paths: string[] = []
+  const out = await fn(
+    wrapTransaction(tx, (path) => {
+      note?.(path)
+      paths.push(path)
+    })
+  )
+  stageOutbox(tx, db, outbox, paths, operationId)
+  return out
+}
+
+/** After the commit: the outbox entry staged in it is durable. */
+function committedWith<T>(outbox: OutboxSession | null): (out: T) => T {
+  return (out) => {
+    outbox?.committed()
+    return out
+  }
+}
+
 export async function runTransaction<T>(
   db: ClientFirestore | AdminFirestore,
   fn: (tx: TransactionWrap) => Promise<T>
 ): Promise<T> {
   if (isAdminFirestore(db)) {
+    const outbox = auditOutbox()
     const fence = writeFence()
-    if (fence) return fence.transact(db, async (tx, note) => fn(wrapTransaction(tx, note)))
+    if (fence) return fence.transact(db, async (tx, note) =>
+      outbox ? stagedRun(tx, db, fn, outbox, note, fence.operationId) : fn(wrapTransaction(tx, note))
+    ).then(committedWith<T>(outbox))
+    if (outbox) {
+      return db
+        .runTransaction(async (tx) => stagedRun(tx as unknown as FenceTransaction, db, fn, outbox))
+        .then(committedWith<T>(outbox))
+    }
     return db.runTransaction(async (tx) => fn(wrapTransaction(tx as unknown as FenceTransaction)))
   }
   refuseUnfencedClientWrite()
+  refuseUnstagedClientWrite(undefined)
   return clientRunTransaction(db, fn as never)
 }
 
