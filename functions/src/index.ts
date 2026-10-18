@@ -16,3 +16,5 @@ export { d1AutoConfirmTick } from "./p2/functions"
 export { d1ConflictReindexTick } from "./p2/functions"
 // Audit F07, F08: the P1 lease reconciler, every minute; settles or releases AI spend reservations whose lease lapsed.
 export { p1ReservationReconciler } from "./p1/reconciler"
+// Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
+export { auditOutboxReconciler } from "./p5/auditOutboxReconciler"

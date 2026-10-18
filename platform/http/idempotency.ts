@@ -51,7 +51,12 @@ import {
   type DurableClaimRef,
   type SettleOutcome,
 } from "@/platform/http/durableIdempotency"
-import { installWriteFence, type WriteFence } from "@/platform/persistence/firestoreDbModular"
+import {
+  installWriteFence,
+  outboxForExternalEffect,
+  type OutboxStage,
+  type WriteFence,
+} from "@/platform/persistence/firestoreDbModular"
 import { getRuntimeFirestore, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 
 export type { SettleOutcome } from "@/platform/http/durableIdempotency"
@@ -305,11 +310,14 @@ const requestClaims = new AsyncLocalStorage<RequestClaims>()
 /** A refusal the route answered itself (status and JSON body), kept when the attempt's effect committed. */
 export type StorableRefusal = { status: number; json: string }
 
+/** A durable claim's write fence; `markEffect` stages the request's audit-outbox entry with the marker (audit F11). */
+type ClaimFence = WriteFence & { markEffect(kind: string, outbox?: OutboxStage | null): Promise<void> }
+
 /** How a claim is held: in the memory Map, or in the durable store. */
 type ClaimBackend = {
   complete(payload: unknown): void
   settle(completed: boolean, payload: unknown, refusal: StorableRefusal | undefined): Promise<SettleOutcome>
-  fence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null
+  fence(): ClaimFence | null
   operationId?: string
 }
 
@@ -341,7 +349,7 @@ export class IdempotencyClaim {
   }
 
   /** The claim's write fence while it is open (durable store only). */
-  fence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null {
+  fence(): ClaimFence | null {
     return this.settled ? null : this.backend.fence()
   }
 
@@ -469,7 +477,7 @@ export async function runWithIdempotencyScope<T>(scope: IdempotencyScope, run: (
 }
 
 /** The current request's open claim with a write fence (durable store), or null. */
-function currentFence(): (WriteFence & { markEffect(kind: string): Promise<void> }) | null {
+function currentFence(): ClaimFence | null {
   const ctx = requestClaims.getStore()
   if (!ctx) return null
   for (let i = ctx.claims.length - 1; i >= 0; i--) {
@@ -482,12 +490,27 @@ function currentFence(): (WriteFence & { markEffect(kind: string): Promise<void>
 installWriteFence(currentFence)
 
 /**
+ * Audit F11 review round 1 (spec ruling 18): true when every idempotency claim the current request took is completed
+ * (the route stored its success payload), or it took none. withSession releases the request's audit-outbox entries only
+ * then: a claim left open means the route stopped before its end, whatever it answered.
+ */
+export function requestClaimsCompleted(): boolean {
+  const ctx = requestClaims.getStore()
+  return ctx === undefined || ctx.claims.every((claim) => claim.isCompleted)
+}
+
+/**
  * Marks an effect that is not a Firestore write (a provider dispatch) before it happens, through the request's write
  * fence: an attempt whose claim was taken over is refused, and the operation's marker is created, so a retry of the key
  * never repeats the effect. A no-op outside a durable claim.
+ *
+ * Audit F11: the request's audit-outbox entry (`external:<kind>`, with the rows staged so far) commits in the marker's
+ * transaction, so a dispatch that is followed by a crash still leaves its audit for the reconciler.
  */
 export async function recordExternalEffect(kind: string): Promise<void> {
-  await currentFence()?.markEffect(kind)
+  const fence = currentFence()
+  if (fence === null) return
+  await fence.markEffect(kind, outboxForExternalEffect(kind, fence.operationId))
 }
 
 function routeOf(request: Request): string {

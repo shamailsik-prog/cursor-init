@@ -15,9 +15,25 @@ type AuditSink = (rows: AuditEntry[]) => Promise<void>
 
 let sinkForTests: AuditSink | null = null
 
-/** Test hook: replace the audit repository append for request flushes (null restores it). */
+/** The test runner sets VITEST=true in its workers; a deployed process never does. */
+function underTestRunner(): boolean {
+  return process.env.VITEST === "true"
+}
+
+/**
+ * Test hook: replace the audit repository append for request flushes (null restores it). Audit F11 (the F01/F12
+ * re-audit's ask for such hooks): refused outside the test runner, and ignored there too, so a deployed process can never
+ * swap where its audit rows go.
+ */
 export function setRequestAuditSinkForTests(sink: AuditSink | null): void {
+  if (sink !== null && !underTestRunner()) {
+    throw new Error("setRequestAuditSinkForTests is test-only: it refuses outside the test runner (VITEST=true)")
+  }
   sinkForTests = sink
+}
+
+function activeSinkForTests(): AuditSink | null {
+  return underTestRunner() ? sinkForTests : null
 }
 
 /**
@@ -109,9 +125,10 @@ async function sendRows(
     if (log.recordFailure) log.recordFailure(row, err, Date.now())
     if (own.has(row)) ownFailed = ownFailed ?? err
   }
-  if (sinkForTests) {
+  const sink = activeSinkForTests()
+  if (sink) {
     try {
-      await sinkForTests(ready)
+      await sink(ready)
       for (const row of ready) {
         markAuditRowPersisted(row)
         log.settled?.(row)

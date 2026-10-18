@@ -71,8 +71,19 @@ export function endAuditFlight(rows: readonly AuditEntry[]): void {
   for (const row of rows) inFlight.delete(row)
 }
 
-/** A dead-lettered row with why and when; written to the durable audit_dead_letter repository. */
-export type AuditDeadLetter = { row: AuditEntry; reason: string; deadLetteredAt: number }
+/**
+ * A dead-lettered row with why and when; written to the durable audit_dead_letter repository. As read back (audit F11):
+ * `firmId` is the firm that owns the letter (absent on letters stored before F11, which carry only `row.firmId`), and a
+ * letter the audit-outbox reconciler wrote names its `source` and `outboxId`.
+ */
+export type AuditDeadLetter = {
+  row: AuditEntry
+  reason: string
+  deadLetteredAt: number
+  firmId?: string
+  source?: "audit_outbox"
+  outboxId?: string
+}
 export type DeadLetterWriter = (letter: AuditDeadLetter) => Promise<void>
 
 export function isAuditRowDeadLettered(row: AuditEntry): boolean {
