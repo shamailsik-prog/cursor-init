@@ -95,3 +95,4 @@ Verification at the branch head:
 - Branch head across npm versions (`npm ci --dry-run`, root and functions): as checked in, npm 9.2.0 and 10.9.9 exit 0, npm 11.2.0, 11.19.1 and 12.2.0 exit 1 `EBADDEVENGINES`; with `devEngines` taken out of the copy, all five exit 0.
 - Dependency-audit gate (`node ci_gates/check_known_advisories.mjs` on `npm audit --omit=dev --json`, root and functions): PASS, 0 gating advisories; full `npm audit` 35 (12 moderate, 20 high, 3 critical), as on main.
 - `actionlint` 1.7.7 on `.github/workflows/gate-g0.yml`: exit 0.
+- After main moved to 04d388f (F25, #65; no file in common), it was merged in (merge commit, no force push) and `npm run test:unit` (197 files, 5661 passed, 54 skipped), both typechecks, lint (0 errors), G-0 and the guard with `--npm-ci` were run again on the merge: same results.
