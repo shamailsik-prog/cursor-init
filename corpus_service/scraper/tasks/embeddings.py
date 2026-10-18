@@ -69,6 +69,8 @@ async def process_embedding_queue(counts=None):
                 tally.item_ok(1)
                 await asyncio.sleep(0.6)  # 100 RPM limit
             except Exception as e:
+                if outcomes.is_interruption(e):
+                    raise  # F28 R26: the batch's time limit, not this item's failure; its attempts stay
                 if outcomes.is_database_error(e):
                     tally.item_failed(e)  # counted before the batch fails, so its record keeps it
                     raise
@@ -89,16 +91,20 @@ async def run_embedding_batch(*, celery_task_id=None, worker=None):
     counts = BatchCounts()
     try:
         summary = await process_embedding_queue(counts)
-    except Exception as exc:
+    except (Exception, *outcomes.INTERRUPTIONS) as exc:
         # F28 R19: the failed record comes from the batch's own counters, so items done before the
         # failure are kept (an exception escaping the item loop carries no counts of its own).
+        # F28 R26: a batch cut off by the time limit (or cancelled) is recorded the same way, as
+        # RunInterrupted; the original is re-raised.
         tally = counts.tally
+        recorded = outcomes.RunInterrupted.of(exc) if outcomes.is_interruption(exc) else exc
+        extra = {"interrupted_by": recorded.interrupted_by} if recorded is not exc else {}
         try:
             await job_record.record_batch(
                 status=job_record.STATUS_FAILED,
-                summary={**counts.summary(outcomes.OUTCOME_FAILED), "error_class": type(exc).__name__},
+                summary={**counts.summary(outcomes.OUTCOME_FAILED), "error_class": type(recorded).__name__, **extra},
                 started=started, attempted=tally.attempted, written=tally.succeeded, failed=tally.failed,
-                celery_task_id=celery_task_id, worker=worker, exc=exc,
+                celery_task_id=celery_task_id, worker=worker, exc=recorded,
             )
         except Exception as record_exc:
             logger.error(
