@@ -97,6 +97,7 @@ after commit: backlog_stale (ERROR) | backlog_cleared (info) | backlog_remaining
 - **Deploy:** the composite index on `autoconfirm_deferrals (firmId, recheckAt)` must be deployed (`firebase deploy --only firestore:indexes`) before the first run that rechecks. Without it the recheck query fails, the attempt fails retryably and the job dead-letters after 4 attempts, which raises `job.deadLettered`. Create a log-based alert policy on `autoconfirm.backlog_stale` (severity ERROR), as for `job.deadLettered` (O-30).
 - **Job rows:** a firm with a backlog gets up to 23 extra `d1.autoconfirm` job rows per day (`createdBy: "system"`, label `internal`), visible through the jobs routes. Each one carries `{ period, continuation }`.
 - **Firestore:** a new server-only collection and a new per-firm doc in `counters`. No client reads either.
+- **F37 (merged as `f670d62`): no change to F37's files.** F37's conflict name index stays current while every registry write goes through `bumpRegistryVersion`, which moves `nameIndex.version` with `version`. Auto-confirm still bumps through it, with the unchanged two-argument call, whenever a step confirms a pair. Its writes change only link state, so they add no client or opposing-party name and need no chunk write. The deferral records and the progress doc are outside `REGISTRY_SCOPE` and `PROJECTION_SCOPE`.
 
 ## Testing
 
