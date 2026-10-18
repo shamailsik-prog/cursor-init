@@ -28,7 +28,8 @@ const pollCheck = viaCore<Check>("runConflictCheck")
 
 const PIPELINE = EMULATORS && process.env.F37_TRIGGER_PIPELINE === "1"
 const SAMPLES = 5
-const WAIT_MS = 20_000
+// Generous: on a loaded machine the emulator can take over 20 s to start a trigger worker (a run at load 16 did).
+const WAIT_MS = 60_000
 
 const created = { firms: [] as string[], uids: [] as string[] }
 afterAll(async () => {
@@ -76,8 +77,8 @@ describe.skipIf(!PIPELINE)("FA-D1C-002 through the Functions emulator: an out-of
           const s = await readRegistryState(firmId)
           if (s.nameIndex.version !== s.version) broken = Date.now() - t0
         }
-        // Screen every poll once the mirror is broken, and every 250 ms before (the firm's 100 screens a day).
-        if (refused < 0 && (broken >= 0 || Date.now() - lastScreen >= 250)) {
+        // Screen every poll once the mirror is broken, and once a second before (the firm's 100 screens a day).
+        if (refused < 0 && (broken >= 0 || Date.now() - lastScreen >= 1000)) {
           lastScreen = Date.now()
           const answer = await screen(firmId, partner.token, subject.clientId, pollCheck)
           answers.add(answer)
