@@ -10,9 +10,9 @@ import { afterAll, describe, expect, it } from "vitest"
  *
  * Each case works on a clean copy of the checked-in manifests, lockfiles and install surfaces (no node_modules) and
  * runs the real npm: `npm ci --dry-run` is npm's own lockfile validator, the step `npm ci` runs before it installs.
- * (a) and (b) use the npm on the PATH, which the pin requires to be npm 10.9 (CI's Node 22 line). (c) and (d) use
- * Node 24's bundled npm, 11.19.1, through npx: on main the root `npm ci` failed there with
- * "Missing: undici@8.11.2 from lock file", the failure the audit reported.
+ * (a) and (b) use the npm on the PATH, which the guard requires to be inside the pin, npm 10.9 (CI's Node 22 line).
+ * (c) and (d) use Node 24's bundled npm, 11.19.1, through npx: on main the root `npm ci` failed there with
+ * "Missing: undici@8.11.2 from lock file", the failure the audit reported. Since ruling R3d the pin only warns there.
  */
 
 const REPO = process.cwd()
@@ -97,12 +97,8 @@ describe("F39 end to end: a clean frozen install from the checked-in manifests",
   it(
     `(c) the reported failure: Node 24's npm (${NODE24_NPM}) accepts the checked-in lock; main's override form is rejected`,
     () => {
-      // The pin refuses npm 11 by design (case d). devEngines is not part of the lockfile, so taking it out of the
-      // copy isolates the question the audit asked: is the checked-in lock valid for this npm?
+      // Ruling R3d: the pin warns on npm 11 and does not refuse it (case d), so the copy is used exactly as checked in.
       const dir = cleanCopy()
-      editJson(join(dir, "package.json"), (m) => {
-        delete m.devEngines
-      })
       const repaired = npmCiDryRun(NODE24_NPM, dir)
       expect(repaired.out).not.toContain("Missing:")
       expect(repaired.out).not.toContain("Invalid:")
@@ -120,12 +116,18 @@ describe("F39 end to end: a clean frozen install from the checked-in manifests",
   )
 
   it(
-    `(d) the pin refuses npm ${NODE24_NPM} before it resolves anything`,
+    `(d) ruling R3d: npm ${NODE24_NPM} is warned by the pin, not refused, and the frozen install validates at the root and in functions/`,
     () => {
-      const r = npmCiDryRun(NODE24_NPM, cleanCopy())
-      expect(r.out).toContain("EBADDEVENGINES")
-      expect(r.out).toContain(`Invalid semver version "~10.9.0" does not match "${NODE24_NPM}" for "packageManager"`)
-      expect(r.code).toBe(1)
+      // The owner's agents run newer npm (Copilot's coding agent: npm 11.19.0; Cursor and Claude on Node 24: npm 11.x).
+      // CI keeps the pin enforced: check_lockfiles.py --npm-ci requires CI's npm to be inside it.
+      const dir = cleanCopy()
+      for (const target of [dir, join(dir, "functions")]) {
+        const r = npmCiDryRun(NODE24_NPM, target)
+        expect(r.out).toContain("npm warn EBADDEVENGINES")
+        expect(r.out).toContain(`Invalid semver version "~10.9.0" does not match "${NODE24_NPM}" for "packageManager"`)
+        expect(r.out).not.toMatch(/^npm error/m)
+        expect(r.code).toBe(0)
+      }
     },
     TEST_TIMEOUT_MS,
   )

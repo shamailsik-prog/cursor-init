@@ -295,7 +295,9 @@ describe("F39 lockfile guard: the npm pin (packageManager + devEngines)", () => 
     { name: "packageManager not npm", file: "package.json", edit: (m) => void (m.packageManager = "yarn@4.5.0"), message: 'package.json: packageManager "yarn@4.5.0" is not npm@X.Y.Z' },
     { name: "no devEngines", file: "functions/package.json", edit: (m) => void delete m.devEngines, message: "functions/package.json: no devEngines.packageManager pin" },
     { name: "devEngines not npm", file: "package.json", edit: (m) => void (devEngines(m).name = "pnpm"), message: 'package.json: devEngines.packageManager.name is "pnpm", expected "npm"' },
-    { name: "warn-only pin", file: "package.json", edit: (m) => void (devEngines(m).onFail = "warn"), message: 'package.json: devEngines.packageManager.onFail is "warn", expected "error"' },
+    // Ruling R3d: onFail "warn" is the policy (CI enforces the pin through --npm-ci); a pin that does nothing still fails.
+    { name: "pin that does nothing (onFail ignore)", file: "package.json", edit: (m) => void (devEngines(m).onFail = "ignore"), message: 'package.json: devEngines.packageManager.onFail is "ignore", expected "warn" or "error"' },
+    { name: "pin without onFail", file: "functions/package.json", edit: (m) => void delete devEngines(m).onFail, message: 'functions/package.json: devEngines.packageManager.onFail is null, expected "warn" or "error"' },
     { name: "floating range", file: "package.json", edit: (m) => void (devEngines(m).version = "^10.9.0"), message: 'package.json: devEngines.packageManager.version "^10.9.0" is not a pin (use ~X.Y.0 or X.Y.Z)' },
     { name: "packageManager outside the range", file: "package.json", edit: (m) => void (m.packageManager = "npm@11.19.1"), message: "package.json: packageManager npm@11.19.1 is outside devEngines.packageManager.version ~10.9.0" },
     { name: "two manifests disagree", file: "functions/package.json", edit: (m) => void (m.packageManager = "npm@10.9.8"), message: "functions/package.json: npm pin npm@10.9.8 (~10.9.0) differs from package.json's npm@10.9.9 (~10.9.0)" },
@@ -305,6 +307,16 @@ describe("F39 lockfile guard: the npm pin (packageManager + devEngines)", () => 
     const root = tree()
     editManifest(root, file, edit)
     expectFail(root, message)
+  })
+
+  it("accepts onFail warn, the decided policy (ruling R3d), and reports it", () => {
+    const root = tree()
+    for (const file of ["package.json", "functions/package.json"]) {
+      editManifest(root, file, (m) => void (devEngines(m).onFail = "warn"))
+    }
+    const r = guard(root)
+    expect(r.out).toContain("PASS: npm pinned to npm@10.9.9 (devEngines ~10.9.0, onFail warn) in 2 manifests")
+    expect(r.code).toBe(0)
   })
 
   it("accepts an exact devEngines version equal to packageManager", () => {
