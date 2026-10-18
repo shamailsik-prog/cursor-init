@@ -101,5 +101,8 @@ Locally: a PG16 cluster under `/tmp/f31-pg` on 127.0.0.1:55471 (pgvector 0.6.0; 
 | G5a | all four | 079e671 | `runtime_smoke.sh`, manifest as committed | **exit 0, 15/15** (80 distributions) |
 | R5a | all four | 079e671, `origin/main`'s manifest (no pgvector) | `runtime_smoke.sh` | **exit 1, 7 failed** (the same seven as row 2b; the harvest step passes, since main declares lxml) |
 | G5b | all four | 079e671 | full suite, as CI | **872 passed, 0 skipped**, 157 subtests passed (738 s); 872 = 793 pre-existing + 79 F31 |
+| G6a | main ae50c5b (F28 #72) merged | 21c2e1d | F31 contract + script tests | **79 passed**; the contract holds on F28's dispatcher, embeddings and source tasks |
+| G6b | main merged | 21c2e1d | `runtime_smoke.sh`, manifest as committed | **exit 0, 15/15** (80 distributions) |
+| G6c | main merged | 21c2e1d | full suite, as CI | **951 passed, 0 skipped**, 157 subtests passed (973 s under load); `requirements-test.txt` and `docs/architecture/README.md` carry this count |
 
 **Count corrections.** The smoke had **14** checks before this round, not 15: rows 4 and the first PR body said "15 checks passed", and commit c9de14e said the c865145 smoke passed "15/15" on the lxml-free manifest (it was 14/14; the re-audit's own count was 15/15). With the harvest step it has **15** checks: commit 882c6df's "16/16" should read 15/15 (rows R3a, G3b and 4 are corrected above). The counts here are from `grep -c '^PASS'` of each log. Pushed commit messages are not rewritten (no force-push); this note is the correction.
