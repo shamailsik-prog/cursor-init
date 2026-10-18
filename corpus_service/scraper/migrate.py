@@ -40,8 +40,13 @@ logger = logging.getLogger("scraper.migrate")
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 # Audit F23: 002 makes quarantine_decisions append-only; 003 (re-audit round 2) adds its
-# request_fingerprint. Append later migrations in order.
-NUMBERED_MIGRATIONS = ("002_quarantine_decisions", "003_quarantine_decision_fingerprint")
+# request_fingerprint. Audit F27: 004 adds the embedding queue's lease and operation columns, CHECKs
+# and indexes (independent of 003). Append later migrations in order.
+NUMBERED_MIGRATIONS = (
+    "002_quarantine_decisions",
+    "003_quarantine_decision_fingerprint",
+    "004_embedding_queue_leases",
+)
 
 
 def load_migration(name: str):

@@ -155,8 +155,9 @@ def wait_for(predicate, timeout, what):
 def test_r1_two_worker_children_over_the_same_50_rows_pay_once_per_row(corpus_db, tmp_path):
     """Two embedding batches sent together to a worker with two children, over 50 queued rows; each
     provider request takes 100 ms. On main both children selected the same pending rows and paid for
-    them twice (the finding's scenario 1). Here one child claims the 50 and the other none: one
-    request per row, every row embedded once. Spec R1."""
+    them twice (the finding's scenario 1). Here the two claims are disjoint (SKIP LOCKED: whichever
+    claims second skips the rows the first holds, so they split the window or one finds nothing) and
+    together cover the 50: one request per row, every row embedded once. Spec R1."""
     migrated(corpus_db)
     seed_statutes(1, 50)
 
@@ -174,8 +175,14 @@ def test_r1_two_worker_children_over_the_same_50_rows_pay_once_per_row(corpus_db
         f"{len(provider_calls(root))} provider requests for 50 rows; paid more than once: {paid_twice} "
         f"({outcomes}, {results}, {log_path.read_text()[-2000:]})")
     assert sorted(per_row) == list(range(1, 51))
-    assert sorted(r["claimed"] for r in results) == [0, 50], results
-    assert len({c["pid"] for c in provider_calls(root)}) == 1, "one child did the batch"
+    assert sum(r["claimed"] for r in results) == 50, results
+    by_child = {}
+    for call in provider_calls(root):
+        by_child.setdefault(call["pid"], set()).add(int(ROW.search(call["input"]).group(1)))
+    assert sorted(len(rows) for rows in by_child.values()) == sorted(r["claimed"] for r in results if r["claimed"]), (
+        by_child, results)
+    print(f"F27 prefork concurrency: claims {[r['claimed'] for r in results]}, "
+          f"{len(provider_calls(root))} requests for {len(per_row)} rows")  # evidence, shown with -rP
     assert set(queue_by_row().values()) == {("completed", 0, None, True)}
 
 
