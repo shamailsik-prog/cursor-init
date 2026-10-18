@@ -222,6 +222,8 @@ _EXT, _FN = "ext:", "fn:"  # a third-party module with a tracked callable; the c
 # Third-party callables whose string arguments name a distribution to load (BS4_FEATURES).
 TRACKED_CALLABLES: Dict[str, frozenset] = {"bs4": frozenset({"BeautifulSoup"})}
 _BS4 = _FN + "bs4.BeautifulSoup"
+# After a star import the check cannot enumerate, these names may be tracked callables.
+_STAR_UNKNOWN_TRACKED = {"BeautifulSoup": _BS4}
 
 
 def _is_ref(kind: Optional[str]) -> bool:
@@ -260,8 +262,11 @@ class _Module:
 
     def lookup(self, name: str) -> Optional[str]:
         kind = self.bindings.get(name)
-        if kind is None and self.star_unknown and name in _STAR_UNKNOWN_LOADERS:
-            return _LOADER
+        if kind is None and self.star_unknown:
+            if name in _STAR_UNKNOWN_LOADERS:
+                return _LOADER
+            if name in _STAR_UNKNOWN_TRACKED:
+                return _STAR_UNKNOWN_TRACKED[name]
         return kind
 
 
@@ -437,9 +442,23 @@ class _Analyzer:
                 return kw.value
         return None
 
+    def _in_annotation(self, mod: _Module, node: ast.expr) -> bool:
+        """True inside a parameter, return or variable annotation (Optional[X], X | None, ...)."""
+        child, parent = node, mod.parents.get(id(node))
+        while isinstance(parent, (ast.Subscript, ast.Tuple, ast.List, ast.BinOp, ast.Attribute)):
+            child, parent = parent, mod.parents.get(id(parent))
+        if isinstance(parent, ast.arg):
+            return parent.annotation is child
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return parent.returns is child
+        if isinstance(parent, ast.AnnAssign):
+            return parent.annotation is child
+        return False
+
     def _contained(self, mod: _Module, node: ast.expr, kind: str) -> bool:
-        """A loader, runner or loader-module reference the check has accounted for: called, bound
-        by an alias statement, or (a module) used for an attribute, getattr() or vars()."""
+        """A reference the check has accounted for: called, bound by an alias statement, used in an
+        annotation, or (a module) used for an attribute, getattr() or vars(), or (a tracked
+        callable such as BeautifulSoup) used for an attribute or as isinstance()'s class."""
         if id(node) in mod.consumed:
             return True
         parent = mod.parents.get(id(node))
@@ -447,12 +466,16 @@ class _Analyzer:
             return True
         if isinstance(parent, ast.NamedExpr) and parent.value is node:
             return True
-        if isinstance(parent, ast.arg) and parent.annotation is node:
+        if self._in_annotation(mod, node):
             return True
-        if isinstance(parent, ast.AnnAssign) and parent.annotation is node:
-            return True
-        if isinstance(parent, ast.FunctionDef) and parent.returns is node:
-            return True
+        if kind.startswith(_FN):
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                return True
+            holder = mod.parents.get(id(parent)) if isinstance(parent, ast.Tuple) else parent
+            if isinstance(holder, ast.Call) and isinstance(holder.func, ast.Name) \
+                    and holder.func.id in ("isinstance", "issubclass") and len(holder.args) == 2 \
+                    and holder.args[1] is (parent if holder is not parent else node):
+                return True
         if kind.startswith((_MOD, _EXT)):
             if isinstance(parent, ast.Attribute) and parent.value is node:
                 return True
@@ -493,6 +516,13 @@ class _Analyzer:
             uses.append(ByNameUse(tuple(dists), what, mod.rel, node.lineno, self._function_of(mod, node), problem))
 
         for node in ast.walk(mod.tree):
+            if isinstance(node, ast.expr) and not isinstance(getattr(node, "ctx", None), (ast.Store, ast.Del)):
+                kind = self.kind(mod, node)
+                if kind is not None and kind.startswith((_EXT, _FN)) and not self._contained(mod, node, kind):
+                    use((), "BeautifulSoup reference", node,
+                        f"untracked BeautifulSoup reference at {mod.rel}:{node.lineno}: the bs4 parser callable (or its "
+                        f"module) is stored or passed where the check cannot follow it, so the parser feature it is "
+                        f"later called with cannot be mapped to a distribution (fail closed)")
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 referenced.add(node.id)
             elif isinstance(node, ast.Attribute):
@@ -556,7 +586,7 @@ class _Analyzer:
             kind = self.kind(mod, node)
             if kind == _UNRESOLVED:
                 dynamic.add(node.lineno)
-            elif kind is not None and kind != _SYS and not kind.startswith(_FP) \
+            elif kind is not None and kind != _SYS and not kind.startswith((_FP, _EXT, _FN)) \
                     and not self._contained(mod, node, kind):
                 dynamic.add(node.lineno)  # a reference that escapes where the check cannot follow it
         return imports, sorted(dynamic)
