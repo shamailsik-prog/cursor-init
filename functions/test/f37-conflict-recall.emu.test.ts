@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type WriteBatch } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { loadScreeningRegistry } from "../src/d1/conflict/candidates"
@@ -32,6 +32,24 @@ import { viaApi } from "./api"
 
 const NOW = new Date("2099-03-01T09:00:00.000Z")
 const DAY = 24 * 60 * 60 * 1000
+
+/**
+ * The `firms` docs this file creates (about 300 to 390). They are deleted when the file ends: the P2 scheduled-tick
+ * suites (p2.jobs-scheduled) enqueue one run per firm doc in the shared emulator, so hundreds of synthetic firms
+ * left behind pushed those tests past their timeouts when they ran later. Only the firm docs are removed; no other
+ * file reads this file's rows, which are keyed by unique firm ids.
+ */
+const createdFirms: string[] = []
+
+afterAll(async () => {
+  if (!EMULATORS || createdFirms.length === 0) return
+  const db = adminDb()
+  for (let i = 0; i < createdFirms.length; i += 450) {
+    const batch = db.batch()
+    for (const firmId of createdFirms.slice(i, i + 450)) batch.delete(db.collection("firms").doc(firmId))
+    await batch.commit()
+  }
+}, 120_000)
 const REGISTRIES = 300
 const SUBJECT_SETS = 3
 
@@ -167,6 +185,7 @@ function seedRegistry(r: Rand, batch: WriteBatch, firmId: string, shadowFirmId: 
   const flags = [undefined, { L17_2_ENABLED: true }, { L17_2_ENABLED: false }, "malformed"]
   const featureFlags = pick(r, flags)
   batch.set(db.collection("firms").doc(firmId), { name: "F37 recall firm", plan: "internal", ...(featureFlags !== undefined ? { featureFlags } : {}) })
+  createdFirms.push(firmId)
 
   const clients: Seeded["clients"] = []
   const matterIds: string[] = []
@@ -389,6 +408,7 @@ describe.skipIf(!EMULATORS)("F37 recall through the real writers (no reconciliat
     for (let f = 0; f < 6; f++) {
       const firmId = uniq(`f37w${f}`)
       await adminDb().collection("firms").doc(firmId).set({ name: "F37 writer firm", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS" })
+      createdFirms.push(firmId)
       const partner = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
       const p = pools(r)
       const names: string[] = []
