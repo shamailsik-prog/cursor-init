@@ -139,3 +139,25 @@ Filled in as the work runs; exact commands and output are in the evidence log.
 
 | Step | Command | Result |
 |---|---|---|
+| Baseline: the re-audit's probes on main (scratch copy of 84025e8) | `test_zz_reaudit2_f28_prefork.py`, `test_zz_reaudit2_f28_new.py` | **5 failed, 2 passed**: prefork row `running`, `consecutive_failures` 0; await and block emulations; abandoned streak 1; soft-limited stale runs 0 alerts. The contract probe and the refused-run control pass. |
+| Probe: what the coroutine sees | `probe_cancel_context.py` (SIGALRM raising `SoftTimeLimitExceeded` during `await asyncio.sleep` under `asyncio.run`) | the coroutine sees `CancelledError`, `__context__` is `SoftTimeLimitExceeded`, it can still await, and `asyncio.run` raises `SoftTimeLimitExceeded` |
+| RED, main code + the three new files (3e762a3) | `test_f28_fu_outcomes.py test_f28_fu_e2e.py test_f28_fu_prefork_e2e.py` | **39 failed, 20 passed**: unit 29, e2e 7, prefork 3. The 20 that pass are the redaction cases main already handled, the 3 permanent-OS cases, the R25 control and the 9 L6 pins, whose RED is the mutation run. |
+| RED, court retry helpers (test before the change) | `-k court_retry` | **4 failed**: each helper called the URL 3 times through the limit |
+| RED, limit during the record write (branch removed) | `-k record_is_written` | **1 failed**: `RunRecordFailed('PakistanLawSite')` |
+| GREEN 08ca5a1 (`outcomes.py`) | unit files; F25 guard + F31 import contract | 84 passed; 187 passed |
+| GREEN d5390ef (R21–R26) | three new files; F28 files | 60 passed, 4 failed (L3, L1: next commits); 79 passed |
+| GREEN 0f12d01 (R27) | `-k l3` (in process + prefork) | 2 passed |
+| GREEN d17d59e (R30) | new + F28 + F20 harvester files | the two R17 IHC assertions failed on the new `listing:http_404` keys (4 and 5), so they were extended (`discovery_failed` and the feed keys unchanged): **146 passed** |
+| G-0 (first run at 86c8cfd) | `BASE=origin/main bash ci_gates/gate_g0.sh` | FAILED on `[3] provider-guard`: the R26 test imported `openai` to reach the stand-in. Fixed via `sys.modules`; re-run: `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines |
+| Merge origin/main 2bf12d5 (#44) | `git merge --no-ff origin/main` | 6b5d58a; no corpus_service file touched, no conflicts |
+| GREEN full suite (d17d59e tree) | `python -m pytest corpus_service/tests -q -rf`, CI=1, Annex A DDL applied twice | **1059 passed**, 3 warnings, 157 subtests, 0 failed, 0 skipped, in 578.96 s (main collects 995; +64 new) |
+| The re-audit's probes on the head code | the same two probe files | **7 passed**: prefork `failed`, `consecutive_failures` 1, `RunInterrupted: time limit exceeded`; await and block 1 each; abandoned streak 4; soft-limited stale 2 alerts, `consecutive_failures` 2 = the control's 2 and 2 |
+| Mutation, L6 set (scratch copy of the head, one mutant per run) | `mutate.py mutants_l6.py`, target `test_f28_fu_e2e.py` | **9/9 killed**, each by its pin with exactly 1 failure: J1 `test_j1…`, D2 `test_d2…`, D3 `test_d3…`, H2 `test_h2…`, H4 `test_h4…`, H5 `test_h5…`, X1 `test_x1…` (re-anchored to the new sweep filter), X6 `test_x6…`, X7 `test_x7…` |
+| Mutation, this round's fix | `mutate.py mutants_fix.py -x`, the three new files | **14/14 killed**: N1 no interruption record (prefork await); N2 tally counts the limit; N3 sweep does not count; N4 sweep no alert; N5 rows before the success counted; N6 cross_reference without `in_task_loop`; N7 EAI_AGAIN not transient; N8 Nasir not partial; N9 batch interruption not recorded; N10 reason always "cancelled"; N11 BHC retry through the limit; N12 `sk-` not redacted; N13 limit during the record write becomes `RunRecordFailed`; N14 SHC listing failures not recorded |
+| gitleaks 8.30.1 | `gitleaks dir --config .gitleaks.toml --redact` over `git log -p origin/main..HEAD` and `git diff origin/main HEAD` | no leaks found |
+
+### Rulings made while building
+
+- **The prefork test chooses the slow statute per run.** `statutes_master` is unique on `(short_name, section_number)`, so a second run that writes the same act fails with `IntegrityError` 23505 before the limit can land. That is a separate, pre-existing F21 defect (a PakistanCode run after one that wrote statutes fails), recorded as a follow-up.
+- **The provider stand-in is reached through `sys.modules`.** G-0's provider guard refuses `import openai` anywhere outside P1, test files included.
+- **F26 (#76) overlap.** I read its diff (7821f6c). Its `except outcomes.DocumentRejected: tally.item_failed(rejected)` handlers stay correct with R23, because a `DocumentRejected` is never an interruption. While the sandbox parses in a thread, the limit lands in the loop's wait, which is the R21 path. When #76 lands, origin/main is merged in with a merge commit.

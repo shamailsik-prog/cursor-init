@@ -176,6 +176,21 @@ A database error stays class and SQLSTATE only. *Reason:* 7 of the auditor's 13 
 
 *Reason:* the finding. An operator must see that 3–6 of a court's listing pages failed even when the run found nothing, and a Nasir run that fetched nothing because its reporters were down is degraded, not idle. *Devil's advocate:* a `partial` Nasir run is still a success, so a reporter down for weeks raises no alert while the other four keep producing rows. A degraded-run alert is new scope (residual).
 
+**Compatibility with F26 (#76, open while this round was built).** #76 routes every PDF through `pdf_intake` and adds `except outcomes.DocumentRejected: tally.item_failed(rejected)` ahead of each per-PDF `except Exception`. Both behaviours hold together:
+- a `DocumentRejected` is never an interruption, so it is counted as before;
+- a `SoftTimeLimitExceeded` raised in the intake's synchronous code reaches `except Exception`, and the tally re-raises it (R23);
+- while the sandbox parses (`asyncio.to_thread`), the limit lands in the event loop's wait, so the run is recorded through R21's `CancelledError` path.
+
+Neither change edits the other's lines. This branch merges origin/main with a merge commit once #76 lands.
+
+**Residual risks (this round).**
+- A library that catches `Exception` itself turns the limit into an ordinary failure (R23's limit). Examples: the statute parser; the fetch boundary; before F26, the PDF extractor.
+- A hard kill is recorded only by the next attempt's sweep, up to the source's frequency plus 2 hours later, and not at all if beat stops (F28-FU2).
+- The concurrent-sweep guarantee rests on the lock order and `UPDATE … RETURNING`; no concurrency test.
+- A `partial` run raises no alert (R30's devil's advocate).
+- Redaction is by pattern: an unlisted shape such as a JSON `"apiKey": "…"` still passes.
+- EAI_AGAIN is recognised by its errno value.
+
 **L6 pins (tests, no ruling).** The re-audit found nine mutants the shipped tests did not kill: J1 (a success resets the streak), D2 and D3 (a missing or unrouted source is a refusal), H2 (SHC counts a non-200 PDF), H4 (Nasir counts reporter exceptions), H5 (PakistanCode counts a non-200 slug), X1 (the sweep filters by job type), X6 (the NA index needs a 200, R20a) and X7 (Supreme Court discovery fails when every listing fails). Each now has an end-to-end test through the beat entry. Each mutant was re-run against the new tests and is killed (plan ledger).
 
 **Tests for this round.**
