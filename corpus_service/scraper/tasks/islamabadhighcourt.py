@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from scraper.net import fetch_policy
+from scraper.tasks import outcomes
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
     visited_feed_urls: set[str] = set()
     listing_queue = deque(IHC_LISTING_SEED_URLS)
 
+    # Audit F28: every listing request is counted; when all of them fail the run fails.
+    listings = outcomes.Tally()
+
     # Audit F25: listing pages are external input. Every request (and every redirect hop)
     # goes through the IslamabadHighCourt fetch policy: https, its hosts on 443, public addresses only.
     async with fetch_policy.fetcher_for("IslamabadHighCourt") as client:
@@ -291,6 +295,7 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                 response = await _request_with_retries(client, listing_url)
             except Exception as e:
                 logger.warning("IHC listing request failed %s: %s", listing_url, repr(e))
+                listings.item_failed(e)
                 continue
 
             if response.status_code >= 400:
@@ -299,8 +304,10 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                     response.status_code,
                     listing_url,
                 )
+                listings.item_failed(f"http_{response.status_code}")
                 continue
 
+            listings.item_ok()
             child_listings, discovered_pdfs = _extract_listing_and_pdf_links(response.text, str(response.url))
             for pdf_url in discovered_pdfs:
                 pdf_sources.setdefault(
@@ -349,50 +356,58 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
         len(visited_feed_urls),
         len(pdf_sources),
     )
+    listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
     return list(pdf_sources.keys()), pdf_sources
 
 
 async def scrape_islamabadhighcourt(source, db):
-    try:
-        from scraper.models import ScraperStaging
-        from scraper.parsers.pdf_extractor import extract_pdf_text
-        from scraper.source_identity import stamp_metadata
+    # Audit F28: no outer catch. A discovery whose every listing request failed, a database error,
+    # or a run whose every PDF failed fails the run; each PDF's outcome is counted.
+    from scraper.models import ScraperStaging
+    from scraper.parsers.pdf_extractor import extract_pdf_text
+    from scraper.source_identity import stamp_metadata
 
-        pdf_urls, pdf_sources = await _discover_pdf_urls()
-        if not pdf_urls:
-            logger.warning(
-                "IslamabadHighCourt: no PDF links discovered from configured listing URLs"
-            )
-            return
+    tally = outcomes.run_tally()
+    pdf_urls, pdf_sources = await _discover_pdf_urls()
+    if not pdf_urls:
+        logger.warning(
+            "IslamabadHighCourt: no PDF links discovered from configured listing URLs"
+        )
+        return tally.finish(note="no PDF links discovered")
 
-        async with fetch_policy.fetcher_for("IslamabadHighCourt") as client:
-            for pdf_url in pdf_urls[:60]:
-                try:
-                    response = await _request_with_retries(client, pdf_url)
-                    if response.status_code != 200:
-                        continue
-                    if response.content[:4] != b"%PDF":
-                        continue
-                    text = extract_pdf_text(response.content)
-                    provenance = pdf_sources.get(pdf_url, {})
-                    staging = ScraperStaging(
-                        source_id=source.id,
-                        source_site="IslamabadHighCourt",
-                        source_url=pdf_url,
-                        raw_text=text[:50000],
-                        confidence_score=0.6,
-                        quarantined=True,
-                        quarantine_reason="review source",
-                        parsing_metadata=stamp_metadata(source, {
-                            "listing_url": provenance.get("listing_url"),
-                            "feed_url": provenance.get("feed_url"),
-                            "discovery_method": provenance.get("discovery_method"),
-                        }),
-                    )
-                    db.add(staging)
-                    await db.commit()
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    logger.error("IslamabadHighCourt PDF %s error %s", pdf_url, e)
-    except Exception as e:
-        logger.error("IslamabadHighCourt scraper error %s", e)
+    async with fetch_policy.fetcher_for("IslamabadHighCourt") as client:
+        for pdf_url in pdf_urls[:60]:
+            try:
+                response = await _request_with_retries(client, pdf_url)
+                if response.status_code != 200:
+                    tally.item_failed(f"http_{response.status_code}")
+                    continue
+                if response.content[:4] != b"%PDF":
+                    tally.item_failed("not_pdf")
+                    continue
+                text = extract_pdf_text(response.content)
+                provenance = pdf_sources.get(pdf_url, {})
+                staging = ScraperStaging(
+                    source_id=source.id,
+                    source_site="IslamabadHighCourt",
+                    source_url=pdf_url,
+                    raw_text=text[:50000],
+                    confidence_score=0.6,
+                    quarantined=True,
+                    quarantine_reason="review source",
+                    parsing_metadata=stamp_metadata(source, {
+                        "listing_url": provenance.get("listing_url"),
+                        "feed_url": provenance.get("feed_url"),
+                        "discovery_method": provenance.get("discovery_method"),
+                    }),
+                )
+                db.add(staging)
+                await db.commit()
+                tally.item_ok(1)
+                await asyncio.sleep(1)
+            except Exception as e:
+                if outcomes.is_database_error(e):
+                    raise
+                logger.error("IslamabadHighCourt PDF %s error %s", pdf_url, e)
+                tally.item_failed(e)
+    return tally.finish()

@@ -183,6 +183,27 @@ def test_error_text_never_carries_credentials_or_row_data():
     assert len(long) <= 1000, len(long)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        outcomes.SourceRunFailed("every listing request failed", errors={"ConnectError": 4}, retryable=True),
+        outcomes.SourceRefused("NoSuchSource", "source_not_found"),
+        outcomes.HarvesterContractError("PakistanCode", None),
+        outcomes.RunRecordFailed("PakistanCode"),
+        outcomes.BatchFailed(errors={"APIConnectionError": 1}),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_failures_survive_celerys_result_serialisation(exc):
+    """Celery pickles a task's exception, or rebuilds it from a JSON result as ``cls(*args)``; an
+    exception that cannot be rebuilt reaches the caller as UnpickleableExceptionWrapper."""
+    import pickle
+
+    for rebuilt in (pickle.loads(pickle.dumps(exc)), type(exc)(*exc.args)):
+        assert type(rebuilt) is type(exc) and str(rebuilt) == str(exc)
+        assert outcomes.is_retryable(rebuilt) == outcomes.is_retryable(exc)
+
+
 def test_error_keys():
     assert outcomes.error_key(httpx.ConnectError("down")) == "ConnectError"
     assert outcomes.error_key("http_404") == "http_404"
