@@ -324,7 +324,7 @@ def test_buckets_are_per_key_and_the_table_is_bounded():
     assert not limiter.acquire("a", capacity=1, window_seconds=60, max_keys=2)[0]
     assert limiter.acquire("b", capacity=1, window_seconds=60, max_keys=2)[0]
     assert limiter.acquire("c", capacity=1, window_seconds=60, max_keys=2)[0]
-    assert len(limiter) == 2  # "a", the least recently used, was evicted
+    assert len(limiter) == 2  # bounded: "c" found the table full and shared the overflow bucket (re-audit R1b)
     limiter.reset()
     assert len(limiter) == 0
 

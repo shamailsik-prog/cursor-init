@@ -20,26 +20,48 @@ Spec: docs/superpowers/specs/2026-10-18-f24-bounded-public-corpus-queries-design
 * Ruling 6, one READ ONLY transaction per request with a transaction-local statement timeout
   (``set_config('statement_timeout', ..., true)``, i.e. SET LOCAL); a cancelled statement
   (SQLSTATE 57014) becomes 503.
+
+Re-audit round (FAIL 7/10), spec section "Re-audit round":
+
+* R1c, a process-wide cap on concurrent public reads (``PUBLIC_DB_CONCURRENCY``, default 8, well
+  below the pool's 20 + 30). The gate never waits: the next read is 503 with Retry-After at once.
+  Exports have their own gate (``EXPORT_MAX_CONCURRENT``).
+* R1d, a connection that cannot be had (pool checkout timeout, connect refused or timed out, a
+  connection found dead) is 503 with Retry-After, never 500.
+* Strict ``limit``: ASCII digits only (``10.0``, ``+10``, `` 10``, ``1_0`` are 422).
+* L3 and Copilot thread 4305228825: the export reads keyset batches, each in its own short
+  read-only transaction, so no transaction or pooled connection is open while a batch is being
+  sent; one wall-clock deadline (``EXPORT_DEADLINE_SECONDS``) bounds the database reads and the
+  response sends together (scraper.routers.export).
+* L5: the routers use only the public API below (``search_cases``, ``case_detail``,
+  ``list_statutes``, ``statute_detail``, ``export_is_truncated``, ``stream_export_cases``, the DTOs,
+  the parameter checks and the export gate). Statement builders, column tuples and the raw reader
+  are internal; ``tests/test_trust_policy.py`` enforces this.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import re
+import threading
+import time
 import unicodedata
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import AsyncIterator, Final, List, Optional, Sequence, Tuple
+from typing import AsyncIterator, Callable, Final, List, Optional, Sequence, Tuple
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Select, and_, exists, or_, select, text
+from sqlalchemy import exc as sa_exc
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scraper import database
+from scraper.config import settings
 from scraper.models import CaseLawMaster, ScraperSource, StatutesMaster
 from scraper.trust import REVIEW, TRUSTED
 
@@ -236,6 +258,24 @@ def cursor_or_400(kind: str, token: Optional[str]) -> Optional[uuid.UUID]:
         raise HTTPException(status_code=400, detail="invalid cursor") from None
 
 
+# -- strict limit (re-audit): ASCII digits only ---------------------------------------------------------
+_LIMIT_DIGITS: Final = re.compile(r"[0-9]{1,3}")
+
+
+def limit_param(default: int):
+    """A FastAPI dependency for ``limit``: plain ASCII digits, 1-MAX_PAGE_SIZE, else 422. Pydantic's
+    lax integer parsing accepted ``10.0``, ``+10``, `` 10`` and ``1_0`` as 10."""
+
+    def page_limit(
+        limit: str = Query(str(default), description=f"1-{MAX_PAGE_SIZE}, written in ASCII digits only"),
+    ) -> int:
+        if not _LIMIT_DIGITS.fullmatch(limit) or not 1 <= int(limit) <= MAX_PAGE_SIZE:
+            raise HTTPException(status_code=422, detail=f"limit must be an integer from 1 to {MAX_PAGE_SIZE}, in ASCII digits")
+        return int(limit)
+
+    return page_limit
+
+
 # -- statements -----------------------------------------------------------------------------------------
 def search_cases_stmt(query_text: str, after: Optional[uuid.UUID], limit: int) -> Select:
     """Published case-law summaries whose citation or title contains ``query_text`` literally, in id
@@ -275,8 +315,19 @@ def statute_detail_stmt(statute_id: uuid.UUID) -> Select:
     return select(*STATUTE_DETAIL_COLUMNS).where(StatutesMaster.id == statute_id, published_statutes())
 
 
+def export_batch_stmt(after: Optional[uuid.UUID], size: int) -> Select:
+    """One keyset batch of the export: published rows after ``after`` in id order, at most
+    ``size``. The id is selected for the next batch's keyset; the export emits only the
+    EXPORT_CASE_COLUMNS."""
+    stmt = select(CaseLawMaster.id, *EXPORT_CASE_COLUMNS).where(published_case_law()).order_by(CaseLawMaster.id).limit(size)
+    if after is not None:
+        stmt = stmt.where(CaseLawMaster.id > after)
+    return stmt
+
+
 def export_cases_stmt(cap: int) -> Select:
-    return select(*EXPORT_CASE_COLUMNS).where(published_case_law()).order_by(CaseLawMaster.id).limit(cap)
+    """The first export batch of at most ``cap`` rows."""
+    return export_batch_stmt(None, cap)
 
 
 def export_truncation_probe(cap: int) -> Select:
@@ -313,13 +364,28 @@ def is_statement_timeout(exc: BaseException) -> bool:
     return _sqlstate(exc) == STATEMENT_TIMEOUT_SQLSTATE
 
 
+class DatabaseUnavailable(Exception):
+    """No database connection could be had for a public read (R1d)."""
+
+
+# Everything that can stop a connection being handed out: the pool's checkout timeout, a DBAPI
+# connect failure (refused, authentication, a connection found dead), an OS-level connect error and
+# a connect timeout (asyncio.TimeoutError is an OSError on 3.11+, listed for clarity).
+_ACQUIRE_FAILURES: Final = (sa_exc.TimeoutError, sa_exc.DBAPIError, OSError, asyncio.TimeoutError)
+
+
 @asynccontextmanager
 async def public_read_session(timeout_ms: int) -> AsyncIterator[AsyncSession]:
     """A session in one READ ONLY transaction whose statement_timeout is ``timeout_ms``. The
     timeout is transaction-local (set_config(..., true) is SET LOCAL; SET cannot take a bind
-    parameter), so it ends with the transaction and never stays on a pooled connection."""
+    parameter), so it ends with the transaction and never stays on a pooled connection. The
+    connection is acquired first and on its own, so a failure to get one is DatabaseUnavailable."""
     async with database.SessionLocal() as session:
         async with session.begin():
+            try:
+                await session.connection()
+            except _ACQUIRE_FAILURES as exc:
+                raise DatabaseUnavailable() from exc
             await session.execute(text("SET TRANSACTION READ ONLY"))
             await session.execute(
                 text("SELECT set_config('statement_timeout', :timeout, true)"),
@@ -328,29 +394,147 @@ async def public_read_session(timeout_ms: int) -> AsyncIterator[AsyncSession]:
             yield session
 
 
+def _busy(detail: str) -> HTTPException:
+    return HTTPException(status_code=503, detail=detail, headers={"Retry-After": "1"})
+
+
 @asynccontextmanager
-async def timeouts_as_503() -> AsyncIterator[None]:
-    """A statement cancelled by the timeout becomes 503 with Retry-After; nothing about the query
-    or its rows is returned. Every other database error propagates unchanged."""
+async def database_errors_as_503() -> AsyncIterator[None]:
+    """A statement cancelled by the timeout, a connection that could not be had (R1d) and a
+    connection lost mid-query become 503 with Retry-After; nothing about the query, its rows or the
+    driver's message is returned. Every other database error propagates unchanged."""
     try:
         yield
+    except DatabaseUnavailable:  # includes the pool's checkout timeout (public_read_session)
+        raise _busy("database unavailable") from None
     except DBAPIError as exc:
         if is_statement_timeout(exc):
-            raise HTTPException(status_code=503, detail="query timed out", headers={"Retry-After": "1"}) from None
+            raise _busy("query timed out") from None
+        if exc.connection_invalidated:
+            raise _busy("database unavailable") from None
         raise
 
 
-async def fetch_rows(stmt: Select, *, timeout_ms: int) -> list:
-    async with timeouts_as_503():
+async def read_rows(stmt: Select, *, timeout_ms: int) -> list:
+    """All rows of ``stmt`` from one short read-only, timed transaction. Internal: no load cap of its
+    own (fetch_rows adds the public one; the export holds its own gate)."""
+    async with database_errors_as_503():
         async with public_read_session(timeout_ms) as db:
             return list((await db.execute(stmt)).all())
 
 
-async def stream_export_cases(cap: int, chunk_rows: int, timeout_ms: int) -> AsyncIterator[Sequence]:
-    """Published export rows (citation, case_title, court, year), at most ``cap``, in id order, in
-    chunks of ``chunk_rows`` read from a server-side cursor inside one timed read-only
-    transaction. Only one chunk is held in memory at a time."""
-    async with public_read_session(timeout_ms) as db:
-        result = await db.stream(export_cases_stmt(cap).execution_options(yield_per=chunk_rows))
-        async for partition in result.partitions():
-            yield partition
+# -- R1c: process-wide caps on concurrent reads ------------------------------------------------------
+class ConcurrencyGate:
+    """A counting gate shared by every event loop and thread in the process. It never waits: a
+    caller that finds it full is refused at once."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._in_use = 0
+
+    def try_acquire(self, limit: int) -> bool:
+        with self._lock:
+            if self._in_use >= max(1, int(limit)):
+                return False
+            self._in_use += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self._in_use = max(0, self._in_use - 1)
+
+    @property
+    def in_use(self) -> int:
+        with self._lock:
+            return self._in_use
+
+
+public_read_gate = ConcurrencyGate()
+export_gate = ConcurrencyGate()
+
+
+async def fetch_rows(stmt: Select, *, timeout_ms: int) -> list:
+    """read_rows under the public cap: PUBLIC_DB_CONCURRENCY reads at once, the next is 503."""
+    if not public_read_gate.try_acquire(settings.PUBLIC_DB_CONCURRENCY):
+        raise _busy("too many concurrent queries")
+    try:
+        return await read_rows(stmt, timeout_ms=timeout_ms)
+    finally:
+        public_read_gate.release()
+
+
+# -- the routers' API (L5: routers use nothing else from this module) --------------------------------
+async def search_cases(query_text: str, after: Optional[uuid.UUID], limit: int, *, timeout_ms: int) -> CasePage:
+    rows = await fetch_rows(search_cases_stmt(query_text, after, limit), timeout_ms=timeout_ms)
+    return page_of(rows, limit, CASE_CURSOR, CaseSummary, CasePage)
+
+
+async def case_detail(case_id: uuid.UUID, *, timeout_ms: int) -> Optional[CaseDetail]:
+    rows = await fetch_rows(case_detail_stmt(case_id), timeout_ms=timeout_ms)
+    return CaseDetail.model_validate(dict(rows[0]._mapping)) if rows else None
+
+
+async def list_statutes(name: Optional[str], after: Optional[uuid.UUID], limit: int, *, timeout_ms: int) -> StatutePage:
+    rows = await fetch_rows(list_statutes_stmt(name, after, limit), timeout_ms=timeout_ms)
+    return page_of(rows, limit, STATUTE_CURSOR, StatuteSummary, StatutePage)
+
+
+async def statute_detail(statute_id: uuid.UUID, *, timeout_ms: int) -> Optional[StatuteDetail]:
+    rows = await fetch_rows(statute_detail_stmt(statute_id), timeout_ms=timeout_ms)
+    return StatuteDetail.model_validate(dict(rows[0]._mapping)) if rows else None
+
+
+def acquire_export_slot() -> Callable[[], None]:
+    """Take one of EXPORT_MAX_CONCURRENT export slots (503 when none is free). Returns the release
+    function; calling it more than once releases once."""
+    if not export_gate.try_acquire(settings.EXPORT_MAX_CONCURRENT):
+        raise _busy("too many concurrent exports")
+    released = threading.Event()
+
+    def release() -> None:
+        if not released.is_set():
+            released.set()
+            export_gate.release()
+
+    return release
+
+
+async def export_is_truncated(cap: int, *, timeout_ms: int) -> bool:
+    """Whether more than ``cap`` published judgments exist (advisory: its own transaction)."""
+    return bool(await read_rows(export_truncation_probe(cap), timeout_ms=timeout_ms))
+
+
+class ExportDeadlineExceeded(Exception):
+    """The export ran past EXPORT_DEADLINE_SECONDS. Raised after the response has started, so the
+    server ends the transfer without its final chunk: no client can take a cut export for a whole one."""
+
+
+async def stream_export_cases(
+    cap: int, chunk_rows: int, timeout_ms: int, *, deadline: Optional[float] = None
+) -> AsyncIterator[list]:
+    """Published export rows (id, citation, case_title, court, year), at most ``cap``, in id order,
+    in keyset batches of at most ``chunk_rows``.
+
+    Each batch is one short read-only transaction (read_rows): the session is closed and its
+    connection back in the pool before the batch is yielded, so nothing is held while the consumer
+    sends it, however slowly (Copilot thread 4305228825). ``deadline`` is a time.monotonic() value,
+    by default EXPORT_DEADLINE_SECONDS from the first call; past it the next batch raises
+    ExportDeadlineExceeded, and each batch's statement_timeout is the smaller of ``timeout_ms`` and
+    the time left. The batches are separate snapshots: a row published or withdrawn between two
+    batches may or may not appear, but no row appears twice (keyset on the primary key)."""
+    if deadline is None:
+        deadline = time.monotonic() + settings.EXPORT_DEADLINE_SECONDS
+    sent, after = 0, None
+    while sent < cap:
+        left_ms = int((deadline - time.monotonic()) * 1000)
+        if left_ms <= 0:
+            raise ExportDeadlineExceeded()
+        size = min(chunk_rows, cap - sent)
+        rows = await read_rows(export_batch_stmt(after, size), timeout_ms=max(1, min(timeout_ms, left_ms)))
+        if not rows:
+            return
+        sent += len(rows)
+        after = rows[-1].id
+        yield rows
+        if len(rows) < size:
+            return

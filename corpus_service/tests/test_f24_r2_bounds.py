@@ -341,12 +341,18 @@ def test_m39_the_limiter_source_reads_no_header():
 # L1: the trusted-proxy setting is explicit, and a missing one is visible in the log
 # ---------------------------------------------------------------------------------------------
 def test_l1_compose_and_app_env_make_the_proxy_setting_explicit():
+    """app.env sets FORWARDED_ALLOW_IPS explicitly; compose hands app.env to the api service, and the
+    api command neither overrides the setting nor turns proxy headers off (uvicorn reads the
+    variable, and --proxy-headers is its default)."""
     lines = (CORPUS_SERVICE / "app.env").read_text().splitlines()
     values = [line.split("=", 1)[1] for line in lines if line.startswith("FORWARDED_ALLOW_IPS=")]
     assert values == ["127.0.0.1"], "app.env must set FORWARDED_ALLOW_IPS once, to the safe default"
     compose = (CORPUS_SERVICE / "docker-compose.yml").read_text()
     api = compose.split("\n  api:\n", 1)[1].split("\n\n", 1)[0]
-    assert "--proxy-headers" in api and "env_file: app.env" in api
+    assert "env_file: app.env" in api
+    command = next(line for line in api.splitlines() if line.strip().startswith("command:"))
+    assert "uvicorn" in command
+    assert "--forwarded-allow-ips" not in command and "--no-proxy-headers" not in command, command
 
 
 @pytest.mark.parametrize(

@@ -255,7 +255,12 @@ class Settings(BaseSettings):
     PUBLIC_RATE_LIMIT_MAX_CLIENTS: int = Field(default=10000, ge=100, le=1000000, description="Client addresses tracked at once (LRU)")
     EXPORT_MAX_ROWS: int = Field(default=50000, ge=1, le=1000000, description="Hard row cap for /export/cases")
     EXPORT_CHUNK_ROWS: int = Field(default=500, ge=10, le=10000, description="Rows fetched and encoded per export chunk")
-    EXPORT_QUERY_TIMEOUT_MS: int = Field(default=60000, ge=1000, le=600000, description="statement_timeout for an export")
+    EXPORT_QUERY_TIMEOUT_MS: int = Field(default=60000, ge=1000, le=600000, description="statement_timeout for each export batch read")
+    # Re-audit round (F24 R1c, L3): aggregate load caps and the whole-export deadline. The pool holds
+    # 20 + 30 overflow connections (database.py); public reads may use at most PUBLIC_DB_CONCURRENCY.
+    PUBLIC_DB_CONCURRENCY: int = Field(default=8, ge=1, le=40, description="Concurrent public database reads per process; the next is 503")
+    EXPORT_MAX_CONCURRENT: int = Field(default=2, ge=1, le=10, description="Concurrent exports per process; the next is 503")
+    EXPORT_DEADLINE_SECONDS: int = Field(default=120, ge=1, le=3600, description="Wall-clock bound on one export, database reads and response sends together")
 
     # ---------------------------------------------------------------------
     # Blackletter / Pakistan Law Site - Dual Credential Failover
