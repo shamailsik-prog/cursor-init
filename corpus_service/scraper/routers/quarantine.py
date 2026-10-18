@@ -42,6 +42,12 @@ Re-audit round 2 (spec section 7):
   the server closes the connection instead of draining whatever the client keeps sending.
 * Ruling 18, every 422 on these routes is rendered here (ReviewRoute): type, loc and msg only, never
   the input, every string encodable and cut short, at most ten errors.
+* Ruling 19, contention is never a 500: after rollback, SQLSTATE 40001 / 40P01 are 409
+  transaction_aborted and 55P03 / 57014 are 503 database_busy with Retry-After.
+* Ruling 20, a decision stores its request_fingerprint (request_fingerprint()); an Idempotency-Key
+  with another body on a resolved record is 422 idempotency_key_reused, not a replay.
+* Ruling 22, a reviewer name and a reason must contain a visible letter or digit, and no line or
+  paragraph separator.
 """
 
 from __future__ import annotations
@@ -126,6 +132,12 @@ def _fingerprint_of(decision: QuarantineDecision) -> str:
 
 
 # -- ruling 12: bounded inputs ----------------------------------------------------------------------
+# Ruling 22 (re-audit round 2, L7): the only letters or digits that are Default_Ignorable_Code_Point
+# (Unicode 15.0) are the Hangul fillers; they render as nothing, so they are not visible.
+_INVISIBLE_LETTERS: Final = frozenset("ᅟᅠㅤﾠ")
+_SEPARATORS: Final = ("Zl", "Zp")  # U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR
+
+
 def _clean_text(field: str, value: str, limit: int, *, multiline: bool) -> str:
     cleaned = value.strip()
     if not cleaned:
@@ -136,6 +148,12 @@ def _clean_text(field: str, value: str, limit: int, *, multiline: bool) -> str:
     for ch in cleaned:
         if ch not in allowed and unicodedata.category(ch) in ("Cc", "Cf", "Cs"):
             raise ValueError(f"{field} must not contain control or format characters")
+        if unicodedata.category(ch) in _SEPARATORS:
+            raise ValueError(f"{field} must not contain line or paragraph separators")
+    # Stored as given; only this check sees the NFC form.
+    if not any(unicodedata.category(ch)[0] in "LN" and ch not in _INVISIBLE_LETTERS
+               for ch in unicodedata.normalize("NFC", cleaned)):
+        raise ValueError(f"{field} must contain a visible letter or digit")
     return cleaned
 
 
