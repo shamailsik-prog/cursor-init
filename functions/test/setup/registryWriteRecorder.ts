@@ -15,6 +15,14 @@
  * non-merge set whose data names an in-scope field; or an update or merge set touching one (the
  * top-level segment of each field path). Field scopes: `all`, `except` (any field but those), `only`.
  *
+ * Audit F37 adds two rules for the conflict name index (`conflict/nameIndex.ts`):
+ *
+ * - a write to a collection in `PROJECTION_SCOPE` (the index's chunks) is a registry write too: it needs a bump;
+ * - a product transaction attempt that creates a `clients` row with a string `canonicalName`, or an opposing
+ *   `matter_parties` row with a string `name`, must stage an index-aware bump for that firm (`no_name_index`):
+ *   a bump whose `nameIndex` patch carries the chunk pointer, which only `stageRegistryWrite` writes. That is the
+ *   writer path that adds the name to the index (or knows it is there already).
+ *
  * Every violation not taken by the test (`registryRecorder.take()`) fails it in `afterEach`. Writes
  * from test files are never product writes, so seeding fixtures is unaffected.
  *
@@ -24,8 +32,9 @@
  *   which would wipe its other fields, is therefore treated as exempt; no writer in functions/src does it.
  * - BulkWriter and `recursiveDelete` are not patched; p2.registry-recorder-attribution.emu.test.ts fails
  *   if functions/src uses either.
- * - The read log (`readsDuring`) sees `Query.get` and `DocumentReference.get` only, not `getAll`,
- *   `stream` or `onSnapshot`; a loadRegistry read through those would not be noticed.
+ * - The read log (`readsDuring`) sees `Query.get`, `DocumentReference.get` and `Firestore.getAll` (F37: the
+ *   candidate loader reads the name index chunks and parties' matters with getAll), not transaction reads,
+ *   `stream` or `onSnapshot`; a screen read through those would not be noticed.
  * - Violations are attributed by global state, not by test id: a product write that lands after its
  *   test's afterEach (an unawaited write, background work) is reported in whichever test is running
  *   then, or lost if none is.
@@ -38,13 +47,14 @@
 import path from "node:path"
 import { afterEach } from "vitest"
 import { DocumentReference, Firestore, Query, Transaction, WriteBatch, FieldPath } from "firebase-admin/firestore"
-import { REGISTRY_SCOPE } from "../../src/d1/registryVersion"
+import { PROJECTION_SCOPE, REGISTRY_SCOPE, type RegistryFieldScope } from "../../src/d1/registryVersion"
 
-export type RegistryViolation = { file: string; line: number; collection: string; reason: "no_bump" | "outside_transaction" }
+export type RegistryViolation = { file: string; line: number; collection: string; reason: "no_bump" | "outside_transaction" | "no_name_index" }
 
 type Site = { file: string; line: number; product: boolean }
 type PendingWrite = { site: Site; collection: string; firmId: string | null }
-type Attempt = { writes: PendingWrite[]; bumps: Set<string> }
+/** `named`: product creates of rows whose name a screen can hit (F37); `indexBumps`: firms bumped through stageRegistryWrite. */
+type Attempt = { writes: PendingWrite[]; bumps: Set<string>; named: PendingWrite[]; indexBumps: Set<string> }
 
 type RecorderState = {
   violations: RegistryViolation[]
@@ -106,8 +116,11 @@ function topSegment(field: unknown): string {
   return String(field).split(".")[0]
 }
 
+/** The registry scope of a collection: what the oracle screen reads, or the screen's own projection (F37). */
+const scopeOf = (collection: string): RegistryFieldScope | undefined => REGISTRY_SCOPE[collection] ?? PROJECTION_SCOPE[collection]
+
 function inScope(collection: string, fields: string[]): boolean {
-  const scope = REGISTRY_SCOPE[collection]
+  const scope = scopeOf(collection)
   if (!scope) return false
   if ("all" in scope) return fields.length > 0
   if ("except" in scope) return fields.some((f) => !scope.except.includes(f))
@@ -119,7 +132,7 @@ type WriteKind = "create" | "set" | "update" | "delete"
 /** The written firm (`firmId` named in the data) when the write is a registry write; `undefined` when it is not one. */
 function registryWrite(kind: WriteKind, ref: DocumentReference, args: unknown[]): { firmId: string | null } | undefined {
   const collection = ref.parent.id
-  if (!REGISTRY_SCOPE[collection]) return undefined
+  if (!scopeOf(collection)) return undefined
   const firmOf = (data: unknown) => (isPlainObject(data) && typeof data.firmId === "string" ? data.firmId : null)
   if (kind === "delete") return { firmId: null }
   if (kind === "create") {
@@ -143,6 +156,19 @@ function registryWrite(kind: WriteKind, ref: DocumentReference, args: unknown[])
   }
   if (!isPlainObject(first)) return undefined
   return inScope(collection, Object.keys(first).map(topSegment)) ? { firmId: firmOf(first) } : undefined
+}
+
+/** A created row whose name the conflict screen can hit (F37): a client with a string canonicalName, an opposing party with a string name. */
+function namesCandidate(ref: DocumentReference, data: unknown): boolean {
+  if (!isPlainObject(data)) return false
+  if (ref.parent.id === "clients") return typeof data.canonicalName === "string"
+  if (ref.parent.id === "matter_parties") return data.role === "opposing" && typeof data.name === "string"
+  return false
+}
+
+/** A registry bump staged by stageRegistryWrite: its `nameIndex` patch carries the chunk pointer. */
+function isIndexBump(data: unknown): boolean {
+  return isPlainObject(data) && isPlainObject(data.nameIndex) && "chunk" in data.nameIndex
 }
 
 /** `counters/<firmId>_registry` → firmId. */
@@ -179,11 +205,17 @@ function patchWrites(proto: Record<string, unknown>, via: "transaction" | "batch
             const attempt = state.attempts.get(this as object)
             if (attempt) {
               const bumped = kind === "set" ? bumpedFirm(ref) : null
-              if (bumped !== null) attempt.bumps.add(bumped)
+              if (bumped !== null) {
+                attempt.bumps.add(bumped)
+                if (isIndexBump(args[0])) attempt.indexBumps.add(bumped)
+              }
               const w = registryWrite(kind, ref, args)
               if (w) {
                 const site = siteOf()
-                if (site.product) attempt.writes.push({ site, collection: ref.parent.id, firmId: w.firmId })
+                if (site.product) {
+                  attempt.writes.push({ site, collection: ref.parent.id, firmId: w.firmId })
+                  if (kind === "create" && namesCandidate(ref, args[0])) attempt.named.push({ site, collection: ref.parent.id, firmId: w.firmId })
+                }
               }
             }
           } else {
@@ -205,6 +237,10 @@ function checkAttempt(attempt: Attempt): void {
     const ok = w.firmId === null ? attempt.bumps.size > 0 : attempt.bumps.has(w.firmId)
     if (!ok) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_bump" })
   }
+  for (const w of attempt.named) {
+    const ok = w.firmId === null ? attempt.indexBumps.size > 0 : attempt.indexBumps.has(w.firmId)
+    if (!ok) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_name_index" })
+  }
 }
 
 function noteRead(collection: string): void {
@@ -224,7 +260,7 @@ function install(): void {
     if (typeof updateFunction !== "function") return runTransaction.call(this, updateFunction, ...rest)
     const wrapped = async (tx: Transaction) => {
       // A fresh record per attempt: the SDK re-runs the update function on the same Transaction.
-      const attempt: Attempt = { writes: [], bumps: new Set() }
+      const attempt: Attempt = { writes: [], bumps: new Set(), named: [], indexBumps: new Set() }
       state.attempts.set(tx, attempt)
       const result = await (updateFunction as (t: Transaction) => unknown)(tx)
       checkAttempt(attempt)
@@ -245,6 +281,12 @@ function install(): void {
   refProto.get = function patchedRefGet(this: unknown, ...args: unknown[]) {
     noteRead((this as DocumentReference).parent.id)
     return refGet.apply(this, args)
+  }
+  const fsGetAll = fsProto as unknown as { getAll: Method }
+  const getAll = fsGetAll.getAll
+  fsGetAll.getAll = function patchedGetAll(this: unknown, ...args: unknown[]) {
+    for (const a of args) if (a instanceof DocumentReference) noteRead(a.parent.id)
+    return getAll.apply(this, args)
   }
 }
 
@@ -276,6 +318,8 @@ afterEach(() => {
   state.override = null
   const left = registryRecorder.take()
   if (left.length > 0) {
-    throw new Error(left.map((v) => `registry write without bumpRegistryVersion: ${v.file}:${v.line} (${v.collection})`).join("\n"))
+    const what = (v: RegistryViolation) =>
+      v.reason === "no_name_index" ? "registry name without the conflict name index (stageRegistryWrite)" : "registry write without bumpRegistryVersion"
+    throw new Error(left.map((v) => `${what(v)}: ${v.file}:${v.line} (${v.collection})`).join("\n"))
   }
 })
