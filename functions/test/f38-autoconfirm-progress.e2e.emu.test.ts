@@ -230,8 +230,10 @@ async function purgeFirm(firmId: string): Promise<void> {
 
 async function purgeTicks(period: string): Promise<void> {
   const rows = await jobs().where("runKey", "==", runKeyOf(period, 0)).select().get()
-  for (const row of rows.docs) {
-    const audits = await db().collection("audit_log").where("target", "==", `jobs/${row.id}`).select().get()
+  // Their job.enqueue audit rows, 30 targets per query (the `in` limit), so a crowded emulator costs few queries.
+  const targets = rows.docs.map((row) => `jobs/${row.id}`)
+  for (let i = 0; i < targets.length; i += 30) {
+    const audits = await db().collection("audit_log").where("target", "in", targets.slice(i, i + 30)).select().get()
     await deleteAll(audits.docs.map((d) => d.ref))
   }
   await deleteAll(rows.docs.map((d) => d.ref))
