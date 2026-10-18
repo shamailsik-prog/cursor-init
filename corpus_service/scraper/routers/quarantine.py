@@ -63,7 +63,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scraper.auth import require_admin_api_key
@@ -446,6 +446,23 @@ async def _conflict_detail(db: AsyncSession, quarantine_id: uuid.UUID) -> Dict[s
     return {"error": "conflict"}
 
 
+# Ruling 19: contention the transaction lost, by SQLSTATE. 40001 / 40P01: aborted for a concurrent
+# transaction (a conflict; resend). 55P03 / 57014: the server stopped waiting for a lock or a
+# statement (temporarily unavailable; retry after the delay). Never 500, never the SQL.
+_CONTENTION: Final = {
+    "40001": (409, "transaction_aborted"),  # serialization_failure
+    "40P01": (409, "transaction_aborted"),  # deadlock_detected
+    "55P03": (503, "database_busy"),  # lock_not_available
+    "57014": (503, "database_busy"),  # query_canceled
+}
+
+
+def _sqlstate(exc: DBAPIError) -> Optional[str]:
+    orig = exc.orig
+    return (getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+            or getattr(getattr(orig, "__cause__", None), "sqlstate", None))
+
+
 async def _decide(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body: ReviewDecisionIn,
                   request_key: Optional[str]) -> Dict[str, Any]:
     try:
@@ -463,6 +480,16 @@ async def _decide(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body:
         detail = await _conflict_detail(db, quarantine_id)
         await db.rollback()
         raise HTTPException(status_code=409, detail=detail) from None
+    except DBAPIError as exc:
+        sqlstate = _sqlstate(exc)
+        if sqlstate not in _CONTENTION:
+            raise
+        await db.rollback()
+        status, error = _CONTENTION[sqlstate]
+        logger.warning("quarantine.review_contended quarantine_id=%s action=%s sqlstate=%s status=%d",
+                       quarantine_id, action, sqlstate, status)
+        raise HTTPException(status_code=status, detail={"error": error, "sqlstate": sqlstate, "retryable": True},
+                            headers={"Retry-After": "1"} if status == 503 else None) from None
     logger.info("quarantine.review_decided quarantine_id=%s decision=%s decision_id=%s replayed=%s",
                 quarantine_id, result["decision"], result["decision_id"], result["replayed"])
     return result
