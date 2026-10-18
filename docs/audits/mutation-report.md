@@ -112,18 +112,19 @@ bodies. Non-incremental, break 85, run per PR by Gate G-0 ("Mutation floor
 (document vault)"), because `mutation.yml` is disabled in the repository
 settings.
 
-| Module | Mutants | Before (main 62d1d66, main's tests) | After (PR #47) | Remaining (survived + no coverage) |
+| Module | Mutants | Before (main 62d1d66, main's tests) | After (PR #47 at a4fd027, merged as bd43d80) | Remaining (survived + no coverage) |
 | --- | ---: | ---: | ---: | ---: |
-| `platform/documents/documentObjectStore.ts` | 196 → 361 | 57.65% | 96.40% | 13 |
+| `platform/documents/documentObjectStore.ts` | 196 → 384 | 57.65% | 96.61% | 13 |
 | `platform/documents/documentObjectS3.ts` | (new) 467 | - | 93.36% | 31 |
-| **All** | 828 | **57.65%** | **94.69%** | 44 |
+| **All** | 851 | **57.65%** | **94.83%** | 44 |
 
 Before: 113 killed, 54 survived, 29 no coverage. The hash, key and version
 checks (main's lines 47, 93 and 112) were among the uncovered and surviving
-mutants. After: 780 killed, 4 timed out, 33 survived, 11 no coverage; every
+mutants. After: 803 killed, 4 timed out, 33 survived, 11 no coverage; every
 mutant on those three checks, and on the new one-byte-repeated key check, is
 killed. The mutant count grew because the store gained the S3 backend
-selection and production rules, and the S3 adapter is new.
+selection, the production rules and the restore path rules, and the S3
+adapter is new.
 
 Remaining mutants, by kind (all checked by hand):
 
@@ -138,7 +139,7 @@ Remaining mutants, by kind (all checked by hand):
 | documentObjectS3.ts:343-344, 356-359 (9) | our own abort listener on the body, and the post-loop abort check | The SDK destroys the request, and so the body, when the same signal aborts; ours is a second guard. A stalled body is still cut at the deadline (asserted). |
 | documentObjectS3.ts:373 | `ContentType` to `""` | The SDK then sends `application/octet-stream` itself (asserted on the wire). |
 | documentObjectS3.ts:411, 420-421 (5) | settle-loop boundaries (`<=` to `<`, the bottom break) | At most one extra poll interval inside the budget; the budget assertions allow it. |
-| documentObjectS3.ts:452 | `httpStatus !== null` to `true` | `null >= 500` is false. |
+| documentObjectS3.ts:453 | `httpStatus !== null` to `true` | `null >= 500` is false. |
 | documentObjectS3.ts:70 | `?.trim()` on the backend name | Killable (backend unset while the SSE mode is resolved); not exercised. Accepted. |
 | documentObjectStore.ts:178 | hook flag initialised `true` | Every test resets the hooks before use. |
 | documentObjectStore.ts:223-224 (5) | path-escape check | Unreachable: every segment already passed `SAFE_SEGMENT`. Kept as defence in depth. |
