@@ -1,11 +1,17 @@
 """Audit F25 closure guard: no corpus code opens an HTTP path of its own (spec R1, R4, R12, R13).
 
 1. An AST scan of every non-test module under corpus_service/ (scraper/, bootstrap_harvest.py,
-   migrations/) except scraper/net/fetch_policy.py fails on: building an httpx client or transport
-   or an httpcore pool; module-level httpx request functions; HTTP or browser libraries that would
-   bypass the boundary; raw sockets; any ``follow_redirects`` other than a literal False; any
-   ``_test_*`` keyword (the boundary's test-only hooks). Positive controls prove the scanner sees
-   each form, so the guard cannot rot into a pass.
+   migrations/) except scraper/net/fetch_policy.py fails on: importing or referencing a network,
+   socket, process or browser module (by any alias, even after only ``import urllib.parse``);
+   httpx client/transport classes and request functions outside type annotations (calls, aliases,
+   subclasses); private members of httpx or the boundary; raw connection methods on any receiver
+   (``loop.create_connection``, ``anyio.connect_tcp``); ``os.system`` / ``os.popen`` / exec /
+   spawn; ``getattr``/``setattr``/``vars`` on those modules; dynamic imports of them by literal
+   (constant-folded) name, and by any computed name outside the dispatcher; building
+   ``FetchPolicy`` / ``PolicyFetcher`` outside the registry or writing to the boundary; any
+   ``follow_redirects`` other than a literal False; the test-only hooks (``_test_*``,
+   ``loopback_origins``). Positive controls (including every form of the re-audit's probe) prove
+   the scanner sees each form, so the guard cannot rot into a pass.
 2. Every harvester the dispatcher routes, except PakistanLawSite (import folder, no network), gets
    its client from ``fetch_policy.fetcher_for`` with a registered policy; bootstrap_harvest.py uses
    ``sync_fetcher_for`` for each source it harvests.
@@ -23,19 +29,61 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLICY_MODULE = Path("scraper") / "net" / "fetch_policy.py"
 
-FORBIDDEN_CALLS = {
+BOUNDARY = "scraper.net.fetch_policy"
+# Modules (and their submodules) that open network paths of their own: nothing outside the boundary
+# imports or references them (re-audit round, R21).
+FORBIDDEN_MODULES = (
+    "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "httplib2", "pycurl", "playwright",
+    "treq", "tornado.httpclient", "tornado.simple_httpclient", "tornado.tcpclient", "websockets", "websocket",
+    "httpcore", "h11", "h2", "trio", "socket", "anyio.streams", "ftplib", "smtplib", "poplib", "imaplib", "nntplib",
+    "telnetlib", "xmlrpc", "webbrowser", "subprocess", "pty", "asyncssh", "paramiko", "pexpect", "curl_cffi",
+    "pyppeteer", "selenium", "mechanize", "scrapy", "grpc", "ctypes", "cffi",
+)
+# Names inside otherwise-allowed modules that open a network path, run a program, or widen the boundary.
+FORBIDDEN_NAMES = (
     "httpx.Client", "httpx.AsyncClient", "httpx.HTTPTransport", "httpx.AsyncHTTPTransport",
     "httpx.get", "httpx.post", "httpx.put", "httpx.patch", "httpx.delete", "httpx.head", "httpx.options",
     "httpx.request", "httpx.stream",
-    "httpcore.ConnectionPool", "httpcore.AsyncConnectionPool", "httpcore.HTTPProxy", "httpcore.AsyncHTTPProxy",
-    "httpcore.SOCKSProxy", "httpcore.AsyncSOCKSProxy", "httpcore.HTTPConnection", "httpcore.AsyncHTTPConnection",
-    "httpcore.request", "httpcore.stream",
-    "socket.socket", "socket.create_connection", "asyncio.open_connection",
-}
-FORBIDDEN_IMPORTS = (
-    "requests", "aiohttp", "urllib.request", "urllib3", "http.client", "httplib2", "pycurl", "playwright",
-    "treq", "tornado.httpclient", "websockets",
+    "asyncio.open_connection", "asyncio.open_unix_connection", "asyncio.create_subprocess_exec",
+    "asyncio.create_subprocess_shell",
+    "os.system", "os.popen", "os.posix_spawn", "os.posix_spawnp", "os.startfile",
+    "ssl.get_server_certificate", "ssl.wrap_socket", "ssl.SSLSocket",
+    "lxml.etree.parse", "lxml.etree.iterparse", "lxml.html.parse",
+    # anyio itself is allowed for its cancel scopes (move_on_after, fail_after, CancelScope: F24's
+    # export router uses one); its network, DNS and process APIs are not.
+    "anyio.connect_tcp", "anyio.connect_unix", "anyio.create_tcp_listener", "anyio.create_unix_listener",
+    "anyio.create_udp_socket", "anyio.create_connected_udp_socket", "anyio.create_unix_datagram_socket",
+    "anyio.create_connected_unix_datagram_socket", "anyio.open_process", "anyio.run_process",
+    "anyio.getaddrinfo", "anyio.getnameinfo", "anyio.wait_socket_readable", "anyio.wait_socket_writable",
+    "anyio.abc.SocketStream", "anyio.abc.SocketListener", "anyio.abc.UNIXSocketStream", "anyio.abc.UDPSocket",
+    "anyio.abc.ConnectedUDPSocket", "anyio.abc.UNIXDatagramSocket", "anyio.abc.ConnectedUNIXDatagramSocket",
+    "anyio.abc.Process",
+    f"{BOUNDARY}.FetchPolicy", f"{BOUNDARY}.PolicyFetcher",
 )
+FORBIDDEN_PREFIXES = ("os.exec", "os.spawn")
+# Modules whose private members (``_x``, ``__dict__``) nothing outside may reach.
+PRIVATE_GUARDED = ("httpx", BOUNDARY)
+# Calls of these methods open connections whatever the receiver is (loop.create_connection, ...).
+NETWORK_METHODS = {
+    "create_connection", "create_unix_connection", "create_datagram_endpoint", "sock_connect", "connect_tcp",
+    "connect_unix", "connect_unix_socket", "open_connection", "open_unix_connection", "wrap_socket", "wrap_bio",
+    "urlopen", "urlretrieve", "build_opener", "set_url",
+}
+# Roots that getattr/setattr/delattr/vars and writes may not touch.
+NETWORK_ROOTS = (
+    "httpx", "httpcore", "anyio", "socket", "ssl", "asyncio", "urllib", "http", "subprocess", "os", "importlib",
+    "builtins", "sys", "ftplib", "smtplib", "poplib", "imaplib", "nntplib", "telnetlib", "xmlrpc", "requests",
+    "aiohttp", "urllib3", "lxml", "webbrowser", "pty", BOUNDARY,
+)
+DYNAMIC_IMPORTS = {"importlib.import_module", "importlib.__import__", "builtins.__import__", "__import__"}
+# Code or module lookups an AST scan cannot read: refused outright (no corpus module uses them).
+OPAQUE_CALLS = {"exec", "eval", "compile", "builtins.exec", "builtins.eval", "builtins.compile"}
+OPAQUE_NAMES = ("sys.modules", "__builtins__")
+# The one reviewed dynamic import by variable: the dispatcher's ROUTES (every routed module is
+# checked by test_every_fetching_harvester_uses_one_registered_policy).
+DYNAMIC_IMPORT_ALLOWLIST = {"scraper/tasks/dispatcher.py"}
+FORBIDDEN_KEYWORDS = {"loopback_origins"}
+FORBIDDEN_IMPORTS = FORBIDDEN_MODULES  # kept for readers of PR #65's guard
 # Harvester modules that fetch nothing (PakistanLawSite: licensed API placeholder + import folder).
 NO_NETWORK_HARVESTERS = {"scraper.tasks.pakistanlawsite"}
 
@@ -49,39 +97,161 @@ def _dotted(node, aliases):
     return None
 
 
-def _forbidden_import(name):
-    return any(name == f or name.startswith(f + ".") for f in FORBIDDEN_IMPORTS)
+def _under(name, roots):
+    return any(name == r or name.startswith(r + ".") for r in roots)
+
+
+def _forbidden(name):
+    """Why ``name`` (a dotted reference) is outside the boundary, or None."""
+    if not name:
+        return None
+    if _under(name, FORBIDDEN_MODULES):
+        return "reaches a network module"
+    if _under(name, FORBIDDEN_NAMES) or name.startswith(FORBIDDEN_PREFIXES):
+        return "reaches a raw network or process API"
+    for root in PRIVATE_GUARDED:
+        if name.startswith(root + "."):
+            if name[len(root) + 1:].split(".")[0].startswith("_"):
+                return "reaches a private member"
+    return None
+
+
+def _const_str(node):
+    """A string the AST spells out (literals, + concatenation, f-strings of literals), or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _const_str(node.left), _const_str(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = [_const_str(v) for v in node.values]
+        return None if any(p is None for p in parts) else "".join(parts)
+    return None
+
+
+def _annotation_roots(tree):
+    """Every annotation expression: parameters (incl. *args, **kwargs, keyword-only), returns, and
+    variable annotations at module, class or function level."""
+    roots = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+                if arg is not None and arg.annotation is not None:
+                    roots.append(arg.annotation)
+            if node.returns is not None:
+                roots.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            roots.append(node.annotation)
+    return roots
+
+
+def _exempt_in_annotations(roots):
+    """ids of bare type references inside annotations (``x: httpx.Response``), which open nothing.
+
+    Not exempt: anything under a call inside an annotation. Annotations are evaluated at import on
+    Python 3.12 (and on demand via get_type_hints under PEP 563), so ``x: httpx.get(url)`` is code
+    (Copilot review)."""
+    exempt = set()
+    for root in roots:
+        called = set()
+        for node in ast.walk(root):
+            if isinstance(node, ast.Call):
+                called.update(id(n) for n in ast.walk(node))
+        exempt.update(id(n) for n in ast.walk(root) if id(n) not in called)
+    return exempt
+
+
+def _string_annotations(roots, exempt):
+    """(constant, parsed expression) for each string annotation (``x: "httpx.get(url)"``):
+    get_type_hints evaluates them, so they are checked like the code they spell."""
+    for root in roots:
+        for node in ast.walk(root):
+            if id(node) in exempt and isinstance(node, ast.Constant) and isinstance(node.value, str):
+                try:
+                    yield node, ast.parse(node.value.strip(), mode="eval")
+                except SyntaxError:
+                    continue
 
 
 def scan_source(source, where="<snippet>"):
-    """Every way ``source`` opens an HTTP path outside the fetch boundary."""
+    """Every way ``source`` opens a network path outside the fetch boundary, widens the boundary, or
+    passes one of its test hooks."""
     tree = ast.parse(source)
     aliases = {}
     found = []
+
+    def flag(node, message, line=None):
+        found.append(f"{where}:{line or getattr(node, 'lineno', 0)} {message}")
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
-                if _forbidden_import(alias.name):
-                    found.append(f"{where}:{node.lineno} imports {alias.name}")
+                why = _forbidden(alias.name)
+                if why:
+                    flag(node, f"imports {alias.name} ({why})")
         elif isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
                 full = f"{node.module}.{alias.name}"
                 aliases[alias.asname or alias.name] = full
-                if _forbidden_import(node.module) or _forbidden_import(full):
-                    found.append(f"{where}:{node.lineno} imports {full}")
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        dotted = _dotted(node.func, aliases)
-        if dotted in FORBIDDEN_CALLS:
-            found.append(f"{where}:{node.lineno} calls {dotted}")
-        for kw in node.keywords:
-            if kw.arg == "follow_redirects" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
-                found.append(f"{where}:{node.lineno} passes follow_redirects={ast.unparse(kw.value)}")
-            if kw.arg and kw.arg.startswith("_test_"):
-                found.append(f"{where}:{node.lineno} passes the test-only hook {kw.arg}")
-    return found
+                why = _forbidden(node.module) or _forbidden(full)
+                if why:
+                    flag(node, f"imports {full} ({why})")
+
+    def check(root, exempt, line=None):
+        parents = {}
+        for node in ast.walk(root):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+        for node in ast.walk(root):
+            # References: the longest dotted chain at each spot, except bare type annotations.
+            if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in exempt:
+                parent = parents.get(id(node))
+                if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                    dotted = _dotted(node, aliases)
+                    why = _forbidden(dotted)
+                    if why:
+                        flag(node, f"references {dotted} ({why})", line)
+                    elif dotted and _under(dotted, OPAQUE_NAMES):
+                        flag(node, f"references {dotted} (a module or builtin lookup the guard cannot follow)", line)
+            # Writes to the boundary or a network module (monkeypatching a factory, widening the registry).
+            if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                target = _dotted(node if isinstance(node, ast.Attribute) else node.value, aliases)
+                if target and _under(target, NETWORK_ROOTS):
+                    flag(node, f"modifies {target}", line)
+            if not isinstance(node, ast.Call):
+                continue
+            dotted = _dotted(node.func, aliases)
+            if dotted in OPAQUE_CALLS:
+                flag(node, f"calls {dotted} (code the guard cannot read)", line)
+            if dotted in DYNAMIC_IMPORTS:
+                name = _const_str(node.args[0]) if node.args else None
+                if name is None:
+                    if where not in DYNAMIC_IMPORT_ALLOWLIST:
+                        flag(node, f"imports a module by a computed name via {dotted}", line)
+                elif _forbidden(name) or _under(name, NETWORK_ROOTS):
+                    flag(node, f"imports {name} via {dotted}", line)
+            if dotted in {"getattr", "setattr", "delattr", "vars", "hasattr"} and node.args:
+                target = _dotted(node.args[0], aliases)
+                if target and _under(target, NETWORK_ROOTS):
+                    flag(node, f"calls {dotted} on {target}", line)
+            if dotted == "urllib.robotparser.RobotFileParser" and (node.args or node.keywords):
+                flag(node, "gives RobotFileParser a URL (it fetches with urllib)", line)
+            if isinstance(node.func, ast.Attribute) and node.func.attr in NETWORK_METHODS:
+                flag(node, f"calls .{node.func.attr}() (a raw connection)", line)
+            for kw in node.keywords:
+                if kw.arg == "follow_redirects" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
+                    flag(node, f"passes follow_redirects={ast.unparse(kw.value)}", line)
+                if kw.arg and (kw.arg.startswith("_test_") or kw.arg in FORBIDDEN_KEYWORDS):
+                    flag(node, f"passes the test-only hook {kw.arg}", line)
+
+    roots = _annotation_roots(tree)
+    exempt = _exempt_in_annotations(roots)
+    check(tree, exempt)
+    for constant, expression in _string_annotations(roots, exempt):
+        check(expression, _exempt_in_annotations([expression.body]), line=constant.lineno)
+    return list(dict.fromkeys(found))
 
 
 def corpus_modules():
@@ -129,6 +299,150 @@ def test_no_corpus_module_opens_its_own_http_path():
 )
 def test_guard_positive_controls(snippet):
     assert scan_source(snippet), snippet
+
+
+# The independent re-audit's probe (scratchpad reaudit-f25/zz_audit_probe.py), one form per case: the
+# guard of PR #65 caught only the control (p18). Each must now fail the guard on its own.
+REAUDIT_PROBE_FORMS = {
+    "p01 importlib.import_module('requests')": "import importlib\ndef p01(u):\n    return importlib.import_module('requests').get(u)",
+    "p02 __import__('urllib.request')": "def p02(u):\n    return __import__('urllib.request').request.urlopen(u)",
+    "p03 urllib.request after import urllib.parse": "import urllib.parse\ndef p03(u):\n    return urllib.request.urlopen(u)",
+    "p04 subprocess curl": "import subprocess\ndef p04(u):\n    return subprocess.run(['curl', '-s', u])",
+    "p05 os.system curl": "import os\ndef p05(u):\n    return os.system('curl -s ' + u)",
+    "p06 getattr(httpx, ...)": "import httpx\ndef p06():\n    return getattr(httpx, 'Async' + 'Client')()",
+    "p07 subclass httpx.AsyncClient": "import httpx\nclass Sneaky(httpx.AsyncClient):\n    pass\ndef p07():\n    return Sneaky()",
+    "p08 httpx._client": "from httpx import _client as hc\ndef p08():\n    return hc.AsyncClient()",
+    "p09 loop.create_connection": "import asyncio\nasync def p09(h):\n    return await asyncio.get_running_loop().create_connection(asyncio.Protocol, h, 80)",
+    "p10 anyio.connect_tcp": "import anyio\nasync def p10(h):\n    return await anyio.connect_tcp(h, 80)",
+    "p11 httpcore backend": "import httpcore\nasync def p11(h):\n    return await httpcore.AnyIOBackend().connect_tcp(h, 80)",
+    "p12 FetchPolicy/PolicyFetcher outside the registry": (
+        "from scraper.net import fetch_policy\ndef p12():\n"
+        "    wide = fetch_policy.FetchPolicy(name='Wide', hosts=frozenset({'169.254.169.254.nip.io'}), ports=frozenset({80, 443}))\n"
+        "    return fetch_policy.PolicyFetcher(wide)"
+    ),
+    "p13 ftplib": "import ftplib\ndef p13(h):\n    return ftplib.FTP(h)",
+    "p14 smtplib": "import smtplib\ndef p14(h):\n    return smtplib.SMTP(h)",
+    "p15 xmlrpc.client": "import xmlrpc.client\ndef p15(u):\n    return xmlrpc.client.ServerProxy(u).system.listMethods()",
+    "p16 ssl.get_server_certificate": "import ssl\ndef p16(h):\n    return ssl.get_server_certificate((h, 443))",
+    "p17 httpx.Client attribute": "import httpx\ndef p17(u):\n    return httpx.Client.__call__",
+    "p18 control": "import httpx\ndef p18():\n    return httpx.AsyncClient(follow_redirects=True)",
+    "p19 httpx._transports": "import httpx\ndef p19():\n    return httpx._transports.default.AsyncHTTPTransport()",
+    "p20 os.popen wget": "import os\ndef p20(u):\n    return os.popen('wget -qO- ' + u).read()",
+}
+MORE_BYPASS_FORMS = {
+    "backend loopback hook keyword": "from scraper.net import fetch_policy\nfetch_policy._GuardedBackend('x', loopback_origins={('h', 1)})",
+    "loopback_origins keyword alone": "make(loopback_origins={('h', 1)})",
+    "private boundary member": "from scraper.net import fetch_policy\nfetch_policy._GuardedTransport",
+    "registry mutation": "from scraper.net import fetch_policy\nfetch_policy.SOURCE_POLICIES['Wide'] = None",
+    "factory monkeypatch": "from scraper.net import fetch_policy\nfetch_policy.fetcher_for = lambda *a, **k: None",
+    "setattr on the boundary": "from scraper.net import fetch_policy\nsetattr(fetch_policy, 'fetcher_for', None)",
+    "string-built dynamic import": "import importlib\nimportlib.import_module('req' + 'uests')",
+    "dynamic import by variable": "import importlib\nname = 'requests'\nimportlib.import_module(name)",
+    "builtins.__import__": "import builtins\nbuiltins.__import__('socket')",
+    "vars(httpx)": "import httpx\nvars(httpx)['AsyncClient']()",
+    "httpx.__dict__": "import httpx\nhttpx.__dict__['AsyncClient']()",
+    "socket import": "import socket",
+    "asyncio.open_connection alias": "from asyncio import open_connection\nopen_connection('h', 1)",
+    "asyncio subprocess": "import asyncio\nasyncio.create_subprocess_exec('curl', 'http://h')",
+    "robots.txt fetch by urllib": "from urllib.robotparser import RobotFileParser\nRobotFileParser('http://h/robots.txt').read()",
+    "lxml fetches a URL": "from lxml import etree\netree.parse('http://h/x.xml')",
+    "webbrowser": "import webbrowser\nwebbrowser.open('http://h')",
+    "ssl wrap_socket": "import ssl\nssl.create_default_context().wrap_socket(s, server_hostname='h')",
+    # Code an AST scan cannot read: banned outright (no corpus module uses them).
+    "exec of a string": "exec('import socket')",
+    "eval of a string": "eval(\"__import__('socket')\")",
+    "compile": "code = compile(src, 'probe', 'exec')",
+    "ctypes": "import ctypes\nctypes.CDLL(None)",
+    "cffi": "from cffi import FFI",
+    "sys.modules lookup": "import sys\nsys.modules['socket']",
+    "__builtins__": "__builtins__['__import__']('socket')",
+    # anyio is allowed for its cancel scopes only; its network and process APIs are not.
+    "anyio.connect_tcp imported by name": "from anyio import connect_tcp\nconnect_tcp('h', 80)",
+    "anyio.connect_unix": "import anyio\nanyio.connect_unix('/var/run/docker.sock')",
+    "anyio.create_udp_socket": "import anyio\nanyio.create_udp_socket(remote_host='h')",
+    "anyio.create_tcp_listener": "import anyio\nanyio.create_tcp_listener(local_port=1)",
+    "anyio.open_process": "import anyio\nanyio.open_process(['curl', 'http://h'])",
+    "anyio.run_process": "import anyio\nanyio.run_process(['wget', 'http://h'])",
+    "anyio.getaddrinfo": "import anyio\nanyio.getaddrinfo('h', 80)",
+    "anyio.abc socket streams": "from anyio.abc import SocketStream",
+    "anyio.streams.tls": "from anyio.streams.tls import TLSStream",
+}
+
+
+@pytest.mark.parametrize("snippet", list(REAUDIT_PROBE_FORMS.values()) + list(MORE_BYPASS_FORMS.values()),
+                         ids=list(REAUDIT_PROBE_FORMS) + list(MORE_BYPASS_FORMS))
+def test_guard_catches_every_reaudit_probe_form(snippet):
+    assert scan_source(snippet, "scraper/tasks/zz_probe.py"), snippet
+
+
+@pytest.mark.parametrize(
+    "snippet, where",
+    [
+        ("import importlib\nharvest = getattr(importlib.import_module(module_name), function_name)", "scraper/tasks/dispatcher.py"),
+        ("import ssl\nctx = ssl.create_default_context(cafile=path)", "scraper/config.py"),
+        ("import asyncio\nasyncio.run(main())\nasyncio.sleep(1)", "scraper/tasks/x.py"),
+        ("import os\nos.getenv('X')\nos.environ.get('Y')\nos.replace(a, b)", "scraper/tasks/x.py"),
+        ("from urllib.robotparser import RobotFileParser\nrp = RobotFileParser()\nrp.parse(lines)", "bootstrap_harvest.py"),
+        ("x = getattr(settings, 'CORS_ALLOW_ORIGINS', '')", "scraper/main.py"),
+        ("from scraper.net import fetch_policy\ndef f(c: fetch_policy.PolicyFetcher) -> fetch_policy.FetchedResponse: ...", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\ntry:\n    pass\nexcept fetch_policy.FetchRefused:\n    raise", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\np = fetch_policy.SOURCE_POLICIES['NasirLawSite']\nq = fetch_policy.policy_for('X')", "scraper/tasks/x.py"),
+        ("from scraper.net import fetch_policy\nwith fetch_policy.sync_fetcher_for('PakistanCode', headers=h) as c:\n    c.get(u)", "bootstrap_harvest.py"),
+        ("import re\npattern = re.compile(r'x')\nimport sys\nsys.path.insert(0, p)", "scraper/x.py"),
+        # anyio's cancel scopes open nothing (F24's export router bounds a query with one, #64).
+        ("import anyio\nwith anyio.move_on_after(5) as scope:\n    pass\nwith anyio.fail_after(1):\n    pass", "scraper/routers/export.py"),
+        ("from anyio import move_on_after, CancelScope\nwith move_on_after(5):\n    pass", "scraper/routers/x.py"),
+    ],
+)
+def test_guard_round_two_negative_controls(snippet, where):
+    assert scan_source(snippet, where) == [], (where, snippet)
+
+
+# Copilot, thread 4305395582: annotations run at import (Python 3.12, no PEP 563 by default), and
+# with ``from __future__ import annotations`` they can still be evaluated later (get_type_hints).
+# Bare type references stay exempt; a call inside an annotation, a default, or a string annotation
+# is checked like any other code.
+EXECUTABLE_ANNOTATION_FORMS = {
+    "parameter annotation": "import httpx\ndef f(x: httpx.get('http://169.254.169.254/')):\n    pass",
+    "return annotation": "import httpx\ndef f() -> httpx.get('http://169.254.169.254/'):\n    pass",
+    "module AnnAssign with a value": "import httpx\nx: httpx.get('http://169.254.169.254/') = None",
+    "module AnnAssign without a value": "import httpx\nx: httpx.get('http://169.254.169.254/')",
+    "class-body annotation": "import httpx\nclass C:\n    x: httpx.get('http://169.254.169.254/')",
+    "keyword-only and *args annotations": "import httpx\ndef f(*a: httpx.post('u'), k: httpx.put('u')):\n    pass",
+    "default argument": "import httpx\ndef f(x=httpx.get('http://169.254.169.254/')):\n    pass",
+    "subscript that calls": "import httpx\ndef f(x: list[httpx.get('http://169.254.169.254/')]):\n    pass",
+    "client built in an annotation": "import httpx\ndef f(x: httpx.AsyncClient()):\n    pass",
+    "future annotations still count": (
+        "from __future__ import annotations\nimport httpx\ndef f(x: httpx.get('http://169.254.169.254/')):\n    pass"
+    ),
+    "string annotation": "import httpx\ndef f(x: \"httpx.get('http://169.254.169.254/')\"):\n    pass",
+}
+
+
+@pytest.mark.parametrize("snippet", list(EXECUTABLE_ANNOTATION_FORMS.values()), ids=list(EXECUTABLE_ANNOTATION_FORMS))
+def test_guard_checks_code_inside_annotations(snippet):
+    assert scan_source(snippet, "scraper/tasks/zz_probe.py"), snippet
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "import httpx\nx: httpx.Response = None",
+        "import httpx\ndef f(c: list[httpx.AsyncClient], *a: httpx.Client) -> dict[str, httpx.Response]: ...",
+        "from __future__ import annotations\nimport httpx\ndef f(c: httpx.AsyncClient) -> httpx.Response: ...",
+        "import httpx\ndef f(c: 'httpx.AsyncClient') -> 'httpx.Response': ...",
+        "import typing\nfrom pydantic import Field\nx: typing.Annotated[int, Field(gt=0)] = 1",
+    ],
+)
+def test_bare_type_references_in_annotations_stay_exempt(snippet):
+    assert scan_source(snippet, "scraper/tasks/x.py") == [], snippet
+
+
+def test_source_policies_are_read_only():
+    from scraper.net import fetch_policy
+
+    with pytest.raises(TypeError):
+        fetch_policy.SOURCE_POLICIES["Wide"] = fetch_policy.policy_for("NasirLawSite")
 
 
 @pytest.mark.parametrize(

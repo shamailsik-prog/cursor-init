@@ -34,7 +34,12 @@ the 2026-10-06 baseline were fixed, not listed, and the table is empty:
   fix is a breaking downgrade of eve. A package.json `overrides` entry moves
   eve's copy to `undici` 8.11.2, the same major (fixes GHSA-rfgv-xxqx-mfg5,
   GHSA-w293-vg96-wgc3 and eight lower-severity undici advisories). Remove the
-  override once an eve release pins undici >= 8.10.2.
+  override once an eve release pins undici >= 8.10.2. The override is keyed on
+  the version it replaces, `"eve": { "undici@8.9.0": "8.11.2" }` (audit F39):
+  the unkeyed form `"eve": { "undici": "8.11.2" }` is carried by npm >= 11.2
+  across eve's peer dependency on `ai` into `@ai-sdk/provider-utils` (which
+  declares undici ^7.29.0), so npm 10 and npm 11 resolved different trees and
+  no lockfile satisfied both. The keyed form resolves one tree on both.
 
 Remaining, below the gate's threshold: `npm:root` has 2 moderate (`uuid` < 11.1.1
 nested under `gaxios` 6, GHSA-w5hq-g745-h8pq, buffer-bounds check only when a
