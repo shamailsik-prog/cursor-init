@@ -69,6 +69,9 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   jobSweeper: "scheduler, no caller",
   d1AutoConfirmTick: "scheduler, no caller; enqueues d1.autoconfirm for every firm, which acts only on its own firm",
   d1ConflictReindexTick: "scheduler, no caller; enqueues d1.conflict.reindex for every firm, which reconciles only its own firm's name index (audit F37)",
+  d1ConflictClientWritten: "Firestore trigger, no caller; on a client written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
+  d1ConflictPartyWritten: "Firestore trigger, no caller; on a matter party written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
+  d1ConflictIndexChunkWritten: "Firestore trigger, no caller; on a name removed from a chunk, breaks only that chunk's firm's name index (audit F37 re-audit)",
   p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)"
 }
 

@@ -170,8 +170,9 @@ describe.skipIf(!EMULATORS)("Registry recorder: the F37 conflict name index", ()
       await asProduct(() =>
         db.runTransaction(async (tx) => {
           const state = await readRegistryStateTx(tx, firmId)
-          tx.create(client(), { firmId, canonicalName: "Haris Qalbani" })
-          tx.create(party(), { firmId, role: "opposing", name: "Omer Daryani" })
+          // Staged and stamped (F37 re-audit: the stamp is what the registry trigger and the recorder check).
+          tx.create(client(), { firmId, canonicalName: "Haris Qalbani", nameIndexed: { firmId, name: "Haris Qalbani" } })
+          tx.create(party(), { firmId, role: "opposing", name: "Omer Daryani", nameIndexed: { firmId, name: "Omer Daryani" } })
           stageRegistryWrite(tx, firmId, state, ["Haris Qalbani", "Omer Daryani"])
         })
       )

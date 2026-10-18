@@ -115,16 +115,14 @@ async function seedRegistry(firmId: string, n: number): Promise<Set<string>> {
 
 type NameIndexModule = {
   reconcileNameIndex(firmId: string): Promise<unknown>
-  readIndexedNames(firmId: string, state: unknown): Promise<Set<string>>
+  readIndexedNames(firmId: string): Promise<{ names: Set<string> }>
 }
-type RegistryVersionModule = { readRegistryState(firmId: string): Promise<unknown> }
 
 /** The production reconciliation and index reader, when this tree has the projection (F37); null on a tree without it. */
-async function projection(): Promise<{ index: NameIndexModule; registry: RegistryVersionModule } | null> {
+async function projection(): Promise<{ index: NameIndexModule } | null> {
   try {
     const index = (await import("../src/d1/conflict/nameIndex")) as unknown as NameIndexModule
-    const registry = (await import("../src/d1/registryVersion")) as unknown as RegistryVersionModule
-    return typeof index.reconcileNameIndex === "function" ? { index, registry } : null
+    return typeof index.reconcileNameIndex === "function" ? { index } : null
   } catch {
     return null
   }
@@ -138,7 +136,7 @@ async function reconcile(firmId: string, seeded: Set<string>): Promise<void> {
   if (!p) return
   await p.index.reconcileNameIndex(firmId)
   // The index really holds the registry: every seeded name, so the screen's flat reads are not an empty index's.
-  const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
+  const indexed = (await p.index.readIndexedNames(firmId)).names
   expect([...seeded].filter((name) => !indexed.has(name))).toEqual([])
 }
 
@@ -161,7 +159,7 @@ async function measure(n: number): Promise<Measure> {
   const { firmId, partner, client, seeded } = await seedFirm(n)
   const p = await projection()
   if (p) {
-    const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
+    const indexed = (await p.index.readIndexedNames(firmId)).names
     expect(indexed.size).toBe(seeded.size)
   }
   const check = await countReads(() =>
@@ -197,20 +195,26 @@ describe.skipIf(!EMULATORS)("F37: conflict screening reads are bounded by the ca
 })
 
 /**
- * Spellings of the opposing subject ("Haris Qalbani") that the 0.80 token-set name rule matches: exact, a doubled
- * letter, a vowel swap, a long vowel, the reversed order. None shares a key or an entity with the subject.
+ * K distinct names the 0.80 token-set rule matches to the opposing subject ("Haris Qalbani"): the subject's tokens plus
+ * one more (a subset scores 1.0). Distinct names put more than 30 values in the name tier's `in` list too (F37
+ * re-audit FA-D1C-006, mutant M05). None shares a key or an entity with the subject.
  */
-const CANDIDATE_SPELLINGS = ["Haris Qalbani", "Harris Qalbani", "Haris Qalbany", "Haaris Qalbani", "Qalbani Haris"]
+function candidateNames(k: number): string[] {
+  const rand = prng(0xca7)
+  const out = new Set<string>()
+  while (out.size < k) out.add(`Haris Qalbani ${titled(token(rand))}`)
+  return [...out]
+}
 
-/** K clients the screen must hit (each with one live matter), written out of band; returns their names. */
-async function seedCandidates(firmId: string, k: number): Promise<Set<string>> {
+/** K clients the screen must hit (each with one live matter), written out of band; returns each name's matter id. */
+async function seedCandidates(firmId: string, k: number): Promise<Map<string, string>> {
   const db = adminDb()
   const batch = db.batch()
-  const names = new Set<string>()
-  for (let i = 0; i < k; i++) {
+  const matterOf = new Map<string, string>()
+  candidateNames(k).forEach((name, i) => {
     const clientRef = db.collection("clients").doc()
-    const name = CANDIDATE_SPELLINGS[i % CANDIDATE_SPELLINGS.length]
-    names.add(name)
+    const matterRef = db.collection("matters").doc()
+    matterOf.set(name, matterRef.id)
     batch.set(clientRef, {
       firmId,
       clientCode: `SKD-2099-${String(90000 + i)}`,
@@ -222,7 +226,7 @@ async function seedCandidates(firmId: string, k: number): Promise<Set<string>> {
       createdBy: "seed",
       createdAt: Timestamp.now(),
     })
-    batch.set(db.collection("matters").doc(), {
+    batch.set(matterRef, {
       firmId,
       clientId: clientRef.id,
       matterNo: `NHS/2099/${String(90000 + i)}`,
@@ -233,12 +237,12 @@ async function seedCandidates(firmId: string, k: number): Promise<Set<string>> {
       classification: "confidential",
       createdAt: Timestamp.now(),
     })
-  }
+  })
   await batch.commit()
-  return names
+  return matterOf
 }
 
-/** True candidates per firm: more than one `in` chunk (30), so the per-chunk queries are exercised. */
+/** True candidates per firm: more than one `in` list (30) for the name tier, the matters and the links. */
 const K = 40
 
 type CandidateMeasure = { n: number; without: ReadCount; withK: ReadCount; hits: number }
@@ -252,22 +256,24 @@ async function measureCandidates(n: number): Promise<CandidateMeasure> {
   const without = await screen()
   // CLEAR, though not hit-free: the registered client subject meets its own record (a NONE hit).
   expect(without.result).toMatchObject({ result: "CLEAR", decision: "cleared" })
-  expect(candidateHits(without.result)).toBe(0)
-  for (const name of await seedCandidates(firmId, K)) seeded.add(name)
+  const matterOf = await seedCandidates(firmId, K)
+  expect(candidateHits(without.result, matterOf)).toBe(0)
+  for (const name of matterOf.keys()) seeded.add(name)
   await reconcile(firmId, seeded)
   const withK = await screen()
-  return { n, without: without.reads, withK: withK.reads, hits: candidateHits(withK.result) }
+  return { n, without: without.reads, withK: withK.reads, hits: candidateHits(withK.result, matterOf) }
 }
 
 /**
- * The check's hits on the seeded candidates (by their names), distinct by candidate: each candidate client has its
- * own matter, whose id the partner (cleared above the matters' label) is shown.
+ * The check's hits on the seeded candidates: a hit counts only when its name is a seeded candidate's and its matter id
+ * is that candidate's own matter (the partner, cleared above the matters' label, is shown it), so a candidate fetched
+ * without its matter, or not fetched at all, is missing from the count.
  */
-const candidateHits = (check: Check): number =>
+const candidateHits = (check: Check, matterOf: ReadonlyMap<string, string>): number =>
   new Set(
     (check.hits as Array<{ matchedName?: unknown; matterId?: unknown }>)
-      .filter((h) => typeof h.matchedName === "string" && CANDIDATE_SPELLINGS.includes(h.matchedName))
-      .map((h) => String(h.matterId))
+      .filter((h) => typeof h.matchedName === "string" && matterOf.get(h.matchedName) === h.matterId)
+      .map((h) => String(h.matchedName))
   ).size
 
 describe.skipIf(!EMULATORS)("F37: a screen's reads grow with its true candidates, not with the registry", () => {
@@ -283,8 +289,8 @@ describe.skipIf(!EMULATORS)("F37: a screen's reads grow with its true candidates
       // Recall through the real flow: every true candidate is found (one hit each).
       expect(m.hits).toBe(K)
       // The added reads are per candidate: its client and its matter (the screen), and the caller's membership of
-      // that matter (disclosure of the hit), 3 per candidate, plus at most one query per 30 values for the matters
-      // and each side of the links; never a read per registry row.
+      // that matter (disclosure of the hit), 3 per candidate, plus at most one query per 30 values for the name tier,
+      // the matters and each side of the links; never a read per registry row.
       expect(m.withK.total - m.without.total).toBeGreaterThanOrEqual(K)
       expect(m.withK.total - m.without.total).toBeLessThanOrEqual(3 * K + 3 * Math.ceil(K / 30) + 2)
     }

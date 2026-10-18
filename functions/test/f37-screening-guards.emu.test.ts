@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest"
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "../src/admin"
 import { loadScreeningRegistry } from "../src/d1/conflict/candidates"
-import { nameIndexChunkRef, reconcileNameIndex, NAME_INDEX_SCHEMA } from "../src/d1/conflict/nameIndex"
-import { NAME_REINDEX_JOB_TYPE, nameReindexHandler, pktHourKey } from "../src/d1/conflict/reindexJob"
+import { nameIndexChunkRef, readIndexedNames, reconcileNameIndex, NAME_INDEX_SCHEMA } from "../src/d1/conflict/nameIndex"
+import { NAME_REINDEX_JOB_TYPE, nameReindexHandler, pktHourKey, pktMinuteKey } from "../src/d1/conflict/reindexJob"
 import { openMatterTestSeam } from "../src/d1/matter/ops"
 import { readRegistryState, registryVersionRef } from "../src/d1/registryVersion"
 import { jobIdFor } from "../src/p2/enqueue"
@@ -70,12 +70,15 @@ describe.skipIf(!EMULATORS)("F37: an index that cannot be trusted refuses the sc
     const partner = await mintIdToken(claims(firmId))
     await adminDb().collection("clients").add({ firmId, canonicalName: "Haris Qalbani", classification: "internal", type: "individual" })
     const data = { firmId, client: { name: "Bashir Ahmed" }, opposingParties: [{ name: "Haris Qalbani" }] }
-    // A burst of refused calls makes one job: the idempotency key is per firm and PKT hour.
-    for (let i = 0; i < 3; i++) expectKind(await apiErrorOf(runCheck({ token: partner.token, data } as never)), "unavailable", "screening_unavailable")
+    // A burst of refused calls makes one job: the idempotency key is per firm and PKT minute (F37 re-audit; the calls
+    // share one clock reading, so the burst cannot straddle a minute).
+    const at = Date.now()
+    const runCheckAt = viaApi<Check>("runConflictCheck", { now: () => at })
+    for (let i = 0; i < 3; i++) expectKind(await apiErrorOf(runCheckAt({ token: partner.token, data } as never)), "unavailable", "screening_unavailable")
     expect(await rows("conflict_checks", firmId)).toHaveLength(0)
     expect((await denyRows(partner.uid, "conflict.run")).map((r) => r.reason)).toEqual(["screening_unavailable", "screening_unavailable", "screening_unavailable"])
     const jobs = await reindexJobs(firmId)
-    expect(jobs.map((d) => d.id)).toEqual([jobIdFor(firmId, NAME_REINDEX_JOB_TYPE, `${NAME_REINDEX_JOB_TYPE}:stale:${pktHourKey(Date.now())}`)])
+    expect(jobs.map((d) => d.id)).toEqual([jobIdFor(firmId, NAME_REINDEX_JOB_TYPE, `${NAME_REINDEX_JOB_TYPE}:stale:${pktMinuteKey(at)}`)])
     expect(jobs[0].data()).toMatchObject({ createdBy: "system", classification: "internal", matterId: null, status: "queued" })
 
     expect(await runReindexJob(firmId)).toBe("done")
@@ -174,7 +177,7 @@ describe.skipIf(!EMULATORS)("F37: a registry write racing a matter opening is ca
       { role: "opposing" as const, name: "Haris Qalbani", keys: {} },
     ]
     const load = await loadScreeningRegistry(firmId, subjects, [client.entityId, undefined], new Date())
-    expect(load.indexedNames.has("Harris Qalbany")).toBe(true)
+    expect((await readIndexedNames(firmId)).names.has("Harris Qalbany")).toBe(true)
     expect(load.registry.candidates.map((c) => c.name).sort()).toEqual(["Harris Qalbany", "Tariq Zarvani"])
   })
 })
@@ -199,7 +202,7 @@ describe.skipIf(!EMULATORS)("F37: cross-firm isolation (G-2)", () => {
     ]
     const load = await loadScreeningRegistry(a.firmId, subjects, [a.client.entityId, undefined], new Date())
     expect(load.registry.candidates.map((c) => c.candidateId)).toEqual([`client:${a.client.clientId}`])
-    expect([...load.indexedNames]).toEqual(["Tariq Zarvani"])
+    expect([...(await readIndexedNames(a.firmId)).names]).toEqual(["Tariq Zarvani"])
     // Firm B's own screen finds its own party (and its own same-named client), from its own index only.
     const bHits = (await runCheck({ token: b.partner.token, data: { firmId: b.firmId, client: { name: "Tariq Zarvani" }, opposingParties: [{ name: "Zzz Qqq" }] } } as never)).hits
     expect(bHits).toContainEqual(expect.objectContaining({ hitRole: "opposing", matchedName: "Tariq Zarvani", outcome: "POSSIBLE_CANDIDATE_REVIEW" }))
@@ -266,6 +269,9 @@ describe.skipIf(!EMULATORS)("F37: the reconciliation", () => {
       expect(() => nameReindexHandler.parse(bad)).toThrow(expect.objectContaining({ code: "invalid_payload", permanent: true }))
     }
     expect(pktHourKey(Date.parse("2099-01-02T19:30:00Z"))).toBe("2099-01-03T00")
+    expect(pktMinuteKey(Date.parse("2099-01-02T19:30:59Z"))).toBe("2099-01-03T00:30")
+    expect(nameReindexHandler.parse({ period: "2099-01-03T00:30" })).toEqual({ period: "2099-01-03T00:30" })
+    expect(() => nameReindexHandler.parse({ period: "2099-01-03T00:3" })).toThrow(expect.objectContaining({ code: "invalid_payload" }))
     // No failure is permanent: a damaged index is rebuilt; racing writes make the run retry (PR #80 review).
     expect(Object.keys(nameReindexHandler.errorCodes)).toEqual(["reconcile_contended"])
     expect(Timestamp.now()).toBeTruthy()

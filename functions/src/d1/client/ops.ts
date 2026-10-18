@@ -7,6 +7,7 @@ import { isKnownClassification, rankOf } from "../../p5/classification"
 import { isSafeDocId, type Data, type FirmOperation } from "../../p5/common"
 import { requirePermission } from "../../p5/permission"
 import { bornFreshPatch, stageRegistryWrite } from "../conflict/nameIndex"
+import { nameIndexStamp } from "../conflict/screenedName"
 import { normalisePhone } from "../conflict/normalise"
 import { allocateNumber, formatClientCode, karachiYear, readPrefixes } from "../numbering"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../pagination"
@@ -70,7 +71,8 @@ const iso = (value: unknown): string | null => (value instanceof Timestamp ? val
 
 /** The client document as returned by the read routes. */
 function present(id: string, doc: DocumentData): Record<string, unknown> {
-  const { createdAt, ...rest } = doc
+  // `nameIndexed` is the conflict index's bookkeeping (F37), not client data.
+  const { createdAt, nameIndexed: _bookkeeping, ...rest } = doc
   return { clientId: id, ...rest, createdAt: iso(createdAt) }
 }
 
@@ -185,6 +187,8 @@ export const registerClientOp: FirmOperation<RegisterResult> = {
         ...(keys.secp !== undefined ? { secpNumber: keys.secp } : {}),
         ...Object.fromEntries(Object.entries(optional).filter(([, v]) => v !== undefined)),
         classification,
+        // The name staged in the index above: the registry trigger leaves a stamped name alone (F37 re-audit).
+        ...nameIndexStamp(caller.firmId, canonicalName),
         createdBy: caller.uid,
         createdAt: FieldValue.serverTimestamp(),
       })

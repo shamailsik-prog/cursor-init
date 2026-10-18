@@ -10,6 +10,7 @@ import { isFirestoreDocId, isSafeDocId, type Data, type FirmOperation } from "..
 import { checkPermission, requirePermission } from "../../p5/permission"
 import { maxLabel, runEngine, unseenHits } from "../conflict/engine"
 import { stageRegistryWrite } from "../conflict/nameIndex"
+import { nameIndexStamp } from "../conflict/screenedName"
 import { screeningRegistry } from "../conflict/screening"
 import { nameForms } from "../conflict/normalise"
 import { reliedOnLinkIds, type Hit, type Subject } from "../conflict/match"
@@ -309,10 +310,11 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
             createdBy: caller.uid,
           }
           await audit.stage(tx, "allow", "ok")
-          // The new matter and its parties change the registry: a concurrent open re-screens against them. The opposing
-          // names the name index lacks join it here (F37); the version is the screen's, so the index is the one it read.
-          const newNames = subjects.filter((s) => s.role === "opposing" && !screen.indexedNames.has(s.name)).map((s) => s.name)
-          stageRegistryWrite(tx, caller.firmId, registryState, newNames)
+          // The new matter and its parties change the registry: a concurrent open re-screens against them. Every opposing
+          // name is staged in the name index here (F37), present already or not (the chunks deduplicate it), so each party
+          // row it writes is staged and stamped in this transaction (the registry trigger and recorder check both).
+          const opposingNames = subjects.filter((s) => s.role === "opposing").map((s) => s.name)
+          stageRegistryWrite(tx, caller.firmId, registryState, opposingNames)
           tx.create(matterRef, { ...matter, createdAt: FieldValue.serverTimestamp() })
           for (const uid of [caller.uid, ...memberIds]) {
             tx.create(members().doc(`${matterId}_${uid}`), {
@@ -336,6 +338,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
               matterClassification: classification,
               matterStatus: "live",
               classification: partyClass,
+              ...(s.role === "opposing" ? nameIndexStamp(caller.firmId, s.name) : {}),
               createdAt: FieldValue.serverTimestamp(),
             })
           }

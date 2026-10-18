@@ -96,7 +96,8 @@ async function expectRefusedThenHealed(f: Firm): Promise<void> {
   expect(await rows("conflict_checks", f.firmId)).toHaveLength(checksBefore)
   expect(await rows("matters", f.firmId)).toHaveLength(0)
   expect((await adminDb().collection("conflict_checks").doc(f.clearedCheckId).get()).data()).toMatchObject({ boundMatterId: null, stale: false })
-  expect(await reindexJobs(f.firmId)).toHaveLength(1)
+  // At least one: the refusals' runs are keyed per PKT minute (F37 re-audit), and the two calls may straddle one.
+  expect((await reindexJobs(f.firmId)).length).toBeGreaterThanOrEqual(1)
 
   expect(await runReindexJob(f.firmId)).toBe("done")
   const state = await readRegistryState(f.firmId)

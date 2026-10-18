@@ -6,13 +6,13 @@ import { enqueueJob } from "../../p2/enqueue"
 import { loadScreeningRegistry, type ScreeningLoad } from "./candidates"
 import type { Subject } from "./match"
 import { NameIndexUnavailable } from "./nameIndex"
-import { NAME_REINDEX_JOB_TYPE, pktHourKey } from "./reindexJob"
+import { NAME_REINDEX_JOB_TYPE, pktMinuteKey } from "./reindexJob"
 
 /**
  * The screening registry for runConflictCheck and openMatter (audit F37; spec 2026-10-18-f37 ruling 5). When the
  * firm's name index cannot be trusted (missing, another schema, behind the registry, unreadable) the screen is
  * refused with 503 `screening_unavailable`: no check is written and no matter is opened. A reconciliation job is
- * enqueued for the firm (one per PKT hour, however many calls are refused), so the refusal clears itself once it
+ * enqueued for the firm (one per PKT minute, however many calls are refused), so the refusal clears itself once it
  * runs. Never a silent CLEAR, and never the old O(registry) read on the request path.
  */
 export async function screeningRegistry(
@@ -32,12 +32,14 @@ export async function screeningRegistry(
 }
 
 /**
- * Enqueues the firm's on-demand `d1.conflict.reindex` run for the current PKT hour (a system job, in its own
- * transaction). A failure is logged and swallowed: the caller's refusal stands either way, and the daily run
- * or the next refused call enqueues it again.
+ * Enqueues the firm's on-demand `d1.conflict.reindex` run for the current PKT minute (a system job, in its own
+ * transaction). Keyed per minute, not per hour (F37 re-audit): a key reused after its run finished enqueues nothing,
+ * so an index broken again later in the same hour would wait for the next hour; per minute a burst of refusals or
+ * trigger events still makes one run. A failure is logged and swallowed: the caller's refusal stands either way, and
+ * the daily run or the next refused call enqueues it again.
  */
 export async function requestReindex(firmId: string, nowMs: number): Promise<void> {
-  const period = pktHourKey(nowMs)
+  const period = pktMinuteKey(nowMs)
   const key = `${NAME_REINDEX_JOB_TYPE}:stale:${period}`
   try {
     await adminDb().runTransaction((tx) =>
