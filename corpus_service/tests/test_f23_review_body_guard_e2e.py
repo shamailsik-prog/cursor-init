@@ -257,7 +257,7 @@ def test_m1_review_routes_refuse_before_reading_the_body(review, corpus_db, http
 
         # Ruling 14: with the key, a Content-Length over the cap is 413 before anything is read.
         observed["key, Content-Length over the cap, nothing sent"], measured["over cap"] = _refusal(
-            port, f"/quarantine/{qid}/promote", _json_headers(key, length=MAX_BODY_BYTES + 1))
+            port, f"/quarantine/{qid}/promote", _json_headers(length=MAX_BODY_BYTES + 1, key=key))
 
         # Ruling 14: a chunked body is read up to the cap, and refused as soon as it passes it.
         req = RawRequest(port, f"/quarantine/{qid}/promote", _json_headers(key, chunked=True),
