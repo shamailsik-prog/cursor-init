@@ -62,7 +62,7 @@ If **any** resolved address is blocked, the whole hostname is refused (fail clos
 **R8. Bounded everything.**
 - Timeouts: connect 10 s, read 60 s, write 30 s, pool 10 s, as `httpx.Timeout`.
 - An overall per-fetch deadline of 300 s covers the redirects and the body. A server that drip-feeds bytes cannot hold a worker forever, because the read timeout alone resets on every chunk.
-- Bodies are capped at 100 MiB, counted after content decoding (gzip bombs count by output). That matches `pdf_extractor.MAX_PDF_SIZE_BYTES`.
+- Bodies are capped at 100 MiB. That matches `pdf_extractor.MAX_PDF_SIZE_BYTES`. **Corrected in the re-audit round (section 6):** as first shipped, this line also said "counted after content decoding (gzip bombs count by output)", which was false. The count ran on httpx's already-inflated chunks, so a bomb was inflated before the cap could refuse it. R17 replaces this rule.
 - Over-limit and deadline both raise `FetchRefused` (`too_large`, `deadline_exceeded`).
 
 *Reason:* the audit's P0 fetch-security test row (`:1102`) asks to "cap bytes and elapsed time". Parser isolation and the PDF-specific limits remain **F26**.
@@ -192,3 +192,137 @@ Two behaviour changes follow from routing, both deliberate: every GET now follow
 5. **F26 stays open.** Parser isolation, decompressed, page and time limits on PDF parsing, and the bounded PDF downloader are F26. This change only bounds bytes and time at the fetch boundary.
 6. **Coupling to httpx internals.** The transport replaces httpx's private `_pool`. A future httpx release could move it; construction then raises, and the unit test and the e2e fail, so it cannot silently degrade. R15 pins the runtime to the proven version.
 7. **Connector log lines outside the boundary.** The boundary's own refusal line redacts userinfo. The court connectors' pre-existing `listing request failed <url>` lines still print the URL as discovered, so a page-planted `user:pass@` (which is refused, never sent) can appear there. Not a request path, so not F25; noted for the logging follow-up.
+
+## 6. Re-audit round (FAIL 7/10)
+
+An independent re-audit of #65 (merged as 04d388f) found that the SSRF boundary itself held. About 95 hostile URL forms, the DNS and redirect attacks and the hooks were all refused, and 34 of 47 mutants were killed. It failed F25 at 7/10 on one MEDIUM finding and eight LOWs. The follow-up branch is `claude/remediate-f25-r2`, from origin/main 04d388f. Each ruling below records the decision and the reason.
+
+**Correction to R8.** R8 and the #65 PR body said the body cap was "counted after content decoding (gzip bombs count by output)". That was false. `_read_capped` counted the output of httpx's `aiter_bytes()`, and httpx's decoders inflate each network chunk with no output limit, so the cap was checked only after a chunk had been inflated in full. The re-audit measured:
+- 1.7–1.8 KB bodies with `Content-Encoding: gzip, gzip`, `deflate, deflate` or `br` peaked at about 2,093 MiB RSS before being refused as `too_large`;
+- a 5 KB body aimed at 3 GiB raised `MemoryError`;
+- `br` is live in production, because weasyprint pulls in brotli, so httpx advertises and decodes it.
+
+On main 04d388f this branch's tests measure (tracemalloc):
+- 557.7 MiB for a stacked bomb under 8 KB;
+- 45.5 MiB for a single-coding bomb against a 2 MiB cap;
+- 142 MiB for a 256 MiB gzip bomb at the production cap.
+
+**R17. The boundary decodes bodies itself, in bounded steps (MEDIUM).**
+- Every request sends `Accept-Encoding: gzip`. It is forced in `_send` and at client construction, so a caller's header cannot re-open br or zstd.
+- The body is read raw (`aiter_raw()`), so httpx decodes nothing.
+- Accepted codings: identity, or exactly one of `gzip` / `x-gzip` / `deflate` (`identity` entries are ignored). Refused before any decoding, as `content_encoding_refused`:
+  - stacked codings (`gzip, gzip`, `gzip, deflate`);
+  - `br`, `zstd`, `compress`;
+  - parameterised or unknown values.
+- `_BoundedDecoder` inflates with `zlib.decompressobj(...).decompress(data, 64 KiB)` and feeds `unconsumed_tail` back. No step produces more than 64 KiB, and the decoded total is checked before each write, so memory never exceeds `max_bytes` plus one step.
+- `deflate` is the zlib format; a raw deflate stream (no zlib header) is accepted on the first chunk, as httpx does.
+- Refused as `content_encoding_refused`:
+  - data after the end of the compressed stream (the re-audit's "gztrail");
+  - a stream that never ends (truncated);
+  - a corrupt stream.
+- Bytes on the wire are capped at `max_bytes` too (with no Content-Length, only this cap stops an endless body), and a declared Content-Length over the cap is refused before reading.
+
+*Reason:* the brief's recommended fix. Only gzip is worth advertising: court PDFs are already compressed, and HTML compresses well with gzip. Fail-closed strictness on malformed compressed streams costs nothing for a well-formed server.
+
+**R18. httpx never interprets a redirect (LOW 3).** Even with `follow_redirects=False`, httpx's `send()` builds a `next_request` for every 3xx response. For `Location: https:127.0.0.1:PORT/x`, its `_redirect_url` raised `httpx.InvalidURL` inside `send()`, before the boundary saw the response, and a court retry helper sent the URL three times. Now:
+- A response hook (`_hold_location`, public httpx event-hook API) moves every redirect `Location` into a response extension before httpx's redirect code runs.
+- The boundary resolves the held value itself and refuses, as `ambiguous_url`:
+  - more than one `Location`;
+  - leading or trailing whitespace, or control characters;
+  - backslashes (a browser reads them as `/`);
+  - a scheme without `//`, which httpx's `join` puts on the current origin while its redirect builder reads a host.
+- An unparseable `Location` is `unparseable_url`.
+- `httpx.InvalidURL`, `UnsupportedProtocol` and `TooManyRedirects` raised anywhere inside `get` / `post` become `FetchRefused`, which the court helpers never retry.
+- A 3xx returned as is (a POST) gets its `Location` header back.
+
+*Changed expectation:* `test_the_transport_checks_requests_that_bypass_the_helper` used `follow_redirects=True` on the underlying client to make httpx follow a redirect into the transport check. httpx can no longer follow one at all, so the test now asserts that the 302 comes back unfollowed, and sends the hop's URL directly to show the transport refuses it.
+
+**R19. The body is held once (LOW 4).** On main, a 99 MiB in-cap body cost about 477 MiB peak RSS (re-audit), and a 24 MiB body 48.2 MiB under tracemalloc: the chunk list, the joined copy and an eager `text` copy. Now:
+- The decoder writes into one `BytesIO` and hands its buffer over without a copy (`getvalue()` on an unshared buffer).
+- `FetchedResponse.text` decodes on access and keeps nothing, so a PDF fetch never pays for text.
+- Measured: 24 MiB body 26.6 MiB peak (tracemalloc); 99 MiB body about 102 MiB of fetch RSS.
+- What remains is the body itself, plus `BytesIO`'s growth slack (at most about 12.5 %) and one 64 KiB step.
+
+**R20. `_GuardedBackend`'s hooks are gated like `PolicyFetcher`'s (LOW 5).** `resolver`, `loopback_origins` and `inner` raise `RuntimeError` unless ENVIRONMENT is explicitly `development`. `PolicyFetcher` passes none of them in production. The guard flags the `loopback_origins` keyword, any private member of the boundary (`_GuardedBackend`, `_GuardedTransport`), and building `FetchPolicy` or `PolicyFetcher` outside the registry.
+
+**R21. The guard sees through aliases, dynamic imports and indirection (LOW 1).** The PR #65 guard caught only the control among the re-audit probe's 20 forms. The scan, still AST-based and in `tests/test_f25_fetch_guard.py`, now fails on:
+1. Importing or referencing a forbidden module or any submodule, by any alias. That covers `urllib.request` reached after only `import urllib.parse`. The forbidden list:
+   - HTTP and browser libraries: requests, aiohttp, urllib3, http.client, httplib2, pycurl, playwright, websockets, selenium and the like;
+   - the transport stack: httpcore, anyio, h11, h2, trio;
+   - raw networking and other protocols: socket, ftplib, smtplib, poplib, imaplib, nntplib, telnetlib, xmlrpc, webbrowser;
+   - processes and native code: subprocess, pty, ctypes, cffi.
+2. httpx's client and transport classes and module-level request functions, anywhere outside type annotations. That covers calls, aliases (`from httpx import AsyncClient as C`) and subclasses (`class S(httpx.AsyncClient)`).
+3. Private members of httpx (`httpx._client`, `httpx._transports`, `httpx.__dict__`) and of the boundary.
+4. Connection methods on any receiver: `create_connection`, `connect_tcp`, `open_connection`, `sock_connect`, `wrap_socket`, `urlopen` and the like. That covers `loop.create_connection`, `anyio.connect_tcp` and `httpcore.AnyIOBackend().connect_tcp`.
+5. Processes and fetches:
+   - `os.system`, `os.popen`, `os.exec*`, `os.spawn*`, `asyncio.create_subprocess_*`;
+   - `ssl.get_server_certificate`, `ssl.wrap_socket`;
+   - `lxml` `parse` (it fetches URLs);
+   - `RobotFileParser` given a URL, and `.set_url`.
+6. `getattr` / `setattr` / `delattr` / `vars` / `hasattr` on a network module or the boundary.
+7. Dynamic imports. A literal name, constant-folded through `+` and f-strings, is refused when it names a network module. A computed name is refused everywhere except `scraper/tasks/dispatcher.py`, whose `ROUTES` modules the adoption test already checks.
+8. `exec` / `eval` / `compile`, `sys.modules` and `__builtins__`: code an AST scan cannot read. No corpus module uses them.
+9. Writes to the boundary or a network module (monkeypatching `fetcher_for`, adding to `SOURCE_POLICIES`). `SOURCE_POLICIES` is also a read-only mapping (`MappingProxyType`).
+10. `follow_redirects` other than a literal `False`, and the `_test_*` / `loopback_origins` hooks.
+
+Positive controls: each of the 20 probe forms (p17, an attribute-only reference, is flagged too) plus 25 further bypass forms. Negative controls are taken from real corpus code (dispatcher, config TLS, asyncio, os, robots, annotations). Placed in the tree, the auditor's probe file fails the new guard on every one of its 20 functions and its 7 forbidden imports (33 findings); the PR #65 guard flagged only line 94.
+
+*Residual:* any static guard can be evaded by code it does not parse (C extensions, a dependency's own client). That is what F25-FU1's network egress control is for.
+
+**R22. Plain-http links to allowlisted hosts are fetched as https (LOW 8).** *Ruling: upgrade.*
+- Every registry policy has `upgrade_http=True`. `PolicyFetcher` (`get`, `post`, `allows`) rewrites an `http` link on the default port (none, or `:80`) to `https` on 443, changing only the scheme, and the result must pass `check_url`.
+- Any other http link (another port, a host off the allowlist, userinfo) is refused **as written** (`scheme_not_https` with the original URL), so the log shows what the page said.
+- A **redirect** to http is still refused as a downgrade: a server actively moving to plaintext is not a published link.
+- `FetchPolicy.check_url` / `allows` stay strict (https only).
+
+*Reason:* the re-audit counted 7 Sindh listing links (shc.gov.pk, enotices.sindhhighcourt.gov.pk) that R3 refused. Upgrading keeps that coverage and never sends plaintext. A host that serves no https fails like any unreachable page. *Note:* a court connector stages the link as published (`source_url` may read `http://...`) while the fetch was https.
+
+**LOW 6.** The e2e's pre-F25 fallback catches `ImportError`. A leftover `scraper/net/` directory, say a lone `__pycache__`, is a namespace package, and `from scraper.net import fetch_policy` then raises `ImportError: cannot import name ...`, not `ModuleNotFoundError`. Shown on the pre-F25 tree: the old fallback was a collection error; the new one reaches the real RED assertion (the internal service reached).
+
+**LOW 7.** `pdf_writer.write_judgment_pdf` (no callers today):
+- escapes every metadata value with `xml.sax.saxutils.escape` before reportlab's `Paragraph` parses it as markup (an `<img src=...>` there is fetched at build time);
+- truncates body paragraphs before escaping, so an entity is never cut in half;
+- imports reportlab inside the function, so the module can be tested with a recording stand-in (reportlab is not in the test set).
+
+**Mutation testing, round 2.** The re-audit's 47 mutants (read from its `mutate.py`, never edited) were re-run against this branch, plus 17 new ones for the round-2 code (N01–N17). Six were re-targeted (M13, M17, M26, M31, M36, M47) because round 2 rewrote the lines they named; each keeps its intent. Results:
+
+| Set | Killed | Survived |
+|---|---|---|
+| Re-audit's 47 (re-audit: 34 killed) | **43** | 4, all equivalent (below) |
+| New for round 2, N01–N17 | **17** | 0; N04, N08 and N15 survived the first run and are killed by tests added in 7cc0cc2 |
+
+- **Killed now, having survived the re-audit:** M07, M09, M16, M25, M31 (re-targeted at the decoded cap), M32, M35, M43, M45.
+- **Equivalent survivors.** Each removes one of two layers that refuse the same inputs; both layers stay as defense in depth.
+  - **M06** (`inet_aton` forms missed): every form `inet_aton` accepts ends in a decimal, octal or hex label, which the numeric-last-label check also refuses (httpx lowercases `0X`).
+  - **M14** (NAT64 `/96` unlisted): `64:ff9b::/96` lies outside 2000::/3, which is refused already.
+  - **M17** (`is_global` not required): the explicit lists cover every range Python 3.12 marks non-global. `is_global` stays as a guard against a future Python adding ranges.
+  - **M30** (final-origin check off): the final URL is always the request URL already checked.
+
+**Residuals added in this round.**
+8. An endless identity (uncompressed) body is held up to `max_bytes` (100 MiB) before it is refused: that is the cap itself.
+9. Strict decoding and redirect rules refuse some malformed-but-harmless responses (trailing bytes after gzip, truncated gzip, ambiguous `Location`). They fail closed by design; such a page is logged and skipped.
+10. A static guard cannot see code it does not parse (residual of R21); network egress (F25-FU1) is the backstop.
+
+**Review round (Codex P2 + Copilot ×3) on #67 at ed3b7ae.** Each item was fixed test-first.
+
+- **Raw-deflate fragmentation** (Codex P2, thread 4305386005; Copilot, thread 4305395619).
+  - *Problem:* `_BoundedDecoder` tried the zlib-wrapped decoder and fell back to raw deflate on its first error. A one-byte first chunk gave neither output nor error, which switched the fallback off, so whether a valid raw-deflate body decoded depended on how the server split it. Simply relaxing `_started` would have lost the byte already consumed.
+  - *Ruling:* decide on the first two bytes with zlib's own RFC 1950 header test (CM 8, CINFO <= 7, FCHECK). The undecided prefix (at most one byte) is held and replayed into the chosen decoder. The 64 KiB step and both caps are unchanged, and a deflate body under two bytes is truncated.
+  - *Evidence:* RED 245a08e (5 failed: every raw-deflate one-byte case and the prefix check); GREEN 84b5ddb.
+- **Falsey hooks** (Copilot, thread 4305395602).
+  - *Problem:* `_GuardedBackend` gated its hooks by truthiness but installed them by identity.
+  - *Ruling:* a hook counts when it is not None. The origins are materialised once with `tuple(...)`, and that same tuple is gated and installed. `PolicyFetcher` passes its origins through as given. The sweep for other truthiness switches found `upgrade_http`, which must now be a real bool (TypeError otherwise).
+  - *Evidence:* RED 9a13709 (12 failed); GREEN fcee71a.
+- **Executable annotations** (Copilot, thread 4305395582).
+  - *Ruling:* only bare type references in annotations are exempt from the guard. Calls inside annotations (parameter, return, module, class body, a calling subscript), defaults and string annotations are checked like other code, including under PEP 563.
+  - *Evidence:* RED 9a13709 (10 failed); GREEN 9331dba.
+- **Counts at 9331dba:** `test_f25_reaudit.py` 150 passed; `test_f25_fetch_guard.py` 105 passed; full suite 616 passed; G-0 PASSED.
+- **Found while verifying the merge with main** (origin/main moved to 9ee7854, F24 #64). F24's `routers/export.py` bounds a query with `anyio.move_on_after`, and R21's guard banned the whole anyio module, so this branch merged with main failed the guard although a cancel scope opens nothing.
+  - *Ruling:* anyio is allowed. Its network, DNS and process APIs are banned by name: `connect_tcp` / `connect_unix`, listeners, UDP and UNIX datagram sockets, `open_process` / `run_process`, `getaddrinfo` / `getnameinfo`, the `anyio.abc` socket and process types, and `anyio.streams`. F24's router was not edited.
+  - *Evidence:* RED a827f88 (2 failed: the cancel-scope negatives); GREEN 647398d (`test_f25_fetch_guard.py` 116 passed on the branch and on the merge).
+- **Declared-length test.** It now proves the Content-Length precheck by its reason alone, with wide time margins, because this machine ran at load average 15-20 on 4 CPUs (f9c9de6; M32 is still killed).
+- **Final counts.**
+  - **Branch at f9c9de6:** `test_f25_reaudit.py` 150 passed, `test_f25_fetch_guard.py` 116 passed; full suite 627 passed, 3 warnings, 131 subtests.
+  - **Merged with origin/main 9ee7854 (F24),** a full-tree export of `git merge-tree`, which is what PR CI runs: 793 passed, 3 warnings, 157 subtests.
+  - **Run conditions:** the private PG16 ran with fsync, full_page_writes and synchronous_commit off. That speeds up per-test database creation on the loaded box; it changes no test.
+
