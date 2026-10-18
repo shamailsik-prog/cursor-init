@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -458,5 +458,83 @@ describe("F39 lockfile guard: --npm-ci runs the pinned npm's own validator", () 
     expect(r.out).toContain("cannot run npm --version")
     expect(r.out).toContain("=== lockfile guard FAILED")
     expect(r.code).toBe(1)
+  })
+})
+
+describe("F39 lockfile guard: review round (Codex P2 x2 on PR #66)", () => {
+  const TWO_LOCKS =
+    "functions/npm-shrinkwrap.json and functions/package-lock.json: two lockfiles in one directory; npm ci uses " +
+    "npm-shrinkwrap.json and ignores package-lock.json (keep one)"
+
+  it("P2-1: fails a valid package-lock.json beside an npm-shrinkwrap.json at lockfileVersion 2 (npm ci uses the shrinkwrap)", () => {
+    const root = tree()
+    const shrinkwrap = lockFor(FUNCTIONS_MANIFEST)
+    shrinkwrap.lockfileVersion = 2
+    write(root, "functions/npm-shrinkwrap.json", shrinkwrap)
+    expectFail(root, TWO_LOCKS)
+  })
+
+  it("P2-1: fails two lockfiles in one directory even when both match the manifest", () => {
+    const root = tree()
+    write(root, "functions/npm-shrinkwrap.json", lockFor(FUNCTIONS_MANIFEST))
+    expectFail(root, TWO_LOCKS)
+  })
+
+  it("P2-1: a shrinkwrap on its own is the lockfile checked: a matching one passes, a drifted one fails", () => {
+    const root = tree()
+    renameSync(join(root, "functions/package-lock.json"), join(root, "functions/npm-shrinkwrap.json"))
+    const ok = guard(root)
+    expect(ok.out).toContain("PASS: 2 lockfiles match their manifests (functions/npm-shrinkwrap.json, package-lock.json)")
+    expect(ok.code).toBe(0)
+
+    const shrinkwrap = read(root, "functions/npm-shrinkwrap.json")
+    shrinkwrap.lockfileVersion = 2
+    write(root, "functions/npm-shrinkwrap.json", shrinkwrap)
+    expectFail(root, "functions/npm-shrinkwrap.json: lockfileVersion 2, expected 3 (regenerate it with the pinned npm)")
+  })
+
+  it("P2-2: fails a root package.json that declares no dependencies and has no lockfile (npm ci needs one)", () => {
+    const root = mkdtempSync(join(tmpdir(), "f39-guard-bare-"))
+    roots.push(root)
+    write(root, "package.json", { name: "bare", version: "1.0.0", private: true, ...PIN })
+    expectFail(root, "package.json: no lockfile at the repository root (npm ci fails without one)")
+  })
+
+  it("P2-2: fails an install surface that runs npm ci in a directory without a lockfile or without a package.json", () => {
+    const root = tree()
+    // Declares nothing, so only the install surface below makes its missing lockfile a failure.
+    write(root, "tools/site/package.json", { name: "site", version: "1.0.0", private: true })
+    write(
+      root,
+      ".github/workflows/x.yml",
+      [
+        "name: X",
+        "jobs:",
+        "  a:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - uses: actions/checkout@v4",
+        "      - run: npm --prefix tools/site ci",
+        "      - run: npm ci --prefix=./tools/site/ --no-audit",
+        "      - run: npm clean-install -C tools/docs",
+        "",
+      ].join("\n"),
+    )
+    expectFail(
+      root,
+      ".github/workflows/x.yml:7: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+      ".github/workflows/x.yml:8: npm ci runs in tools/site, which has no lockfile (npm ci fails without one)",
+      ".github/workflows/x.yml:9: npm ci runs in tools/docs, which has no package.json",
+    )
+  })
+
+  it("P2-2: npm ci where a lockfile exists passes, and a prefix held in a variable is not guessed", () => {
+    const root = tree()
+    write(root, "tools/site/package.json", { name: "site", version: "1.0.0", private: true })
+    write(root, ".claude/hooks/session-start.sh", '#!/bin/bash\nfor dir in . functions; do npm ci --prefix "$dir"; done\n')
+    write(root, ".cursor/environment.json", { install: "npm ci && npm --prefix ./functions ci && npm ci --prefix=functions/" })
+    const r = guard(root)
+    expect(r.out).toContain("PASS: install surfaces install frozen (npm ci)")
+    expect(r.code).toBe(0)
   })
 })
