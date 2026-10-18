@@ -301,6 +301,14 @@ MORE_BYPASS_FORMS = {
     "lxml fetches a URL": "from lxml import etree\netree.parse('http://h/x.xml')",
     "webbrowser": "import webbrowser\nwebbrowser.open('http://h')",
     "ssl wrap_socket": "import ssl\nssl.create_default_context().wrap_socket(s, server_hostname='h')",
+    # Code an AST scan cannot read: banned outright (no corpus module uses them).
+    "exec of a string": "exec('import socket')",
+    "eval of a string": "eval(\"__import__('socket')\")",
+    "compile": "code = compile(src, 'probe', 'exec')",
+    "ctypes": "import ctypes\nctypes.CDLL(None)",
+    "cffi": "from cffi import FFI",
+    "sys.modules lookup": "import sys\nsys.modules['socket']",
+    "__builtins__": "__builtins__['__import__']('socket')",
 }
 
 
@@ -323,6 +331,7 @@ def test_guard_catches_every_reaudit_probe_form(snippet):
         ("from scraper.net import fetch_policy\ntry:\n    pass\nexcept fetch_policy.FetchRefused:\n    raise", "scraper/tasks/x.py"),
         ("from scraper.net import fetch_policy\np = fetch_policy.SOURCE_POLICIES['NasirLawSite']\nq = fetch_policy.policy_for('X')", "scraper/tasks/x.py"),
         ("from scraper.net import fetch_policy\nwith fetch_policy.sync_fetcher_for('PakistanCode', headers=h) as c:\n    c.get(u)", "bootstrap_harvest.py"),
+        ("import re\npattern = re.compile(r'x')\nimport sys\nsys.path.insert(0, p)", "scraper/x.py"),
     ],
 )
 def test_guard_round_two_negative_controls(snippet, where):
