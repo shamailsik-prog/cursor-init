@@ -2,11 +2,26 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { SpineStore } from "@/platform/spine/store"
+import {
+  assertDocumentObjectS3Configuration,
+  deleteS3Payload,
+  isDocumentObjectS3Configured,
+  readS3Payload,
+  resetDocumentObjectS3ClientForTests,
+  writeS3Payload,
+} from "@/platform/documents/documentObjectS3"
+import {
+  DocumentObjectConfigurationError,
+  DocumentObjectStoreError,
+} from "@/platform/documents/documentObjectStoreTypes"
+
+export { DocumentObjectConfigurationError, DocumentObjectStoreError }
 
 const OBJECT_FORMAT_VERSION = 1
 const NONCE_BYTES = 12
 const TAG_BYTES = 16
-const STORAGE_SCHEME = "fs://"
+const FS_STORAGE_SCHEME = "fs://"
+const S3_STORAGE_SCHEME = "s3://"
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]+$/
 
 export type DocumentObjectPutInput = {
@@ -25,28 +40,66 @@ export type DocumentObjectPutResult = {
   mimeType: string
 }
 
-export class DocumentObjectConfigurationError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "DocumentObjectConfigurationError"
-  }
+export type DocumentObjectBackendKind = "memory" | "fs" | "s3"
+
+function explicitBackendFromEnv(): DocumentObjectBackendKind | null {
+  const raw = process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND?.trim().toLowerCase()
+  if (!raw) return null
+  if (raw === "s3" || raw === "r2") return "s3"
+  if (raw === "fs") return "fs"
+  if (raw === "memory") return "memory"
+  throw new DocumentObjectConfigurationError(
+    `unsupported SIKANDER_DOCUMENT_OBJECT_BACKEND value: ${raw}`
+  )
 }
 
-function isMemoryBackend(): boolean {
-  if (process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) return false
-  if (process.env.NODE_ENV === "production") return false
-  return process.env.VITEST === "true" || process.env.NODE_ENV === "test"
+/**
+ * The vault backend for this call. Every object-store operation starts here, and in production it
+ * returns "s3" (with the four S3 settings present) or throws: fs and memory never run in production.
+ */
+export function resolveDocumentObjectBackendKind(): DocumentObjectBackendKind {
+  const explicit = explicitBackendFromEnv()
+  if (process.env.NODE_ENV === "production") {
+    if (explicit === "fs" || explicit === "memory") {
+      throw new DocumentObjectConfigurationError(
+        "production requires S3-compatible document object storage (R2); fs and memory backends are forbidden"
+      )
+    }
+    if (!isDocumentObjectS3Configured()) {
+      throw new DocumentObjectConfigurationError(
+        "production requires S3-compatible document object storage (configure Cloudflare R2 / S3 env vars)"
+      )
+    }
+    return "s3"
+  }
+  if (explicit) return explicit
+  if (process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) return "fs"
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") return "memory"
+  if (isDocumentObjectS3Configured()) return "s3"
+  return "memory"
 }
+
+function activeStorageScheme(): string {
+  return resolveDocumentObjectBackendKind() === "s3" ? S3_STORAGE_SCHEME : FS_STORAGE_SCHEME
+}
+
+/** Exactly 64 hex characters. Buffer.from(hex) stops at the first bad pair, so it cannot be the check. */
+const ENCRYPTION_KEY_HEX = /^[0-9a-fA-F]{64}$/
 
 function encryptionKey(): Buffer {
   const raw = process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY?.trim()
   if (!raw) {
     throw new DocumentObjectConfigurationError("SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY is not set")
   }
-  const key = Buffer.from(raw, "hex")
-  if (key.length !== 32) {
+  if (!ENCRYPTION_KEY_HEX.test(raw)) {
     throw new DocumentObjectConfigurationError(
       "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+    )
+  }
+  const key = Buffer.from(raw, "hex")
+  if (key.every((byte) => byte === key[0])) {
+    throw new DocumentObjectConfigurationError(
+      "SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY must not be one byte repeated (all-zero, all-ff and the like)"
     )
   }
   return key
@@ -58,11 +111,16 @@ export function assertDocumentObjectIngestAllowed(): void {
       "document object encryption key is required before ingest is accepted"
     )
   }
-  if (!isMemoryBackend() && !process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
+  // A malformed key refuses the upload here (503), before anything is written.
+  encryptionKey()
+  const kind = resolveDocumentObjectBackendKind()
+  if (kind === "fs" && !process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()) {
     throw new DocumentObjectConfigurationError(
       "SIKANDER_DOCUMENT_OBJECT_ROOT is required before ingest is accepted"
     )
   }
+  // Every S3 setting, not only their presence: a bad one is a 503 here, before the upload is read.
+  if (kind === "s3") assertDocumentObjectS3Configuration()
 }
 
 export function validateDocumentObjectIdentity(firmId: string, docId: string): void {
@@ -73,7 +131,7 @@ export function validateDocumentObjectIdentity(firmId: string, docId: string): v
 
 export function buildDocumentStoragePath(firmId: string, docId: string, objectVersion: number): string {
   validateDocumentObjectIdentity(firmId, docId)
-  return `${STORAGE_SCHEME}${firmId}/documents/${docId}/v${objectVersion}`
+  return `${activeStorageScheme()}${firmId}/documents/${docId}/v${objectVersion}`
 }
 
 function encryptPlaintext(plaintext: Buffer): Buffer {
@@ -85,7 +143,7 @@ function encryptPlaintext(plaintext: Buffer): Buffer {
   return Buffer.concat([Buffer.from([OBJECT_FORMAT_VERSION]), nonce, ciphertext, tag])
 }
 
-function decryptPayload(payload: Buffer): Buffer {
+export function decryptDocumentObjectPayload(payload: Buffer): Buffer {
   if (payload.length < 1 + NONCE_BYTES + TAG_BYTES) {
     throw new Error("document object payload is truncated")
   }
@@ -116,6 +174,29 @@ function assertExpectedHash(
 
 const memoryObjects = new Map<string, Buffer>()
 
+let testHookFailNextRead = false
+let testHookFailNextDelete = false
+
+function assertDocumentObjectTestHooksAllowed(): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "document object test hooks are not available when NODE_ENV=production"
+    )
+  }
+}
+
+/** Test-only: force the next readPayload call to fail (FA-D16-003 verification). */
+export function __testHookFailNextDocumentObjectRead(): void {
+  assertDocumentObjectTestHooksAllowed()
+  testHookFailNextRead = true
+}
+
+/** Test-only: force the next strict delete to fail (FA-D16-003 rollback logging). */
+export function __testHookFailNextDocumentObjectDelete(): void {
+  assertDocumentObjectTestHooksAllowed()
+  testHookFailNextDelete = true
+}
+
 function objectRoot(): string {
   const root = process.env.SIKANDER_DOCUMENT_OBJECT_ROOT?.trim()
   if (!root) {
@@ -125,13 +206,14 @@ function objectRoot(): string {
 }
 
 export function filesystemPathForStoragePath(storagePath: string): string {
-  if (!storagePath.startsWith(STORAGE_SCHEME)) {
+  if (!storagePath.startsWith(FS_STORAGE_SCHEME)) {
     throw new Error("document storagePath must use fs:// scheme")
   }
-  const relative = storagePath.slice(STORAGE_SCHEME.length)
+  const relative = storagePath.slice(FS_STORAGE_SCHEME.length)
   const segments = relative.split("/").filter(Boolean)
   for (const segment of segments) {
-    if (!SAFE_SEGMENT.test(segment) && !/^v[0-9]+$/.test(segment)) {
+    // SAFE_SEGMENT already admits the "v1" version segment.
+    if (!SAFE_SEGMENT.test(segment)) {
       throw new Error("document object path segment failed safety validation")
     }
   }
@@ -145,11 +227,16 @@ export function filesystemPathForStoragePath(storagePath: string): string {
 }
 
 async function writePayload(storagePath: string, payload: Buffer): Promise<void> {
-  if (isMemoryBackend()) {
+  const kind = resolveDocumentObjectBackendKind()
+  if (kind === "memory") {
     if (memoryObjects.has(storagePath)) {
       throw new Error("document object already exists (immutable)")
     }
     memoryObjects.set(storagePath, payload)
+    return
+  }
+  if (kind === "s3") {
+    await writeS3Payload(storagePath, payload)
     return
   }
   const filePath = filesystemPathForStoragePath(storagePath)
@@ -158,7 +245,25 @@ async function writePayload(storagePath: string, payload: Buffer): Promise<void>
 }
 
 async function readPayload(storagePath: string): Promise<Buffer> {
-  if (isMemoryBackend()) {
+  if (testHookFailNextRead) {
+    testHookFailNextRead = false
+    throw new Error("forced round-trip failure")
+  }
+  const kind = resolveDocumentObjectBackendKind()
+  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
+    if (kind !== "s3") {
+      throw new DocumentObjectConfigurationError(
+        "document storage path uses s3:// but the active backend is not S3-compatible"
+      )
+    }
+    return readS3Payload(storagePath)
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object reads require s3:// storage paths"
+    )
+  }
+  if (kind === "memory") {
     const payload = memoryObjects.get(storagePath)
     if (!payload) throw new Error(`document object not found: ${storagePath}`)
     return payload
@@ -166,8 +271,40 @@ async function readPayload(storagePath: string): Promise<Buffer> {
   return readFile(filesystemPathForStoragePath(storagePath))
 }
 
+async function deleteDocumentObjectStrict(storagePath: string): Promise<void> {
+  const kind = resolveDocumentObjectBackendKind()
+  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
+    await deleteS3Payload(storagePath, { strict: true })
+    return
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object deletes require s3:// storage paths"
+    )
+  }
+  if (kind === "memory") {
+    memoryObjects.delete(storagePath)
+    return
+  }
+  if (testHookFailNextDelete) {
+    testHookFailNextDelete = false
+    throw new Error("delete blocked for test")
+  }
+  await unlink(filesystemPathForStoragePath(storagePath))
+}
+
 export async function deleteDocumentObject(storagePath: string): Promise<void> {
-  if (isMemoryBackend()) {
+  const kind = resolveDocumentObjectBackendKind()
+  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
+    await deleteS3Payload(storagePath)
+    return
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object deletes require s3:// storage paths"
+    )
+  }
+  if (kind === "memory") {
     memoryObjects.delete(storagePath)
     return
   }
@@ -181,17 +318,25 @@ export async function deleteDocumentObject(storagePath: string): Promise<void> {
 export async function putImmutableDocumentObject(
   input: DocumentObjectPutInput
 ): Promise<DocumentObjectPutResult> {
-  validateDocumentObjectIdentity(input.firmId, input.docId)
   const objectVersion = 1
+  // buildDocumentStoragePath validates the identity (path safety) first.
   const storagePath = buildDocumentStoragePath(input.firmId, input.docId, objectVersion)
   assertExpectedHash(input.store, input.firmId, input.bytes, input.contentHash)
   const payload = encryptPlaintext(input.bytes)
   await writePayload(storagePath, payload)
-  const roundTrip = decryptPayload(await readPayload(storagePath))
-  assertExpectedHash(input.store, input.firmId, roundTrip, input.contentHash)
-  if (!roundTrip.equals(input.bytes)) {
-    await deleteDocumentObject(storagePath)
-    throw new Error("document object round-trip verification failed")
+  try {
+    const roundTrip = decryptDocumentObjectPayload(await readPayload(storagePath))
+    assertExpectedHash(input.store, input.firmId, roundTrip, input.contentHash)
+    if (!roundTrip.equals(input.bytes)) {
+      throw new Error("document object round-trip verification failed")
+    }
+  } catch (err) {
+    try {
+      await deleteDocumentObjectStrict(storagePath)
+    } catch (deleteErr) {
+      console.error("[documentObjectStore] rollback delete failed:", deleteErr)
+    }
+    throw err
   }
   return {
     storagePath,
@@ -207,7 +352,7 @@ export async function getImmutableDocumentObject(
   storagePath: string,
   expectedContentHash: string
 ): Promise<Buffer> {
-  const plaintext = decryptPayload(await readPayload(storagePath))
+  const plaintext = decryptDocumentObjectPayload(await readPayload(storagePath))
   assertExpectedHash(store, firmId, plaintext, expectedContentHash)
   return plaintext
 }
@@ -222,8 +367,31 @@ export async function restoreDocumentObjectFile(
   storagePath: string,
   backupFilePath: string
 ): Promise<void> {
+  const kind = resolveDocumentObjectBackendKind()
+  // The path rules of readPayload and the deletes, checked before the backup is read or anything is
+  // written: an s3:// path needs the S3 backend; any other path is refused in production and under the
+  // S3 backend, so a restore never writes ciphertext to local disk that the next read would refuse.
+  if (storagePath.startsWith(S3_STORAGE_SCHEME)) {
+    if (kind !== "s3") {
+      throw new DocumentObjectConfigurationError(
+        "document storage path uses s3:// but the active backend is not S3-compatible"
+      )
+    }
+  } else if (process.env.NODE_ENV === "production") {
+    throw new DocumentObjectConfigurationError(
+      "production document object restores require s3:// storage paths"
+    )
+  } else if (kind === "s3") {
+    throw new DocumentObjectConfigurationError(
+      "document object restores under the S3 backend require s3:// storage paths"
+    )
+  }
   const payload = await readFile(path.resolve(backupFilePath))
-  if (isMemoryBackend()) {
+  if (kind === "s3") {
+    await writeS3Payload(storagePath, payload)
+    return
+  }
+  if (kind === "memory") {
     if (memoryObjects.has(storagePath)) {
       throw new Error("document object already exists (immutable)")
     }
@@ -237,4 +405,7 @@ export async function restoreDocumentObjectFile(
 
 export function resetDocumentObjectStoreForTests(): void {
   memoryObjects.clear()
+  testHookFailNextRead = false
+  testHookFailNextDelete = false
+  resetDocumentObjectS3ClientForTests()
 }
