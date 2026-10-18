@@ -20,6 +20,7 @@ import logging
 import signal
 import socket
 import sys
+import time
 
 import httpx
 import pytest
@@ -244,6 +245,88 @@ def test_r26_an_interrupted_embedding_batch_is_recorded_and_its_item_is_untouche
     assert rows[0].error_message == "RunInterrupted: time limit exceeded", rows[0].error_message
     summary = rows[0].result_summary
     assert (summary["outcome"], summary["claimed"], summary["interrupted_by"]) == ("failed", 1, "CancelledError"), summary
+
+
+# ---------------------------------------------------------------------------------------------
+# F26 (#76) compatibility: a court run whose PDFs go through pdf_intake and the sandbox
+# ---------------------------------------------------------------------------------------------
+SLOW_PDF = b"%PDF-1.4\n%F28-SLOW synthetic fixture\n" + b"\x00" * 2048
+
+
+def sandbox_parse_stand_in(monkeypatch, on_slow):
+    """pdf_sandbox.parse (F26's seam, looked up per call and run in a thread by the intake): the
+    readable fixture parses at once; the slow one calls ``on_slow`` first."""
+    from pathlib import Path
+
+    from scraper.parsers import pdf_sandbox
+
+    from test_f28_source_outcomes_e2e import READABLE_TEXT
+
+    def _parse(path, sha256, size, **kwargs):
+        if b"F28-SLOW" in Path(path).read_bytes():
+            on_slow()
+        return pdf_sandbox.ParseResult(text=READABLE_TEXT, pages=1, ocr_applied=False)
+
+    monkeypatch.setattr(pdf_sandbox, "parse", _parse)
+
+
+def test_f26_compat_a_time_limit_while_the_sandbox_parses_is_recorded(corpus_db, monkeypatch):
+    """SHC: the first PDF is staged; the soft limit lands while the second is parsed in the sandbox's
+    thread, so the event loop is waiting and the run gets asyncio.run's CancelledError (R21)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: READABLE_PDF, 2: SLOW_PDF}))
+
+    def slow_parse():
+        signal.setitimer(signal.ITIMER_REAL, 0.3)
+        time.sleep(2)
+
+    sandbox_parse_stand_in(monkeypatch, slow_parse)
+
+    with soft_limit_on_sigalrm():
+        result = fire("scrape-shc-public")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "SoftTimeLimitExceeded", repr(result.result)
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.pages_scraped, r.records_extracted, r.records_failed) for r in rows] == [("failed", 1, 1, 0)], rows
+    summary = rows[0].result_summary
+    assert (summary["reason"], summary["interrupted_by"]) == ("time limit exceeded", "CancelledError"), summary
+    assert count("scraper_staging") == 1
+    assert source_row("SindhHighCourtPublic").consecutive_failures == 1
+
+
+def test_f26_compat_a_time_limit_in_the_intakes_own_code_is_not_a_rejected_document(corpus_db, monkeypatch):
+    """The limit lands in pdf_intake's synchronous code for the second PDF. F26's `except
+    DocumentRejected` does not match it; the harvester's `except Exception` hands it to the tally,
+    which re-raises it (R23). On main (F26 without this round) it was counted as one failed PDF and
+    the run ended `partial`, a SUCCESS."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: READABLE_PDF, 2: READABLE_PDF}))
+    sandbox_parse_stand_in(monkeypatch, lambda: None)
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from scraper.tasks import pdf_intake
+
+    real_declared_type = pdf_intake.declared_type
+    calls = []
+
+    def declared_type(headers):  # the intake's own code, on the event loop's thread
+        calls.append(headers)
+        if len(calls) == 2:
+            raise SoftTimeLimitExceeded()
+        return real_declared_type(headers)
+
+    monkeypatch.setattr(pdf_intake, "declared_type", declared_type)
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "SoftTimeLimitExceeded", repr(result.result)
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.pages_scraped, r.records_extracted, r.records_failed) for r in rows] == [("failed", 1, 1, 0)], rows
+    summary = rows[0].result_summary
+    assert (summary["reason"], summary["interrupted_by"], summary["errors"]) == (
+        "time limit exceeded", "SoftTimeLimitExceeded", {}), summary
 
 
 # ---------------------------------------------------------------------------------------------
