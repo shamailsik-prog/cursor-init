@@ -153,6 +153,8 @@ No new production seam. The e2e simulates the crash by stopping firebase-admin's
 - `platform/http/durableIdempotency.ts`, `platform/http/idempotency.ts`: ruling 10.
 - `platform/persistence/firestoreSpineRepositories.ts`, `platform/persistence/spineRepositories.ts`, `platform/audit/requestAudit.ts`: the dead-letter firm scope (§2.5).
 - `functions/src/p5/auditOutbox.ts`, `functions/src/p5/auditOutboxReconciler.ts` (new), `functions/src/index.ts` (one export line).
+- `platform/persistence/firmScopedList.ts` (`listAllRowsByFirmField`), `firestoreDbModular.ts` (`queryByFieldEquals`): the paged legacy dead-letter listing.
+- Functions tests: `functions/test/f11-audit-outbox.emu.test.ts` (new); the export lists in `p2.boot`, `p5.identity` and the G-2 `NOT_TENANT_ENDPOINTS` (ruling 17).
 - `firestore.rules` (`audit_outbox` server-only), `firestore.indexes.json` (ruling 13).
 - `package.json` (`test:rules` runs the new emulator files), `vitest.config.ts` (excludes them without emulators).
 
@@ -160,7 +162,8 @@ No new production seam. The e2e simulates the crash by stopping firebase-admin's
 
 - `tests/f11-atomic-request-audit.e2e.firestore.test.ts`: the real flow. `POST /api/d1/clients` through `withSession`, `NODE_ENV=production`, Firebase auth with Auth-emulator ID tokens, Firestore mode on the emulator. The crash: the test stops firebase-admin's prototypes right after a chosen commit. RED on main; GREEN for every property the brief lists.
 - `tests/f11-audit-outbox.firestore.test.ts`: the helpers stage in the same commit or not at all (fenced, unfenced, transaction, external effect, excluded collections, no request); the reconciler's exactly-once, poison, attempts, alert and isolation; the dead-letter `listByFirm` on Firestore.
-- `tests/f11-audit-outbox.unit.test.ts`: the contract, the memory `listByFirm`, the sink seam guard.
+- `tests/f11-audit-outbox.unit.test.ts`: the contract, the memory `listByFirm`, the sink seam guard, the client-SDK refusal (ruling 11).
+- `functions/test/f11-audit-outbox.emu.test.ts`: the reconciler on the Functions package's own firebase-admin (the deployed one): racing runs publish once, a poisoned row is dead-lettered, the alert fires and clears.
 
 ## 8. Deploy and consumer impact
 
@@ -176,3 +179,14 @@ No new production seam. The e2e simulates the crash by stopping firebase-admin's
 - A row mutated in memory after it was staged and before the flush can conflict with the reconciler's copy if the request outlives the grace (more than 10 minutes); the flush then answers 503 and dead-letters the row through the existing path.
 - A deployment without the reconciler, or without the alert policies, leaves the backlog undrained or unwatched; the state document still shows it.
 - The object-store bytes of a document whose row never committed (ruling 16).
+- The reconciler's range query sees only entries whose `stagedAt` is a timestamp. The Next process always writes a `Date`; an entry written otherwise (by hand) is neither published nor counted in the backlog.
+- Each effect commit carries one more write. A repository transaction that already writes Firestore's per-commit maximum would exceed it by one; no Next repository transaction writes near that many documents today.
+- A fire-and-forget effect write that a handler leaves running after the response would stage an entry after the release; the reconciler then publishes it, its rows already present (superseded), with a recovered row.
+
+## 10. Amendments in execution (2026-10-18)
+
+- A1. Rows are normalised (id, firm, time) when they are staged, not at the flush. A staged row's `at` is the time of the write that staged it, and the flush persists the same object with the same id and content.
+- A2. The dispatch staging rides on F10's `markEffect(kind, outbox)`. The outbox write lives in a non-exported helper of `firestoreDbModular.ts` and runs only inside the fenced transaction; F10's static guard still finds exactly the four fenced writers.
+- A3. A request whose flush has no rows cannot fail it, so it releases its entries even when the sink fails. That is correct (no row is owed); two staging tests push a row so that their failing flush keeps the entries.
+- A4. Main 957fe26 (F37's `d1ConflictReindexTick`) was merged; the Functions export lists hold both new functions.
+- A5. Observation from the full `test:rules` set: another file's scenario (a request whose flush fails in Firestore mode) leaves one outbox entry in the emulator. In production such an entry is what the reconciler drains.
