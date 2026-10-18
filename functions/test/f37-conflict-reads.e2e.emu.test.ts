@@ -132,23 +132,38 @@ async function projection(): Promise<{ index: NameIndexModule; registry: Registr
 
 type Measure = { n: number; registryRows: number; check: ReadCount; open: ReadCount }
 
-async function measure(n: number): Promise<Measure> {
+/** Builds the name index the way production does (the reconciliation) and checks it holds every seeded name; a no-op without the projection. */
+async function reconcile(firmId: string, seeded: Set<string>): Promise<void> {
+  const p = await projection()
+  if (!p) return
+  await p.index.reconcileNameIndex(firmId)
+  // The index really holds the registry: every seeded name, so the screen's flat reads are not an empty index's.
+  const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
+  expect([...seeded].filter((name) => !indexed.has(name))).toEqual([])
+}
+
+/** A firm with N filler clients (3N registry rows), its name index built, and a partner who registers the subject client. */
+async function seedFirm(n: number) {
   const firmId = uniq("f37firm")
   await adminDb().collection("firms").doc(firmId).set({ name: "F37 synthetic firm", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS" })
   const seeded = await seedRegistry(firmId, n)
-  const p = await projection()
-  if (p) {
-    await p.index.reconcileNameIndex(firmId)
-    // The index really holds the registry: every seeded name, so the screen's flat reads are not an empty index's.
-    const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
-    expect([...seeded].filter((name) => !indexed.has(name))).toEqual([])
-    expect(indexed.size).toBe(seeded.size)
-  }
+  await reconcile(firmId, seeded)
   const partner = await mintIdToken(claims(firmId, "partner"))
   const client = await registerClient({
     token: partner.token,
     data: { firmId, name: "Tariq Zarvani", type: "individual", primaryMobile: "03019990001", classification: "internal" },
   } as never)
+  seeded.add("Tariq Zarvani")
+  return { firmId, partner, client, seeded }
+}
+
+async function measure(n: number): Promise<Measure> {
+  const { firmId, partner, client, seeded } = await seedFirm(n)
+  const p = await projection()
+  if (p) {
+    const indexed = await p.index.readIndexedNames(firmId, await p.registry.readRegistryState(firmId))
+    expect(indexed.size).toBe(seeded.size)
+  }
   const check = await countReads(() =>
     runCheck({ token: partner.token, data: { firmId, client: { clientId: client.clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
   )
@@ -178,5 +193,103 @@ describe.skipIf(!EMULATORS)("F37: conflict screening reads are bounded by the ca
     // Flat in N: quadrupling the registry adds no reads beyond noise in the fixed overhead.
     expect(large.open.total - small.open.total).toBeLessThanOrEqual(2)
     expect(large.check.total - small.check.total).toBeLessThanOrEqual(2)
+  }, 600_000)
+})
+
+/**
+ * Spellings of the opposing subject ("Haris Qalbani") that the 0.80 token-set name rule matches: exact, a doubled
+ * letter, a vowel swap, a long vowel, the reversed order. None shares a key or an entity with the subject.
+ */
+const CANDIDATE_SPELLINGS = ["Haris Qalbani", "Harris Qalbani", "Haris Qalbany", "Haaris Qalbani", "Qalbani Haris"]
+
+/** K clients the screen must hit (each with one live matter), written out of band; returns their names. */
+async function seedCandidates(firmId: string, k: number): Promise<Set<string>> {
+  const db = adminDb()
+  const batch = db.batch()
+  const names = new Set<string>()
+  for (let i = 0; i < k; i++) {
+    const clientRef = db.collection("clients").doc()
+    const name = CANDIDATE_SPELLINGS[i % CANDIDATE_SPELLINGS.length]
+    names.add(name)
+    batch.set(clientRef, {
+      firmId,
+      clientCode: `SKD-2099-${String(90000 + i)}`,
+      entityId: `ent-${clientRef.id}`,
+      canonicalName: name,
+      type: "individual",
+      primaryMobile: `+92398${String(1000000 + i).padStart(7, "0")}`,
+      classification: "internal",
+      createdBy: "seed",
+      createdAt: Timestamp.now(),
+    })
+    batch.set(db.collection("matters").doc(), {
+      firmId,
+      clientId: clientRef.id,
+      matterNo: `NHS/2099/${String(90000 + i)}`,
+      title: "Synthetic matter",
+      stage: "pre_filing",
+      status: "live",
+      conflictCheckId: "seeded",
+      classification: "confidential",
+      createdAt: Timestamp.now(),
+    })
+  }
+  await batch.commit()
+  return names
+}
+
+/** True candidates per firm: more than one `in` chunk (30), so the per-chunk queries are exercised. */
+const K = 40
+
+type CandidateMeasure = { n: number; without: ReadCount; withK: ReadCount; hits: number }
+
+async function measureCandidates(n: number): Promise<CandidateMeasure> {
+  const { firmId, partner, client, seeded } = await seedFirm(n)
+  const screen = () =>
+    countReads(() =>
+      runCheck({ token: partner.token, data: { firmId, client: { clientId: client.clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
+    )
+  const without = await screen()
+  // CLEAR, though not hit-free: the registered client subject meets its own record (a NONE hit).
+  expect(without.result).toMatchObject({ result: "CLEAR", decision: "cleared" })
+  expect(candidateHits(without.result)).toBe(0)
+  for (const name of await seedCandidates(firmId, K)) seeded.add(name)
+  await reconcile(firmId, seeded)
+  const withK = await screen()
+  return { n, without: without.reads, withK: withK.reads, hits: candidateHits(withK.result) }
+}
+
+/**
+ * The check's hits on the seeded candidates (by their names), distinct by candidate: each candidate client has its
+ * own matter, whose id the partner (cleared above the matters' label) is shown.
+ */
+const candidateHits = (check: Check): number =>
+  new Set(
+    (check.hits as Array<{ matchedName?: unknown; matterId?: unknown }>)
+      .filter((h) => typeof h.matchedName === "string" && CANDIDATE_SPELLINGS.includes(h.matchedName))
+      .map((h) => String(h.matterId))
+  ).size
+
+describe.skipIf(!EMULATORS)("F37: a screen's reads grow with its true candidates, not with the registry", () => {
+  it(`K = ${K} clients matching the opposing party: every one is a hit, and the reads they add are bounded by K at N = 500 and N = 2,000`, async () => {
+    const small = await measureCandidates(500)
+    const large = await measureCandidates(2000)
+    for (const m of [small, large]) {
+      console.log(
+        `F37 reads N=${m.n} K=0: runConflictCheck ${m.without.total}; K=${K}: runConflictCheck ${m.withK.total} hits ${m.hits} ${JSON.stringify(m.withK.byCollection)}`
+      )
+    }
+    for (const m of [small, large]) {
+      // Recall through the real flow: every true candidate is found (one hit each).
+      expect(m.hits).toBe(K)
+      // The added reads are per candidate: its client and its matter (the screen), and the caller's membership of
+      // that matter (disclosure of the hit), 3 per candidate, plus at most one query per 30 values for the matters
+      // and each side of the links; never a read per registry row.
+      expect(m.withK.total - m.without.total).toBeGreaterThanOrEqual(K)
+      expect(m.withK.total - m.without.total).toBeLessThanOrEqual(3 * K + 3 * Math.ceil(K / 30) + 2)
+    }
+    // Flat in N with candidates present: quadrupling the registry adds no reads beyond noise in the fixed overhead.
+    expect(large.withK.total - small.withK.total).toBeLessThanOrEqual(2)
+    expect(large.withK.total).toBeLessThanOrEqual(OPEN_READ_BUDGET)
   }, 600_000)
 })
