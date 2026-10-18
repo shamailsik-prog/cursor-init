@@ -555,12 +555,13 @@ def test_r2_a_batch_that_lost_its_lease_writes_nothing_to_the_row_or_the_record(
 # ---------------------------------------------------------------------------------------------
 # R10: a batch that ends abnormally gives back what it holds
 # ---------------------------------------------------------------------------------------------
-def test_r10_a_batch_failed_by_the_database_charges_its_row_once_and_gives_back_the_rest(corpus_db, monkeypatch):
+def test_r10_a_batch_failed_by_the_database_keeps_its_paid_answer_and_gives_back_the_rest(corpus_db, monkeypatch):
     """Three rows; the database refuses row 2's vector write (a trigger, SQLSTATE 23514), after the
     provider answered. The batch fails (F28 R4). On main row 2 stayed `pending` uncharged with nothing
-    kept, so the next batch paid for it again. Here row 2 is charged once (it may be the cause), row 3
-    goes back untouched, row 2's answered vector is kept in its receipt, and once due the next batch
-    stores it with no second request. Spec R10, R6, R5."""
+    kept, so the next batch paid for it again. Here row 2's answered vector is kept in its receipt,
+    the failed store is counted on that receipt instead of charging the row (review round 2: a store
+    of a paid answer is not a provider attempt), row 3 goes back untouched, and the next batch stores
+    row 2's answer with no second request. Spec R10, R6, R5."""
     migrated(corpus_db)
     seed_statutes(1, 3)
     corpus_db.admin(
@@ -576,10 +577,11 @@ def test_r10_a_batch_failed_by_the_database_charges_its_row_once_and_gives_back_
 
     assert failed.state == "FAILURE", repr(failed.result)
     rows = queue_by_row()
-    assert (rows[1], rows[2][:2], rows[3]) == (("completed", 0, None, True), ("pending", 1), ("pending", 0, None, False)), rows
-    delay = run(fetch("SELECT extract(epoch FROM q.next_attempt_at - q.updated_at)::int FROM embedding_queue q "
-                      "JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = 's2'"))[0][0]
-    assert delay == BACKOFF[0], delay
+    assert (rows[1], rows[2], rows[3]) == (
+        ("completed", 0, None, True), ("pending", 0, "IntegrityError", False), ("pending", 0, None, False)), rows
+    due = run(fetch("SELECT q.next_attempt_at IS NULL FROM embedding_queue q "
+                    "JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = 's2'"))[0][0]
+    assert due, "the held answer's store is retried at once"
     assert [r[:3] for r in receipts()] == [("stored", TOKENS, False), ("answered", TOKENS, True)], receipts()
     summary_row = jobs("embedding_queue", job_type="embed")[0].result_summary
     assert (summary_row["claimed"], summary_row["completed"], summary_row["failed"], summary_row["released"]) == (3, 1, 1, 1), summary_row
@@ -590,7 +592,103 @@ def test_r10_a_batch_failed_by_the_database_charges_its_row_once_and_gives_back_
 
     assert (provider.per_row(), done.get("reused")) == ({1: 1, 2: 1, 3: 1}, 1), (
         f"requests per row {provider.per_row()}: row 2's paid answer must be stored, not paid for again; {done}")
-    assert set(queue_by_row().values()) == {("completed", 0, None, True), ("completed", 1, None, True)}
+    assert set(queue_by_row().values()) == {("completed", 0, None, True)}
+
+
+# Review round 2 (Bugbot 4307417933): a store of a paid answer that fails is bounded on its receipt.
+STORE_RETRY_LIMIT = 3  # spec R10 (review round 2)
+REFUSE_VECTOR = (
+    "CREATE FUNCTION f27_refuse_vector() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+    "IF NEW.embedding IS NOT NULL THEN "
+    "RAISE EXCEPTION 'synthetic F27 vector write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+    "CREATE TRIGGER f27_refuse_vector BEFORE UPDATE ON statutes_master FOR EACH ROW EXECUTE FUNCTION f27_refuse_vector()",
+)
+REQUEUE = ("UPDATE embedding_queue SET status = 'pending', attempts = 0, next_attempt_at = NULL, "
+           "error_type = NULL, error_message = NULL")  # the README's requeue statement, for every row
+
+
+def store_failures():
+    return [n for (n,) in run(fetch("SELECT store_failures FROM embedding_attempts ORDER BY started_at, id"))]
+
+
+def test_r10_a_store_that_fails_on_the_last_attempt_keeps_the_row_and_its_paid_answer(corpus_db, monkeypatch):
+    """Review round 2 (Bugbot 4307417933). The row is on its last attempt (4 of 5); the provider
+    answers, the `answered` receipt commits, then the database refuses the vector write (a trigger,
+    SQLSTATE 23514: a database error inside `_store`). At 132957c the give-back charged the row, which
+    sent it to the dead letter with the paid vector held in a receipt nothing claims. Now a failed
+    store of a held answer does not charge the row: it is due again at once, and once the database
+    accepts the write the answer is stored with no new request."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    run(execute("UPDATE embedding_queue SET attempts = max_attempts - 1"))
+    corpus_db.admin(*REFUSE_VECTOR)
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    failed = fire("process-embeddings")
+
+    assert failed.state == "FAILURE", repr(failed.result)
+    assert (queue_by_row()[1], receipts()) == (
+        ("pending", MAX_ATTEMPTS - 1, "IntegrityError", False), [("answered", 7, True, False, None)]), (
+        f"the paid answer was stranded: row {queue_by_row()[1]}, receipts {receipts()}")
+    assert store_failures() == [1]
+    corpus_db.admin("DROP TRIGGER f27_refuse_vector ON statutes_master")
+    done = summary(fire("process-embeddings"))
+    assert (queue_by_row()[1], len(provider.calls), done.get("reused")) == (
+        ("completed", MAX_ATTEMPTS - 1, None, True), 1, 1), done
+    assert receipts() == [("stored", 7, False, True, None)], receipts()
+
+
+def test_r10_a_paid_answer_the_database_keeps_refusing_is_dead_lettered_after_three_stores_and_kept(corpus_db, monkeypatch):
+    """Review round 2: the bound. The database refuses the vector write every time (a deterministic
+    refusal). Each batch retries the store of the held answer, uncharged, with no new request; the
+    third failed store sends the row to the dead letter as `store_failed`, its attempts untouched and
+    the vector kept in the `answered` receipt. No retry-forever loop (with Autofix ee8ee02's uncharged
+    give-back the row went back to pending after every failure). After the operator fixes the cause
+    and requeues the row (README), the kept answer is stored with no new request."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    corpus_db.admin(*REFUSE_VECTOR)
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    runs = [fire("process-embeddings") for _ in range(STORE_RETRY_LIMIT)]
+
+    assert [r.state for r in runs] == ["FAILURE"] * STORE_RETRY_LIMIT, [repr(r.result) for r in runs]
+    assert (queue_by_row()[1], receipts(), len(provider.calls)) == (
+        ("dead_letter", 0, "store_failed", False), [("answered", 7, True, False, None)], 1), (
+        f"row {queue_by_row()[1]}, receipts {receipts()}, {len(provider.calls)} requests")
+    assert store_failures() == [STORE_RETRY_LIMIT]
+    assert summary(fire("process-embeddings")).get("claimed") == 0, "a dead letter is never claimed again"
+    corpus_db.admin("DROP TRIGGER f27_refuse_vector ON statutes_master")
+    run(execute(REQUEUE))
+    done = summary(fire("process-embeddings"))
+    assert (queue_by_row()[1], len(provider.calls), done.get("reused")) == (("completed", 0, None, True), 1, 1), done
+
+
+def test_r3_a_row_whose_storing_batch_was_lost_three_times_is_dead_lettered_with_its_answer_kept(corpus_db, monkeypatch):
+    """Review round 2: the bound on round 1's residual. A reclaim that finds a held answer counts the
+    lost batch as a failed store of that answer; when the count reaches the bound (here the receipt
+    already shows 2), the row goes to the dead letter as `store_failed` instead of cycling uncharged
+    forever, its attempts untouched and the vector kept; a requeue stores it with no new request. (No
+    132957c equivalent: the count is new.)"""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    statute_id = run(fetch("SELECT id FROM statutes_master"))[0][0]
+    leave_crashed("s1", statute_id, outcome="answered", text=statute_text(1), attempts_left=MAX_ATTEMPTS)
+    run(execute("UPDATE embedding_attempts SET store_failures = :n", params={"n": STORE_RETRY_LIMIT - 1}))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    result = summary(fire("process-embeddings"))
+
+    assert (queue_by_row()[1], receipts()) == (("dead_letter", 0, "store_failed", False), [("answered", 7, True, False, None)]), (
+        queue_by_row(), receipts())
+    assert (store_failures(), len(provider.calls), result.get("dead_letter_reasons"), result.get("reclaimed_answered")) == (
+        [STORE_RETRY_LIMIT], 0, {"store_failed": 1}, 0), result
+    run(execute(REQUEUE))
+    done = summary(fire("process-embeddings"))
+    assert (queue_by_row()[1], len(provider.calls), done.get("reused")) == (("completed", 0, None, True), 0, 1), done
 
 
 def test_r10_an_interrupted_request_leaves_an_interrupted_receipt_and_its_row_uncharged(corpus_db, monkeypatch):
