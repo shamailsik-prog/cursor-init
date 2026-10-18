@@ -179,21 +179,44 @@ def parse(path: "os.PathLike[str] | str", sha256: str, size: int, *, limits: Opt
     return result
 
 
-def _scratch_owner(name: str) -> Optional[int]:
-    """The worker pid in ``f26-pdf-<pid>-<random>``; None for a name without one (F26's first
-    version named them ``f26-pdf-<random>``, and ``mkdtemp``'s random part has no ``-``)."""
+_PID_MAX_FALLBACK = 4194304  # the kernel's ceiling for pid_max on 64-bit (PID_MAX_LIMIT)
+
+
+def _pid_max(path: str = "/proc/sys/kernel/pid_max") -> int:
+    """The largest pid this kernel hands out; the 64-bit ceiling when it cannot be read."""
+    try:
+        with open(path, encoding="ascii") as source:
+            value = int(source.read().strip())
+    except (OSError, ValueError):
+        return _PID_MAX_FALLBACK
+    return value if value > 0 else _PID_MAX_FALLBACK
+
+
+def _scratch_owner(name: str, pid_max: Optional[int] = None) -> Optional[int]:
+    """The worker pid in ``f26-pdf-<pid>-<random>``, parsed strictly (PR #81 review round 1): ASCII
+    digits in canonical form, above 0 and at most the kernel's pid_max. Anything else (F26's first
+    version named them ``f26-pdf-<random>``; ``mkdtemp``'s random part has no ``-``; a name planted
+    by anyone who can write the temporary directory) has no owner and is left to the age rule."""
     head, sep, _ = name[len(SCRATCH_PREFIX):].partition("-")
-    return int(head) if sep and head.isdigit() and int(head) > 0 else None
+    if not sep or not head.isascii() or not head.isdigit() or head != str(int(head)):
+        return None
+    pid = int(head)
+    limit = _pid_max() if pid_max is None else pid_max
+    return pid if 0 < pid <= limit else None
 
 
-def _process_alive(pid: int) -> bool:
+def _worker_gone(pid: int) -> bool:
+    """True only when no process has ``pid`` (signal 0 sends nothing). A value that is not a pid
+    (never past ``_scratch_owner``, but checked here too) is never a dead worker."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return False
-    except PermissionError:  # alive, another user's
         return True
-    return True
+    except (PermissionError, OverflowError, ValueError):  # alive (another user's), or not a pid
+        return False
+    return False
 
 
 def _sweep_stale_scratch() -> None:
@@ -203,6 +226,7 @@ def _sweep_stale_scratch() -> None:
     a link and does not follow links inside)."""
     root = tempfile.gettempdir()
     now = time.time()
+    pid_max = _pid_max()
     try:
         entries = list(os.scandir(root))
     except OSError:
@@ -216,8 +240,8 @@ def _sweep_stale_scratch() -> None:
             age = now - entry.stat(follow_symlinks=False).st_mtime
         except OSError:
             continue
-        owner = _scratch_owner(entry.name)
-        if age > SCRATCH_STALE_SECONDS or (owner is not None and not _process_alive(owner)):
+        owner = _scratch_owner(entry.name, pid_max)
+        if age > SCRATCH_STALE_SECONDS or (owner is not None and _worker_gone(owner)):
             shutil.rmtree(entry.path, ignore_errors=True)
 
 
