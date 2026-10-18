@@ -35,7 +35,8 @@ kind, is refused and logged. `tests/test_trust_policy.py` scans all of `scraper/
 (import aliases resolved) for any reference to `CaseLawMaster` / `StatutesMaster` and any write SQL
 naming `case_law_master` / `statutes_master` (schema-qualified or not); every module it finds must be
 a `direct` route module or on the reviewed allowlist in that test: promotion, the F23 quarantine
-router, embeddings and cross_reference write; main (`/health`), search and export only read.
+router, embeddings and cross_reference write; main (`/health`) and `scraper/public_corpus.py` (the
+published-only reads behind search and export, audit F24) only read.
 
 Every staging row a harvester writes carries its source: `source_id` plus
 `parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`).
@@ -223,6 +224,41 @@ are `test_publication_vocabulary.py`, `test_publication_citations.py` (checked a
 `tests/fixtures/corpus/citation-canonical-golden.json`, generated from TypeScript by
 `npm run corpus:citation-golden`) and `test_publication_batch.py`. Run them with
 `CORPUS_TEST_DATABASE_URL=… python -m pytest corpus_service/tests -q` from the repository root.
+
+## Public corpus API (audit F24)
+
+`/search`, `/cases/{id}`, `/statutes` and `/statutes/{id}` (`scraper/routers/search.py`) are
+unauthenticated; `/export/cases` (`scraper/routers/export.py`) needs the admin key. Both routers read
+`case_law_master` / `statutes_master` only through `scraper/public_corpus.py`, and the AST scan in
+`tests/test_trust_policy.py` keeps it that way. Spec:
+`docs/superpowers/specs/2026-10-18-f24-bounded-public-corpus-queries-design.md`.
+
+- **Published only, failing closed.** A judgment is served when `is_promoted` is true and its
+  `source_site` names a `scraper_sources` row whose `trust_level` is exactly `trusted` or `review`;
+  a statute section when its `source_site` names a `trusted` source. Anything else (not promoted, a
+  `blocked`, unknown or missing source) is never returned, and a detail request for it is `404`, the
+  same as a missing id. Staging and quarantine are never read.
+- **Summary DTOs.** Lists return `{"items": [...], "next_cursor": ...}` with summary fields only (no
+  text column). Detail routes add the text. No public response carries `embedding`, `search_text`,
+  quality fields or provenance (`source_site`, `source_url`, `source_file_path`).
+- **Bounds.** `limit` is 1-100 (`/search` default 10, `/statutes` default 20); out of range is `422`,
+  never clamped. `q` and `statute_name` are trimmed, 2-200 characters, contain no control
+  characters and are not only `%`, `_`, `\` and whitespace (`422`); `%`, `_` and `\` then match
+  literally (`ILIKE ... ESCAPE '\'`). Pages are keyset pages on the primary key; the cursor is
+  opaque, and a malformed one is `400`.
+- **Timeout and quota.** Each request runs in one `READ ONLY` transaction with a transaction-local
+  `statement_timeout` (`PUBLIC_QUERY_TIMEOUT_MS`, default 3000); a cancelled statement is `503` with
+  `Retry-After: 1`. Each client address gets `PUBLIC_RATE_LIMIT_REQUESTS` (60) requests per
+  `PUBLIC_RATE_LIMIT_WINDOW_SECONDS` (60), then `429` with `Retry-After`. The limiter is in-process
+  and keyed by the peer address: behind a reverse proxy, run uvicorn with `--forwarded-allow-ips`
+  naming the proxy, or every client shares one bucket.
+- **Export.** `format` is `csv` or `jsonl` (`422` otherwise). Published rows only, in id order, at
+  most `EXPORT_MAX_ROWS` (50,000), streamed from a server-side cursor in chunks of
+  `EXPORT_CHUNK_ROWS` (500) under `EXPORT_QUERY_TIMEOUT_MS` (60,000). `X-Export-Row-Cap` gives the
+  cap and `X-Export-Truncated` says whether more published rows existed when the export started.
+
+**Tests.** `tests/test_f24_public_corpus_db.py` drives the real app against Postgres (needs
+`CORPUS_TEST_DATABASE_URL`); `tests/test_f24_public_corpus_bounds.py` needs no database.
 
 ## Quick start (no Docker)
 
