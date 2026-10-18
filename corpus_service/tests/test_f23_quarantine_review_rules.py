@@ -57,40 +57,83 @@ def test_the_publication_id_is_uuid5_of_the_publication_key():
 # ---------------------------------------------------------------------------------------------
 # ruling 11: when migration 002 counts the append-only triggers as current
 # ---------------------------------------------------------------------------------------------
-def test_the_append_only_state_is_current_only_when_exact():
+def _current_state():
     from scraper import quarantine_ledger as ql
 
-    fn = (4242, ql.FUNCTION_BODY)
-    row = (ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, True, True)
-    trunc = (ql.TRUNCATE_TRIGGER, 4242, "A", ql.TRUNCATE_TGTYPE, True, True)
-    assert ql.is_current(fn, [row, trunc]) is True
+    function = {"oid": 4242, **ql.EXPECTED_FUNCTION}
+    triggers = [
+        {"tgname": ql.ROW_TRIGGER, **ql.expected_trigger(4242, ql.ROW_TGTYPE)},
+        {"tgname": ql.TRUNCATE_TRIGGER, **ql.expected_trigger(4242, ql.TRUNCATE_TGTYPE)},
+    ]
+    return function, triggers
+
+
+def _with(rows, name, **changes):
+    return [{**row, **changes} if row["tgname"] == name else row for row in rows]
+
+
+def test_the_append_only_state_is_current_only_when_exact():
+    """Review round (Copilot thread 4305754687): every attribute that changes what the function does or
+    when a trigger fires makes the state not current, so migrate rebuilds it (fail closed)."""
+    from scraper import quarantine_ledger as ql
+
+    fn, trg = _current_state()
+    row, trunc = ql.ROW_TRIGGER, ql.TRUNCATE_TRIGGER
+    assert ql.is_current(fn, trg) is True
+    assert ql.is_current(fn, list(reversed(trg))) is True
     not_current = {
-        "no function": (None, [row, trunc]),
-        "altered body": ((4242, ql.FUNCTION_BODY.replace("RAISE EXCEPTION", "RAISE NOTICE")), [row, trunc]),
-        "row trigger missing": (fn, [trunc]),
-        "truncate trigger missing": (fn, [row]),
-        "row trigger disabled": (fn, [(ql.ROW_TRIGGER, 4242, "D", ql.ROW_TGTYPE, True, True), trunc]),
-        "truncate trigger replica-only": (fn, [row, (ql.TRUNCATE_TRIGGER, 4242, "R", ql.TRUNCATE_TGTYPE, True, True)]),
-        "row trigger origin-only": (fn, [(ql.ROW_TRIGGER, 4242, "O", ql.ROW_TGTYPE, True, True), trunc]),
-        "row trigger calls another function": (fn, [(ql.ROW_TRIGGER, 99, "A", ql.ROW_TGTYPE, True, True), trunc]),
-        "row trigger AFTER, not BEFORE": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE & ~2, True, True), trunc]),
-        "row trigger misses DELETE": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE & ~8, True, True), trunc]),
-        "row trigger WHEN (false)": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, False, True), trunc]),
-        "row trigger UPDATE OF reason": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, True, False), trunc]),
+        "no function": (None, trg),
+        "no-op body": ({**fn, "prosrc": "BEGIN RETURN NEW; END"}, trg),
+        "body without the raise": ({**fn, "prosrc": ql.FUNCTION_BODY.replace("RAISE EXCEPTION", "RAISE NOTICE")}, trg),
+        "another language": ({**fn, "lanname": "plpython3u"}, trg),
+        "SECURITY DEFINER": ({**fn, "prosecdef": True}, trg),
+        "SET options": ({**fn, "no_config": False}, trg),
+        "strict": ({**fn, "proisstrict": True}, trg),
+        "a procedure": ({**fn, "prokind": "p"}, trg),
+        "row trigger missing": (fn, [t for t in trg if t["tgname"] != row]),
+        "truncate trigger missing": (fn, [t for t in trg if t["tgname"] != trunc]),
+        "row trigger WHEN (false)": (fn, _with(trg, row, no_qual=False)),
+        "row trigger UPDATE OF reason": (fn, _with(trg, row, attr_count=1)),
+        "row trigger FOR EACH STATEMENT": (fn, _with(trg, row, tgtype=ql.ROW_TGTYPE & ~1)),
+        "row trigger AFTER, not BEFORE": (fn, _with(trg, row, tgtype=ql.ROW_TGTYPE & ~2)),
+        "row trigger misses DELETE": (fn, _with(trg, row, tgtype=ql.ROW_TGTYPE & ~8)),
+        "row trigger misses UPDATE": (fn, _with(trg, row, tgtype=ql.ROW_TGTYPE & ~16)),
+        "row trigger enabled only in origin mode ('O')": (fn, _with(trg, row, tgenabled="O")),
+        "row trigger replica-only": (fn, _with(trg, row, tgenabled="R")),
+        "row trigger disabled": (fn, _with(trg, row, tgenabled="D")),
+        "truncate trigger enabled only in origin mode ('O')": (fn, _with(trg, trunc, tgenabled="O")),
+        "row trigger calls another function": (fn, _with(trg, row, tgfoid=99)),
+        "row trigger with arguments": (fn, _with(trg, row, tgnargs=1)),
+        "row trigger is a constraint trigger": (fn, _with(trg, row, no_constraint=False)),
+        "row trigger deferrable": (fn, _with(trg, row, tgdeferrable=True)),
+        "row trigger initially deferred": (fn, _with(trg, row, tginitdeferred=True)),
+        "row trigger with transition tables": (fn, _with(trg, row, no_transition_tables=False)),
+        "row trigger cloned from a parent": (fn, _with(trg, row, no_parent=False)),
+        "truncate trigger per row": (fn, _with(trg, trunc, tgtype=ql.TRUNCATE_TGTYPE | 1)),
         # The defect test (h) found: through asyncpg a raw "char" arrives as bytes, hence ::text in the query.
-        "tgenabled as bytes": (fn, [(ql.ROW_TRIGGER, 4242, b"A", ql.ROW_TGTYPE, True, True), trunc]),
+        "tgenabled as bytes": (fn, _with(trg, row, tgenabled=b"A")),
     }
     assert {name: ql.is_current(*args) for name, args in not_current.items()} == {name: False for name in not_current}
 
 
-def test_the_append_only_ddl_is_schema_qualified():
+def test_the_append_only_ddl_rebuilds_from_nothing_schema_qualified():
     from scraper import quarantine_ledger as ql
 
     statements = ql.ddl('"corpus"')
-    assert len(statements) == 7
     assert all('"corpus".' in s for s in statements)
-    assert "BEFORE UPDATE OR DELETE ON \"corpus\".quarantine_decisions FOR EACH ROW" in statements[3]
-    assert "BEFORE TRUNCATE ON \"corpus\".quarantine_decisions FOR EACH STATEMENT" in statements[4]
+    assert statements[:3] == (
+        f'DROP TRIGGER IF EXISTS {ql.ROW_TRIGGER} ON "corpus".quarantine_decisions',
+        f'DROP TRIGGER IF EXISTS {ql.TRUNCATE_TRIGGER} ON "corpus".quarantine_decisions',
+        f'DROP FUNCTION IF EXISTS "corpus".{ql.FUNCTION}() CASCADE',
+    )
+    assert statements[3].startswith(f'CREATE FUNCTION "corpus".{ql.FUNCTION}() RETURNS trigger LANGUAGE plpgsql')
+    assert 'BEFORE DELETE OR UPDATE ON "corpus".quarantine_decisions FOR EACH ROW EXECUTE' in statements[4]
+    assert 'WHEN' not in statements[4] and ' OF ' not in statements[4]
+    assert 'BEFORE TRUNCATE ON "corpus".quarantine_decisions FOR EACH STATEMENT EXECUTE' in statements[5]
+    assert statements[6:] == (
+        f'ALTER TABLE "corpus".quarantine_decisions ENABLE ALWAYS TRIGGER {ql.ROW_TRIGGER}',
+        f'ALTER TABLE "corpus".quarantine_decisions ENABLE ALWAYS TRIGGER {ql.TRUNCATE_TRIGGER}',
+    )
 
 
 # ---------------------------------------------------------------------------------------------

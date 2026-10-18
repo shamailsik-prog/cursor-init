@@ -319,9 +319,12 @@ admin key) decide one `quarantine_queue` record. Spec:
   row's `reviewed`, `reviewed_by`, `reviewed_at`, `resolution` (`approved` / `rejected`) and
   `resolution_notes` are filled from the same values. The table is append-only in the database:
   triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` (SQLSTATE 23001) for every role
-  (`scraper/quarantine_ledger.py`). They are created with the table, and migration
-  `migrations/002_quarantine_decisions.py`, run by `python -m scraper.migrate`, restores them if
-  they were dropped, disabled or altered.
+  (`scraper/quarantine_ledger.py`). They are `ENABLE ALWAYS`, so a session in
+  `session_replication_role = replica` cannot skip them. They are created with the table, and
+  migration `migrations/002_quarantine_decisions.py`, run by `python -m scraper.migrate`, compares
+  the function and both triggers attribute by attribute (a `WHEN` clause, an `UPDATE OF` column
+  list, a statement-level, disabled or origin-only trigger, a replaced function body) and drops and
+  recreates all three on any difference.
 
 **Tests.** `tests/test_f23_quarantine_review_db.py` drives the real app against Postgres (needs
 `CORPUS_TEST_DATABASE_URL`), with quarantine rows made by the real promotion;
