@@ -15,7 +15,11 @@ describe.skipIf(!EMULATORS)("P2 scheduled jobs (P3-16)", () => {
   })
   afterAll(() => removeTestHandlers())
 
-  it("one run per firm per period; a repeated tick reuses it", async () => {
+  // Like the backfill below, both ticks read every firm in the shared emulator (the first at two per
+  // page), so this test's cost is O(firms left behind by earlier files) and it exceeded the 15 s
+  // default when its file ran late (main 53f4450, PR #82 e87ef85). The timeout bounds the worst
+  // case; the assertions are unchanged.
+  it("one run per firm per period; a repeated tick reuses it", { timeout: 120_000 }, async () => {
     const first = await enqueueScheduledRuns(spec, T0, { pageSize: 2 })
     expect(first.firms).toBeGreaterThanOrEqual(3)
     for (const f of firms) {

@@ -8,6 +8,12 @@
 
 These import names main does not have, so on main they fail at import; the behavioural RED for F23
 is the end-to-end file, tests/test_f23_quarantine_review_db.py.
+
+Re-audit round 2 (spec section 7): the visible-character rule (ruling 22) among the bad bodies; the
+review routes answer 401 / 413 / 408 / 422 before reading the body, closing the connection
+(rulings 13-16), driven through the ASGI app with a ``receive`` that counts its calls; no admin route
+declares a body (ruling 17); a 422 is bounded and never echoes the input (ruling 18); the request
+fingerprint (ruling 20). The real-server proof is tests/test_f23_review_body_guard_e2e.py.
 """
 
 import uuid
@@ -195,11 +201,22 @@ BAD_BODIES = {
     "reviewer too long": {**GOOD, "reviewer": "r" * 256},
     "reason too long": {**GOOD, "reason": "r" * 2001},
     "reason with NUL": {**GOOD, "reason": "synthetic\x00reason"},
-    "reason with a bidi override": {**GOOD, "reason": "synthetic ‮reason"},
-    "reviewer with a zero-width space": {**GOOD, "reviewer": "Reviewer​F23"},
+    "reason with a bidi override": {**GOOD, "reason": "synthetic \u202ereason"},
+    "reviewer with a zero-width space": {**GOOD, "reviewer": "Reviewer\u200bF23"},
     "reviewer not a string": {**GOOD, "reviewer": 123},
     "unknown field": {**GOOD, "trust_level": "trusted"},
     "a list": [GOOD],
+    # Re-audit round 2, L7 (spec ruling 22): no visible letter or digit, or a line/paragraph separator.
+    "reviewer a Hangul filler": {**GOOD, "reviewer": "\u3164"},
+    "reviewer a halfwidth Hangul filler": {**GOOD, "reviewer": "\uffa0"},
+    "reviewer Hangul choseong and jungseong fillers": {**GOOD, "reviewer": "\u115f\u1160"},
+    "reviewer a braille blank": {**GOOD, "reviewer": "\u2800"},
+    "reviewer combining marks only": {**GOOD, "reviewer": "\u0301"},
+    "reviewer punctuation only": {**GOOD, "reviewer": "-.-"},
+    "reviewer with a line separator": {**GOOD, "reviewer": "Reviewer\u2028F23"},
+    "reason with a paragraph separator": {**GOOD, "reason": "synthetic\u2029reason"},
+    "reason a braille blank": {**GOOD, "reason": "\u2800\u2800"},
+    "reason punctuation only": {**GOOD, "reason": "..."},
 }
 BAD_KEYS = {"space": "has space", "too long": "k" * 129, "empty": "", "non-ascii": "clé".encode("utf-8"),
             "slash": "a/b"}
@@ -243,3 +260,226 @@ def test_a_valid_request_reaches_the_database(api, action):
     res = client.post(f"/quarantine/{uuid.uuid4()}/{action}", json=body,
                       headers=_headers("f23-unit:key_1.A-" + "k" * 100))
     assert res.status_code == 500 and touched, (res.status_code, touched)
+
+
+# ---------------------------------------------------------------------------------------------
+# re-audit round 2, M1 (spec rulings 13-17): the body is refused before it is read
+# ---------------------------------------------------------------------------------------------
+MAX_BODY_BYTES = 32 * 1024  # spec ruling 14
+
+
+def _asgi_call(path, headers, chunks, *, timeout=5.0):
+    """One HTTP request straight through the ASGI app. ``receive`` hands out ``chunks`` ((bytes,
+    more_body) pairs) and then blocks, as a client that sends nothing more would. Returns the status
+    (None when the app did not answer within ``timeout``), the Connection response header and how
+    many times the app asked for body data."""
+    import asyncio
+
+    from scraper.main import app
+
+    calls = []
+    sent = []
+
+    async def receive():
+        calls.append(1)
+        if chunks:
+            data, more = chunks.pop(0)
+            return {"type": "http.request", "body": data, "more_body": more}
+        await asyncio.Event().wait()
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "POST", "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
+        "query_string": b"", "client": ("127.0.0.1", 50000), "server": ("testserver", 80),
+        "headers": [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()],
+    }
+
+    async def go():
+        try:
+            await asyncio.wait_for(app(scope, receive, send), timeout)
+        except Exception:  # noqa: BLE001 - a timeout or an app error: judged by what was sent
+            pass
+
+    asyncio.run(go())
+    start = next((m for m in sent if m["type"] == "http.response.start"), None)
+    if start is None:
+        return None, None, len(calls)
+    connection = {k.decode().lower(): v.decode() for k, v in start["headers"]}.get("connection")
+    return start["status"], connection, len(calls)
+
+
+def test_review_routes_answer_before_reading_the_body(api, monkeypatch):
+    from scraper.config import settings
+    from scraper.routers import quarantine
+
+    # Spec ruling 15's deadline, shortened here; tests/test_f23_review_body_guard_e2e.py waits the real 10 s.
+    monkeypatch.setattr(quarantine, "BODY_READ_SECONDS", 0.3, raising=False)
+    _client, touched = api
+    url = f"/quarantine/{uuid.uuid4()}/promote"
+    key = settings.ADMIN_API_KEY
+    json_type = {"content-type": "application/json"}
+    complete = b'{"reviewer": "\\u2800", "reason": "Synthetic reason"}'  # valid JSON, refused by ruling 22
+    observed = {
+        "no key, 1 GB declared": _asgi_call(url, {**json_type, "content-length": "1000000000"}, []),
+        "wrong key, 1 GB declared": _asgi_call(
+            url, {**json_type, "content-length": "1000000000", "x-api-key": "wrong"}, []),
+        "key, Content-Length over the cap": _asgi_call(
+            url, {**json_type, "content-length": str(MAX_BODY_BYTES + 1), "x-api-key": key}, []),
+        "key, malformed id": _asgi_call(
+            "/quarantine/not-a-uuid/promote", {**json_type, "content-length": "100", "x-api-key": key}, []),
+        "key, malformed Idempotency-Key": _asgi_call(
+            url, {**json_type, "content-length": "100", "x-api-key": key, "idempotency-key": "a b"}, []),
+        "key, not JSON": _asgi_call(url, {"content-type": "text/plain", "content-length": "100", "x-api-key": key}, []),
+        "key, chunked past the cap": _asgi_call(
+            url, {**json_type, "transfer-encoding": "chunked", "x-api-key": key},
+            [(b"r" * 20_000, True), (b"r" * 20_000, True), (b"r" * 20_000, True)]),
+        "key, the body stalls": _asgi_call(
+            url, {**json_type, "content-length": "100", "x-api-key": key}, [(b'{"reviewer"', True)]),
+        # A server that passes a Content-Length of non-ASCII digits through: the stream decides, never a 500.
+        "key, Content-Length of superscript digits": _asgi_call(
+            url, {**json_type, "content-length": "\u00b2\u00b3", "x-api-key": key}, []),
+        "key, a complete body refused by validation": _asgi_call(
+            url, {**json_type, "content-length": str(len(complete)), "x-api-key": key}, [(complete, False)]),
+    }
+    # (status, Connection header, receive() calls): nothing is read before the key is checked, the
+    # cap applies to the declared and the streamed size, and a response sent before the body was
+    # complete closes the connection (spec ruling 16).
+    assert observed == {
+        "no key, 1 GB declared": (401, "close", 0),
+        "wrong key, 1 GB declared": (401, "close", 0),
+        "key, Content-Length over the cap": (413, "close", 0),
+        "key, malformed id": (422, "close", 0),
+        "key, malformed Idempotency-Key": (422, "close", 0),
+        "key, not JSON": (422, "close", 0),
+        "key, chunked past the cap": (413, "close", 2),
+        "key, the body stalls": (408, "close", 2),
+        "key, Content-Length of superscript digits": (408, "close", 1),
+        "key, a complete body refused by validation": (422, None, 1),
+    }
+    assert touched == []
+
+
+def test_no_admin_route_reads_a_body_before_authenticating():
+    """Spec ruling 17: FastAPI reads a declared body before it runs a route's dependencies, so no route
+    that depends on require_admin_api_key may declare one. The review routes read theirs themselves,
+    after the key check."""
+    from fastapi.routing import APIRoute, iter_route_contexts
+
+    from scraper.auth import require_admin_api_key
+    from scraper.main import app
+
+    def calls(dependant):
+        for sub in dependant.dependencies:
+            yield sub.call
+            yield from calls(sub)
+
+    admin, with_body = set(), set()
+    for context in iter_route_contexts(app.routes):
+        route = context.route
+        if not isinstance(route, APIRoute) or require_admin_api_key not in set(calls(route.dependant)):
+            continue
+        names = {f"{method} {context.path}" for method in route.methods}
+        admin |= names
+        if route.body_field is not None:
+            with_body |= names
+    assert {"POST /quarantine/{quarantine_id}/promote", "POST /quarantine/{quarantine_id}/reject",
+            "POST /api/start", "POST /api/stop", "POST /admin/sources/{name}/trigger"} <= admin, admin
+    assert with_body == set()
+
+
+# ---------------------------------------------------------------------------------------------
+# re-audit round 2, L4/L5 (spec ruling 18): a 422 is bounded and never echoes the input
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("action", ["promote", "reject"])
+def test_validation_errors_are_bounded_and_never_echo_the_input(api, action):
+    client, touched = api
+    extra = {f"x{i:02d}" + "k" * 300: "v" * 50 for i in range(40)}  # about 14 KB, under the cap
+    res = client.post(f"/quarantine/{uuid.uuid4()}/{action}", json={**GOOD, **extra}, headers=_headers())
+    entries = res.json()["detail"]
+    observed = {
+        "status": res.status_code,
+        "entries": len(entries),
+        "only type, loc and msg": all(set(e) == {"type", "loc", "msg"} for e in entries),
+        "loc parts at most 64 characters": all(len(p) <= 64 for e in entries for p in e["loc"] if isinstance(p, str)),
+        "msg at most 200 characters": all(len(e["msg"]) <= 200 for e in entries),
+        "last entry": (entries[-1]["type"], entries[-1]["msg"]),
+        "under 4 KB": len(res.content) < 4096,
+    }
+    assert observed == {"status": 422, "entries": 11, "only type, loc and msg": True,
+                        "loc parts at most 64 characters": True, "msg at most 200 characters": True,
+                        "last entry": ("too_many_errors", "30 more errors not shown"), "under 4 KB": True}
+    assert touched == []
+
+
+def test_the_422_renderer_encodes_and_bounds_whatever_an_error_carries():
+    """The body parser refuses a lone surrogate itself (json_invalid), so none reaches the renderer
+    through the body; the renderer still never fails on one (FastAPI's did: L4) and never grows with
+    its input, whichever error source hands it one."""
+    import json
+
+    from scraper.routers.quarantine import validation_response
+
+    lone = chr(0xD800)
+    response = validation_response([{"type": "value_error" + lone, "loc": ("body", lone + "k" * 500, 3),
+                                     "msg": "m" * 500 + chr(0xDFFF), "input": "x" * 10_000, "ctx": {"a": 1}}])
+    [entry] = json.loads(response.body)["detail"]
+    assert response.status_code == 422
+    assert set(entry) == {"type", "loc", "msg"}
+    assert entry["type"] == "value_error\\ud800"
+    assert entry["loc"][0] == "body" and entry["loc"][1].startswith("\\ud800k") and len(entry["loc"][1]) == 64
+    assert entry["loc"][2] == 3 and len(entry["msg"]) == 200 and len(response.body) < 600
+
+
+# ---------------------------------------------------------------------------------------------
+# re-audit round 2, L8 (spec ruling 25): invisible characters are written as escapes
+# ---------------------------------------------------------------------------------------------
+F23_FILES = (
+    "scraper/routers/quarantine.py", "scraper/quarantine_ledger.py", "migrations/002_quarantine_decisions.py",
+    "migrations/003_quarantine_decision_fingerprint.py", "tests/test_f23_quarantine_review_db.py",
+    "tests/test_f23_quarantine_review_rules.py", "tests/test_f23_review_hardening_db.py",
+    "tests/test_f23_review_body_guard_e2e.py",
+)
+_INVISIBLE_SO = {"\u2800"}  # braille pattern blank: category So, renders as nothing
+_INVISIBLE_LO = {"\u115f", "\u1160", "\u3164", "\uffa0"}  # Hangul fillers
+
+
+def test_f23_files_write_invisible_characters_as_escapes():
+    """A reader of the source must see every character it contains: no format, control, separator,
+    combining, private-use or unassigned character, and no blank-rendering letter or symbol, is
+    written literally in F23's code or tests (the re-audit found U+202E and U+200B in this file)."""
+    import unicodedata
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    found = []
+    for name in F23_FILES:
+        for number, line in enumerate((root / name).read_text(encoding="utf-8").splitlines(), 1):
+            for ch in line:
+                if ch.isascii() and (ch.isprintable() or ch == "\t"):
+                    continue
+                category = unicodedata.category(ch)
+                if category[0] not in "LNPS" or ch in _INVISIBLE_SO or ch in _INVISIBLE_LO:
+                    found.append(f"{name}:{number}: U+{ord(ch):04X} ({category})")
+    assert found == []
+
+
+# ---------------------------------------------------------------------------------------------
+# re-audit round 2, L6 (spec ruling 20): the request fingerprint
+# ---------------------------------------------------------------------------------------------
+def test_the_request_fingerprint_is_sha256_of_the_canonical_values():
+    import hashlib
+    import json
+
+    from scraper.routers.quarantine import request_fingerprint
+
+    cases = [("promoted", "Reviewer F23-U (synthetic)", "Synthetic reason"),
+             ("rejected", "\u0634\u0645\u0627\u0626\u0644", "line one\nline two\t\"quoted\"")]
+    for decision, reviewer, reason in cases:
+        canonical = json.dumps({"decision": decision, "reason": reason, "reviewer": reviewer},
+                               sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        assert request_fingerprint(decision, reviewer, reason) == hashlib.sha256(canonical.encode("ascii")).hexdigest()
+    # The fields are delimited, not concatenated.
+    assert request_fingerprint("promoted", "ab", "c") != request_fingerprint("promoted", "a", "bc")

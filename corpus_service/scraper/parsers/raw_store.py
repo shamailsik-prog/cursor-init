@@ -17,11 +17,16 @@ its key (the path relative to ``PDF_STORAGE_PATH``, which staging rows record in
   containers that share the volume never race.
 * Bounded, failing safe (R15): ``raw-pdf/.usage`` holds the bytes stored. A new object is counted in
   the ledger before it is linked, so an interrupted write can only overcount, never leave an object
-  the ledger misses. When the ledger says a write would pass ``MAX_STORE_BYTES`` (or the ledger is
-  missing or unreadable), the store recounts its objects first, rewrites the ledger and removes
-  temporary files left by killed writers (every writer holds the lock, so none can be live), and only
-  then refuses. A write that would leave less than ``MIN_FREE_BYTES`` free on the filesystem is
-  refused too.
+  the ledger misses. A write that would pass ``MAX_STORE_BYTES``, or leave less than
+  ``MIN_FREE_BYTES`` free on the filesystem, is refused.
+* Recounted only when needed (R18, re-audit L2/L3): the store walks its tree, rewrites the ledger and
+  removes temporary files left by killed writers (every writer holds the lock, so none can be live)
+  when the ledger is missing or unreadable; when the dirty marker ``raw-pdf/.dirty`` says a write was
+  interrupted (a writer sets it before it creates its temporary file and clears it once the object
+  is linked); and when a write would pass either bound and the last recount (``raw-pdf/.recounted``)
+  is older than ``RECOUNT_INTERVAL_SECONDS``. Otherwise a refusal is decided from the ledger alone.
+* Temporary files carry a random name (R17, re-audit L1), so one left by a killed writer never makes a
+  later write of the same document fail.
 
 A refusal is ``StoreRefused``; the intake records it as ``raw_store_full`` or ``raw_store_failed`` and
 does not parse the document (fail closed: what cannot be kept is not parsed).
@@ -35,8 +40,10 @@ import fcntl
 import hashlib
 import logging
 import os
+import secrets
 import shutil
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
@@ -48,12 +55,15 @@ logger = logging.getLogger(__name__)
 STORE_DIR = "raw-pdf"
 MAX_STORE_BYTES = 20 * 1024 ** 3
 MIN_FREE_BYTES = 1024 ** 3
+RECOUNT_INTERVAL_SECONDS = 600  # R18: at most one walk per interval when a bound refuses
 # R14: owner-only, whatever the umask.
 DIR_MODE = 0o700
 OBJECT_MODE = 0o400
-PRIVATE_FILE_MODE = 0o600  # the lock and the ledger
+PRIVATE_FILE_MODE = 0o600  # the lock, the ledger, the dirty marker and the recount stamp
 _LOCK = ".lock"
 _USAGE = ".usage"
+_DIRTY = ".dirty"
+_RECOUNTED = ".recounted"
 _TEMPORARY = ".tmp"
 _CHUNK = 1 << 20
 
@@ -98,9 +108,12 @@ def put(data: bytes, *, root: Optional[Path] = None) -> StoredPdf:
             if os.path.lexists(target):
                 _verify(target, digest, size, key)
                 return StoredPdf(digest, size, key, target, created=False)
-            used = _usage(store)
-            if used + size > MAX_STORE_BYTES:
-                used = _recount(store, "a write would pass the cap")  # the ledger may overcount (R15)
+            if os.path.lexists(store / _DIRTY):
+                used = _recount(store, "a write was interrupted")  # R18: the ledger may overcount
+            else:
+                used = _usage(store)
+            if _past_a_bound(store, used, size) and _recount_due(store):
+                used = _recount(store, "a write would pass a bound")  # R18: at most once an interval
             if used + size > MAX_STORE_BYTES:
                 raise StoreRefused(f"store at {used} bytes of {MAX_STORE_BYTES}", full=True)
             if shutil.disk_usage(store).free - size < MIN_FREE_BYTES:
@@ -162,11 +175,40 @@ def _verify(target: Path, digest: str, size: int, key: str) -> None:
         raise StoreRefused(f"stored object {key} does not match its sha256")
 
 
+def _past_a_bound(store: Path, used: int, size: int) -> bool:
+    return used + size > MAX_STORE_BYTES or shutil.disk_usage(store).free - size < MIN_FREE_BYTES
+
+
+def _recount_due(store: Path) -> bool:
+    """R18: the last recount (the stamp's modification time) is older than the interval, unknown, or
+    in the future."""
+    try:
+        age = time.time() - os.lstat(store / _RECOUNTED).st_mtime
+    except FileNotFoundError:
+        return True
+    return not 0 <= age < RECOUNT_INTERVAL_SECONDS
+
+
+def _touch(path: Path) -> None:
+    """Create ``path`` (owner-only) if needed and set its modification time to now."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, PRIVATE_FILE_MODE)
+    try:
+        os.fchmod(fd, PRIVATE_FILE_MODE)
+        os.utime(fd)
+    finally:
+        os.close(fd)
+
+
 def _publish(store: Path, target: Path, data: bytes, digest: str, used: int) -> None:
     """Write the object beside its name, count it in the ledger, then link it (R15: an interruption
-    between the two overcounts, the safe direction). A link that fails puts the ledger back."""
+    between the two overcounts, the safe direction). A link that fails puts the ledger back. The
+    dirty marker is set, durably, before anything else and cleared only once the object is linked
+    and its temporary file is gone (R18); a random temporary name keeps a stale file from blocking
+    the write (R17)."""
     _makedirs(target.parent)
-    temporary = target.parent / f".{digest}.{os.getpid()}{_TEMPORARY}"
+    _touch(store / _DIRTY)
+    _fsync_dir(store)
+    temporary = target.parent / f".{digest}.{secrets.token_hex(8)}{_TEMPORARY}"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, OBJECT_MODE)
     try:
         try:
@@ -188,6 +230,12 @@ def _publish(store: Path, target: Path, data: bytes, digest: str, used: int) -> 
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
+    _clear_dirty(store)  # reached only when the object is linked and its temporary file is gone
+
+
+def _clear_dirty(store: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(store / _DIRTY)
 
 
 def _fsync_dir(directory: Path) -> None:
@@ -214,7 +262,8 @@ def _usage(store: Path) -> int:
 
 def _recount(store: Path, why: str) -> int:
     """The bytes the store's objects hold, from the tree; the ledger is rewritten to match. Called
-    with the lock held, so any temporary file was left by a killed writer and is removed."""
+    with the lock held, so any temporary file was left by a killed writer and is removed. Then the
+    recount stamp is touched and, last, the dirty marker cleared (R18)."""
     objects = store / "sha256"
     used = 0
     if objects.is_dir():
@@ -225,6 +274,8 @@ def _recount(store: Path, why: str) -> int:
         with contextlib.suppress(FileNotFoundError):
             stale.unlink()
     _set_usage(store, used)
+    _touch(store / _RECOUNTED)
+    _clear_dirty(store)
     logger.warning("F26 raw store: recounted the store (%s): %d bytes", why, used)
     return used
 
