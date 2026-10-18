@@ -3,7 +3,7 @@
  *
  * A minimal tree that clean G-0 accepts is copied into a temporary git repository: the gate
  * scripts, the Phase 0 files the other checks read, the FA-D3C allowlisted corpus_service files,
- * the root Playwright e2e tooling, and legitimate provider imports inside the P1 boundary. The
+ * the root Playwright e2e tooling, and a legitimate provider import inside the Cloud Functions P1 boundary. The
  * control run must pass. Each case then plants one violation in a fresh copy and the whole gate
  * must fail and name the planted file in the scraper- or provider-guard report.
  */
@@ -119,8 +119,8 @@ function buildBaseTree(): string {
   ) as Record<string, string[]>;
   const allowlisted = new Set(Object.values(allow).flat().map((entry) => entry.split(":")[0]));
   for (const rel of allowlisted) copyFromRepo(dir, rel);
-  // Legitimate provider SDK imports inside the P1 boundary.
-  plant(dir, "platform/p1/probe-gateway.ts", 'import OpenAI from "openai"\nexport const client = OpenAI\n');
+  // Legitimate provider SDK imports inside the P1 boundary: Cloud Functions P1 only. Audit F18: platform/p1 is the Next
+  // and eve half of P1, which holds no provider path; check [19] fails a provider import there (case below).
   plant(
     dir,
     "functions/src/p1/probe-transport.ts",
@@ -173,6 +173,19 @@ const PLANTED: GateCase[] = [
     body: `${OPENAI_IMPORT}${PW_IMPORT}`,
     reports: ["app/api/probe/route.ts: playwright import", "app/api/probe/route.ts: provider SDK (openai)"],
   },
+  // Audit F18, check [19]: the Next and eve runtime holds no paid AI client, platform/p1 included.
+  {
+    name: "F18 openai under platform/p1 (the Next half of P1)",
+    rel: "platform/p1/probe-gateway.ts",
+    body: OPENAI_IMPORT,
+    reports: ["platform/p1/probe-gateway.ts: imports openai"],
+  },
+  {
+    name: "F18 the ai SDK's generateText in a Next route",
+    rel: "app/api/brain/route.ts",
+    body: 'import { generateText } from "ai"\nexport const g = generateText\n',
+    reports: ["app/api/brain/route.ts: imports ai"],
+  },
   {
     name: "openai dependency in functions/package.json",
     rel: "functions/package.json",
@@ -203,6 +216,9 @@ describe("Gate G-0 end to end (FA-CI-001)", () => {
       );
       expect(result.out).toContain(
         "PASS: provider SDK imports confined to P1; FA-D3C-002 allowlist entries verified",
+      );
+      expect(result.out).toContain(
+        "PASS: no AI SDK, provider SDK, provider key or provider host in the Next/eve runtime; no deploy surface binds a provider key",
       );
       expect(result.out).toContain("=== Gate G-0 PASSED (static) ===");
       expect(result.status).toBe(0);

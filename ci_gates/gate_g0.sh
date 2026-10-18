@@ -75,6 +75,9 @@ python3 ci_gates/check_committee_eval_record.py || fail=1
 echo "[18] frozen-install guard (audit F39: every lockfile matches its manifest, npm pinned, install surfaces use npm ci; the gates job adds --npm-ci)"
 python3 ci_gates/check_lockfiles.py || fail=1
 
+echo "[19] next-ai-egress guard (audit F18: no AI SDK, provider SDK, provider key or provider host in the Next/eve runtime; no deploy surface hands a provider key to it)"
+python3 ci_gates/check_next_ai_egress.py || fail=1
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

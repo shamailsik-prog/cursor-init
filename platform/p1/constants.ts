@@ -13,9 +13,10 @@ export const COMMITTEE_BRAIN_GATEWAY_MODEL = "anthropic/claude-sonnet-4.6"
 export const COMMITTEE_BRAIN_CONTEXT_WINDOW_TOKENS = 200_000
 
 /**
- * The longest answer the Next transport asks for (audit F16 review round, ruling R4a), as on the Functions path
+ * The longest answer a committee row is sized for (audit F16 review round, ruling R4a), as on the Functions path
  * (functions/src/p1/costTable.ts MAX_OUTPUT_TOKENS). The answer is stored beside the outbound in one 1 MiB document,
- * and the outbound is bounded at MAX_STORED_OUTBOUND_BYTES, so the answer must be bounded too.
+ * and the outbound is bounded at MAX_STORED_OUTBOUND_BYTES, so the answer must be bounded too. Since audit F18 the Next
+ * runtime has no provider transport of its own; every answer comes from Cloud Functions P1, which asks for this bound.
  */
 export const COMMITTEE_BRAIN_MAX_OUTPUT_TOKENS = 4096
 

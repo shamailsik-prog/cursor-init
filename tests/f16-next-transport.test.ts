@@ -1,63 +1,74 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 /**
- * Audit F16 (ruling 1): the Next legacy transport (`platform/p1/gatewayTransport.ts`) hands the AI SDK role-separated
- * messages, the system message first. On main 403200c it calls `generateText({ prompt: request.body })`, which the SDK
- * turns into one user message: no system role at all.
+ * Audit F16 (ruling 1) tested the Next legacy transport, `platform/p1/gatewayTransport.ts`: role-separated messages and
+ * the 4,096-token answer bound. Audit F18 (spec docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md,
+ * rulings R2 and R12) deletes that transport: the Next and eve runtime has no provider path, and a paid call runs only in
+ * Cloud Functions P1, whose transport keeps both F16 properties (functions/test/p1.transport.test.ts posts the
+ * role-separated messages, the system message first, with `max_tokens` 4096).
  *
- * The SDK boundary is faked (`generateText`, `createGateway`), so no request leaves and no key is needed beyond a
- * stubbed placeholder. This file imports nothing that is new in F16.
+ * So this file now holds the Next side to having no transport at all: the module is gone, and with a provider key in the
+ * environment a P1 call never reaches the AI SDK. The SDK boundary is a counting fake and a fetch tripwire refuses every
+ * non-loopback request, so nothing can leave even on a tree that still had the transport. The key is an obviously fake
+ * placeholder.
  */
 
-const calls: Array<Record<string, unknown>> = []
+const calls = vi.hoisted(() => ({ generateText: 0, createGateway: 0 }))
 
 vi.mock("ai", async (importActual) => {
-  const actual = await importActual<typeof import("ai")>()
+  const actual = await importActual<Record<string, unknown>>()
   return {
     ...actual,
-    createGateway: () => ({ languageModel: (id: string) => ({ fakeModelId: id }) }),
-    generateText: async (args: Record<string, unknown>) => {
-      calls.push(args)
+    createGateway: () => {
+      calls.createGateway += 1
+      return { languageModel: (id: string) => ({ fakeModelId: id }) }
+    },
+    generateText: async () => {
+      calls.generateText += 1
       return { text: "stub reply" }
     },
   }
 })
 
-afterEach(() => {
-  calls.length = 0
-  vi.unstubAllEnvs()
+const egress: string[] = []
+const realFetch = globalThis.fetch
+
+beforeAll(() => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+    const host = url.hostname.replace(/^\[|\]$/g, "")
+    if (!(host === "localhost" || host === "::1" || /^127\./.test(host))) {
+      egress.push(url.host)
+      throw new TypeError(`F18 tripwire: request to ${url.host} refused`)
+    }
+    return realFetch(input, init)
+  }) as typeof fetch
 })
 
-describe("audit F16: the Next gateway transport sends role-separated messages", () => {
-  it("passes the system message first and the user turn after it, and never a flattened prompt", async () => {
-    vi.stubEnv("AI_GATEWAY_API_KEY", "placeholder-not-a-key")
-    const { createGatewayTransport } = await import("@/platform/p1/gatewayTransport")
-    const messages = [
-      { role: "system", content: "Platform policy." },
-      { role: "user", content: "Draft the reply for [PARTY]." },
-    ]
-    const request = {
-      body: "Draft the reply for [PARTY].",
-      messages,
-      metadata: { classification: "internal", provider: "ai-gateway", purpose: "committee-brain", redactionCounts: {} },
-    }
-    const out = await createGatewayTransport("test/model").send(request as never)
+afterAll(() => {
+  globalThis.fetch = realFetch
+})
 
-    expect(out).toEqual({ text: "stub reply" })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).not.toHaveProperty("prompt")
-    expect(calls[0]!.messages).toEqual(messages)
-    expect(calls[0]!.model).toEqual({ fakeModelId: "test/model" })
+afterEach(() => {
+  calls.generateText = 0
+  calls.createGateway = 0
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
+
+describe("audit F18 (supersedes the F16 Next-transport checks): the Next runtime has no provider transport", () => {
+  it("the legacy transport module is gone", async () => {
+    await expect(import("@/platform/p1/gatewayTransport" as string)).rejects.toThrow()
   })
 
-  // Audit F16 review round (Codex P2, spec ruling R4a): the stored outbound is bounded at 900 KiB before dispatch, and the
-  // answer is stored beside it in the same 1 MiB document, so the answer is bounded too: at most 4,096 output tokens, as
-  // on the Functions path (functions/src/p1/costTable.ts MAX_OUTPUT_TOKENS). On c56cf4d the SDK default applies.
-  it("bounds the answer at 4,096 output tokens", async () => {
+  it("with an AI Gateway key in the environment, a P1 call never reaches the AI SDK and is blocked PHASE0_NO_CREDENTIALS", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
     vi.stubEnv("AI_GATEWAY_API_KEY", "placeholder-not-a-key")
-    const { createGatewayTransport } = await import("@/platform/p1/gatewayTransport")
-    await createGatewayTransport("test/model").send({ messages: [{ role: "user", content: "Draft the reply." }] } as never)
-    expect(calls).toHaveLength(1)
-    expect(calls[0]!.maxOutputTokens).toBe(4096)
+    vi.stubEnv("VERCEL_AI_GATEWAY_API_KEY", "placeholder-not-a-key")
+    const { callCommitteeBrain, PHASE0_NO_CREDENTIALS } = await import("@/platform/p1/internalAICaller")
+    const result = await callCommitteeBrain({ body: "Draft the reply.", classification: "public", provider: "ai-gateway", purpose: "committee-brain" })
+    expect(calls).toEqual({ generateText: 0, createGateway: 0 })
+    expect(egress).toEqual([])
+    expect(result).toMatchObject({ blocked: true, reason: PHASE0_NO_CREDENTIALS })
   })
 })

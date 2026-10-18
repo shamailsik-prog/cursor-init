@@ -308,12 +308,11 @@ export function FoundationConsole({ courts, fixtures, types }: Props) {
               <CardHeader>
                 <CardTitle>eve Committee Brain (P1)</CardTitle>
                 <CardDescription>
-                  Agent files live under `agent/`. The only outbound path is
-                  `callCommitteeBrain`. Masked body is what would be sent.
-                  Classification stays in metadata. Internal+ is blocked while
-                  the DPA table is empty. Live Gateway calls stay blocked
-                  unless `AI_GATEWAY_API_KEY` already exists — do not invent
-                  secrets.
+                  Agent files live under `agent/`. Paid model calls run only in
+                  Cloud Functions P1 (kill switches, budget, cost log); this
+                  runtime holds no provider key and sends nothing itself.
+                  Masked body is what would be sent. Classification stays in
+                  metadata. Internal+ is blocked while the DPA table is empty.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
