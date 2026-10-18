@@ -415,7 +415,11 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
         progressAfter = doc.id
       }
       const lastId = slice.docs[slice.docs.length - 1]?.id
-      const next = slice.size < RECONCILE_PAGE_SIZE && lastId !== undefined && progressAfter === lastId ? "" : progressAfter
+      const next =
+        slice.size < RECONCILE_PAGE_SIZE &&
+        (slice.size === 0 || (lastId !== undefined && progressAfter === lastId))
+          ? ""
+          : progressAfter
       await cursorRef.set({ after: next, updatedAt: FieldValue.serverTimestamp() })
     } catch (err) {
       log.error("audit.outbox_sweep_failed", { code: codeOf(err) })
