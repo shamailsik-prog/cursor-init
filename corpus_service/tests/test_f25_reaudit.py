@@ -250,6 +250,17 @@ def test_data_after_the_end_of_a_gzip_stream_is_refused(env):
     assert _refused(_fetcher(env), f"{env.origin}/b").reason == fp.CONTENT_ENCODING
 
 
+@pytest.mark.parametrize(
+    "coding, member",
+    [("gzip", lambda: gzip.compress(b"F25 member")), ("deflate", lambda: zlib.compress(b"F25 member"))],
+)
+def test_trailing_bytes_in_the_same_chunk_as_the_stream_end_are_refused(env, coding, member):
+    """Trailing bytes that arrive in the very read that ends the compressed stream (a small fixed
+    body): only the decoder's unused_data check sees them, there is no later chunk to refuse."""
+    env.source.routes["/b"] = _fixed(200, {"Content-Encoding": coding}, member() + b"F25 trailing bytes")
+    assert _refused(_fetcher(env), f"{env.origin}/b").reason == fp.CONTENT_ENCODING
+
+
 def test_a_truncated_gzip_stream_is_refused(env):
     env.source.routes["/b"] = _fixed(200, {"Content-Encoding": "gzip"}, gzip.compress(b"F25 " * 5000)[:-12])
     assert _refused(_fetcher(env), f"{env.origin}/b").reason == fp.CONTENT_ENCODING
@@ -275,6 +286,35 @@ def test_a_chunked_body_over_the_cap_without_content_length_is_refused(env):
     result, peak = _peak(lambda: _run_get(_fetcher(env, max_bytes=1 * MIB), f"{env.origin}/b"))
     assert isinstance(result, fp.FetchRefused) and result.reason == fp.TOO_LARGE, result
     assert peak < 4 * MIB
+
+
+def test_bytes_on_the_wire_are_capped_even_when_the_decoded_body_fits(env):
+    """A stored (level 0) gzip of exactly 1 MiB of random bytes is a little over 1 MiB on the wire.
+    Sent chunked (no Content-Length to pre-check) against a 1 MiB cap, only the raw cap stops it:
+    the decoded body would fit."""
+    import os as _os
+
+    co = zlib.compressobj(0, zlib.DEFLATED, 31)
+    body = co.compress(_os.urandom(MIB)) + co.flush()
+    assert len(body) > MIB
+
+    def chunked(handler):
+        handler.send_response(200)
+        handler.send_header("Content-Encoding", "gzip")
+        handler.send_header("Transfer-Encoding", "chunked")
+        handler.end_headers()
+        try:
+            for i in range(0, len(body), 65536):
+                part = body[i:i + 65536]
+                handler.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
+            handler.wfile.write(b"0\r\n\r\n")
+        except OSError:
+            pass
+        return None
+
+    env.source.routes["/b"] = chunked
+    refusal = _refused(_fetcher(env, max_bytes=MIB), f"{env.origin}/b")
+    assert refusal.reason == fp.TOO_LARGE and "on the wire" in (refusal.detail or ""), refusal
 
 
 def test_a_declared_length_over_the_cap_is_refused_before_reading_the_body(env):
@@ -332,6 +372,22 @@ def test_a_malformed_redirect_is_a_refusal(env, location, reason):
     assert refusal.reason == getattr(fp, reason)
     assert [r["path"] for r in env.source.requests] == ["/r"]
     assert env.internal.connections == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [lambda: httpx.InvalidURL("synthetic"), lambda: httpx.UnsupportedProtocol("synthetic"), lambda: httpx.TooManyRedirects("synthetic")],
+)
+def test_httpx_url_errors_inside_the_boundary_are_refusals(env, monkeypatch, error):
+    """Defense in depth (R18): with Location held back no known path raises these any more, but
+    if httpx ever does, the caller gets a refusal (never retried), not an httpx error."""
+    fetcher = _fetcher(env)
+
+    async def broken(request, **kwargs):
+        raise error()
+
+    monkeypatch.setattr(fetcher._client, "send", broken)
+    assert _refused(fetcher, f"{env.origin}/x").reason == fp.UNPARSEABLE
 
 
 def test_court_retry_helpers_send_a_malformed_redirect_once(env, monkeypatch):
