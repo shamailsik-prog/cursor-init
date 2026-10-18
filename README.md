@@ -21,12 +21,15 @@ Precedence: Erratum Set No. 1 > Layer 18 > Layer 17 > specification body. Anythi
 ## Run locally
 
 ```bash
-npm install
+npm ci                     # frozen install: exactly what package-lock.json pins, never rewritten
+npm ci --prefix functions
 npm run gate:g0
 npm run dev -- --port 43127
 ```
 
 Open http://127.0.0.1:43127
+
+Toolchain (audit F39): Node 22 and npm 10.9. npm is pinned in both manifests (`packageManager` `npm@10.9.9`, the npm Node 22 ships; `devEngines.packageManager` `~10.9.0`, `onFail: error`), so npm 11 or later refuses to install, run scripts or `npx` here (`EBADDEVENGINES`). On a machine whose npm is newer, use `corepack npm ci` (corepack reads `packageManager`) or `npm install -g npm@10.9.9`. To change a dependency, run `npm install <package>` with the pinned npm and commit `package.json` and `package-lock.json` together; `npm run gate:lockfiles` then checks that every lockfile matches its manifest and that the pinned npm's `npm ci` accepts it.
 
 ## Gate G-0
 
@@ -48,12 +51,12 @@ Live Firestore/Postgres checks: `SIKANDER_LIVE=1 bash ci_gates/gate_g0.sh` (need
 
 The eve agent lives at `agent/` (`sikander-ai`). It is not a second provider path. `agent/agent.ts` uses `committeeBrainLanguageModel` from `platform/p1`, which only calls `callCommitteeBrain`. Default eve tools (`web_fetch`, `web_search`, `bash`) are off.
 
-The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app and CI stay on Node 20+.
+The foundation console **Committee Brain** tab posts to `POST /api/p1/committee-brain` (Idempotency-Key required). `next.config.ts` is not wrapped with `withEve()` so `npm run dev` stays the Phase 0 inspector. The eve CLI (`npm run eve:dev`) needs Node 24; the Next.js app, the Functions package and CI run Node 22 (audit F48 tracks the split). Node 24 bundles npm 11, which the npm pin refuses: under Node 24 run `corepack npm run eve:dev`, or call the binary directly (`./node_modules/.bin/eve dev`).
 
 Do not set provider API keys. Until O-53 closes (the app moves to the Cloud Functions route), the Next.js deployment must not hold an AI Gateway key: leave `AI_GATEWAY_API_KEY` and `VERCEL_AI_GATEWAY_API_KEY` unset, so `POST /api/p1/committee-brain` stays blocked (`PHASE0_NO_CREDENTIALS`). That route does not go through `callP1`, so the P1 kill switches, the monthly budget and the cost log govern the Cloud Functions path (`/api/platform/brain/committeeBrain`) only (ruling R8, `functions/src/p1/README.md`). Through that path, per L18 §4.6, public and internal calls may leave; confidential and above stay blocked while `data/provider_dpa.json` is empty (`TODO(firm)`).
 
 ```bash
-npm run eve:info   # Node 24 — discovered agent surface
+corepack npm run eve:info   # Node 24 — discovered agent surface
 ```
 
 ## Non-negotiables

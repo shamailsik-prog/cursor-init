@@ -76,8 +76,9 @@ Re-enabling:
 ## Running the gates and scans locally
 
 CI is `.github/workflows/gate-g0.yml` (seven independent jobs) plus `pr-phase-claim-gate.yml`. Each command below is
-what the matching CI job runs. Requirements: Node 22, Java 21+ (Firebase emulators), Python 3.12, and both installs
-(`npm ci` and `npm ci --prefix functions`).
+what the matching CI job runs. Requirements: Node 22 with npm 10.9 (pinned in both manifests, audit F39: npm 11 or
+later refuses with `EBADDEVENGINES`; `corepack npm …` runs the pinned npm), Java 21+ (Firebase emulators), Python 3.12,
+and both installs (`npm ci` and `npm ci --prefix functions`).
 
 | CI job | Command (repo root) | Notes |
 |---|---|---|
@@ -85,7 +86,7 @@ what the matching CI job runs. Requirements: Node 22, Java 21+ (Firebase emulato
 | unit | `npm run test:unit` | Vitest, 15 s per-test timeout. The emulator-backed files are excluded unless `FIRESTORE_EMULATOR_HOST` is set. |
 | rules | `npm run test:rules` | Firestore emulator on the repo ports (18088). |
 | functions | `npm --prefix functions run typecheck`, `npm --prefix functions run build`, `npm --prefix functions run test:emu` | Auth (19099) and Firestore emulators. Without emulators the suites skip locally; with `CI` set they fail instead (`functions/test/emu.ts`). |
-| gates | `npm run gate:g0`, `npm run gate:g1`, `npm run gate:g2` | See below. |
+| gates | `npm run gate:g0`, `npm run gate:lockfiles`, `npm run gate:g1`, `npm run gate:g2` | See below. `gate:lockfiles` is the frozen-install guard with `--npm-ci` (audit F39). |
 | next-build | `npm run build` | `next build`. |
 | authority-f05 | `SIKANDER_POSTGRES_URL=postgres://… npm run test:f05-authority` | Audit F05: the user-flow e2e (`functions/test/f05-authority-corpus.e2e.emu.test.ts`), the corpus adapter and the O-59 parity suites. Needs Postgres 16 with `vector` (a superuser URL; each file creates and drops its own database and roles), Java for the Auth and Firestore emulators, and Python with `corpus_service/requirements-test.txt` (`SIKANDER_CORPUS_PYTHON`, default `python3`): the corpus is seeded through the publication CLI. The script sets `F05_AUTHORITY_SUITE=1`; without it `functions/vitest.config.ts` excludes these suites, and with it a missing URL fails the run. |
 | postgres-ddl | `SIKANDER_POSTGRES_URL=postgres://… npm run test:postgres-ddl` | Requires Postgres 16 with the `vector` extension (CI uses `pgvector/pgvector:pg16`). CI first applies every `postgres/ddl/*.sql` twice with `psql` (idempotency); the harness then applies them all in order (`001_corpus_contract.sql`, `002_platform.sql`, `003_corpus_publication.sql`, `004_authority_read_views.sql`) and runs the trigger, grant, publication and authority-view tests (PG-DDL-1..32) and the FA-DATA-001 probe regression, one file at a time (`--no-file-parallelism`). Run it against a fresh database: PG-DDL-5 and PG-DDL-10 cannot re-run on one they already ran on. |
@@ -98,6 +99,14 @@ Gates:
   (default `origin/main`; CI passes the pull request's base commit and checks out full history). In a shallow clone, or
   one without `origin/main`, set `BASE` to a commit you have, for example `BASE=$(git merge-base origin/main HEAD)`.
   `SIKANDER_LIVE=1` also runs the live checks when `ci_gates/gate_g0_live.sh` exists.
+- **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
+  matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
+  (`packageManager` + `devEngines.packageManager`, `onFail: error`, one pin for every manifest), and no workflow,
+  `.cursor/environment.json`, `.claude/hooks/*` or package script installs without the lockfile. With `--npm-ci`
+  (`npm run gate:lockfiles`, and a step in the CI gates job) it also checks that the running npm is inside the pin and
+  runs `npm ci --dry-run --ignore-scripts` for each lockfile: npm's own validator, which catches an override added,
+  changed or removed in `package.json` without the lock. Regenerate a lockfile only with the pinned npm
+  (`npm install --package-lock-only --ignore-scripts`), never by hand.
 - **G-1 (spine):** `python3 ci_gates/gate_g1.py` runs `tests/gate_g1.test.ts` (G1-1 to G1-10), in memory.
 - **G-2 (cross-firm isolation):** `npm run gate:g2`. Locally it starts the Auth and Firestore emulators on ephemeral
   ports with a private `demo-g2-*` project, so it can run beside other emulators. With `CI` set it uses the repo
