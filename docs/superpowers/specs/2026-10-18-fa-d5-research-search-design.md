@@ -63,12 +63,18 @@ Each ruling records the decision and the reason (owner's standing instruction).
   - a term absent from the corpus still counts in the denominator.
 - **Semantic score.** `max(0, cosine(query, stored))`. A stored zero vector scores 0.
 - **Blended.** When the query has both legs, the score is `0.6 * semantic + 0.4 * keyword` (Module 18: "60% semantic and 40% keyword"). Otherwise it is the one leg.
-- **Hits.** Only a score above 0 is a hit. Hits are ordered by score (descending), then by fewer distinct document tokens (the more specific authority), then by `entityId`, so the order is deterministic. Scores are reported to 6 decimals.
+- **Hits.** Scores are rounded to 6 decimals first, and only a rounded score above 0 is a hit (Codex review 4305473680), so no published score is 0. Hits are ordered by score (descending), then by the cited authority (R4a), then by fewer distinct document tokens (the more specific authority), then by `entityId`, so the order is deterministic.
 
 *Reason:*
 - The score is bounded, so the 60/40 blend is well defined without per-query renormalisation.
 - IDF stops a common word ("state", "petition") from outranking the distinctive term.
 - An exact citation query ("2099 SCMR 101") covers every one of its terms in that judgment's citation, so it scores 1.
+
+**R4a. A citation the query names ranks its own authority first (Copilot review 4305482190).**
+- **Rule.** The citation gate's parser (`analyseCitations`) reads the canonical citations in the query text. A judgment whose citation normalises (`normaliseCitation`, the gate's rule) to one of them scores 1 and, among score-1 hits, ranks before the rest. The order then falls to specificity and id as in R4.
+- **Why.** Keyword coverage alone ties the cited authority with any judgment whose title and citation carry the same numbers. "Bail 497" (section 497 CrPC is the bail section) at `2099 SCMR 100` scores 1 for `2099 SCMR 497`. Shorter titles then win the specificity tie-break and can push the cited authority past k. `2099 SCMR 2098` and `2098 SCMR 2099` have identical term sets. Score 1 (not a separate tier) keeps the list ordered by its published score, including when the citation sits inside a longer query.
+- **Cost.** Only a judgment whose own citation carries every number of the query citation reaches the parser. The prefilter result and the canonical form are cached per row and recomputed if the citation changes. Measured on 20,000 judgments that all mention the query's numbers in their titles: 263 ms for the first citation query and 74 ms warm, against about 4 s without the citation-only prefilter.
+- **Scope.** The rule applies to the text leg only. A semantic-only query names no citation.
 
 **R5. Bounds. A bad value is refused with a `PublicError` (a clean 400 at any route), never clamped.**
 - `k`: a safe integer from 1 to 50 (`RESEARCH_MAX_K`). The default is 10 (`RESEARCH_DEFAULT_K`). A non-number, 0, a negative, a fraction, NaN, or 10^9 is refused.

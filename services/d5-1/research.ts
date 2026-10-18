@@ -1,6 +1,6 @@
 import type { Judgment, SpineStore } from "@/platform/spine/store"
 import { PublicError } from "@/platform/http/publicError"
-import { normaliseDraftText } from "@/services/d4-2/citations"
+import { analyseCitations, normaliseCitation, normaliseDraftText } from "@/services/d4-2/citations"
 import type { CitationVerdict } from "@/services/d4-2/citationVerdict"
 import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
 
@@ -14,6 +14,8 @@ import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
  * - Semantic leg: cosine between a caller-supplied query vector and the stored 1536-d vector (P1 has no embedding
  *   operation yet, so no in-app caller supplies one: R3).
  * - Both legs: 0.6 semantic + 0.4 keyword (Module 18). Scores are in [0, 1]; only a score above 0 is a hit.
+ * - A judgment whose citation is one the query text names (read by the citation gate's parser) scores 1 and ranks
+ *   ahead of other score-1 hits: the authority asked for, not another sharing its numbers (R4a).
  * Every refusal is a PublicError with a fixed message (a clean 400 at any route) that never echoes the query.
  * Callers own the P5 `research` check (L19.10: "P5.checkPermission then D5-1"), as for verifyCitations.
  */
@@ -86,6 +88,32 @@ function termsOfJudgment(judgment: Judgment): ReadonlySet<string> {
   return terms
 }
 
+const isNumberTerm = (term: string) => /^\p{N}+$/u.test(term)
+
+type QueryCitation = { canonical: string; numbers: string[] }
+
+const judgmentCitations = new WeakMap<
+  Judgment,
+  { key: string | undefined; numbers: ReadonlySet<string>; canonical?: string | null }
+>()
+
+/**
+ * Whether `judgment`'s citation is `cited` (R4a). Only a judgment whose own citation carries every number of `cited`
+ * reaches the citation parser (normaliseCitation, the gate's rule), so a corpus full of titles that mention the
+ * numbers costs no parsing. Both steps are cached per row, recomputed if the citation changes.
+ */
+function citesExactly(judgment: Judgment, cited: QueryCitation): boolean {
+  let entry = judgmentCitations.get(judgment)
+  if (!entry || entry.key !== judgment.citation) {
+    entry = { key: judgment.citation, numbers: new Set(termsOf(judgment.citation ?? "").filter(isNumberTerm)) }
+    judgmentCitations.set(judgment, entry)
+  }
+  const { numbers } = entry
+  if (!cited.numbers.every((n) => numbers.has(n))) return false
+  if (entry.canonical === undefined) entry.canonical = judgment.citation ? normaliseCitation(judgment.citation) : null
+  return entry.canonical === cited.canonical
+}
+
 function parseK(k: unknown): number {
   if (k === undefined) return RESEARCH_DEFAULT_K
   if (typeof k !== "number" || !Number.isSafeInteger(k) || k < 1 || k > RESEARCH_MAX_K) {
@@ -94,7 +122,8 @@ function parseK(k: unknown): number {
   return k
 }
 
-function parseText(text: unknown): string[] {
+/** The query's search terms and the canonical citations it names (R4a). */
+function parseText(text: unknown): { terms: string[]; citations: QueryCitation[] } {
   if (typeof text !== "string") throw new PublicError("research query text must be a string")
   const collapsed = text.replace(/\s+/gu, " ").trim()
   // Refused, never truncated: a cut query is a different question.
@@ -103,7 +132,12 @@ function parseText(text: unknown): string[] {
   }
   const terms = [...new Set(termsOf(collapsed))]
   if (terms.length === 0) throw new PublicError("research query has no search terms")
-  return terms
+  // Each citation's numbers prefilter candidates cheaply: reporter spellings vary ("S.C.M.R."), numbers do not.
+  const citations = analyseCitations(collapsed).citations.map((canonical) => ({
+    canonical,
+    numbers: termsOf(canonical).filter(isNumberTerm),
+  }))
+  return { terms, citations }
 }
 
 /** The query vector scaled to unit length (scaling first, so huge finite values cannot overflow the norm). */
@@ -161,7 +195,8 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
     throw new PublicError("research query must be an object with text or embedding")
   }
   const k = parseK(query.k)
-  const terms = query.text === undefined ? null : parseText(query.text)
+  const text = query.text === undefined ? null : parseText(query.text)
+  const terms = text?.terms ?? null
   const unitQuery = query.embedding === undefined ? null : parseEmbedding(store, query.embedding)
 
   // The corpus integrity lock (G1-10): a corpus caught mid-migration serves neither leg.
@@ -183,7 +218,7 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
   const vectors = new Map<string, readonly number[]>()
   if (unitQuery) for (const row of store.embeddings) if (!vectors.has(row.entityId)) vectors.set(row.entityId, row.vector)
 
-  const scored: { judgment: Judgment; size: number; score: number }[] = []
+  const scored: { judgment: Judgment; size: number; score: number; exact: boolean }[] = []
   judgments.forEach((judgment, i) => {
     let keyword = 0
     if (terms) {
@@ -198,14 +233,22 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
     let semantic = 0
     const stored = unitQuery ? vectors.get(judgment.id) : undefined
     if (unitQuery && stored) semantic = Math.max(0, cosine(unitQuery, stored))
-    const raw = mode === "blended" ? SEMANTIC_WEIGHT * semantic + KEYWORD_WEIGHT * keyword : mode === "keyword" ? keyword : semantic
+    // R4a: the authority the query cites.
+    const exact = text !== null && text.citations.some((cited) => citesExactly(judgment, cited))
+    const raw = exact ? 1 : mode === "blended" ? SEMANTIC_WEIGHT * semantic + KEYWORD_WEIGHT * keyword : mode === "keyword" ? keyword : semantic
     // Rounded before the hit test, so a relevance too small to show at 6 decimals is not a hit that reads as 0.
     const score = Math.round(raw * 1e6) / 1e6
-    if (score > 0) scored.push({ judgment, size: docTerms[i].size, score })
+    if (score > 0) scored.push({ judgment, size: docTerms[i].size, score, exact })
   })
 
-  // Score, then the more specific authority (fewer distinct terms), then the id: a deterministic order.
-  scored.sort((a, b) => b.score - a.score || a.size - b.size || (a.judgment.id < b.judgment.id ? -1 : a.judgment.id > b.judgment.id ? 1 : 0))
+  // Score, then the cited authority (R4a), then the more specific one (fewer distinct terms), then the id.
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      Number(b.exact) - Number(a.exact) ||
+      a.size - b.size ||
+      (a.judgment.id < b.judgment.id ? -1 : a.judgment.id > b.judgment.id ? 1 : 0)
+  )
   const top = scored.slice(0, k)
 
   const verdicts = new Map<string, CitationVerdict>()

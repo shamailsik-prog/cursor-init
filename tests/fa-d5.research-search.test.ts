@@ -224,6 +224,40 @@ describe("searchCorpus: ranking", () => {
     expect(searchCorpus(store, { text: "bail" }).items.map((h) => h.entityId)).toEqual(["j-a", "j-b", "j-c"])
   })
 
+  // Copilot review 4305482190: a citation query must reach the authority it names, not another sharing its numbers.
+  it("an exact citation query ranks that authority first, above shorter titles that share its numbers", () => {
+    const store = newStore()
+    addJudgment(store, "j-target", "Synthetic accused number one versus the State through the prosecutor general", "2099 SCMR 497")
+    for (let i = 0; i < 12; i++) addJudgment(store, `j-bail-${String(i).padStart(2, "0")}`, "Bail 497", `2099 SCMR ${100 + i}`)
+    const out = searchCorpus(store, { text: "2099 SCMR 497" })
+    expect(out.items[0]).toMatchObject({ entityId: "j-target", score: 1 })
+    // The same authority, however the reporter is written.
+    expect(searchCorpus(store, { text: "2099 S.C.M.R. 497", k: 1 }).items.map((h) => h.entityId)).toEqual(["j-target"])
+  })
+
+  it("an exact citation query tells apart citations whose numbers are swapped", () => {
+    const store = newStore()
+    addJudgment(store, "j-a", "Synthetic appeal", "2098 SCMR 2099")
+    addJudgment(store, "j-b", "Synthetic appeal", "2099 SCMR 2098")
+    expect(searchCorpus(store, { text: "2099 SCMR 2098", k: 1 }).items.map((h) => h.entityId)).toEqual(["j-b"])
+    expect(searchCorpus(store, { text: "2098 SCMR 2099", k: 1 }).items.map((h) => h.entityId)).toEqual(["j-a"])
+    // A citation corrected in place is read afresh, not from the earlier search's cache.
+    const a = store.judgments.get("j-a") as { citation?: string }
+    const b = store.judgments.get("j-b") as { citation?: string }
+    ;[a.citation, b.citation] = [b.citation, a.citation]
+    expect(searchCorpus(store, { text: "2099 SCMR 2098", k: 1 }).items.map((h) => h.entityId)).toEqual(["j-a"])
+  })
+
+  it("a citation inside a longer query ranks that authority first, with score 1; the order stays by score", () => {
+    const store = newStore()
+    addJudgment(store, "j-target", "Synthetic accused number one versus the State", "2099 SCMR 497")
+    for (let i = 0; i < 3; i++) addJudgment(store, `j-bail-${i}`, "Bail 497 delay", `2099 SCMR ${100 + i}`)
+    const out = searchCorpus(store, { text: "bail delay 2099 SCMR 497" })
+    expect(out.items[0]).toMatchObject({ entityId: "j-target", score: 1 })
+    const scores = out.items.map((h) => h.score as number)
+    for (let i = 1; i < scores.length; i++) expect(scores[i - 1]).toBeGreaterThanOrEqual(scores[i])
+  })
+
   it("an embedding of an entity that is not a judgment is never a hit", () => {
     const store = bailCorpus(2)
     store.embeddings.push({ entityId: "section-ppc-302", model: LIVE, vector: unit(5) })
