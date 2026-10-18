@@ -27,3 +27,11 @@ celery[redis]==5.6.3
 kombu==5.6.2
 redis==6.4.0
 pytest==9.1.1
+# Audit F26: the PDF parser stack, so the sandbox, golden and end-to-end tests run the real parser in a
+# real sandbox (requirements.txt declares pdfplumber and pillow for the runtime; pdfplumber pins
+# pdfminer.six, whose output the golden texts depend on). tesseract is not part of this set: OCR paths
+# are tested with a stand-in for pytesseract.
+pdfplumber==0.11.10
+pdfminer.six==20260107
+pypdfium2==5.14.0
+pillow==13.0.0

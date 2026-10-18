@@ -1,13 +1,21 @@
 """
 Pakistani Legal Scraper - PDF Extractor
-Section 15 - PDF Text Extraction & Download
+Section 15 - PDF Text Extraction
 
 Production module for extracting text from legal judgment PDFs.
 Primary: pdfplumber text extraction
 Fallback: pytesseract OCR when text layer is empty / scanned.
-Download: streaming download with size limits and validation.
 
-Tech stack: pdfplumber, pytesseract, Pillow, httpx, pdf2image fallback
+Tech stack: pdfplumber, pytesseract, Pillow
+
+Audit F26 (spec docs/superpowers/specs/2026-10-18-f26-bounded-isolated-pdf-processing-design.md):
+this module runs only inside the PDF sandbox (scraper/parsers/pdf_sandbox.py), never in a worker
+(tests/test_f26_pdf_sandbox.py fails the build if anything else imports it). The extraction algorithm
+is main's (R9); what changed is that it is bounded (``Limits``: pages, extracted text, pages sent to
+OCR, pixels rendered, tesseract time), that ``MemoryError`` and a ``PdfLimitExceeded`` are never
+swallowed by its broad handlers, and that each page's cached layout is released once it is read.
+``find_active_content`` is the malware policy's structural scan (R4). The streaming downloaders are
+gone: every PDF is fetched by the F25 boundary through ``scraper.tasks.pdf_intake`` (R1, R2).
 """
 
 from __future__ import annotations
@@ -16,9 +24,8 @@ import io
 import logging
 import re
 import time
-from typing import Optional
-
-import httpx
+from dataclasses import dataclass
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +33,8 @@ logger = logging.getLogger(__name__)
 # Constants & Config
 # ---------------------------------------------------------------------------
 MIN_EXTRACTED_LENGTH = 200  # chars - threshold to consider pdfplumber success
-MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB hard limit
-CHUNK_SIZE = 64 * 1024  # 64KB streaming chunks
-DOWNLOAD_TIMEOUT = 120.0
-DEFAULT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
+MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB: the fetch boundary's cap (scraper.net.fetch_policy.MAX_BYTES)
+OCR_DPI = 300  # the resolution pages are rendered at for OCR
 
 # Tesseract config - PSM 6 = assume uniform block of text, good for judgments
 TESSERACT_CONFIG = "--oem 3 --psm 6 -l eng"
@@ -53,6 +55,79 @@ class PDFDownloadError(RuntimeError):
 
 class PDFExtractionError(RuntimeError):
     """Raised when both pdfplumber and OCR fail to produce usable text."""
+
+
+# ---------------------------------------------------------------------------
+# Audit F26: bounds (spec R8) and what an extraction did
+# ---------------------------------------------------------------------------
+PAGE_LIMIT = "pdf_page_limit"
+TEXT_LIMIT = "pdf_text_limit"
+
+
+class PdfLimitExceeded(Exception):
+    """A document past one of the extraction caps; ``code`` is the F26 refusal code."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class Limits:
+    max_pages: int = 1000
+    max_text_chars: int = 4_000_000
+    max_ocr_pages: int = 25  # pages sent to OCR; the rest are not OCRed (ocr_truncated)
+    max_image_pixels: int = 50_000_000  # a page larger than this at OCR_DPI is not rendered
+    tesseract_seconds: int = 30  # one tesseract call
+
+
+DEFAULT_LIMITS = Limits()
+
+# Never swallowed by the broad handlers below: the sandbox turns them into refusals.
+_NEVER_SWALLOWED = (MemoryError, PdfLimitExceeded)
+
+
+@dataclass(frozen=True)
+class Extraction:
+    text: str
+    pages: int
+    ocr_applied: bool  # the text returned came from OCR
+    ocr_pages: int = 0  # pages OCR was attempted on
+    ocr_skipped: int = 0  # pages too large to render
+    ocr_truncated: bool = False  # pages past max_ocr_pages were not OCRed
+
+
+@dataclass
+class _OcrStats:
+    pages: int = 0
+    skipped: int = 0
+    truncated: bool = False
+
+
+def _reraise_if_exhausted(exc: BaseException) -> None:
+    """pdfplumber wraps what pdfminer and pypdfium2 raise (``PdfminerException(e)``,
+    ``MalformedPDFException(e)``), so a MemoryError or a cap can arrive inside another exception. Find
+    it in the chain (cause, context, arguments) and raise it, so no broad handler swallows it."""
+    seen, stack = set(), [exc]
+    while stack:
+        item = stack.pop()
+        if not isinstance(item, BaseException) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, PdfLimitExceeded):
+            raise item
+        if isinstance(item, MemoryError):
+            raise MemoryError("parser memory exhausted") from exc
+        stack.extend([item.__cause__, item.__context__, *item.args])
+
+
+def _check_pages(num_pages: int, limits: Limits) -> None:
+    if num_pages > limits.max_pages:
+        raise PdfLimitExceeded(PAGE_LIMIT)
+
+
+def _render_pixels(page: Any, dpi: int) -> float:
+    return (float(page.width) * dpi / 72.0) * (float(page.height) * dpi / 72.0)
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +159,11 @@ def _clean_text(text: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
-def _pdfplumber_extract(pdf_bytes: bytes) -> tuple[str, int, bool]:
+def _pdfplumber_extract(pdf_bytes: bytes, limits: Limits = DEFAULT_LIMITS) -> tuple[str, int, bool]:
     """
     Attempt pdfplumber extraction.
     Returns (text, num_pages, is_scanned_hint)
+    Audit F26: raises PdfLimitExceeded past the page or text cap; never swallows MemoryError.
     """
     try:
         import pdfplumber
@@ -99,8 +175,10 @@ def _pdfplumber_extract(pdf_bytes: bytes) -> tuple[str, int, bool]:
         text_parts: list[str] = []
         num_pages = 0
         scanned_pages = 0
+        total_chars = 0
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             num_pages = len(pdf.pages)
+            _check_pages(num_pages, limits)
             if num_pages == 0:
                 return "", 0, False
             for i, page in enumerate(pdf.pages):
@@ -114,23 +192,40 @@ def _pdfplumber_extract(pdf_bytes: bytes) -> tuple[str, int, bool]:
                     if len(page_text.strip()) < 20:
                         scanned_pages += 1
                     text_parts.append(page_text)
+                except _NEVER_SWALLOWED:
+                    raise
                 except Exception as e:
+                    _reraise_if_exhausted(e)
                     logger.warning("pdfplumber page %d extraction failed: %s", i, e, exc_info=False)
                     text_parts.append("")
                     scanned_pages += 1
+                finally:
+                    page.close()  # audit F26: release the page's cached layout
+                total_chars += len(text_parts[-1])
+                if total_chars > limits.max_text_chars:
+                    raise PdfLimitExceeded(TEXT_LIMIT)
         full_text = "\n".join(text_parts)
         is_scanned = scanned_pages > (num_pages * 0.6) if num_pages else False
         return full_text, num_pages, is_scanned
+    except _NEVER_SWALLOWED:
+        raise
     except Exception as e:
+        _reraise_if_exhausted(e)
         logger.warning("pdfplumber open/parse failed: %s", e, exc_info=True)
         return "", 0, True
 
 
-def _ocr_extract_with_pdfplumber_images(pdf_bytes: bytes) -> str:
+def _ocr_extract_with_pdfplumber_images(
+    pdf_bytes: bytes, limits: Limits = DEFAULT_LIMITS, stats: Optional[_OcrStats] = None
+) -> str:
     """
     OCR fallback using pdfplumber's page.to_image() -> PIL -> pytesseract
     Works without poppler dependency.
+    Audit F26: at most limits.max_ocr_pages pages, none larger than limits.max_image_pixels at
+    OCR_DPI, each tesseract call bounded by limits.tesseract_seconds, the OCR text held to
+    limits.max_text_chars; MemoryError and PdfLimitExceeded propagate. ``stats`` records what was done.
     """
+    stats = stats if stats is not None else _OcrStats()
     try:
         import pdfplumber
         from PIL import Image
@@ -140,15 +235,28 @@ def _ocr_extract_with_pdfplumber_images(pdf_bytes: bytes) -> str:
         return ""
 
     ocr_texts: list[str] = []
+    ocr_chars = 0
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            _check_pages(len(pdf.pages), limits)
             for idx, page in enumerate(pdf.pages):
+                if idx >= limits.max_ocr_pages:
+                    stats.truncated = True
+                    logger.warning("OCR stops after %d of %d pages (audit F26 cap)", idx, len(pdf.pages))
+                    break
                 try:
+                    pixels = _render_pixels(page, OCR_DPI)
+                    if pixels > limits.max_image_pixels:
+                        stats.skipped += 1
+                        logger.warning("page %d is %.0f pixels at %d dpi, over the audit F26 cap; not rendered", idx, pixels, OCR_DPI)
+                        continue
+                    stats.pages += 1
                     # Render page to image at 300 DPI for decent OCR
                     # pdfplumber's to_image requires Wand or pdfium optional; handle fallback
                     try:
-                        pil_image: Image.Image = page.to_image(resolution=300).original
-                    except Exception:
+                        pil_image: Image.Image = page.to_image(resolution=OCR_DPI).original
+                    except Exception as render_error:
+                        _reraise_if_exhausted(render_error)
                         # Fallback: try to extract embedded images and OCR them (less accurate)
                         # If no image rendering, skip
                         logger.debug("page.to_image failed on page %d, trying crop render", idx)
@@ -176,21 +284,40 @@ def _ocr_extract_with_pdfplumber_images(pdf_bytes: bytes) -> str:
 
                     # Try combined eng+urd first, fallback to eng if urdu traineddata missing
                     try:
-                        txt = pytesseract.image_to_string(pil_image, config=TESSERACT_CONFIG_URDU)
+                        txt = pytesseract.image_to_string(
+                            pil_image, config=TESSERACT_CONFIG_URDU, timeout=limits.tesseract_seconds
+                        )
                         if len(txt.strip()) < 50:
-                            txt = pytesseract.image_to_string(pil_image, config=TESSERACT_CONFIG)
+                            txt = pytesseract.image_to_string(
+                                pil_image, config=TESSERACT_CONFIG, timeout=limits.tesseract_seconds
+                            )
+                    except _NEVER_SWALLOWED:
+                        raise
                     except Exception as e:
+                        _reraise_if_exhausted(e)
                         # Tesseract might not have urd, fallback
                         logger.debug("tesseract urd fallback triggered: %s", e)
-                        txt = pytesseract.image_to_string(pil_image, config=TESSERACT_CONFIG)
+                        txt = pytesseract.image_to_string(pil_image, config=TESSERACT_CONFIG, timeout=limits.tesseract_seconds)
 
                     if txt:
                         ocr_texts.append(txt)
+                        # audit F26: OCR text counts against the same cap as a text layer
+                        ocr_chars += len(txt)
+                        if ocr_chars > limits.max_text_chars:
+                            raise PdfLimitExceeded(TEXT_LIMIT)
 
+                except _NEVER_SWALLOWED:
+                    raise
                 except Exception as e:
+                    _reraise_if_exhausted(e)
                     logger.warning("OCR failed on page %d: %s", idx, e, exc_info=False)
                     continue
+                finally:
+                    page.close()  # audit F26: release the page's cached layout
+    except _NEVER_SWALLOWED:
+        raise
     except Exception as e:
+        _reraise_if_exhausted(e)
         logger.warning("OCR pdf open failed: %s", e, exc_info=True)
         return ""
 
@@ -221,33 +348,29 @@ def _validate_pdf_bytes(data: bytes, url: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Public API per spec Section 15
 # ---------------------------------------------------------------------------
-def extract_pdf_text(pdf_bytes: bytes) -> str:
+def extract_pdf(pdf_bytes: bytes, limits: Limits = DEFAULT_LIMITS) -> Extraction:
     """
-    Extract text from Pakistan legal judgment PDF bytes.
-    
-    Strategy:
+    Extract text from Pakistan legal judgment PDF bytes, within ``limits`` (audit F26).
+
+    Strategy (main's, unchanged):
       1. Primary: pdfplumber extract_text() for digital PDFs.
       2. If extracted length < 200 chars or >60% pages look scanned,
          fallback to pytesseract OCR via pdfplumber page.to_image().
       3. Return cleaned, normalized text. Empty string if truly unreadable.
 
-    Args:
-        pdf_bytes: Raw PDF file content.
-
-    Returns:
-        Extracted and cleaned text. Never raises - returns "" on failure
-        to allow scraper to continue. Logs warnings for observability.
+    Raises PdfLimitExceeded past the page or text cap, and MemoryError; any other failure degrades
+    to the best text found (possibly "") as before.
     """
     if not pdf_bytes:
         logger.warning("extract_pdf_text called with empty bytes")
-        return ""
+        return Extraction("", 0, False)
 
     _validate_pdf_bytes(pdf_bytes)
 
     start = time.monotonic()
 
     # --- Primary: pdfplumber ---
-    raw_text, num_pages, is_scanned_hint = _pdfplumber_extract(pdf_bytes)
+    raw_text, num_pages, is_scanned_hint = _pdfplumber_extract(pdf_bytes, limits)
     cleaned_primary = _clean_text(raw_text)
 
     if len(cleaned_primary.strip()) >= MIN_EXTRACTED_LENGTH and not is_scanned_hint:
@@ -257,7 +380,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             len(cleaned_primary),
             time.monotonic() - start,
         )
-        return cleaned_primary
+        return Extraction(cleaned_primary, num_pages, False)
 
     # --- Fallback: OCR ---
     logger.info(
@@ -267,8 +390,13 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         num_pages,
     )
 
+    ocr = _OcrStats()
+
+    def done(text: str, from_ocr: bool) -> Extraction:
+        return Extraction(text, num_pages, from_ocr, ocr.pages, ocr.skipped, ocr.truncated)
+
     try:
-        ocr_raw = _ocr_extract_with_pdfplumber_images(pdf_bytes)
+        ocr_raw = _ocr_extract_with_pdfplumber_images(pdf_bytes, limits, ocr)
         ocr_cleaned = _clean_text(ocr_raw)
 
         # Choose best of primary vs OCR
@@ -280,7 +408,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                 time.monotonic() - start,
             )
             if len(ocr_cleaned.strip()) >= 50:
-                return ocr_cleaned
+                return done(ocr_cleaned, True)
 
         # If OCR produced little but primary had something, return primary
         if len(cleaned_primary.strip()) >= 50:
@@ -289,215 +417,165 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                 len(ocr_cleaned.strip()),
                 len(cleaned_primary.strip()),
             )
-            return cleaned_primary
+            return done(cleaned_primary, False)
 
         # Last resort - return whatever we have
-        final = ocr_cleaned if len(ocr_cleaned) > len(cleaned_primary) else cleaned_primary
+        from_ocr = len(ocr_cleaned) > len(cleaned_primary)
+        final = ocr_cleaned if from_ocr else cleaned_primary
         if final.strip():
-            return final
+            return done(final, from_ocr)
 
         logger.error("Both pdfplumber (%d chars) and OCR (%d chars) yielded insufficient text", len(cleaned_primary), len(ocr_cleaned))
-        return ""
+        return done("", False)
 
+    except _NEVER_SWALLOWED:
+        raise
     except Exception as e:
+        _reraise_if_exhausted(e)
         logger.error("extract_pdf_text OCR fallback crashed: %s", e, exc_info=True)
         # Return primary if exists, else empty - graceful degradation for scraper
-        return cleaned_primary if cleaned_primary.strip() else ""
+        return done(cleaned_primary if cleaned_primary.strip() else "", False)
 
 
-async def download_pdf(
-    url: str,
-    client: httpx.AsyncClient,
-    max_size_bytes: int = MAX_PDF_SIZE_BYTES,
-    timeout: float = DOWNLOAD_TIMEOUT,
-) -> bytes:
+def extract_pdf_text(pdf_bytes: bytes) -> str:
     """
-    Download a PDF with streaming to handle large Pakistani judgment files.
-
-    Features:
-      - Streaming via client.stream() + aiter_bytes() to avoid loading huge files in RAM at once
-      - Hard size limit (default 100MB) to protect scraper
-      - Content-Type validation with warning (some sites mis-label)
-      - PDF magic validation (%PDF)
-      - Raises PDFDownloadError on failure with actionable message
-      - Graceful logging for scraper observability
-
-    Args:
-        url: PDF URL (could be PakistanLawSite GetCaseFile indirect or gov.pk statute)
-        client: httpx.AsyncClient with existing cookies/session (dual-credential managed externally)
-        max_size_bytes: Reject if larger than this
-        timeout: Per-request timeout in seconds
-
-    Returns:
-        bytes: Raw PDF bytes
-
-    Raises:
-        PDFDownloadError: On HTTP error, size exceed, or content validation failure
-        ValueError: On invalid URL
+    Extract text from Pakistan legal judgment PDF bytes: ``extract_pdf(pdf_bytes).text`` with the
+    default limits. Same signature and, below the limits, the same text as before audit F26.
     """
-    if not url or not isinstance(url, str):
-        raise ValueError(f"Invalid url: {url!r}")
-    if not url.startswith(("http://", "https://")):
-        raise ValueError(f"URL must be http(s): {url}")
+    return extract_pdf(pdf_bytes).text
 
-    if client is None:
-        raise ValueError("httpx.AsyncClient client is required for download_pdf")
 
-    logger.info("Downloading PDF: %s", url)
+# ---------------------------------------------------------------------------
+# Audit F26: malware policy (spec R4) and the sandbox's set-up
+# ---------------------------------------------------------------------------
+# PDF names that carry or launch code, or embed files: JavaScript (/JS, /JavaScript), launch actions,
+# embedded files (the stream's optional /Type, the name tree, a filespec's /EF, an attachment
+# annotation), and the script containers that need no /JS name (/XFA forms, /RichMedia).
+ACTIVE_CONTENT_NAMES = frozenset({
+    "JS", "JavaScript", "Launch", "EmbeddedFile", "EmbeddedFiles", "EF", "FileAttachment", "RichMedia", "XFA",
+})
 
-    headers = {
-        "User-Agent": DEFAULT_UA,
-        "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+
+def _name_of(value: Any) -> Optional[str]:
+    if isinstance(value, bytes):
+        return value.decode("latin-1")
+    return value if isinstance(value, str) else None
+
+
+def _active_name_in(root: Any) -> Optional[str]:
+    """The first active-content name among the keys, name values and stream dictionaries of ``root``
+    (references are not followed: every object is scanned on its own)."""
+    from pdfminer.pdftypes import PDFStream
+    from pdfminer.psparser import PSLiteral
+
+    stack = [root]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if _name_of(key) in ACTIVE_CONTENT_NAMES:
+                    return _name_of(key)
+                stack.append(value)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, PDFStream):
+            stack.append(item.attrs)
+        elif isinstance(item, PSLiteral):
+            if _name_of(item.name) in ACTIVE_CONTENT_NAMES:
+                return _name_of(item.name)
+    return None
+
+
+def find_active_content(pdf_bytes: bytes) -> Optional[str]:
+    """The structural scan (spec R4): every object pdfminer resolves through every cross-reference
+    section (tables and streams, objects packed in compressed object streams included, and its own
+    repair scan of a broken table) and every trailer. Names are compared after pdfminer decodes
+    their #xx escapes. Returns the first active-content name found, or None. A document pdfminer
+    cannot open is left to extraction."""
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfparser import PDFParser
 
     try:
-        # Use stream=True pattern for large PDFs - prevents buffering entire file in memory at HTTP layer
-        # Audit F25: redirects are never forced on here; the caller's client decides, and a
-        # corpus fetch client (scraper.net.fetch_policy) re-checks every hop itself.
-        async with client.stream(
-            "GET",
-            url,
-            timeout=httpx.Timeout(timeout, connect=30.0),
-            headers=headers,
-        ) as response:
-
-            # Status check - will raise for 4xx/5xx but we want custom message
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # Detailed logging for blocked/session expiry cases common on PakistanLawSite
-                body_preview = ""
-                try:
-                    # try read small preview without consuming whole stream
-                    body_preview = (await response.aread())[:500].decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
-                if e.response.status_code == 403 or e.response.status_code == 429:
-                    logger.warning("Access blocked (%d) for %s: %s", e.response.status_code, url, body_preview[:200])
-                raise PDFDownloadError(
-                    f"HTTP {e.response.status_code} downloading PDF from {url}: {body_preview[:200]}"
-                ) from e
-
-            # Early content-length guard
-            content_length = response.headers.get("content-length")
-            if content_length:
-                try:
-                    cl = int(content_length)
-                    if cl > max_size_bytes:
-                        raise PDFDownloadError(
-                            f"PDF too large: Content-Length {cl} > limit {max_size_bytes} for {url}"
-                        )
-                except ValueError:
-                    pass  # ignore malformed header
-
-            # Content-Type advisory (warn, don't fail - gov.pk sometimes uses octet-stream)
-            ctype = response.headers.get("content-type", "").lower()
-            if ctype and "pdf" not in ctype and "octet-stream" not in ctype and "binary" not in ctype:
-                # If it's HTML, likely login page / session expired
-                if "html" in ctype or "text" in ctype:
-                    # Peek first bytes to confirm
-                    logger.warning("Expected PDF but got content-type %s from %s - may be session expiry", ctype, url)
-                else:
-                    logger.debug("Unusual content-type %s for PDF %s", ctype, url)
-
-            # Streamed read with size enforcement
-            buffer = io.BytesIO()
-            total_bytes = 0
-            start_dl = time.monotonic()
-
-            async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
-                if not chunk:
-                    continue
-                total_bytes += len(chunk)
-                if total_bytes > max_size_bytes:
-                    raise PDFDownloadError(
-                        f"PDF exceeded max size {max_size_bytes} bytes while streaming from {url} (got {total_bytes})"
-                    )
-                buffer.write(chunk)
-
-            data = buffer.getvalue()
-            elapsed = time.monotonic() - start_dl
-
-            logger.info(
-                "Downloaded %d bytes in %.2fs (%.1f KB/s) from %s",
-                total_bytes,
-                elapsed,
-                (total_bytes / 1024 / elapsed) if elapsed > 0 else 0,
-                url,
-            )
-
-            # Validation
-            _validate_pdf_bytes(data, url=url)
-
-            # Guard against login page disguised as PDF (PakistanLawSite returns mainLoginForm)
-            if b"mainLoginForm" in data[:5000] or b"Login.UserName" in data[:5000]:
-                raise PDFDownloadError(
-                    f"Session expired - received login page instead of PDF from {url}"
-                )
-
-            if len(data) < 15000:
-                # For Blackletter policy, PDFs <15KB are likely stubs / forbidden content
-                logger.warning("PDF from %s is very small (%d bytes), possible stub", url, len(data))
-                # Still return - caller decides if to discard, but warn
-
-            return data
-
-    except PDFDownloadError:
-        # Already wrapped with context
+        document = PDFDocument(PDFParser(io.BytesIO(pdf_bytes)))
+    except _NEVER_SWALLOWED:
         raise
-    except httpx.TimeoutException as e:
-        msg = f"Timeout ({timeout}s) downloading PDF from {url}: {e}"
-        logger.error(msg)
-        raise PDFDownloadError(msg) from e
-    except httpx.RequestError as e:
-        # Network-level failure - per dual-credential spec, this is real failure triggering failover in caller
-        msg = f"Network error downloading PDF from {url}: {e.__class__.__name__}: {e}"
-        logger.error(msg)
-        raise PDFDownloadError(msg) from e
     except Exception as e:
-        msg = f"Unexpected error downloading PDF from {url}: {e}"
-        logger.error(msg, exc_info=True)
-        raise PDFDownloadError(msg) from e
+        _reraise_if_exhausted(e)
+        logger.info("active-content scan: pdfminer cannot open the document (%s); extraction decides", type(e).__name__)
+        return None
+    seen: set = set()
+    for xref in document.xrefs:
+        hit = _active_name_in(xref.get_trailer())
+        if hit:
+            return hit
+        for objid in xref.get_objids():
+            if objid in seen:
+                continue
+            seen.add(objid)
+            try:
+                obj = document.getobj(objid)
+            except _NEVER_SWALLOWED:
+                raise
+            except Exception as e:
+                _reraise_if_exhausted(e)
+                continue
+            hit = _active_name_in(obj)
+            if hit:
+                return hit
+    return None
 
 
-# ---------------------------------------------------------------------------
-# Optional sync wrapper for callers outside asyncio (e.g., Celery tasks)
-# ---------------------------------------------------------------------------
-def download_pdf_sync(
-    url: str,
-    client: Optional[httpx.Client] = None,
-    max_size_bytes: int = MAX_PDF_SIZE_BYTES,
-    timeout: float = DOWNLOAD_TIMEOUT,
-) -> bytes:
-    """
-    Synchronous version for Celery workers or non-async contexts.
-    Maintains same streaming + size-limit behavior.
+def bound_image_decoding(max_pixels: int) -> None:
+    """PIL refuses any image over ``max_pixels``: its decompression-bomb warning becomes an error."""
+    import warnings
 
-    Audit F25: the caller supplies the client. This function no longer builds an HTTP client of
-    its own (with redirects on and no host or address control); corpus fetches go through
-    scraper.net.fetch_policy.
-    """
-    if not url.startswith(("http://", "https://")):
-        raise ValueError(f"Invalid url: {url}")
-    if client is None:
-        raise ValueError("an HTTP client is required for download_pdf_sync (audit F25)")
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = int(max_pixels)
+    warnings.simplefilter("error", Image.DecompressionBombWarning)
+
+
+def _warm_up_pdf() -> bytes:
+    """A one-page PDF of more than 1 KiB (so _validate_pdf_bytes does not warn) with a text layer of
+    more than MIN_EXTRACTED_LENGTH characters (so the warm-up never turns to OCR)."""
+    lines = [f"F26 sandbox warm-up line {i}: a synthetic page, not a judgment, 2099." for i in range(1, 9)]
+    content = b"BT\n/F1 11 Tf\n14 TL\n72 740 Td\n" + b"\nT*\n".join(b"(" + ln.encode("ascii") + b") Tj" for ln in lines) + b"\nET\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+def warm_up() -> None:
+    """Load everything the parser and the OCR path load lazily, by running them once on a built-in
+    page: the sandbox calls this before it drops privileges, so nothing later needs to read files
+    the unprivileged user may not."""
+    import pdfplumber
+    import pdfplumber.display  # noqa: F401 - pypdfium2, which renders pages for OCR
+    import PIL.Image
+    import PIL.PngImagePlugin  # noqa: F401 - the format pytesseract hands images to tesseract in
 
     try:
-        with client.stream("GET", url, headers={"User-Agent": DEFAULT_UA}) as resp:
-            resp.raise_for_status()
-            cl = resp.headers.get("content-length")
-            if cl and int(cl) > max_size_bytes:
-                raise PDFDownloadError(f"Content-Length {cl} > limit {max_size_bytes}")
-            total = 0
-            buf = io.BytesIO()
-            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                total += len(chunk)
-                if total > max_size_bytes:
-                    raise PDFDownloadError(f"PDF exceeded max size {max_size_bytes}")
-                buf.write(chunk)
-            data = buf.getvalue()
-            _validate_pdf_bytes(data, url=url)
-            return data
-    except httpx.HTTPStatusError as e:
-        raise PDFDownloadError(f"HTTP {e.response.status_code} for {url}") from e
+        import pytesseract  # noqa: F401
+    except ImportError:
+        pass
+    data = _warm_up_pdf()
+    extract_pdf(data)
+    find_active_content(data)
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        image = pdf.pages[0].to_image(resolution=10).original
+        PIL.Image.new("RGB", image.size, (255, 255, 255)).convert("L").save(io.BytesIO(), format="PNG")
+        image.convert("L").save(io.BytesIO(), format="PNG")
