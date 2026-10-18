@@ -49,11 +49,13 @@ survivors, and the equivalent mutants: [`mutation-report.md`](mutation-report.md
 | --- | --- | --- |
 | Next app | `platform/p5` (session, request identity, checkPermission, committeeScope), `platform/p1/providerPolicy.ts` and `types.ts`, `platform/http/**`, `platform/flags/**`, the audit write path (`platform/persistence/audit*.ts`; there is no `platform/audit/`), `platform/persistence/runtimeRepositories.ts`. | `npm run mutation` |
 | functions | `functions/src/p5/**`, `functions/src/http/**`, under the emulators: `scripts/mutation.sh` starts one independent Auth + Firestore emulator set per Stryker worker on ephemeral ports, and each worker claims its own set, so concurrent mutants cannot interfere. Needs Java (Firestore emulator). | `npm run mutation:functions` |
+| document vault (audit F03, FA-D16-002) | `platform/documents/documentObjectStore.ts` and `documentObjectS3.ts`, against the four F03 unit suites only (`vitest.stryker.documents.config.ts`; the fault proxy's in-memory S3 stands in for MinIO). **Runs per PR** in Gate G-0 ("Mutation floor (document vault)"), path-gated to the vault, its tests and their configuration; break 85. | `npm run mutation:documents` |
 
-Reports: `reports/mutation/next/` and `functions/reports/mutation/`
+Reports: `reports/mutation/next/`, `reports/mutation/documents/` and `functions/reports/mutation/`
 (gitignored; HTML + JSON). Re-runs are incremental
 (`stryker-incremental.json` in the report directory): only mutants whose code
 or covering tests changed are re-tested. Delete that file for a full run.
 
-Not part of per-PR CI because of runtime (measured on 4 cores): see
-`mutation-report.md` "Runtime".
+The Next and functions runs are not part of per-PR CI because of runtime
+(measured on 4 cores): see `mutation-report.md` "Runtime". The document vault
+run is (13 to 26 minutes measured on 4 shared cores; non-incremental, so every PR run is a full run).

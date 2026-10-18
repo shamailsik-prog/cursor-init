@@ -80,6 +80,16 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
             raise outcomes.SourceRefused(source_name, decision.reason)
         if not isinstance(decision, outcomes.Skipped) and not isinstance(decision, outcomes.HarvestResult):
             raise outcomes.HarvesterContractError(source_name, decision)
+    except outcomes.INTERRUPTIONS as exc:
+        # F28 R21 (re-audit M1): Celery's soft time limit, or the CancelledError asyncio.run throws in
+        # when that limit escapes the event loop, ends the run. Record it as a failed attempt with the
+        # counts reached (alerts included), never retried (R25), then re-raise the original so Celery
+        # and asyncio see what happened. KeyboardInterrupt / SystemExit / GeneratorExit pass (R22).
+        await job_record.finish_failed(
+            job_id, source_name, outcomes.RunInterrupted.of(exc), tally=tally, started=started, attempt=attempt,
+            max_retries=max_retries, retry_in=None,
+        )
+        raise
     except Exception as exc:
         retry_in = outcomes.retry_countdown(attempt) if outcomes.will_retry(exc, attempt, max_retries) else None
         await job_record.finish_failed(
@@ -95,6 +105,10 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
         if isinstance(decision, outcomes.Skipped):
             return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
         return await job_record.finish_completed(job_id, source_name, decision, started)
+    except outcomes.INTERRUPTIONS:
+        # F28 R21: cut off while its record was written. Report the time limit itself; the row stays
+        # running and the sweep closes and counts it (R24).
+        raise
     except Exception as exc:
         logger.error(
             "F28 run record failed: %s %s run could not be recorded (%s); not retried, freshness unchanged",

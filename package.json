@@ -25,6 +25,7 @@
     "test:rules": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/firestore.rules.lattice-dedicated-view-invariants.test.ts tests/firestore.rules.test.ts tests/firestore.rules.d1-phase2a.test.ts tests/firestore.rules.d1-phase2b.test.ts tests/firestore.rules.p1-phase3d.test.ts tests/firestore.rules.d4-phase4a.test.ts tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts tests/audit-f01-production-persistence.e2e.test.ts tests/f03.persistence-rollback.test.ts tests/f14-document-clearance.firestore.test.ts tests/f10-durable-idempotency.firestore.test.ts tests/f10-next-idempotency.e2e.firestore.test.ts tests/f16-next-output-size.firestore.test.ts tests/f01-production-identity.e2e.firestore.test.ts tests/f12-firm-scoped-reads.e2e.firestore.test.ts\"",
     "test:postgres-ddl": "vitest run --no-file-parallelism tests/postgres.ddl.integration.test.ts tests/probe-fa-data-001.regression.test.ts",
     "test:f05-authority": "npm --prefix functions run test:f05-authority",
+    "test:document-object-s3": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/f03-document-object-store.s3.integration.test.ts tests/f03-r2-document-vault.e2e.firestore.test.ts\"",
     "probe:fa-data-001": "node docs/audit/probes/probe_fa_data_001.mjs",
     "corpus:citation-golden": "UPDATE_CITATION_GOLDEN=1 vitest run tests/citations.canonical-golden.test.ts",
     "test:f02-console-auth": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/audit-f02-console-functions-auth.e2e.test.ts\"",
@@ -44,10 +45,12 @@
     "gate:g4:phase4a": "bash ci_gates/gate_g4_phase4a.sh",
     "mutation": "stryker run stryker.config.mjs",
     "mutation:functions": "npm --prefix functions run mutation",
+    "mutation:documents": "stryker run stryker.documents.config.mjs",
     "eve:dev": "eve dev",
     "eve:info": "eve info"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1151.0",
     "@base-ui/react": "^1.8.0",
     "ai": "^7.0.93",
     "class-variance-authority": "^0.7.1",
