@@ -244,13 +244,12 @@ def _ocr_extract_with_pdfplumber_images(
                     stats.truncated = True
                     logger.warning("OCR stops after %d of %d pages (audit F26 cap)", idx, len(pdf.pages))
                     break
-                pixels = _render_pixels(page, OCR_DPI)
-                if pixels > limits.max_image_pixels:
-                    stats.skipped += 1
-                    logger.warning("page %d is %.0f pixels at %d dpi, over the audit F26 cap; not rendered", idx, pixels, OCR_DPI)
-                    page.close()
-                    continue
                 try:
+                    pixels = _render_pixels(page, OCR_DPI)
+                    if pixels > limits.max_image_pixels:
+                        stats.skipped += 1
+                        logger.warning("page %d is %.0f pixels at %d dpi, over the audit F26 cap; not rendered", idx, pixels, OCR_DPI)
+                        continue
                     stats.pages += 1
                     # Render page to image at 300 DPI for decent OCR
                     # pdfplumber's to_image requires Wand or pdfium optional; handle fallback
