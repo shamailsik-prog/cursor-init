@@ -21,3 +21,12 @@ python-multipart
 reportlab
 weasyprint
 python-dateutil
+# Audit F31: runtime code imports these directly, so the runtime manifest declares them (checked by
+# tests/test_f31_import_contract.py, proven by tests/e2e/runtime_smoke.sh). pgvector is imported by
+# scraper/models.py and pinned to the version requirements-test.txt runs. The other four were
+# installed only as other packages' dependencies; they stay unpinned until F46 pins the runtime set.
+pgvector==0.5.0
+anyio
+certifi
+httpcore
+pydantic
