@@ -11,6 +11,8 @@ import logging
 import os
 from pathlib import Path
 
+from scraper.tasks import outcomes
+
 logger = logging.getLogger(__name__)
 
 IMPORT_DIR = Path(
@@ -47,7 +49,8 @@ async def scrape_pakistanlawsite(source, db):
             "PakistanLawSite: no PLS_API_KEY and no files in %s — idle (FINAL_2)",
             IMPORT_DIR,
         )
-        return {"status": "idle", "reason": "no_api_key_or_import_files", "ingested": 0}
+        # Audit F28: idle is a run that worked and found nothing (outcome "empty"), not a failure.
+        return outcomes.run_tally().finish(note="idle: no_api_key_or_import_files")
 
     logger.info("PakistanLawSite: importing %d file(s) from %s", len(files), IMPORT_DIR)
     return await _ingest_import_folder(files=files, source=source, db=db)
@@ -60,7 +63,7 @@ async def _poll_licensed_api(*, api_key: str, source, db):
         "drop exports in %s meanwhile",
         IMPORT_DIR,
     )
-    return {"status": "idle", "reason": "api_endpoint_not_configured", "ingested": 0}
+    return outcomes.run_tally().finish(note="idle: api_endpoint_not_configured")
 
 
 async def _ingest_import_folder(*, files, source, db):
@@ -74,7 +77,7 @@ async def _ingest_import_folder(*, files, source, db):
     provenance = Path(__file__).resolve().parents[2] / "live" / "provenance"
     provenance.mkdir(parents=True, exist_ok=True)
     out = provenance / "pls_imports.jsonl"
-    ingested = 0
+    tally = outcomes.run_tally()
     for path in files:
         data = path.read_bytes()
         dest = live / path.name
@@ -92,5 +95,5 @@ async def _ingest_import_folder(*, files, source, db):
         }
         with out.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
-        ingested += 1
-    return {"status": "ok", "ingested": ingested}
+        tally.item_ok(1)
+    return tally.finish()

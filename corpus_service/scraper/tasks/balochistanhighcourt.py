@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from scraper.net import fetch_policy
+from scraper.tasks import outcomes
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,9 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
     visited_listing_urls: set[str] = set()
     listing_queue = deque(BHC_LISTING_SEED_URLS)
 
+    # Audit F28: every listing request is counted; when all of them fail the run fails.
+    listings = outcomes.Tally()
+
     # Audit F25: listing pages are external input. Every request (and every redirect hop)
     # goes through the BalochistanHighCourt fetch policy: https, its hosts on 443, public addresses only.
     async with fetch_policy.fetcher_for("BalochistanHighCourt") as client:
@@ -199,16 +203,19 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
                 response = await _request_with_retries(client, listing_url)
             except Exception as e:
                 logger.warning("BHC listing request failed %s: %s", listing_url, repr(e))
+                listings.item_failed(e)
                 continue
 
-            if response.status_code >= 400:
+            if response.status_code != 200:
                 logger.warning(
                     "BHC listing returned status %s for %s",
                     response.status_code,
                     listing_url,
                 )
+                listings.item_failed(f"http_{response.status_code}")
                 continue
 
+            listings.item_ok()
             child_listings, discovered_pdfs = _extract_listing_and_pdf_links(
                 response.text, str(response.url)
             )
@@ -224,45 +231,59 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, str]]:
         len(visited_listing_urls),
         len(pdf_sources),
     )
+    listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
     return list(pdf_sources.keys()), pdf_sources
 
 
 async def scrape_balochistanhighcourt(source, db):
-    try:
-        from scraper.models import ScraperStaging
-        from scraper.parsers.pdf_extractor import extract_pdf_text
-        from scraper.source_identity import stamp_metadata
+    # Audit F28: no outer catch. A discovery whose every listing request failed, a database error,
+    # or a run whose every PDF failed fails the run; each PDF's outcome is counted.
+    from scraper.models import ScraperStaging
+    from scraper.parsers.pdf_extractor import extract_pdf_text
+    from scraper.source_identity import stamp_metadata
 
-        pdf_urls, pdf_sources = await _discover_pdf_urls()
-        if not pdf_urls:
-            logger.warning(
-                "BalochistanHighCourt: no PDF links discovered from configured listing URLs"
-            )
-            return
+    tally = outcomes.run_tally()
+    pdf_urls, pdf_sources = await _discover_pdf_urls()
+    if not pdf_urls:
+        logger.warning(
+            "BalochistanHighCourt: no PDF links discovered from configured listing URLs"
+        )
+        return tally.finish(note="no PDF links discovered")
 
-        async with fetch_policy.fetcher_for("BalochistanHighCourt") as client:
-            for pdf_url in pdf_urls[:60]:
-                try:
-                    response = await _request_with_retries(client, pdf_url)
-                    if response.status_code != 200:
-                        continue
-                    if response.content[:4] != b"%PDF":
-                        continue
-                    text = extract_pdf_text(response.content)
-                    staging = ScraperStaging(
-                        source_id=source.id,
-                        source_site="BalochistanHighCourt",
-                        source_url=pdf_url,
-                        raw_text=text[:50000],
-                        confidence_score=0.6,
-                        quarantined=True,
-                        quarantine_reason="review source",
-                        parsing_metadata=stamp_metadata(source, {"listing_url": pdf_sources.get(pdf_url)}),
-                    )
-                    db.add(staging)
-                    await db.commit()
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    logger.error("BalochistanHighCourt PDF %s error %s", pdf_url, e)
-    except Exception as e:
-        logger.error("BalochistanHighCourt scraper error %s", e)
+    async with fetch_policy.fetcher_for("BalochistanHighCourt") as client:
+        for pdf_url in pdf_urls[:60]:
+            try:
+                response = await _request_with_retries(client, pdf_url)
+                if response.status_code != 200:
+                    tally.item_failed(f"http_{response.status_code}")
+                    continue
+                if not outcomes.looks_like_pdf(response.content):
+                    tally.item_failed(outcomes.ERROR_NOT_PDF)
+                    continue
+                text = extract_pdf_text(response.content)
+                if not outcomes.has_text(text):
+                    # Audit F28 R16: the signature but no text (parsing and OCR both failed) is a
+                    # failed document: never staged, never progress.
+                    logger.warning("PDF %s has no extractable text; not staged", pdf_url)
+                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
+                    continue
+                staging = ScraperStaging(
+                    source_id=source.id,
+                    source_site="BalochistanHighCourt",
+                    source_url=pdf_url,
+                    raw_text=text[:50000],
+                    confidence_score=0.6,
+                    quarantined=True,
+                    quarantine_reason="review source",
+                    parsing_metadata=stamp_metadata(source, {"listing_url": pdf_sources.get(pdf_url)}),
+                )
+                db.add(staging)
+                await db.commit()
+                tally.item_ok(1)
+                await asyncio.sleep(1)
+            except Exception as e:
+                if outcomes.is_database_error(e):
+                    raise
+                logger.error("BalochistanHighCourt PDF %s error %s", pdf_url, e)
+                tally.item_failed(e)
+    return tally.finish()
