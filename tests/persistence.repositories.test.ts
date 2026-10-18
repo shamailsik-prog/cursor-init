@@ -4909,7 +4909,10 @@ describe("Firestore repository adapters", () => {
         await repos.filingEscalationClosureQueueReentryCompliance.listByFirm("firmA")
       expect(closureQueueReentryComplianceByFirm.some((row) => row.ownerId === "partner_a")).toBe(true)
     })
-  }, 10_000)
+    // About 440 sequential emulator round-trips (no timing assertion): 8.2 s on main and 9.4 s with the firm-scoped
+    // queries on a lightly loaded machine, which crossed the old 10 s timeout in every loaded full test:rules run
+    // (takeover of #44). The timeout bounds a hang; it is not a performance budget.
+  }, 60_000)
 
   it("audit_log append is insert-only: an existing audit id is never overwritten (emulator)", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {

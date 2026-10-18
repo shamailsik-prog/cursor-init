@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, it } from "vitest"
 import type { FirmBoundSpineRepositories } from "@/platform/persistence/firmBoundRepositories"
 
 type MatterGet = FirmBoundSpineRepositories["matters"]["get"]

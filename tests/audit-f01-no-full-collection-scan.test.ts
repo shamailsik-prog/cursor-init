@@ -98,7 +98,7 @@ describe("FA-F01-001 no admin full-collection scans", () => {
       mB: { id: "mB", firmId: "firmB", title: "B" },
     }
     const db = {
-      collection: (name: string) => ({
+      collection: (_name: string) => ({
         doc: (id: string) => ({
           get: async () => ({
             exists: Boolean(docs[id]),

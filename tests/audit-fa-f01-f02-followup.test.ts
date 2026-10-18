@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { tryDispatchConsoleCallToFunctions } from "@/lib/console/console-functions-dispatch"
 import { executeConsoleApiCall } from "@/lib/console/execute-console-api-call"
 import {
@@ -35,7 +35,7 @@ describe("FA-F01/F02 follow-up regressions", () => {
         ["m1", { id: "m1", firmId: "firmA", title: "A matter" }],
       ])
       const db = {
-        collection: (name: string) => ({
+        collection: (_name: string) => ({
           doc: (id: string) => ({
             get: async () => ({
               exists: store.has(id),
