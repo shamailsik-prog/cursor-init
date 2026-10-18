@@ -651,3 +651,99 @@ def test_pdf_writer_escapes_metadata_before_reportlab_parses_it(monkeypatch, tmp
     assert "&lt;img src=" in paragraphs[0] and "&amp; &lt;b&gt;" in paragraphs[0]
     assert paragraphs[0].startswith("<b>court ")  # the writer's own markup is kept
     assert (tmp_path / "out" / "j.pdf").read_bytes().startswith(b"%PDF")
+
+
+# ---------------------------------------------------------------------------------------------
+# Review round (Codex P2 on #67): the deflate format must not depend on how the server splits chunks
+# ---------------------------------------------------------------------------------------------
+PAYLOAD = b"Synthetic F25 judgment text, not a real judgment. " * 400
+
+
+def _raw_deflate(data):
+    co = zlib.compressobj(6, zlib.DEFLATED, -15)
+    return co.compress(data) + co.flush()
+
+
+def _decoder(coding, limit=MIB):
+    return fp._BoundedDecoder(coding, limit, lambda reason, detail: fp.FetchRefused(reason, "https://t.example/", "T", detail))
+
+
+def _feed_in(decoder, data, size):
+    for i in range(0, len(data), size):
+        decoder.feed(data[i:i + size])
+    return decoder.finish()
+
+
+ENCODINGS = [("deflate", _raw_deflate), ("deflate", zlib.compress), ("gzip", gzip.compress)]
+ENCODING_IDS = ["raw deflate", "zlib deflate", "gzip"]
+
+
+@pytest.mark.parametrize("coding, encode", ENCODINGS, ids=ENCODING_IDS)
+@pytest.mark.parametrize("size", [1, 2, 3, 7, 65536])
+def test_every_split_of_a_valid_body_decodes_the_same(coding, encode, size):
+    """Raw deflate fed one byte at a time used to be refused: the zlib-wrapped decoder took the first
+    byte without output or error, so the raw fallback was gone when the second byte failed."""
+    assert _feed_in(_decoder(coding), encode(PAYLOAD), size) == PAYLOAD
+
+
+def test_the_undecided_deflate_prefix_holds_at_most_one_byte():
+    decoder = _decoder("deflate")
+    decoder.feed(b"\x78")  # half of a zlib header: nothing decided, nothing decoded
+    assert decoder._prefix == b"\x78" and decoder.size == 0
+    decoder.feed(b"\x9c")
+    assert decoder._prefix is None  # decided on the two header bytes
+    too_short = _decoder("deflate")
+    too_short.feed(b"\x03")
+    with pytest.raises(fp.FetchRefused) as info:
+        too_short.finish()
+    assert info.value.reason == fp.CONTENT_ENCODING
+
+
+@pytest.mark.parametrize("coding, make", [("deflate", raw_deflate_zeros), ("deflate", zlib_zeros), ("gzip", gzip_zeros)],
+                         ids=ENCODING_IDS)
+def test_a_bomb_fed_one_byte_at_a_time_is_refused_with_bounded_memory(coding, make):
+    cap = 256 * 1024
+    bomb = make(16 * MIB)
+    decoder = _decoder(coding, limit=cap)
+    result, peak = _peak(lambda: _feed_in(decoder, bomb, 1))
+    assert isinstance(result, fp.FetchRefused) and result.reason == fp.TOO_LARGE, result
+    assert decoder.size <= cap
+    assert peak < 2 * MIB, f"peak {peak / MIB:.1f} MiB"
+
+
+def _one_byte_chunks(headers, body):
+    """A route sending ``body`` as HTTP/1.1 chunks of one byte each: h11 hands each chunk over as its
+    own piece, so the decoder sees one byte at a time whatever TCP does."""
+
+    def route(handler):
+        handler.send_response(200)
+        for name, value in headers.items():
+            handler.send_header(name, value)
+        handler.send_header("Transfer-Encoding", "chunked")
+        handler.end_headers()
+        wire = bytearray()
+        for byte in body:
+            wire += b"1\r\n" + bytes([byte]) + b"\r\n"
+        wire += b"0\r\n\r\n"
+        try:
+            handler.wfile.write(bytes(wire))
+        except OSError:
+            pass
+        return None
+
+    return route
+
+
+@pytest.mark.parametrize("coding, encode", ENCODINGS, ids=ENCODING_IDS)
+def test_one_byte_http_chunks_decode_end_to_end(env, coding, encode):
+    env.source.routes["/b"] = _one_byte_chunks({"Content-Encoding": coding}, encode(PAYLOAD))
+    assert _run_get(_fetcher(env), f"{env.origin}/b").content == PAYLOAD
+
+
+@pytest.mark.parametrize("coding, make", [("deflate", raw_deflate_zeros), ("deflate", zlib_zeros), ("gzip", gzip_zeros)],
+                         ids=ENCODING_IDS)
+def test_a_bomb_in_one_byte_http_chunks_is_refused_with_bounded_memory(env, coding, make):
+    env.source.routes["/b"] = _one_byte_chunks({"Content-Encoding": coding}, make(16 * MIB))
+    result, peak = _peak(lambda: _run_get(_fetcher(env, max_bytes=256 * 1024), f"{env.origin}/b"))
+    assert isinstance(result, fp.FetchRefused) and result.reason == fp.TOO_LARGE, result
+    assert peak < 4 * MIB, f"peak {peak / MIB:.1f} MiB"
