@@ -49,6 +49,9 @@ REASON_DOCUMENTS_FAILED = "every document request failed"
 # Per-item error codes that are not an HTTP status or an exception (R3, R16).
 ERROR_NOT_PDF = "not_pdf"  # a body assumed to be a PDF does not start with the %PDF- signature
 ERROR_EMPTY_PDF_TEXT = "empty_pdf_text"  # a PDF whose extraction is empty or whitespace only
+ERROR_FEED_UNPARSEABLE = "feed_unparseable"  # a discovery feed answered 200 with a payload that does not parse
+
+REASON_FEEDS_FAILED = "every feed request failed"
 
 PDF_SIGNATURE = b"%PDF-"
 
@@ -263,7 +266,9 @@ def describe_error(exc: BaseException) -> str:
 @dataclass(frozen=True)
 class HarvestResult:
     """What a harvester run did. ``attempted`` documents, of which ``succeeded`` loaded and
-    ``failed`` did not; ``written`` data rows (or files) produced; ``errors`` per error key."""
+    ``failed`` did not; ``written`` data rows (or files) produced; ``errors`` per error key.
+    ``discovery_failed`` / ``discovery_errors``: secondary discovery requests (the IHC feeds) that
+    failed while the run still went on (R17); they make the run partial."""
 
     attempted: int
     succeeded: int
@@ -271,10 +276,12 @@ class HarvestResult:
     written: int
     errors: Dict[str, int] = field(default_factory=dict)
     note: Optional[str] = None
+    discovery_failed: int = 0
+    discovery_errors: Dict[str, int] = field(default_factory=dict)
 
     @property
     def outcome(self) -> str:
-        if self.failed:
+        if self.failed or self.discovery_failed:
             return OUTCOME_PARTIAL
         return OUTCOME_OK if self.written else OUTCOME_EMPTY
 
@@ -286,6 +293,8 @@ class HarvestResult:
             "failed": self.failed,
             "written": self.written,
             "errors": dict(self.errors),
+            "discovery_failed": self.discovery_failed,
+            "discovery_errors": dict(self.discovery_errors),
         }
         if self.note:
             out["note"] = self.note
@@ -317,6 +326,8 @@ class Tally:
         self.written = 0
         self.transient_failures = 0
         self.errors: Counter = Counter()
+        self.discovery_failed = 0
+        self.discovery_errors: Counter = Counter()
 
     def item_ok(self, rows: int = 0) -> None:
         """One item loaded; ``rows`` data rows written from it (0: it held nothing to write)."""
@@ -342,6 +353,12 @@ class Tally:
                 reason, errors=dict(self.errors), retryable=self.transient_failures == self.failed
             )
 
+    def add_discovery_failures(self, stage: "Tally") -> None:
+        """Carry a discovery stage's failures (the IHC feeds) into this run's result: the run went
+        on, but those requests failed, so it is partial (R17)."""
+        self.discovery_failed += stage.failed
+        self.discovery_errors.update(stage.errors)
+
     def result(self, note: Optional[str] = None) -> HarvestResult:
         return HarvestResult(
             attempted=self.attempted,
@@ -350,6 +367,8 @@ class Tally:
             written=self.written,
             errors=dict(self.errors),
             note=note,
+            discovery_failed=self.discovery_failed,
+            discovery_errors=dict(self.discovery_errors),
         )
 
     def finish(self, note: Optional[str] = None) -> HarvestResult:

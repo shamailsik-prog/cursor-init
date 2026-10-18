@@ -198,21 +198,30 @@ def _extract_feed_urls(html: str, base_url: str) -> list[str]:
     return _dedupe_preserve_order(feed_urls)
 
 
-def _extract_pdf_urls_from_feed_payload(payload_text: str, feed_url: str) -> list[str]:
+def _parse_feed_rows(payload_text: str) -> list | None:
+    """The rows of a feed payload (``{"d": [...]}`` or ``{"d": "<json list>"}``), or None when the
+    payload does not parse (audit F28 R17: an unparseable feed answer is a failed feed request)."""
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError:
-        return []
-
+        return None
+    if not isinstance(payload, dict):
+        return None
     data = payload.get("d")
     if isinstance(data, str):
         try:
             rows = json.loads(data)
         except json.JSONDecodeError:
-            return []
-    elif isinstance(data, list):
-        rows = data
-    else:
+            return None
+        return rows if isinstance(rows, list) else None
+    if isinstance(data, list):
+        return data
+    return None
+
+
+def _extract_pdf_urls_from_feed_payload(payload_text: str, feed_url: str) -> list[str]:
+    rows = _parse_feed_rows(payload_text)
+    if rows is None:
         return []
 
     pdf_urls: list[str] = []
@@ -273,7 +282,7 @@ async def _post_json_with_retries(
     raise last_error
 
 
-async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
+async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[str], dict[str, dict[str, str]]]:
     pdf_sources: dict[str, dict[str, str]] = {}
     visited_listing_urls: set[str] = set()
     visited_feed_urls: set[str] = set()
@@ -281,6 +290,10 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
 
     # Audit F28: every listing request is counted; when all of them fail the run fails.
     listings = outcomes.Tally()
+    # Audit F28 R17: every AJAX feed request too (a failure, a 4xx/5xx, an unparseable payload).
+    # Every feed failing with nothing found any other way fails the run; otherwise the feed failures
+    # go into the run's tally (``tally``) and make it partial.
+    feeds = outcomes.Tally()
 
     # Audit F25: listing pages are external input. Every request (and every redirect hop)
     # goes through the IslamabadHighCourt fetch policy: https, its hosts on 443, public addresses only.
@@ -331,6 +344,7 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                     feed_response = await _post_json_with_retries(client, feed_url, {})
                 except Exception as e:
                     logger.warning("IHC feed request failed %s: %s", feed_url, repr(e))
+                    feeds.item_failed(e)
                     continue
                 if feed_response.status_code >= 400:
                     logger.warning(
@@ -338,7 +352,13 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                         feed_response.status_code,
                         feed_url,
                     )
+                    feeds.item_failed(f"http_{feed_response.status_code}")
                     continue
+                if _parse_feed_rows(feed_response.text) is None:
+                    logger.warning("IHC feed returned an unparseable payload for %s", feed_url)
+                    feeds.item_failed(outcomes.ERROR_FEED_UNPARSEABLE)
+                    continue
+                feeds.item_ok()
 
                 for pdf_url in _extract_pdf_urls_from_feed_payload(feed_response.text, feed_url):
                     pdf_sources.setdefault(
@@ -357,6 +377,12 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
         len(pdf_sources),
     )
     listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    if not pdf_sources:
+        # The feeds were the only discovery path left: all of them failing fails the run, before
+        # anything is written, with their error counts (a transient set is retried).
+        feeds.raise_if_all_failed(outcomes.REASON_FEEDS_FAILED)
+    if tally is not None:
+        tally.add_discovery_failures(feeds)
     return list(pdf_sources.keys()), pdf_sources
 
 
@@ -368,7 +394,7 @@ async def scrape_islamabadhighcourt(source, db):
     from scraper.source_identity import stamp_metadata
 
     tally = outcomes.run_tally()
-    pdf_urls, pdf_sources = await _discover_pdf_urls()
+    pdf_urls, pdf_sources = await _discover_pdf_urls(tally=tally)
     if not pdf_urls:
         logger.warning(
             "IslamabadHighCourt: no PDF links discovered from configured listing URLs"

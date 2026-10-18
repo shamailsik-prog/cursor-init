@@ -164,6 +164,8 @@ async def finish_failed(
         "failed": tally.failed,
         "written": tally.written,
         "errors": dict(getattr(exc, "errors", None) or tally.errors),
+        "discovery_failed": tally.discovery_failed,
+        "discovery_errors": dict(tally.discovery_errors),
     }
     try:
         await _close(
