@@ -1,0 +1,3 @@
+# Audit F26 golden fixtures: compared byte for byte, never normalised.
+*.pdf binary
+*.txt -text
