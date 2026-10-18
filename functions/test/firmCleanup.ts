@@ -4,9 +4,9 @@ import { adminAuth, adminDb } from "../src/admin"
 
 /**
  * Deletes what a test created for `firmIds` (and the auth users `uids`) from the shared emulator: every document of
- * every top-level collection whose `firmId` is one of them, every document whose id is the firm id or starts with
- * `{firmId}_` (the firm doc, its counters, its name index chunks), and the subcollections of the job rows. Returns
- * the number of documents deleted.
+ * every top-level collection whose `firmId` is one of them, every document whose id is a firm id or a uid or starts
+ * with `{firmId}_` or `{uid}_` (the firm doc, its counters, its name index chunks, the users' rate-limit windows), and
+ * the subcollections of the job rows. Returns the number of documents deleted.
  */
 export async function deleteFirmData(firmIds: readonly string[], uids: readonly string[] = []): Promise<number> {
   const db = adminDb()
@@ -22,8 +22,12 @@ export async function deleteFirmData(firmIds: readonly string[], uids: readonly 
         await deleteAll([...refs.values()])
         refs.clear()
       }
-      const byId = await col.orderBy(FieldPath.documentId()).startAt(firmId).endAt(`${firmId}_`).select().get()
-      for (const d of byId.docs) if (d.id === firmId || d.id.startsWith(`${firmId}_`)) refs.set(d.ref.path, d.ref)
+    }
+  }
+  for (const id of new Set([...firmIds, ...uids])) {
+    for (const col of collections) {
+      const byId = await col.orderBy(FieldPath.documentId()).startAt(id).endAt(`${id}_\uf8ff`).select().get()
+      for (const d of byId.docs) if (d.id === id || d.id.startsWith(`${id}_`)) refs.set(d.ref.path, d.ref)
     }
   }
   const all = [...refs.values()]

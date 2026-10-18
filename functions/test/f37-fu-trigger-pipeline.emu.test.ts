@@ -4,7 +4,7 @@ import { NAME_REINDEX_JOB_TYPE } from "../src/d1/conflict/reindexJob"
 import { readRegistryState } from "../src/d1/registryVersion"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
-import { ApiError, viaApi } from "./api"
+import { ApiError, viaApi, viaCore } from "./api"
 import { deleteFirmData } from "./firmCleanup"
 import { FakeClock, readJob, testDeps } from "./jobs"
 
@@ -21,7 +21,10 @@ import { FakeClock, readJob, testDeps } from "./jobs"
 
 type Check = { checkId: string; result: string; hits: Array<Record<string, unknown>> }
 const registerClient = viaApi<{ clientId: string; entityId: string }>("registerClient")
+// The polls run the operation core (no per-user rate limit, which a 20 ms poll exhausts in seconds); the first and the
+// healed screens go through the router.
 const runCheck = viaApi<Check>("runConflictCheck")
+const pollCheck = viaCore<Check>("runConflictCheck")
 
 const PIPELINE = EMULATORS && process.env.F37_TRIGGER_PIPELINE === "1"
 const SAMPLES = 5
@@ -35,9 +38,9 @@ afterAll(async () => {
 let mobileSeq = 0
 const nextMobile = () => `0306${String(8000000 + ++mobileSeq)}`
 
-async function screen(firmId: string, token: string, clientId: string): Promise<string> {
+async function screen(firmId: string, token: string, clientId: string, via = runCheck): Promise<string> {
   try {
-    const out = await runCheck({ token, data: { firmId, client: { clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
+    const out = await via({ token, data: { firmId, client: { clientId }, opposingParties: [{ name: "Haris Qalbani" }] } } as never)
     return `${out.result}${out.hits.some((h) => h.matchedName === "Haris Qalbani" && h.outcome !== "NONE") ? "+HIT" : ""}`
   } catch (err) {
     if (err instanceof ApiError) return `ERR ${err.status} ${err.code}`
@@ -66,17 +69,25 @@ describe.skipIf(!PIPELINE)("FA-D1C-002 through the Functions emulator: an out-of
       await adminDb().collection("clients").doc(target.clientId).update({ canonicalName: "Haris Qalbani" })
       let broken = -1
       let refused = -1
+      const answers = new Set<string>()
+      let lastScreen = 0
       while (Date.now() - t0 < WAIT_MS && (broken < 0 || refused < 0)) {
         if (broken < 0) {
           const s = await readRegistryState(firmId)
           if (s.nameIndex.version !== s.version) broken = Date.now() - t0
         }
-        if (refused < 0 && (await screen(firmId, partner.token, subject.clientId)) === "ERR 503 screening_unavailable") refused = Date.now() - t0
+        // Screen every poll once the mirror is broken, and every 250 ms before (the firm's 100 screens a day).
+        if (refused < 0 && (broken >= 0 || Date.now() - lastScreen >= 250)) {
+          lastScreen = Date.now()
+          const answer = await screen(firmId, partner.token, subject.clientId, pollCheck)
+          answers.add(answer)
+          if (answer === "ERR 503 screening_unavailable") refused = Date.now() - t0
+        }
         await new Promise((r) => setTimeout(r, 20))
       }
       latencies.push({ broken, refused })
-      expect(broken).toBeGreaterThanOrEqual(0)
-      expect(refused).toBeGreaterThanOrEqual(0)
+      expect(broken, `screens answered ${[...answers].join(", ")}`).toBeGreaterThanOrEqual(0)
+      expect(refused, `screens answered ${[...answers].join(", ")}`).toBeGreaterThanOrEqual(0)
 
       const jobs = (await adminDb().collection("jobs").where("firmId", "==", firmId).get()).docs.filter((d) => d.data().jobType === NAME_REINDEX_JOB_TYPE)
       expect(jobs.length).toBeGreaterThanOrEqual(1)
@@ -92,6 +103,6 @@ describe.skipIf(!PIPELINE)("FA-D1C-002 through the Functions emulator: an out-of
       expect(healed).toBe("POSSIBLE_CANDIDATE_REVIEW+HIT")
     }
     const sorted = (k: "broken" | "refused") => latencies.map((l) => l[k]).sort((a, b) => a - b)
-    console.log(`F37-FU trigger latency ms: broken=${JSON.stringify(sorted("broken"))} refused=${JSON.stringify(sorted("refused"))}`)
+    console.log(`F37-FU trigger latency ms: broken=${JSON.stringify(sorted("broken"))} refused=${JSON.stringify(sorted("refused"))} pairs=${JSON.stringify(latencies)}`)
   }, 600_000)
 })
