@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto"
+import { FieldValue } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it } from "vitest"
 import { AUDIT_OUTBOX_ALERT_AGE_MS, AUDIT_OUTBOX_GRACE_MS } from "@/platform/persistence/auditOutboxContract"
 import { adminDb } from "../src/admin"
-import { BACKLOG_STATE_COLLECTION, BACKLOG_STATE_DOC, reconcileAuditOutbox, type ReconcileLog } from "../src/p5/auditOutbox"
+import { BACKLOG_STATE_COLLECTION, BACKLOG_STATE_DOC, reconcileAuditOutbox, SWEEP_CURSOR_DOC, type ReconcileLog } from "../src/p5/auditOutbox"
 import { EMULATORS } from "./emu"
 
 /**
@@ -30,8 +31,8 @@ function row(firmId: string, over: Record<string, unknown> = {}) {
   return { id: `aud_${randomUUID()}`, firmId, action: "f11_fn_row", actorId: "u-f11", target: "f11_probe/x", classification: "internal", at: 1, ...over }
 }
 
-async function stage(firmId: string, rows: unknown[], ageMs: number): Promise<string> {
-  const id = `${randomUUID()}_0`
+async function stage(firmId: string, rows: unknown[], ageMs: number, docId?: string): Promise<string> {
+  const id = docId ?? `${randomUUID()}_0`
   entries.push(id)
   await adminDb()
     .collection("audit_outbox")
@@ -68,7 +69,7 @@ describe.skipIf(!EMULATORS)("F11 audit-outbox reconciler (Functions firebase-adm
     }
     for (const id of entries.splice(0)) await db.collection("audit_outbox").doc(id).delete()
     await db.collection(BACKLOG_STATE_COLLECTION).doc(BACKLOG_STATE_DOC).delete()
-    await db.collection(BACKLOG_STATE_COLLECTION).doc("auditOutboxSweepCursor").delete()
+    await db.collection(BACKLOG_STATE_COLLECTION).doc(SWEEP_CURSOR_DOC).delete()
   })
 
   it("publishes once (runs racing), dead-letters the poisoned row under the entry's firm, and deletes the entry", async () => {
@@ -108,5 +109,23 @@ describe.skipIf(!EMULATORS)("F11 audit-outbox reconciler (Functions firebase-adm
     const cleared = await reconcileAuditOutbox({ db: real, log: clearing })
     expect([cleared.published, cleared.backlog.firing, cleared.backlog.transition, cleared.backlog.oldestAgeMs]).toEqual([[entryId], false, "cleared", null])
     expect(clearing.lines.some((l) => l.level === "info" && l.message === "audit.outbox_backlog_cleared")).toBe(true)
+  })
+
+  it("review round 1 (ruling 19): the sweep walks the outbox by document id and dead-letters an entry with no stagedAt under its firm", async () => {
+    const firmId = `f11fn-${randomUUID().slice(0, 8)}`
+    firms.push(firmId)
+    const tag = `f11fnsweep-${randomUUID().slice(0, 8)}`
+    // A fresh entry (inside the grace) sorts first, so the one-entry pages must move the cursor to reach the other.
+    await stage(firmId, [row(firmId)], 0, `${tag}-a`)
+    const entryId = await stage(firmId, [row(firmId)], 0, `${tag}-b`)
+    await adminDb().collection("audit_outbox").doc(entryId).update({ stagedAt: FieldValue.delete() })
+    await adminDb().collection(BACKLOG_STATE_COLLECTION).doc(SWEEP_CURSOR_DOC).delete()
+    const swept: string[] = []
+    for (let runs = 0; runs < 50 && (await adminDb().collection("audit_outbox").doc(entryId).get()).exists; runs += 1) {
+      swept.push(...(await reconcileAuditOutbox({ db: adminDb(), log: recording(), sweepPageSize: 1 })).deadLettered)
+    }
+    expect(swept).toEqual([entryId])
+    expect((await byFirm("audit_dead_letter", firmId)).map((d) => [d.id, d.get("reason")])).toEqual([[`outbox_${entryId}`, "entry_malformed"]])
+    expect((await adminDb().collection("audit_outbox").doc(`${tag}-a`).get()).exists).toBe(true)
   })
 })

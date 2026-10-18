@@ -7,8 +7,9 @@
  * collected so far and not yet staged (normalised in place, so the flush later persists the same ids), the paths the write
  * touched, and who, which firm, which route and action, which F10 operation.
  *
- * After a successful end-of-request flush every row of the request is in the audit log, and `release` deletes the
- * request's entries. If the flush fails, or the process dies anywhere after a commit, the entries stay and the reconciler
+ * When the request reached its audited end (a 2xx, every claim completed, its action rows flushed: withSession's
+ * reachedAuditedEnd, spec ruling 18), `release` deletes the request's entries. If the flush fails, the request stops short
+ * of that end, or the process dies anywhere after a commit, the entries stay and the reconciler
  * (functions/src/p5/auditOutbox.ts) publishes them once the grace has passed. Nothing depends on the process any more.
  * Spec: docs/superpowers/specs/2026-10-18-f11-atomic-request-audit-design.md.
  */
@@ -151,8 +152,9 @@ export class RequestOutbox {
   }
 
   /**
-   * Every row of the request is in the audit log (the flush succeeded): delete the request's entries. A delete that
-   * fails is logged and left; the reconciler then finds the rows present and records the request (spec §5).
+   * The request reached its audited end (its rows are flushed and they audit every effect it committed: withSession's
+   * reachedAuditedEnd): delete the request's entries. A delete that fails is logged and left; the reconciler then finds
+   * the rows present and records the request (spec §5).
    */
   async release(): Promise<void> {
     const entries = this.state.committed.splice(0)

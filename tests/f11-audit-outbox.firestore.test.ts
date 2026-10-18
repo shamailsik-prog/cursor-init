@@ -30,7 +30,14 @@ type Row = Record<string, unknown> & { id: string }
 type Log = { info(message: string, data?: unknown): void; warn(message: string, data?: unknown): void; error(message: string, data?: unknown): void }
 type Backlog = { firing: boolean; transition: "fired" | "cleared" | null; oldestAgeMs: number | null; stale: number; unreadable?: number }
 type ReconcileResult = { published: string[]; deadLettered: string[]; deferred: string[]; counted: string[]; backlog: Backlog }
-type Reconcile = (deps: { db: unknown; now?: () => number; log?: Log }) => Promise<ReconcileResult>
+type Reconcile = (deps: {
+  db: unknown
+  now?: () => number
+  clock?: () => number
+  log?: Log
+  sweepPageSize?: number
+  sweepPendingMax?: number
+}) => Promise<ReconcileResult>
 
 async function reconciler(): Promise<Reconcile> {
   const mod = (await import("@/functions/src/p5/auditOutbox").catch(() => ({}))) as { reconcileAuditOutbox?: Reconcile }
@@ -144,9 +151,9 @@ function auditRow(firmId: string, over: Record<string, unknown> = {}): Row {
   return { id: `aud_${randomUUID()}`, firmId, action: "f11_probe_row", actorId: "f11-user", target: "f11_probe/x", classification: "internal", at: Date.now() - GRACE_MS - 120_000, ...over }
 }
 
-async function stageEntry(firmId: string | null, rows: unknown, over: Record<string, unknown> = {}): Promise<string> {
+async function stageEntry(firmId: string | null, rows: unknown, over: Record<string, unknown> = {}, docId?: string): Promise<string> {
   const requestId = randomUUID()
-  const id = `${requestId}_0`
+  const id = docId ?? `${requestId}_0`
   await db()
     .collection("audit_outbox")
     .doc(id)
@@ -185,6 +192,28 @@ function transactionsDown(real: Firestore): Firestore {
   })
 }
 
+/** The database, counting the transactions it has finished. */
+function countingTransactions(real: Firestore): { db: Firestore; count: () => number } {
+  let finished = 0
+  const counted = new Proxy(real, {
+    get(target, prop) {
+      if (prop === "runTransaction") {
+        return (fn: (tx: Transaction) => Promise<unknown>, options?: unknown) =>
+          target.runTransaction(fn, options as never).finally(() => {
+            finished += 1
+          })
+      }
+      const value = Reflect.get(target, prop, target) as unknown
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value
+    },
+  })
+  return { db: counted, count: () => finished }
+}
+
+const sweepCursorRef = () => db().collection("platform").doc("auditOutboxSweepCursor")
+const sweepCursor = async (): Promise<Record<string, unknown>> => (await sweepCursorRef().get()).data() ?? {}
+const outboxHas = async (id: string) => (await db().collection("audit_outbox").doc(id).get()).exists
+
 /** The database, except that the audit log refuses every create with `error` (inside the reconciler's transactions). */
 function auditLogRefusing(real: Firestore, error: () => Error): Firestore {
   const wrapTx = (tx: Transaction) =>
@@ -215,7 +244,7 @@ function auditLogRefusing(real: Firestore, error: () => Error): Firestore {
 async function drainAll(reconcile: Reconcile): Promise<void> {
   for (let i = 0; i < 50; i += 1) {
     const r = await reconcile({ db: db(), now: () => Date.now() + 365 * 24 * 3_600_000, log: recordingLog() })
-    if (r.backlog.oldestAgeMs === null) return
+    if (r.backlog.oldestAgeMs === null && (r.backlog.unreadable ?? 0) === 0) return
   }
   throw new Error("the outbox did not drain")
 }
@@ -432,6 +461,15 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       expect(out).toEqual({ status: 200, entries: 1 })
     })
 
+    it("a POST that took no claim, wrote, and recorded only decision rows (2xx): kept", async () => {
+      const ref = probeRef()
+      const out = await keptAfter(async () => {
+        expect(checkPermission(getRuntimeStore(), "partner_a", "list_matters").allow).toBe(true)
+        await setDoc(ref, { n: 1 })
+      })
+      expect(out).toEqual({ status: 200, entries: 1 })
+    })
+
     it("a read whose derived write is followed by a refusal (404): kept", async () => {
       const ref = probeRef()
       const out = await keptAfter(async () => {
@@ -441,8 +479,8 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       expect(out).toEqual({ status: 404, entries: 1 })
     })
 
-    it("controls: a completed action (its row pushed after its writes), and a read's derived write, are released", async () => {
-      const [a, b, c] = [probeRef(), probeRef(), probeRef()]
+    it("controls: a completed action (its row pushed after its writes), a claimless action with its row, and a read's derived write, are released", async () => {
+      const [a, b, c, d] = [probeRef(), probeRef(), probeRef(), probeRef()]
       const action = await keptAfter(async (request) => {
         const held = await claim(request)
         await setDoc(a, { n: 1 })
@@ -450,10 +488,15 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
         pushRow("f11_action")
         held.complete({ ok: true })
       })
+      const unclaimed = await keptAfter(async () => {
+        await setDoc(d, { n: 1 })
+        pushRow("f11_action")
+      })
       const read = await keptAfter(async () => {
         await setDoc(c, { n: 1 })
       }, "GET")
-      expect([action, read]).toEqual([
+      expect([action, unclaimed, read]).toEqual([
+        { status: 200, entries: 0 },
         { status: 200, entries: 0 },
         { status: 200, entries: 0 },
       ])
@@ -597,14 +640,20 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
 
     // Review round 1 (Codex P2): an entry whose stagedAt is missing or not a timestamp is invisible to the stagedAt range
     // query and to the backlog queries, so it was never dead-lettered and never counted (spec ruling 19).
-    it("review round 1 (P2): an entry with no stagedAt, or a non-timestamp one, is dead-lettered by the sweep", async () => {
+    it("review round 1 (P2): an entry whose stagedAt is missing, not a Timestamp (text, number, map, null), or a year ahead, is dead-lettered by the sweep", async () => {
       const reconcile = await reconciler()
       const firmId = newFirm()
       const missing = await stageEntry(firmId, [auditRow(firmId)])
       await db().collection("audit_outbox").doc(missing).update({ stagedAt: FieldValue.delete() })
       const text = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: "yesterday" })
+      const ahead = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: new Date(Date.now() + 365 * 24 * 3_600_000) })
+      // A number of milliseconds, and a map shaped like a Timestamp: neither is in the stagedAt range the pass reads.
+      const millis = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: Date.now() - GRACE_MS - 60_000 })
+      const shaped = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: { seconds: 1_700_000_000, nanoseconds: 0 } })
+      const absent = await stageEntry(firmId, [auditRow(firmId)], { stagedAt: null })
+      const ids = [missing, text, ahead, millis, shaped, absent]
       const present = async () =>
-        (await Promise.all([missing, text].map(async (id) => (await db().collection("audit_outbox").doc(id).get()).exists))).filter(Boolean).length
+        (await Promise.all(ids.map(async (id) => (await db().collection("audit_outbox").doc(id).get()).exists))).filter(Boolean).length
       // The sweep reads a bounded page per run from a cursor that wraps; leftovers of other files may come first.
       let runs = 0
       while ((await present()) > 0 && runs < 25) {
@@ -612,11 +661,8 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
         runs += 1
       }
       expect(await present()).toBe(0)
-      const letters = [...(await docsWhere("audit_dead_letter", "outboxId", missing)), ...(await docsWhere("audit_dead_letter", "outboxId", text))]
-      expect(letters.map((l) => [l.reason, l.firmId])).toEqual([
-        ["entry_malformed", firmId],
-        ["entry_malformed", firmId],
-      ])
+      const letters = (await Promise.all(ids.map((id) => docsWhere("audit_dead_letter", "outboxId", id)))).flat()
+      expect(letters.map((l) => [l.reason, l.firmId])).toEqual(ids.map(() => ["entry_malformed", firmId]))
       expect(await auditLogOf(firmId)).toEqual([])
     })
 
@@ -635,6 +681,95 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       const cleared = await reconcile({ db: db(), log: recordingLog() })
       expect(cleared.deadLettered).toContain(entryId)
       expect([cleared.backlog.firing, cleared.backlog.unreadable]).toEqual([false, 0])
+    })
+
+    it("review round 1 (P2): the sweep reads one bounded page a run, by document id, from a cursor that wraps", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      await sweepCursorRef().delete()
+      const firmId = newFirm()
+      const tag = `f11sweep-${randomUUID().slice(0, 8)}`
+      // Five entries in document-id order: three fresh ones (inside the grace: the pass leaves them), then two unreadable.
+      const ids = ["a", "b", "c", "d", "e"].map((s) => `${tag}-${s}`)
+      for (const [i, id] of ids.entries()) await stageEntry(firmId, [auditRow(firmId)], { stagedAt: i < 3 ? new Date() : "unreadable" }, id)
+      const exists = outboxHas
+      const cursor = async () => (await sweepCursor()).after
+      const run = () => reconcile({ db: db(), log: recordingLog(), sweepPageSize: 2 })
+      const first = await run()
+      expect([first.deadLettered, await cursor(), await exists(ids[3]!), await exists(ids[4]!)]).toEqual([[], ids[1], true, true])
+      const second = await run()
+      expect([second.deadLettered, await cursor(), await exists(ids[3]!), await exists(ids[4]!)]).toEqual([[ids[3]], ids[3], false, true])
+      const third = await run()
+      expect([third.deadLettered, await cursor(), await exists(ids[4]!)]).toEqual([[ids[4]], "", false])
+      expect(await Promise.all(ids.slice(0, 3).map(exists))).toEqual([true, true, true])
+      await drainAll(reconcile)
+    })
+
+    it("review round 1 (P2): a full page, then an empty one, wraps the cursor to the start", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      await sweepCursorRef().delete()
+      const firmId = newFirm()
+      const tag = `f11sweep-${randomUUID().slice(0, 8)}`
+      const [a, b, first] = [`${tag}-a`, `${tag}-b`, `${tag}-0`]
+      for (const id of [a, b]) await stageEntry(firmId, [auditRow(firmId)], { stagedAt: new Date() }, id)
+      const run = () => reconcile({ db: db(), log: recordingLog(), sweepPageSize: 2 })
+      await run()
+      expect((await sweepCursor()).after).toBe(b)
+      // An unreadable entry that sorts before the cursor: only a wrap reaches it.
+      await stageEntry(firmId, [auditRow(firmId)], { stagedAt: "unreadable" }, first)
+      const empty = await run()
+      expect([empty.deadLettered, (await sweepCursor()).after, await outboxHas(first)]).toEqual([[], "", true])
+      const wrapped = await run()
+      expect([wrapped.deadLettered, (await sweepCursor()).after, await outboxHas(first)]).toEqual([[first], a, false])
+      await drainAll(reconcile)
+    })
+
+    it("review round 1 (P2): a run the budget stops mid-page keeps the cursor on the last entry it handled; the next run sweeps the rest", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      await sweepCursorRef().delete()
+      const firmId = newFirm()
+      const tag = `f11sweep-${randomUUID().slice(0, 8)}`
+      const ids = ["a", "b", "c"].map((s) => `${tag}-${s}`)
+      for (const id of ids) await stageEntry(firmId, [auditRow(firmId)], { stagedAt: "unreadable" }, id)
+      // The budget is spent once the run has handled one entry (a dead-letter is one transaction).
+      const counted = countingTransactions(db())
+      const stopped = await reconcile({ db: counted.db, log: recordingLog(), sweepPageSize: 10, clock: () => (counted.count() > 0 ? 3_600_000 : 0) })
+      expect([stopped.deadLettered, (await sweepCursor()).after, await outboxHas(ids[1]!), await outboxHas(ids[2]!)]).toEqual([[ids[0]], ids[0], true, true])
+      const next = await reconcile({ db: db(), log: recordingLog(), sweepPageSize: 10 })
+      expect([next.deadLettered, (await sweepCursor()).after, await outboxHas(ids[1]!), await outboxHas(ids[2]!)]).toEqual([[ids[1], ids[2]], "", false, false])
+    })
+
+    it("review round 1 (P2): an entry the sweep cannot dead-letter stays pending and counted; a full pending list stops the cursor before the next", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      await sweepCursorRef().delete()
+      const firmId = newFirm()
+      const tag = `f11sweep-${randomUUID().slice(0, 8)}`
+      const ids = ["a", "b", "c"].map((s) => `${tag}-${s}`)
+      for (const id of ids) await stageEntry(firmId, [auditRow(firmId)], { stagedAt: "unreadable" }, id)
+      const limits = { sweepPageSize: 10, sweepPendingMax: 1 }
+      for (let run = 0; run < 2; run += 1) {
+        const down = await reconcile({ db: transactionsDown(db()), log: recordingLog(), ...limits })
+        const state = await sweepCursor()
+        expect([down.backlog.unreadable, down.backlog.firing, state.after, state.pending]).toEqual([2, true, ids[0], [ids[0]]])
+      }
+      const up = await reconcile({ db: db(), log: recordingLog(), ...limits })
+      const state = await sweepCursor()
+      expect([up.deadLettered, up.backlog.unreadable, state.after, state.pending]).toEqual([ids, 0, "", []])
+    })
+
+    it("review round 1 (P2): a null stagedAt (it sorts first) does not hide the oldest entry's age from the alert", async () => {
+      const reconcile = await reconciler()
+      await drainAll(reconcile)
+      const firmId = newFirm()
+      await stageEntry(firmId, [auditRow(firmId)], { stagedAt: new Date(Date.now() - ALERT_AGE_MS - 5 * 60_000) })
+      await stageEntry(firmId, [auditRow(firmId)], { stagedAt: null })
+      const fired = await reconcile({ db: transactionsDown(db()), log: recordingLog() })
+      expect(fired.backlog.firing).toBe(true)
+      expect(fired.backlog.oldestAgeMs).toBeGreaterThanOrEqual(ALERT_AGE_MS)
+      await drainAll(reconcile)
     })
 
     it("the backlog alert fires while the oldest entry is older than 20 minutes and clears when the outbox drains", async () => {

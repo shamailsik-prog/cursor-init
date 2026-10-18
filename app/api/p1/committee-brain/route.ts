@@ -265,6 +265,16 @@ async function handlePost(request: Request) {
     }
     await repos.committeeOutputs.create(output)
     store.committeeOutputs.set(output.id, output)
+    // Audit F11 review round 1 (spec ruling 18): the call's own action row. Its flush is what lets the request release
+    // the audit-outbox entries its output write and provider dispatch staged; ids and codes only, never the text.
+    store.audit.push({
+      action: "committee_brain_output_create",
+      actorId: actor.id,
+      target: output.id,
+      classification,
+      firmId: actor.firmId,
+      reason: `${purpose}:${result.blocked ? "blocked" : "answered"}`,
+    })
 
     const payload = {
       outputId: output.id,

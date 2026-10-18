@@ -119,6 +119,28 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("audit F16 review round: t
     expect(row!.outbound.system).toEqual({ policyId: "summarise", version: expect.any(String) })
   })
 
+  // Audit F11 review round 1 (spec ruling 18, PR #86): a request releases its audit-outbox entries only when its flushed
+  // rows include an action row. The committee route committed its output (and staged its provider dispatch) and recorded
+  // only permission decisions, so every successful call would have left its entries for a recovered row; it now records
+  // `committee_brain_output_create` for the output it stored.
+  it("audit F11: a committee call records its own action row, and its audit-outbox entries are released", async () => {
+    const db = await getProductionFirestore()
+    const matterId = await seedMatter()
+    const { status, result } = await ask(matterId, "Summarise the matter.")
+    expect(status).toBe(200)
+    const outputPath = `committee_outputs/${result!.outputId}`
+    const rows = (await db.collection("audit_log").where("target", "==", result!.outputId).get()).docs
+    const entries = (await db.collection("audit_outbox").where("route", "==", "POST /api/p1/committee-brain").get()).docs.filter((d) =>
+      (d.get("effectPaths") as string[]).includes(outputPath)
+    )
+    try {
+      expect(rows.map((d) => [d.get("action"), d.get("actorId"), d.get("firmId")])).toEqual([["committee_brain_output_create", "partner_a", "firmA"]])
+      expect(entries.map((d) => d.id)).toEqual([])
+    } finally {
+      for (const d of [...rows, ...entries]) await d.ref.delete()
+    }
+  })
+
   it("a body over the bound (952,000 bytes) is refused before dispatch with a reason, and its small row persists", async () => {
     const matterId = await seedMatter()
     const { status, result } = await ask(matterId, SENTENCE.repeat(56_000))

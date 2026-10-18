@@ -490,6 +490,16 @@ function currentFence(): ClaimFence | null {
 installWriteFence(currentFence)
 
 /**
+ * Audit F11 review round 1 (spec ruling 18): true when every idempotency claim the current request took is completed
+ * (the route stored its success payload), or it took none. withSession releases the request's audit-outbox entries only
+ * then: a claim left open means the route stopped before its end, whatever it answered.
+ */
+export function requestClaimsCompleted(): boolean {
+  const ctx = requestClaims.getStore()
+  return ctx === undefined || ctx.claims.every((claim) => claim.isCompleted)
+}
+
+/**
  * Marks an effect that is not a Firestore write (a provider dispatch) before it happens, through the request's write
  * fence: an attempt whose claim was taken over is refused, and the operation's marker is created, so a retry of the key
  * never repeats the effect. A no-op outside a durable claim.

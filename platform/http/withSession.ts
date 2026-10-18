@@ -37,10 +37,11 @@ import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
 import { attachParsedBody, DEFAULT_JSON_BODY_BYTES, readBodyLimited } from "@/platform/http/validation"
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
-import { runWithRequestAudit } from "@/platform/audit/requestAudit"
+import { isAuditRowPersisted, runWithRequestAudit } from "@/platform/audit/requestAudit"
 import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
 import { openRequestOutbox, type RequestOutboxMeta } from "@/platform/persistence/auditOutbox"
-import { runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
+import { requestClaimsCompleted, runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
+import type { AuditEntry } from "@/platform/spine/store"
 
 /**
  * The caller as seen by a handler. `null` only for public routes and for
@@ -278,9 +279,10 @@ function claimedFirmIdForInsecureDev(url: URL, parsed: unknown): string | undefi
  * Audit F11: the flush no longer establishes audit durability. The handler runs with the
  * request's audit outbox open (platform/persistence/auditOutbox.ts): every effect write commits,
  * in the same transaction or batch, an `audit_outbox` entry carrying the request's rows staged so
- * far, so a committed effect always has its audit in the database. After a successful flush the
- * request deletes its entries; after a failed flush, or a process that died at any point after a
- * commit, they stay and the reconciler (functions/src/p5/auditOutbox.ts) publishes them once.
+ * far, so a committed effect always has its audit in the database. The request deletes its
+ * entries only when it reached its audited end (reachedAuditedEnd below). After a failed flush, a
+ * request that stopped short of that end, or a process that died at any point after a commit,
+ * they stay and the reconciler (functions/src/p5/auditOutbox.ts) publishes them once.
  */
 async function runAudited(
   request: Request,
@@ -311,10 +313,48 @@ async function runAuditedInner(
     )
     return errorResponse(503, "AUDIT_UNAVAILABLE", "audit log unavailable")
   }
-  await outbox.release()
+  if (reachedAuditedEnd(request, outcome)) {
+    await outbox.release()
+  } else if (outbox.entryIds.length > 0) {
+    const status = "error" in outcome ? "a throw" : outcome.value.status
+    console.warn(
+      `[audit] ${describe(request)} ended (${status}) short of its audited end: its ${outbox.entryIds.length} committed ` +
+        "effect write(s) stay in the audit outbox, and the reconciler records each one"
+    )
+  }
   if ("error" in outcome) throw outcome.error
   return outcome.value
 }
+
+/**
+ * Audit F11 review round 1 (spec ruling 18). Whether the request's flushed rows are the audit of every effect it
+ * committed, so that its outbox entries may go: the handler returned (did not throw) a 2xx, every idempotency claim it
+ * took is completed, and, for a request with a body (an action), at least one flushed row is an action row rather than
+ * a permission decision. A GET or HEAD writes only state derived under the read it audits (reports, drafts, snapshots),
+ * so its 2xx suffices.
+ *
+ * Anything else keeps the entries: a refusal or a failure after a commit, a claim never completed, an action that wrote
+ * but recorded no action. The reconciler then publishes one `request_effect_recovered` row per entry, naming its effect
+ * paths and operation, after the grace (rulings 4 and 5). A flushed row is never written twice: the reconciler's
+ * creates are insert-only and the ids are the same (ruling 3).
+ *
+ * The test is per request, not per entry: rows name business targets, not the documents written, and one action writes
+ * several documents (client create: the entity, then its search-index row), so no row can be matched to an entry.
+ */
+function reachedAuditedEnd(
+  request: Request,
+  outcome: { value: Response; rows: AuditEntry[] } | { error: unknown; rows: AuditEntry[] }
+): boolean {
+  if ("error" in outcome) return false
+  const { status } = outcome.value
+  if (status < 200 || status >= 300) return false
+  if (!requestClaimsCompleted()) return false
+  if (!hasBody(request)) return true
+  return outcome.rows.some((row) => row.action !== PERMISSION_DECISION_ACTION && isAuditRowPersisted(row))
+}
+
+/** The action of the rows platform/p5/checkPermission.ts records: decisions, not the audit of an action. */
+const PERMISSION_DECISION_ACTION = "permission_check"
 
 export async function withSession(
   request: Request,
