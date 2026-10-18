@@ -1,13 +1,13 @@
 # F21: one durable lifecycle per corpus record, with registered consumers and a visible completion boundary
 
-Date: 2026-10-18. Base: `origin/main` @ c02ebbc. Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design intent is kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
+Date: 2026-10-18. Base: `origin/main` @ c02ebbc; origin/main 062c7bb (F27 #87, F18 #88) was merged into the branch after the implementation commit, and the GREEN runs are on the merge. Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design intent is kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
 
 Audit sources:
 - `docs/audit/2026-10-13-forensic-audit.md` F21 (:499), its capability row "Government corpus harvesting" (:123) and the "Corpus crawl" row (:1007).
 - `docs/audit/2026-10-14-forensic-audit-v2.md` :94: "F21 | HIGH | OPEN | promote_staging_records (promotion.py:7) has no caller (rg)".
 - `docs/audit/REMEDIATION.md`: rule 2 (closed = merged PR with an end-to-end test of a real flow, RED before and GREEN after) and rule 3 (ticked only after an independent re-audit). This document claims neither closure nor a tick.
 
-Scope (the brief's lane): `corpus_service/scraper/tasks/*` except `embeddings.py`; `corpus_service/scraper/publication/*`; `scraper/models.py` (the two staging tables, a new lifecycle-transition table, and the `scraper_jobs` job-type CHECK, see R5); a new `corpus_service/migrations/005_corpus_lifecycle.py` and its entry in `scraper/migrate.py`; the corpus README; tests; docs. Not touched: `tasks/embeddings.py`, `migrations/004_*` and the `EmbeddingQueue` model (F27, PR #87); `scraper/routers/*` (F23's review routes are used as they are); `functions/**`, `app/**`, `platform/**`; `.gitleaks.toml`; `requirements*.txt`; `init.sql` (three extension lines, no table).
+Scope (the brief's lane): `corpus_service/scraper/tasks/*` except `embeddings.py`; `corpus_service/scraper/publication/*`; `scraper/models.py` (the two staging tables, a new lifecycle-transition table, and the `scraper_jobs` job-type CHECK, see R5); a new `corpus_service/migrations/005_corpus_lifecycle.py` and its entry in `scraper/migrate.py`; the corpus README; tests (`conftest.py`'s `ORM_TABLES`, the new F21 files, and the existing tests named in section 3 whose expectation changes); docs. Not touched: `tasks/embeddings.py`, `migrations/004_*` and the `EmbeddingQueue` model (F27, PR #87, merged meanwhile; this branch only merges it); `scraper/routers/*` (F23's review routes are used as they are); `functions/**`, `app/**`, `platform/**`; `.gitleaks.toml`; `requirements*.txt`; `init.sql` (three extension lines, no table).
 
 ## 1. What main does today (c02ebbc)
 

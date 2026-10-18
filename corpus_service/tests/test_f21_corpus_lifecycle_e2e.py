@@ -712,8 +712,8 @@ def test_i_a_failing_record_is_tried_once_per_tick_and_the_rest_move_on(corpus_d
         first = fire("normalise-corpus")
         monkeypatch.setattr(normalise, "normalise", real)
         second = fire("normalise-corpus")
-    assert (first.state, first.result["claimed"], first.result["failed"], first.result["moved"]) == (
-        "SUCCESS", 4, 1, {"normalised": 3}), first.result
+    assert first.state == "SUCCESS", f"one failing record failed the whole tick: {first.result!r}"
+    assert (first.result["claimed"], first.result["failed"], first.result["moved"]) == (4, 1, {"normalised": 3}), first.result
     assert (second.state, second.result["claimed"], second.result["moved"]) == ("SUCCESS", 1, {"normalised": 1})
     states = dict(admin_fetch(corpus_db, "SELECT id, lifecycle_state FROM statutes_staging"))
     assert set(states.values()) == {"normalised"}
