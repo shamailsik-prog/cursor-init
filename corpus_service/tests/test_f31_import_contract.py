@@ -376,6 +376,47 @@ def test_unknown_or_computed_parser_features_fail_closed(tmp_path, call, start):
     assert len(problems) == 1 and problems[0].startswith(start) and "scraper/a.py:2" in problems[0], problems
 
 
+# Review round (Cursor Bugbot thread 4305754112, on 882c6df): references to the BeautifulSoup
+# callable (or the bs4 module) that the check cannot follow used to be exempt, so a later
+# BeautifulSoup(..., "lxml") through them never required lxml. They now fail closed, naming the
+# line, like the loader path; a star import from bs4 is followed.
+@pytest.mark.parametrize("source, line", [
+    ('from bs4 import BeautifulSoup\nclass Parsers:\n    soup = BeautifulSoup\nParsers.soup(x, "lxml")\n', 3),
+    ('from bs4 import BeautifulSoup\nPARSERS = [BeautifulSoup]\nPARSERS[0](x, "lxml")\n', 2),
+    ('from bs4 import BeautifulSoup\nPARSERS = {"soup": BeautifulSoup}\nPARSERS["soup"](x, "lxml")\n', 2),
+    ('from bs4 import BeautifulSoup\nmake = functools.partial(BeautifulSoup, features="lxml")\n', 2),
+    ('import bs4\nmods = [bs4]\nmods[0].BeautifulSoup(x, "lxml")\n', 2),
+])
+def test_untracked_beautifulsoup_references_fail_closed(tmp_path, source, line):
+    problems = _by_name_problems(tmp_path, {"scraper/a.py": source}, "beautifulsoup4\nlxml\n")
+    assert len(problems) == 1 and problems[0].startswith(f"untracked BeautifulSoup reference at scraper/a.py:{line}"), problems
+
+
+def test_star_import_from_bs4_is_followed(tmp_path):
+    files = {"scraper/a.py": 'from bs4 import *\nBeautifulSoup(x, "lxml")\n'}
+    problems = _by_name_problems(tmp_path, files, "beautifulsoup4\n")
+    assert len(problems) == 1 and problems[0].startswith("undeclared: lxml is loaded by name"), problems
+    assert "scraper/a.py:2" in problems[0]
+    assert _by_name_problems(tmp_path, files, "beautifulsoup4\nlxml\n") == []
+
+
+def test_beautifulsoup_after_a_star_import_the_check_cannot_enumerate_is_scanned(tmp_path):
+    files = {"scraper/a.py": 'from os.path import *\nBeautifulSoup(x, "lxml")\n'}
+    problems = _by_name_problems(tmp_path, files, "beautifulsoup4\n")
+    assert len(problems) == 1 and problems[0].startswith("undeclared: lxml is loaded by name"), problems
+
+
+@pytest.mark.parametrize("source", [
+    'from bs4 import BeautifulSoup\nBeautifulSoup(x, "lxml")\n',
+    'from bs4 import BeautifulSoup\ndef parse(html: str) -> BeautifulSoup:\n'
+    '    soup: BeautifulSoup = BeautifulSoup(html, "lxml")\n    return soup\n',
+    'from bs4 import BeautifulSoup\nimport bs4\nisinstance(x, (BeautifulSoup, str))\nbs4.BeautifulSoup.__name__\n',
+    'import bs4\nbs4.BeautifulSoup(x, "lxml")\nb = bs4\nb.BeautifulSoup(y, "lxml")\nS = bs4.BeautifulSoup\nS(z, "lxml")\n',
+])
+def test_followed_beautifulsoup_uses_pass(tmp_path, source):
+    assert _by_name_problems(tmp_path, {"scraper/a.py": source}, "beautifulsoup4\nlxml\n") == []
+
+
 @pytest.mark.parametrize("literal, dist", [
     ("postgresql+asyncpg://u@h/db", "asyncpg"),
     ("mysql+pymysql://u@h/db", "pymysql"),
