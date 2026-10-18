@@ -76,3 +76,18 @@ paths = [
   '''^tests/f03-r2-document-vault\.e2e\.firestore\.test\.ts$''',
 ]
 targetRules = ["generic-api-key"]
+
+# Audit F23 re-audit round 2: commits 155cc9f..935166d on claude/remediate-f23-fu passed the admin
+# key positionally and then a length keyword set to the body-cap constant MAX_BODY_BYTES in the
+# uvicorn body-guard test's header helper; generic-api-key read the word "key" and the keyword
+# argument after it as a key and its value. It names a constant (32 KiB), not a credential, and the
+# branch tip no longer has it. The PR scan reads every commit and history is not rewritten, so the
+# entry stays. Exact value, that file and this one (commit 380934f quoted the call here),
+# generic-api-key only.
+[[allowlists]]
+description = "F23 round 2: a keyword argument naming the body cap in the uvicorn guard test"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^length=MAX_BODY_BYTES$''']
+paths = ['''^corpus_service/tests/test_f23_review_body_guard_e2e\.py$''', '''^\.gitleaks\.toml$''']
+targetRules = ["generic-api-key"]
