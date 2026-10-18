@@ -61,24 +61,21 @@ def test_the_append_only_state_is_current_only_when_exact():
     from scraper import quarantine_ledger as ql
 
     fn = (4242, ql.FUNCTION_BODY)
-    row = (ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, True, True)
-    trunc = (ql.TRUNCATE_TRIGGER, 4242, "A", ql.TRUNCATE_TGTYPE, True, True)
+    row = (ql.ROW_TRIGGER, 4242, "O", ql.ROW_TGTYPE)
+    trunc = (ql.TRUNCATE_TRIGGER, 4242, "O", ql.TRUNCATE_TGTYPE)
     assert ql.is_current(fn, [row, trunc]) is True
     not_current = {
         "no function": (None, [row, trunc]),
         "altered body": ((4242, ql.FUNCTION_BODY.replace("RAISE EXCEPTION", "RAISE NOTICE")), [row, trunc]),
         "row trigger missing": (fn, [trunc]),
         "truncate trigger missing": (fn, [row]),
-        "row trigger disabled": (fn, [(ql.ROW_TRIGGER, 4242, "D", ql.ROW_TGTYPE, True, True), trunc]),
-        "truncate trigger replica-only": (fn, [row, (ql.TRUNCATE_TRIGGER, 4242, "R", ql.TRUNCATE_TGTYPE, True, True)]),
-        "row trigger origin-only": (fn, [(ql.ROW_TRIGGER, 4242, "O", ql.ROW_TGTYPE, True, True), trunc]),
-        "row trigger calls another function": (fn, [(ql.ROW_TRIGGER, 99, "A", ql.ROW_TGTYPE, True, True), trunc]),
-        "row trigger AFTER, not BEFORE": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE & ~2, True, True), trunc]),
-        "row trigger misses DELETE": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE & ~8, True, True), trunc]),
-        "row trigger WHEN (false)": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, False, True), trunc]),
-        "row trigger UPDATE OF reason": (fn, [(ql.ROW_TRIGGER, 4242, "A", ql.ROW_TGTYPE, True, False), trunc]),
+        "row trigger disabled": (fn, [(ql.ROW_TRIGGER, 4242, "D", ql.ROW_TGTYPE), trunc]),
+        "truncate trigger replica-only": (fn, [row, (ql.TRUNCATE_TRIGGER, 4242, "R", ql.TRUNCATE_TGTYPE)]),
+        "row trigger calls another function": (fn, [(ql.ROW_TRIGGER, 99, "O", ql.ROW_TGTYPE), trunc]),
+        "row trigger AFTER, not BEFORE": (fn, [(ql.ROW_TRIGGER, 4242, "O", ql.ROW_TGTYPE & ~2), trunc]),
+        "row trigger misses DELETE": (fn, [(ql.ROW_TRIGGER, 4242, "O", ql.ROW_TGTYPE & ~8), trunc]),
         # The defect test (h) found: through asyncpg a raw "char" arrives as bytes, hence ::text in the query.
-        "tgenabled as bytes": (fn, [(ql.ROW_TRIGGER, 4242, b"A", ql.ROW_TGTYPE, True, True), trunc]),
+        "tgenabled as bytes": (fn, [(ql.ROW_TRIGGER, 4242, b"O", ql.ROW_TGTYPE), trunc]),
     }
     assert {name: ql.is_current(*args) for name, args in not_current.items()} == {name: False for name in not_current}
 
@@ -87,7 +84,7 @@ def test_the_append_only_ddl_is_schema_qualified():
     from scraper import quarantine_ledger as ql
 
     statements = ql.ddl('"corpus"')
-    assert len(statements) == 7
+    assert len(statements) == 5
     assert all('"corpus".' in s for s in statements)
     assert "BEFORE UPDATE OR DELETE ON \"corpus\".quarantine_decisions FOR EACH ROW" in statements[3]
     assert "BEFORE TRUNCATE ON \"corpus\".quarantine_decisions FOR EACH STATEMENT" in statements[4]
