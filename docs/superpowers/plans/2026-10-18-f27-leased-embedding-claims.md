@@ -118,3 +118,41 @@ Round-1 mutants (each snippet checked to occur once and to compile before the ru
 | CI (coordinator ruling): `gate-g0.yml` job `corpus-service` `timeout-minutes` 10 → 20 with the measured durations (main 8m03s; this branch 9m44s / 9m45s) | ed6cca2; YAML parses, the job reads 20 |
 | Gate G-0 at ed6cca2 | `=== Gate G-0 PASSED (static) ===` |
 | Claim gate at ed6cca2 | PASS |
+
+## Review round 2 (PR #87)
+
+Threads: Bugbot 4307417933 (give-back charges a row whose paid answer is held, so at `max_attempts` the answer is stranded in the dead letter); Bugbot 4307442940 and 4307442945, both against Cursor Autofix ee8ee02 (its give-back reset the row by id with no lease fence; it never charged and left the row always due, so a persistent store failure failed every batch). The independent re-audit returned FAIL (7/10): A3 and A3b (the stranding), A13 (ee8ee02 starves the queue), LOW finding 5 (the reclaim charges rows a dead batch never reached), and surviving mutants X14 and X28. Coordinator rulings: fold finding 5 into round 2; adopt A6 and a pacing pin; record X15, X16, X17, X01 and X13 as LOW residuals. Spec amendments: R3, R5, R6, R10 (the ruling and its reasons), R12, residuals.
+
+Foreign commits (Cursor Bugbot Autofix), reviewed and merged, never rebased:
+- ee8ee02: right that a failed store of a held answer must not be charged into the dead letter, but wrong in two ways: unfenced (R3's reclaim statement, by id, in the give-back; it fails the R2 fencing test with the row `('pending', 0, 'LeaseLost')`) and unbounded (never charged, due at once). Merged (21a5bc9); its give-back replaced by 8584e43.
+- 6cb440a: reverts ee8ee02's give-back to 132957c's unconditional fenced charge. It fixes the fence but brings back 4307417933 (RED below: the last-attempt row dead-lettered with its answer stranded). Merged (98993f5), the conflict resolved to 8584e43's give-back (the tree is identical to 8584e43).
+
+| Step | Result |
+| --- | --- |
+| RED, 132957c (the round-2 test files with 132957c's `embeddings.py` and `models.py`) | 7 failed, 3 passed (the LeaseLost R2 test, A6 and the pacing test pass there: they pin, they do not fix). Last attempt, refused store: `('dead_letter', 5, 'max_attempts')`, receipt `answered` with the vector (stranded). Refused every time: `('pending', 3, 'IntegrityError')`, cycling on `attempts`. Unreached rows: `('dead_letter', 5, 'max_attempts')` with no request. Prefork, store killed twice: rows behind `('pending', 1, 'lease_expired')`, row 1 unbounded. The fence test fails only on the new `store_failures` column there (132957c's give-back is fenced). |
+| RED, ee8ee02 | 5 failed, 1 passed. Lease overwrite (4307442940): the holder's row became `('pending', 0, 'IntegrityError')` with `lease_owner` and `lease_expires_at` NULL; the R2 LeaseLost test `('pending', 0, 'LeaseLost')`. Always due (4307442945): the next batch FAILED on the row at once; `next_attempt_at` NULL. |
+| RED, 6cb440a | 6 failed, 1 passed. Last attempt stranded again: `('dead_letter', 5, 'max_attempts')`. |
+| GREEN | F27 claims e2e file 27 passed; F27 rules + prefork files 23 passed; F27's three files + F28's five files (unchanged: `git diff origin/main` empty on them) 195 passed |
+| Auditor's attack tests against 8584e43's code (scratch copy, not shipped) | in process 17 passed, 1 failed: A2 (unreached rows completed at attempts 4), A3 (`completed`, 1 request), A3b (`completed`, 0 requests), A6, A13 (batches FAILURE, FAILURE, then SUCCESS with rows 2-4 embedded; row 1 `store_failed`, never paid again; 10 more batches SUCCESS) pass; A3c fails only on its premise (it asserts A3 first leaves a dead letter; the requeue still stores with no request). Prefork: P1-P4 pass (P3: all 5 rows `completed` at attempts 0, one request each); P5 times out at its 4th kill because row 1 was dead-lettered after the 3rd (the bound; P5 assumed it cycles forever). |
+
+Round-2 mutants (each snippet checked to occur once and to compile before the run; scratch copy; `pytest -x`): all **12 killed**.
+
+| Mutant | Killed by |
+| --- | --- |
+| RR2-M1 the give-back's unconditional charge restored (132957c, 6cb440a) | R10 database test (row 2 charged, `('pending', 1, 'IntegrityError')`) |
+| RR2-M2 the give-back's fence check removed | fence test (a failed store was counted on another holder's row: `store_failures` 1) |
+| RR2-M3 ee8ee02's shape: neither the check nor the write fenced | R2 LeaseLost test (`('pending', 0, 'LeaseLost')`) |
+| RR2-M4 no store bound in the give-back | bound test (`('pending', 0, 'IntegrityError')` after three refused stores) |
+| RR2-M5 a failed store due at once (ee8ee02's always-due row) | R10 database test (no R8 delay) |
+| RR2-M6 no store bound in the reclaim | reclaim bound test (stored instead of `store_failed`) |
+| RR2-M7 the reclaim charges held answers (round 1's rule under the new code) | in-process R3 test |
+| RR2-M8 every expired row treated as reached | unreached-rows test (`('dead_letter', 5, 'max_attempts')`) |
+| RR2-M9 unreached held answers counted as lost stores | unreached-rows test (`store_failures` 1) |
+| RR2-M10 no receipt takeover in R6 (b) | prefork bound test (the reclaim saw row 1 as never reached) |
+| RR2-X14 R6 (b) reuses any held answer of the record (auditor) | A6 test (stored the old text's vector, no request) |
+| RR2-X28 no pacing (auditor) | pacing test (`pauses [] for 2 requests`) |
+
+| Round-2 step | Result |
+| --- | --- |
+| Full suite at 98993f5 (`CI=1`, PG16 + pgvector, Annex A applied twice; corpus code identical to 8584e43) | **1218 passed**, 3 warnings, 157 subtests, 0 failed, 0 skipped, 13 min 25 s (1168 + 50 F27 tests: 19 unit, 27 in process, 4 prefork); F31 import contract inside it |
+| Gate G-0 at 98993f5 | `=== Gate G-0 PASSED (static) ===` |
