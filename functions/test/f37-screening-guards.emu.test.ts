@@ -218,7 +218,7 @@ describe.skipIf(!EMULATORS)("F37: what the candidate loader reads", () => {
   })
 
   it("a party's matter id that is not a document id is never read; another firm's matter is not used", async () => {
-    const { firmId, client } = await setup()
+    const { firmId } = await setup()
     const foreign = await adminDb().collection("matters").add({ firmId: "other-firm", clientId: "x", matterNo: "OTHER/1", status: "live", classification: "public" })
     await adminDb().collection("matter_parties").add({ firmId, matterId: "bad/id", role: "opposing", name: "Haris Qalbani", keys: {}, classification: "internal" })
     await adminDb().collection("matter_parties").add({ firmId, matterId: foreign.id, role: "opposing", name: "Haris Qalbani", keys: {}, classification: "internal", matterClassification: "confidential", matterStatus: "closed" })
