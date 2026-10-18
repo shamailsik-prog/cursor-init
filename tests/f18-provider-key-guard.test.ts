@@ -158,3 +158,132 @@ describe("audit F18: callCommitteeBrain under the guard (R2, R5)", () => {
     }
   })
 })
+
+/**
+ * PR #88 review round 1 (Codex P2, thread 4307495841; spec ruling R5, review-round note): the key check, with its alert
+ * line, runs first on every path through P1 in this runtime, including every early exit that came before it on
+ * 72ff10f:
+ *   - in callCommitteeBrain, the 900 KiB storage bound (a return), the missing-classification guard and the request
+ *     builder's input checks (throws);
+ *   - in the eve bridge, the two refusals before callCommitteeBrain (no classification in providerOptions, a prompt part
+ *     P1 cannot carry).
+ * When the key refusal and the storage bound both hold, the stored row carries the key reason, in the storage-safe shape
+ * (no body, no messages). Each path logs the alert exactly once.
+ */
+describe("audit F18 review round 1: the key check runs before every early exit", () => {
+  const KEY_ALERT = "p1.provider_key_in_next_runtime"
+  const alerts = (spy: { mock: { calls: unknown[][] } }) => alertLines(spy).filter((l) => l.includes(KEY_ALERT))
+  /** A body whose stored outbound exceeds MAX_STORED_OUTBOUND_BYTES (900 KiB), as tests/f16-next-output-size uses. */
+  const OVERSIZED = "Draft the reply. ".repeat(56_000)
+
+  it("production, a key and an outbound over 900 KiB: the alert is logged, and the storage-safe row carries the key reason", async () => {
+    const { PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    const result = await callCommitteeBrain({ body: OVERSIZED, classification: "internal", provider: "ai-gateway", purpose: "summarise" })
+    expect(alerts(spy), "the deployment alert line").toHaveLength(1)
+    expect(alerts(spy)[0]).not.toContain(FAKE)
+    expect(result).toMatchObject({ blocked: true, event: "ai.call.blocked", reason: PROVIDER_KEY_IN_RUNTIME_REASON })
+    expect(result.outbound.body, "storage-safe: the body is not kept").toBe("")
+    expect(result.messages).toEqual([])
+    expect(direct.calls).toBe(0)
+  }, 120_000)
+
+  it("control: without a key, the same outbound is refused for its size, with no alert", async () => {
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    const { STORED_OUTBOUND_TOO_LARGE_REASON } = await import("@/platform/p1/constants")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    const result = await callCommitteeBrain({ body: OVERSIZED, classification: "internal", provider: "ai-gateway", purpose: "summarise" })
+    expect(alerts(spy)).toHaveLength(0)
+    expect(result).toMatchObject({ blocked: true, reason: STORED_OUTBOUND_TOO_LARGE_REASON })
+    expect(result.outbound.body).toBe("")
+  }, 120_000)
+
+  it("production and a key: a call missing its classification still throws, and the alert is logged first", async () => {
+    await guard()
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    await expect(
+      callCommitteeBrain({ body: "Summarise the order.", classification: undefined as never, provider: "ai-gateway", purpose: "summarise" })
+    ).rejects.toThrow("P1 call omitted classification")
+    expect(alerts(spy)).toHaveLength(1)
+  })
+
+  it("production and a key: a request the builder refuses still throws, and the alert is logged first", async () => {
+    await guard()
+    const { callCommitteeBrain } = await import("@/platform/p1/internalAICaller")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    await expect(callCommitteeBrain({ turns: [], classification: "public", provider: "ai-gateway", purpose: "committee-brain" })).rejects.toThrow(
+      "P1: a request needs at least one turn"
+    )
+    expect(alerts(spy)).toHaveLength(1)
+  })
+
+  it("production and a key: the eve bridge's refusal for a missing classification logs the alert and reports the key reason", async () => {
+    const { PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    const { committeeBrainLanguageModel } = await import("@/platform/p1/committeeBrainModel")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    const result = await committeeBrainLanguageModel.doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "Summarise." }] }] })
+    const text = result.content.map((p) => ("text" in p ? p.text : "")).join("")
+    expect(alerts(spy)).toHaveLength(1)
+    expect(result.finishReason.unified).toBe("error")
+    expect(text).toContain(PROVIDER_KEY_IN_RUNTIME_REASON)
+  })
+
+  it("production and a key: the eve bridge's refusal for a part P1 cannot carry logs the alert and reports the key reason", async () => {
+    const { PROVIDER_KEY_IN_RUNTIME_REASON } = await guard()
+    const { committeeBrainLanguageModel } = await import("@/platform/p1/committeeBrainModel")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    const result = await committeeBrainLanguageModel.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "file", data: "aGVsbG8=", mediaType: "text/plain" }] }],
+      providerOptions: { sikander: { classification: "public" } },
+    })
+    const text = result.content.map((p) => ("text" in p ? p.text : "")).join("")
+    expect(alerts(spy)).toHaveLength(1)
+    expect(text).toContain(PROVIDER_KEY_IN_RUNTIME_REASON)
+  })
+
+  it("without a key the bridge's refusals keep their own reasons and log no alert", async () => {
+    const { committeeBrainLanguageModel } = await import("@/platform/p1/committeeBrainModel")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("NODE_ENV", "production")
+    const missing = await committeeBrainLanguageModel.doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "Summarise." }] }] })
+    expect(missing.content.map((p) => ("text" in p ? p.text : "")).join("")).toContain("classification missing")
+    const file = await committeeBrainLanguageModel.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "file", data: "aGVsbG8=", mediaType: "text/plain" }] }],
+      providerOptions: { sikander: { classification: "public" } },
+    })
+    expect(file.content.map((p) => ("text" in p ? p.text : "")).join("")).toContain("P1 cannot carry file parts")
+    expect(alerts(spy)).toHaveLength(0)
+  })
+
+  it("outside production with a key, a call that reaches the transport logs the alert once (no double alert)", async () => {
+    await guard()
+    const { committeeBrainLanguageModel } = await import("@/platform/p1/committeeBrainModel")
+    const { setTransportForTests } = await import("@/platform/p1/internalAICaller")
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE)
+    setTransportForTests({ send: async () => ({ text: "stub" }) })
+    try {
+      const result = await committeeBrainLanguageModel.doGenerate({
+        prompt: [{ role: "user", content: [{ type: "text", text: "Summarise." }] }],
+        providerOptions: { sikander: { classification: "public" } },
+      })
+      expect(result.finishReason.unified).toBe("stop")
+      expect(alerts(spy)).toHaveLength(1)
+    } finally {
+      setTransportForTests(null)
+    }
+  })
+})

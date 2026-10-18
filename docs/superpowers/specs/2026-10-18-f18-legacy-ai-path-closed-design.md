@@ -37,6 +37,28 @@ writes it in the Next shape, and the route's GET already lists it. Why: the brie
 canonical endpoint, and it already runs the whole control plane. A second budget or kill-switch implementation in Next
 would duplicate F07, F08 and F09 and could drift from them.
 
+**R1, review round 1 (PR #88, Cursor Bugbot, thread 4307502869).** The route exports a static `maxDuration = 130`. It sits
+above FORWARD_TIMEOUT_MS (125 s), so the platform never kills the request before the forward's own deadline. Without it,
+the request could be killed with no 504, no `p1.next_forward_failed` line, and a Next key left in progress. The value is
+Bugbot Autofix's commit 1d46d03, reviewed and kept. It follows the documents route's pattern.
+
+Deadline order: Functions `api` timeout 120 s < FORWARD_TIMEOUT_MS 125 s < `maxDuration` 130 s <= 300 s.
+- 300 s is the smallest Vercel plan's maximum: Hobby with Fluid compute (vercel.com/docs/functions/configuring-functions/
+  duration, read 2026-10-18). Pro and Enterprise allow 800 s.
+- This repo declares no Next deploy target (audit F32).
+- A legacy non-Fluid Vercel project, or a Cloud Run or App Hosting service timeout, is outside `maxDuration`: keep it at or
+  above 130 s at deploy [REQUIRES VERIFICATION].
+
+Functions normally stops first, because its handler fits 115 s of its 120 s. A Functions answer can still land after
+Next's 125 s, after a cold start or slow network before Functions starts its own clock. Then:
+- Next answers 504 `p1_functions_timeout` with the alert and releases its own claim.
+- Functions finishes, pays once, and stores its output row and its answer under the same Idempotency-Key (F09).
+- A same-key retry gets that stored answer, and the provider is not called again (e2e row (k)).
+- If the caller never retries, the call stays booked and its row is listed by the GET.
+
+Pinned by `tests/f18-functions-forward.test.ts` (`maxDuration` * 1000 > FORWARD_TIMEOUT_MS, at most 300, a literal) and the
+e2e (120 s < 125 s, row (k)).
+
 **R2. Delete the Next provider transport.** `platform/p1/gatewayTransport.ts` and `readGatewayApiKey` are removed.
 `callCommitteeBrain` keeps its size bound, system-message check, provider policy and minimisation, but has no provider
 transport. Outside tests every call it makes is blocked `PHASE0_NO_CREDENTIALS`. That reason is kept, not renamed,
@@ -73,7 +95,25 @@ If any of them is non-blank in the Next or eve environment under `NODE_ENV=produ
   `callCommitteeBrain`: its default agent, and self-modification in `eve dev`. They read the Gateway key from the
   environment directly, so only refusing to start covers them.
 
-Outside production the alert line is logged and nothing is refused, because no paid path exists there to refuse. The test
+Outside production the alert line is logged and nothing is refused, because no paid path exists there to refuse.
+
+**R5, review round 1 (PR #88, Codex P2, thread 4307495841).** The key check now runs first on every path through P1 in this
+runtime, so its alert line is logged whatever the input. It runs as the first statement of `callCommitteeBrain`, before:
+- the missing-classification throw;
+- `buildOutbound`'s input throws;
+- the 900 KiB storage bound.
+
+The eve bridge's two refusals before `callCommitteeBrain` run it too: no classification in `providerOptions`, and a part P1
+cannot carry. Each path logs the alert once, not twice.
+
+On 72ff10f the storage bound returned first, so an oversized request in production with a key was reported only as
+`stored_outbound_too_large` and logged no alert. The route's 400/403/404 answers are request validation and authorisation,
+before any AI call; they are not P1 paths, and the next request that reaches P1 logs the alert.
+
+Which reason the row carries when both hold: the key reason (`PROVIDER_KEY_IN_RUNTIME_REASON`), in the storage-safe shape
+(no body, no messages). Why: the key refusal holds for every call this runtime could make, whatever its size, while the size
+reason would tell an operator that a smaller request would go through. The throws stay throws: they are caller contract
+errors with no row, and the alert has already been logged. The test
 runner and the live evaluation suites keep working with a key in the shell. Next gets no start-up hook (Next 16
 instrumentation would be a new surface). The gate (R9) proves no other Next code can use a key, so refusing each call is
 enough.

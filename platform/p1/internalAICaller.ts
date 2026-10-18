@@ -132,6 +132,11 @@ export type CallCommitteeBrainInput = CallCommitteeBrainCommon &
 export async function callCommitteeBrain(
   input: CallCommitteeBrainInput
 ): Promise<OutboundResponse> {
+  // Audit F18 (R5; PR #88 review round 1, Codex P2): a provider key in this runtime is a deployment error. The check runs
+  // first, so its alert line (the variables' names, never their values) is logged on every path, whatever this call's
+  // input; in production the call is then refused below, before anything is sent.
+  const keys = checkProviderKeys("p1-call")
+
   if (!isClassification(input.classification)) {
     throw new Error("P1 call omitted classification")
   }
@@ -170,14 +175,15 @@ export async function callCommitteeBrain(
   })
 
   // R4a: a record too large to store is refused before anything else is decided, so even a blocked call's row fits a
-  // document. Its record keeps the system reference, the turn records and the counts, without the body.
+  // document. Its record keeps the system reference, the turn records and the counts, without the body. When the key
+  // refusal holds too, the row carries the key reason (F18 R5, review round 1): no call could leave this runtime whatever
+  // its size, and the size reason would tell an operator that a smaller request would go through.
   if (storedOutboundBytes(outbound) > MAX_STORED_OUTBOUND_BYTES) {
-    return blocked(STORED_OUTBOUND_TOO_LARGE_REASON, { ...outbound, body: "" }, [])
+    return blocked(keys.refuse ? PROVIDER_KEY_IN_RUNTIME_REASON : STORED_OUTBOUND_TOO_LARGE_REASON, { ...outbound, body: "" }, [])
   }
 
-  // Audit F18 (R5): a provider key in this runtime is a deployment error. In production every call is refused; in every
-  // mode the alert line names the variables (never their values).
-  if (checkProviderKeys("p1-call").refuse) return blocked(PROVIDER_KEY_IN_RUNTIME_REASON)
+  // Audit F18 (R5): in production a provider key in this runtime refuses every call.
+  if (keys.refuse) return blocked(PROVIDER_KEY_IN_RUNTIME_REASON)
 
   // R3a: the system message is exactly the platform text its record names, or nothing is sent.
   if (!verifySystemMessage(messages, built.system)) return blocked(SYSTEM_UNVERIFIED_REASON)

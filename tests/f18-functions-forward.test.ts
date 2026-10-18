@@ -142,3 +142,23 @@ describe("audit F18: forwardCommitteeBrain (R1, R4, R6, R7)", () => {
     expect(lines.join("\n")).not.toContain("emulator-id-token")
   })
 })
+
+/**
+ * PR #88 review round 1 (Cursor Bugbot, thread 4307502869; spec R1, review-round note): the forward waits up to
+ * FORWARD_TIMEOUT_MS for Cloud Functions, so the route's platform limit must sit above it. Otherwise the platform kills
+ * the request first: no 504, no `p1.next_forward_failed` alert, and the Next Idempotency-Key left in progress. The value
+ * must also fit the smallest Vercel plan: Hobby, 300 s maximum with Fluid compute (vercel.com/docs/functions/
+ * configuring-functions/duration, read 2026-10-18). It must be a literal, because Next reads it statically.
+ */
+describe("audit F18 review round 1: the committee route's maxDuration covers the forward deadline", () => {
+  it("exports a static maxDuration above FORWARD_TIMEOUT_MS and within the smallest plan's limit", async () => {
+    const { FORWARD_TIMEOUT_MS } = await forward()
+    const route = (await import("@/app/api/p1/committee-brain/route")) as { maxDuration?: unknown }
+    expect(typeof route.maxDuration, "the route exports maxDuration").toBe("number")
+    const seconds = route.maxDuration as number
+    expect(seconds * 1000).toBeGreaterThan(FORWARD_TIMEOUT_MS)
+    expect(seconds).toBeLessThanOrEqual(300)
+    const source = (await import("node:fs")).readFileSync("app/api/p1/committee-brain/route.ts", "utf8")
+    expect(source).toMatch(/^export const maxDuration = \d+$/m)
+  })
+})

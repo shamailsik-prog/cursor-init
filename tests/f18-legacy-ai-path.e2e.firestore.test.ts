@@ -28,6 +28,8 @@ import { setP1TransportForTests } from "@/functions/src/p1/transport"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
 import { closedLoopbackPort, startFunctionsRouterServer, type FunctionsRouterServer } from "@/tests/helpers/functions-router-server"
+import { FUNCTION_TIMEOUT_SECONDS } from "@/functions/src/health"
+import * as forwardModule from "@/platform/p1/functionsCommitteeBrain"
 
 requireAuthFirestoreEmulators("F18 legacy AI path e2e")
 
@@ -232,7 +234,11 @@ async function leftovers(firms: string[], uids: string[]): Promise<string[]> {
 // ---------------------------------------------------------------------------------------------------------------------
 // The sanctioned path (Functions P1 transport), the network tripwire and the alert lines.
 
-const sanctioned = { calls: 0 }
+const sanctioned = { calls: 0, delayMs: 0 }
+
+type ForwardSeams = { setForwardTimeoutForTests?: (ms: number | null) => void; FORWARD_TIMEOUT_MS?: number }
+/** The forward-deadline seam (review round 1). Read loosely, so this file still runs where it does not exist. */
+const forwardSeams = forwardModule as unknown as ForwardSeams
 const egress: string[] = []
 const realFetch = globalThis.fetch
 
@@ -333,12 +339,14 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     direct.generateText = 0
     direct.createGateway = 0
     sanctioned.calls = 0
+    sanctioned.delayMs = 0
     egress.length = 0
     server.received.length = 0
     // Set while NODE_ENV is still "test": the seam refuses to be set in production, and is read at call time.
     setP1TransportForTests({
       async send() {
         sanctioned.calls += 1
+        if (sanctioned.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, sanctioned.delayMs))
         return { text: "Answer through Functions P1.", inputTokens: 1000, outputTokens: 500 }
       },
     })
@@ -364,6 +372,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     setFirestorePersistenceForTests(null)
     vi.unstubAllEnvs()
     setP1TransportForTests(null)
+    forwardSeams.setForwardTimeoutForTests?.(null)
     restart()
     await sweep()
   }, E2E_TIMEOUT_MS)
@@ -531,6 +540,54 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     expect(direct.generateText + direct.createGateway).toBe(0)
     expect(finish).toBe("error")
     expect(text).toContain(PHASE0_NO_CREDENTIALS)
+  })
+
+  // PR #88 review round 1 (Cursor Bugbot, thread 4307502869; spec R1). The Functions `api` function stops at its own
+  // timeout before Next's forward deadline, and the route's maxDuration sits above that deadline (pinned in
+  // tests/f18-functions-forward.test.ts). The order of the three is pinned here, where the Functions source can load.
+  it("pins the deadlines: the Functions api timeout is below Next's forward deadline", () => {
+    expect(forwardSeams.FORWARD_TIMEOUT_MS, "FORWARD_TIMEOUT_MS").toBeDefined()
+    expect(FUNCTION_TIMEOUT_SECONDS * 1000).toBeLessThan(forwardSeams.FORWARD_TIMEOUT_MS!)
+  })
+
+  // A Functions answer can still land after Next has given up waiting: a cold start or a slow network before Functions
+  // starts its own clock. The forward deadline is shortened through the test seam to show what then happens: Next answers
+  // 504 with the alert line and releases its key; Functions finishes, pays once and stores the output row and its answer
+  // under the same Idempotency-Key (F09); a same-key retry gets that stored answer, and the provider is not called again.
+  it("(k) Functions answers after Next's forward deadline: 504 with an alert; the call is paid once and stored; a same-key retry returns it", async () => {
+    vi.stubEnv("NODE_ENV", "test")
+    forwardSeams.setForwardTimeoutForTests?.(400)
+    vi.stubEnv("NODE_ENV", "production")
+    sanctioned.delayMs = 2_000
+    const { member, matterId } = await firmWithMatter()
+    const key = randomUUID()
+
+    const first = await ask(member, matterId, key)
+    await measure("(k) first", first, member.firmId)
+    expect(first.status, JSON.stringify(first.json)).toBe(504)
+    expect(first.json.code).toBe("p1_functions_timeout")
+    expect(errorLines(errorSpy).some((line) => line.includes(FORWARD_ALERT) && line.includes("p1_functions_timeout"))).toBe(true)
+
+    // Functions carries on after Next's 504: wait until it has stored its answer for the key.
+    const fnKey = adminDb().collection("idempotency_keys").doc(`${member.firmId}_${key.toLowerCase()}`)
+    const until = Date.now() + 60_000
+    while ((await fnKey.get()).get("status") !== "done") {
+      if (Date.now() > until) throw new Error("Functions never stored its answer for the key")
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(sanctioned.calls, "the late call was made once").toBe(1)
+    const outputs = await adminDb().collection("committee_outputs").where("firmId", "==", member.firmId).get()
+    expect(outputs.size, "Functions stored the output row").toBe(1)
+    expect(await costRows(member.firmId)).toEqual([expect.objectContaining({ outcome: "ok" })])
+
+    sanctioned.delayMs = 0
+    const again = await ask(member, matterId, key)
+    await measure("(k) same-key retry", again, member.firmId)
+    expect(again.status, JSON.stringify(again.json)).toBe(200)
+    expect(again.result).toMatchObject({ blocked: false, outputId: outputs.docs[0]!.id, text: "Answer through Functions P1." })
+    expect(sanctioned.calls, "no second provider call").toBe(1)
+    expect(await costRows(member.firmId)).toHaveLength(1)
+    expect(direct.generateText + direct.createGateway).toBe(0)
   })
 
   it("leaves nothing behind: every document and Auth user the suite created is gone", async () => {

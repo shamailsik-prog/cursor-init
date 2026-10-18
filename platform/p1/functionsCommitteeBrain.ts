@@ -17,8 +17,22 @@ import type { Classification } from "@/platform/p1/types"
 
 export const FUNCTIONS_COMMITTEE_BRAIN_PATH = "/api/platform/brain/committeeBrain"
 
-/** The `api` function's timeout (functions/src/health.ts FUNCTION_TIMEOUT_SECONDS, 120 s) plus 5 s. */
+/**
+ * The `api` function's timeout (functions/src/health.ts FUNCTION_TIMEOUT_SECONDS, 120 s) plus 5 s, so Next normally
+ * outwaits Functions. The committee route's `maxDuration` (130 s) sits above this, so the platform never cuts the
+ * request off before the forward's own deadline (PR #88 review round 1). A Functions answer that still lands after Next
+ * gave up (a cold start or a slow network before Functions starts its clock) is paid once and stored under the same
+ * Idempotency-Key (F09), and a same-key retry gets it: tests/f18-legacy-ai-path.e2e.firestore.test.ts row (k).
+ */
 export const FORWARD_TIMEOUT_MS = 125_000
+
+let forwardTimeoutForTests: number | null = null
+
+/** Test seam only: a shorter forward deadline. Refused in production; production code never sets it. */
+export function setForwardTimeoutForTests(ms: number | null): void {
+  if (process.env.NODE_ENV === "production") throw new Error("setForwardTimeoutForTests is test-only")
+  forwardTimeoutForTests = ms
+}
 
 /** Alert line when a configured Functions P1 route does not answer usably. */
 export const FORWARD_ALERT = "p1.next_forward_failed"
@@ -136,7 +150,7 @@ export async function forwardCommitteeBrain(
       },
       body: JSON.stringify(request.payload),
       redirect: "error",
-      signal: AbortSignal.timeout(deps.timeoutMs ?? FORWARD_TIMEOUT_MS),
+      signal: AbortSignal.timeout(deps.timeoutMs ?? forwardTimeoutForTests ?? FORWARD_TIMEOUT_MS),
     })
   } catch (err) {
     return isTimeout(err) ? failed(504, "p1_functions_timeout") : failed(503, "p1_functions_unavailable")

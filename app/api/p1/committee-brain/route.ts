@@ -32,6 +32,9 @@ import {
  * Audit F18: a Firebase forward can wait on Cloud Functions for at most FORWARD_TIMEOUT_MS
  * (125 s; platform/p1/functionsCommitteeBrain.ts). The platform limit sits above that so the
  * forward's own deadline, not a platform kill, ends a hanging call. A literal: Next reads it statically.
+ * Order (PR #88 review round 1): Functions `api` timeout 120 s < FORWARD_TIMEOUT_MS 125 s < 130 s here <= 300 s, the
+ * smallest Vercel plan's maximum (Hobby, Fluid compute). Pinned by tests/f18-functions-forward.test.ts and
+ * tests/f18-legacy-ai-path.e2e.firestore.test.ts.
  */
 export const maxDuration = 130
 
