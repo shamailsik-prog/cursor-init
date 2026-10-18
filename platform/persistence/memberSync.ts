@@ -1,5 +1,18 @@
+import type { FirmBoundSpineRepositories } from "@/platform/persistence/firmBoundRepositories"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
-import type { Matter, SpineStore } from "@/platform/spine/store"
+import type { Matter, MatterMember, SpineStore } from "@/platform/spine/store"
+
+type MemberSyncRepos = {
+  members: {
+    listByFirm(firmId: string): Promise<readonly MatterMember[]>
+  }
+}
+
+type MatterSyncRepos = {
+  matters: {
+    listByFirm(firmId: string): Promise<readonly Matter[]>
+  }
+}
 
 /**
  * The firm's cached entries as they stand before a sync awaits its listing (audit F14 R5-D1). The process-wide store is
@@ -30,7 +43,7 @@ function isKeyPart(value: unknown): value is string {
  */
 export async function syncFirmMembers(
   store: SpineStore,
-  repos: SpineRepositories,
+  repos: SpineRepositories | FirmBoundSpineRepositories | MemberSyncRepos,
   firmId: string
 ): Promise<void> {
   const before = snapshotOfFirm(store.members, firmId)
@@ -59,7 +72,7 @@ export async function syncFirmMembers(
  */
 export async function syncFirmMatters(
   store: SpineStore,
-  repos: SpineRepositories,
+  repos: SpineRepositories | FirmBoundSpineRepositories | MatterSyncRepos,
   firmId: string
 ): Promise<Matter[]> {
   const before = snapshotOfFirm(store.matters, firmId)

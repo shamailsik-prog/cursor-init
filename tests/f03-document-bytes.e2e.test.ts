@@ -338,7 +338,7 @@ describe("F03: uploaded document bytes are retained and integrity-checked", () =
     const repos = await actualGet(store)
     const ids = [...store.documents.keys()]
     for (const id of ids) {
-      expect(await repos.documents.get(id)).toBeNull()
+      expect(await repos.documents.get(id, "firmA")).toBeNull()
     }
   })
 

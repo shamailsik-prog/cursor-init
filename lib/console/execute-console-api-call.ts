@@ -39,7 +39,7 @@ export async function executeConsoleApiCall(
     withKey,
     deps.functionsFetchImpl
   )
-  if (functionsResult) {
+  if (functionsResult !== null) {
     const base = functionsApiBaseUrl()
     const qs = new URLSearchParams()
     for (const [key, value] of Object.entries(options.query ?? {})) {
