@@ -428,12 +428,12 @@ class _Batch:
             logger.warning("F27: reclaimed %d embedding row(s) whose lease expired: %d charged, %d with a paid "
                            "answer held (not charged)", len(expired), len(charged), len(spared))
 
-    async def _current_operation(self, row) -> Optional[str]:
+    async def _current_operation(self, row, db=None) -> Optional[str]:
         """The operation a row would embed now, or None when it cannot be embedded (R9 would
         dead-letter it on its next claim)."""
         if row.table_name not in SOURCES or SUPPORTED_MODELS.get(row.embedding_model) != row.embedding_dimensions:
             return None
-        record = await self._read_record(row, lock=False)
+        record = await self._read_record(row, lock=False, db=db)
         if record is None or text_problem(record[0]) is not None:
             return None
         return operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, record[0])
@@ -485,8 +485,9 @@ class _Batch:
             return False
         return await self._attempt(row, op, value)
 
-    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[str, bool]]:
-        found = (await self.db.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
+    async def _read_record(self, row, *, lock: bool, db=None) -> Optional[Tuple[str, bool]]:
+        session = db if db is not None else self.db
+        found = (await session.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
         if found is None:
             return None
         return embed_text(found[0], found[1], found[2]), bool(found[3])
@@ -609,13 +610,22 @@ class _Batch:
             async with SessionLocal() as db:
                 await db.execute(text(f"SET LOCAL lock_timeout = '{GIVE_BACK_LOCK_TIMEOUT}'"))
                 if charge is not None:
-                    try:
-                        await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
-                    except LeaseLost:
-                        logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
-                    await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
-                        "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
-                    })
+                    op = await self._current_operation(charge, db=db)
+                    held = set((await db.execute(text(HELD_ANSWERS_SQL), {"ops": [op]})).scalars()) if op else set()
+                    if op in held:
+                        await db.execute(text(RECLAIM_ANSWERED_SQL), {
+                            "ids": [charge.id],
+                            "error_type": outcomes.error_key(exc),
+                            "message": outcomes.describe_error(exc),
+                        })
+                    else:
+                        try:
+                            await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
+                        except LeaseLost:
+                            logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
+                        await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
+                            "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
+                        })
                 released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
                 if outcomes.is_interruption(exc):
                     await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
