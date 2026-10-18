@@ -26,8 +26,10 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from test_f20_trust_policy_db import assert_migrated, execute, fetch, run
-from test_f27_embedding_claims_e2e import make_due, queue_by_row, receipts, seed_statutes
+from test_f27_embedding_claims_e2e import queue_by_row, receipts, seed_statutes
 
 CORPUS = Path(__file__).resolve().parents[1]
 EMBED = "scraper.tasks.embeddings.process_embedding_queue"
@@ -186,16 +188,19 @@ def test_r1_two_worker_children_over_the_same_50_rows_pay_once_per_row(corpus_db
     assert set(queue_by_row().values()) == {("completed", 0, None, True)}
 
 
-def test_r5_a_worker_killed_after_the_provider_answered_is_reconciled_from_its_receipt(corpus_db, tmp_path):
+@pytest.mark.parametrize("attempts_before", [0, 4], ids=["first-attempt", "last-attempt"])
+def test_r5_a_worker_killed_after_the_provider_answered_is_reconciled_from_its_receipt(corpus_db, tmp_path, attempts_before):
     """The child's store transaction is held (a trigger sleeps on the vector write) after the provider
     answered, and the child is killed with SIGKILL: nothing it had not committed survives. On main
     nothing recorded the paid request, the row was still `pending`, and the next batch paid again
     (scenario 3). Here the `answered` receipt shows the paid request (its tokens, its vector held); the
-    row stays leased, so a batch before the lease expires does nothing; after expiry it returns to
-    `pending` with one attempt counted, and once due it is stored from the receipt without a second
-    request. Spec R2, R3, R5, R6."""
+    row stays leased, so a batch before the lease expires does nothing; after expiry the reclaim finds
+    the held answer for the row's current operation, so it does not charge the row (review round 1:
+    on the row's last attempt, 4 of 5, fa56eee dead-lettered it and stranded the vector) and the same
+    batch stores it from the receipt without a second request. Spec R2, R3, R5, R6."""
     migrated(corpus_db)
     seed_statutes(1, 1)
+    run(execute("UPDATE embedding_queue SET attempts = :a", params={"a": attempts_before}))
     corpus_db.admin(
         "CREATE FUNCTION f27_hold_vector_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
         "PERFORM pg_sleep(120); RETURN NEW; END $$",
@@ -218,20 +223,17 @@ def test_r5_a_worker_killed_after_the_provider_answered_is_reconciled_from_its_r
         rerun = send()  # the next scheduled batch, before the lease expires
         after_rerun = (len(provider_calls(root)), queue_by_row()[1][:2], receipts())
 
-        assert after_rerun == (1, ("processing", 0), [("answered", 7, True, False, None)]), (
+        assert after_rerun == (1, ("processing", attempts_before), [("answered", 7, True, False, None)]), (
             f"after the kill: {after_kill}; after the next batch: {after_rerun} (requests, row, receipts); "
             f"rerun {rerun}; worker log {log_path.read_text()[-1500:]}")
         assert after_kill[:2] == ("FAILURE", "WorkerLostError"), after_kill
 
         run(execute("UPDATE embedding_queue SET lease_expires_at = now() - interval '1 second'"))
-        reclaimed = send()
-        assert (reclaimed[0], reclaimed[1]["reclaimed"], len(provider_calls(root))) == ("SUCCESS", 1, 1), reclaimed
-        assert queue_by_row()[1][:3] == ("pending", 1, "lease_expired"), queue_by_row()
+        recovered = send()
 
-        make_due()
-        stored = send()
-
-    assert (stored[0], stored[1]["completed"], stored[1]["reused"]) == ("SUCCESS", 1, 1), stored
-    assert len(provider_calls(root)) == 1, "the answered request was paid once"
-    assert queue_by_row()[1] == ("completed", 1, None, True), queue_by_row()
+    assert (queue_by_row()[1], len(provider_calls(root))) == (("completed", attempts_before, None, True), 1), (
+        f"after the lease expired: row {queue_by_row()[1]}, receipts {receipts()}, "
+        f"{len(provider_calls(root))} requests, batch {recovered}")
+    assert (recovered[0], recovered[1]["reclaimed"], recovered[1]["completed"], recovered[1]["reused"]) == (
+        "SUCCESS", 1, 1, 1), recovered
     assert receipts() == [("stored", 7, False, True, None)], receipts()

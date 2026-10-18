@@ -389,9 +389,10 @@ def test_r3_an_expired_lease_is_reclaimed_once_and_an_answered_vector_is_stored_
     """The state a killed batch leaves (the real kill is test_f27_embedding_prefork_e2e.py): row 1 was
     in flight (a `started` receipt), row 2 had its answer (an `answered` receipt holding the vector),
     both still `processing` under a lease that has expired; row 3 is held by a live batch. The next
-    batch reclaims rows 1 and 2, counting one attempt each, abandons row 1's receipt and leaves row 3
-    alone; once due, row 1 is paid for and row 2 is stored from its receipt with no call. Spec R3, R5,
-    R6."""
+    batch reclaims rows 1 and 2 and leaves row 3 alone. Row 1's request had no known outcome: one
+    attempt is counted and its receipt abandoned. Row 2's answer was paid and is held: it is not
+    charged (review round 1), is due at once and the same batch stores it from its receipt with no
+    call. Once due, row 1 is paid for. Spec R3, R5, R6."""
     migrated(corpus_db)
     seed_statutes(1, 3)
     ids = {marker_of(t): i for i, t in run(fetch("SELECT id, section_text FROM statutes_master"))}
@@ -419,24 +420,108 @@ def test_r3_an_expired_lease_is_reclaimed_once_and_an_answered_vector_is_stored_
 
     recovered = summary(fire("process-embeddings"))
 
-    assert (recovered.get("reclaimed"), recovered.get("claimed"), len(provider.calls)) == (2, 0, 0), recovered
+    assert (recovered.get("reclaimed"), recovered.get("claimed"), recovered.get("reused"), len(provider.calls)) == (
+        2, 1, 1, 0), recovered
     rows = queue_by_row()
     assert (rows[1], rows[2], rows[3]) == (
-        ("pending", 1, "lease_expired", False), ("pending", 1, "lease_expired", False), ("processing", 0, None, False),
+        ("pending", 1, "lease_expired", False), ("completed", 0, None, True), ("processing", 0, None, False),
     ), rows
-    assert receipts() == [("abandoned", None, False, False, None), ("answered", 7, True, False, None)], receipts()
+    assert receipts() == [("abandoned", None, False, False, None), ("stored", 7, False, True, None)], receipts()
     record = jobs("embedding_queue", job_type="embed")
     assert [(r.status, r.result_summary["reclaimed"]) for r in record] == [("completed", 2)], record
 
     make_due()
     done = summary(fire("process-embeddings"))
 
-    assert (done.get("completed"), done.get("reused"), provider.per_row()) == (2, 1, {1: 1}), done
+    assert (done.get("completed"), done.get("reused"), provider.per_row()) == (1, 0, {1: 1}), done
     rows = queue_by_row()
-    assert (rows[1], rows[2]) == (("completed", 1, None, True), ("completed", 1, None, True)), rows
+    assert (rows[1], rows[2]) == (("completed", 1, None, True), ("completed", 0, None, True)), rows
     assert receipts() == [
         ("abandoned", None, False, False, None), ("stored", 7, False, True, None), ("stored", TOKENS, False, False, None),
     ], receipts()
+
+
+# Review round 1 (Codex P2, thread 4307196399): a row on its last attempt whose answer was already paid.
+def leave_crashed(section, statute_id, *, outcome, text, attempts_left=1):
+    """Queue row ``section`` as a batch that died leaves it: `processing` under a lease that expired a
+    minute ago, ``attempts_left`` attempts before its max_attempts, and one receipt for the operation of
+    ``text``: `started` (the request was out, its outcome unknown) or `answered` (paid, vector held)."""
+    run(execute(
+        "UPDATE embedding_queue q SET status = 'processing', attempts = q.max_attempts - :left, lease_owner = :dead, "
+        "lease_expires_at = now() - interval '1 minute', last_attempt_at = now() - interval '70 minutes' "
+        "FROM statutes_master s WHERE s.id = q.record_id AND s.section_number = :sn",
+        "INSERT INTO embedding_attempts (operation_id, queue_id, table_name, record_id, model, dimensions, lease_owner, "
+        "attempt, outcome, started_at, answered_at, token_count, embedding) "
+        "SELECT :op, q.id, q.table_name, q.record_id, :model, :dims, :dead, q.max_attempts - :left + 1, "
+        "CAST(:outcome AS text), now() - interval '69 minutes', "
+        "CASE WHEN CAST(:outcome AS text) = 'answered' THEN now() - interval '69 minutes' END, "
+        "CASE WHEN CAST(:outcome AS text) = 'answered' THEN 7 END, "
+        "CASE WHEN CAST(:outcome AS text) = 'answered' THEN CAST(:vec AS vector) END "
+        "FROM embedding_queue q JOIN statutes_master s ON s.id = q.record_id WHERE s.section_number = :sn",
+        params={"left": attempts_left, "dead": uuid.uuid4(), "sn": section, "outcome": outcome, "model": MODEL,
+                "dims": DIMENSIONS, "op": operation_id("statutes_master", statute_id, text),
+                "vec": json.dumps(vector_for(text), separators=(",", ":"))},
+    ))
+
+
+def test_r3_a_row_on_its_last_attempt_whose_answer_was_paid_is_stored_not_dead_lettered(corpus_db, monkeypatch):
+    """The batch died on the row's last attempt after the provider answered: the `answered` receipt
+    holds the paid vector. At fa56eee the reclaim charged the row unconditionally, so it went straight
+    to the dead letter, which is never claimed, and the paid vector was stranded. Now an expired row
+    whose current operation has a held answer is not charged: it is due at once and the same batch
+    stores it from the receipt, with no request. Spec R3 (review round 1), R6."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    statute_id = run(fetch("SELECT id FROM statutes_master"))[0][0]
+    leave_crashed("s1", statute_id, outcome="answered", text=statute_text(1))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    result = summary(fire("process-embeddings"))
+
+    assert (queue_by_row()[1], len(provider.calls)) == (("completed", MAX_ATTEMPTS - 1, None, True), 0), (
+        f"the paid answer of the last attempt was stranded: row {queue_by_row()[1]}, receipts {receipts()}, "
+        f"{len(provider.calls)} requests, summary {result}")
+    assert receipts() == [("stored", 7, False, True, None)], receipts()
+    assert (result.get("reclaimed"), result.get("claimed"), result.get("reused")) == (1, 1, 1), result
+
+
+def test_r3_a_row_on_its_last_attempt_with_only_a_started_receipt_is_dead_lettered(corpus_db, monkeypatch):
+    """The batch died on the last attempt with the request out: whether the provider answered (and
+    billed) is unknown and no vector is held, so the crash is the row's last failed attempt. The row
+    goes to the dead letter (`max_attempts`) and the receipt is `abandoned`; nothing is requested."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    statute_id = run(fetch("SELECT id FROM statutes_master"))[0][0]
+    leave_crashed("s1", statute_id, outcome="started", text=statute_text(1))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    result = summary(fire("process-embeddings"))
+
+    assert queue_by_row()[1] == ("dead_letter", MAX_ATTEMPTS, "max_attempts", False), queue_by_row()
+    assert receipts() == [("abandoned", None, False, False, None)], receipts()
+    assert (len(provider.calls), result.get("dead_letter_reasons")) == (0, {"max_attempts": 1}), result
+
+
+def test_r3_a_row_whose_text_changed_since_its_answer_is_charged_and_the_stale_vector_dropped(corpus_db, monkeypatch):
+    """The held answer is for text the record no longer has (R7): it can never be stored, so it does
+    not spare the row. On its last attempt the row goes to the dead letter, and the stale vector is
+    dropped (`superseded`) instead of being held forever. At fa56eee the receipt kept the vector."""
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    statute_id = run(fetch("SELECT id FROM statutes_master"))[0][0]
+    leave_crashed("s1", statute_id, outcome="answered", text=statute_text(1))
+    run(execute("UPDATE statutes_master SET section_text = section_text || ' Amended.'"))
+    provider = Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    summary(fire("process-embeddings"))
+
+    assert queue_by_row()[1] == ("dead_letter", MAX_ATTEMPTS, "max_attempts", False), queue_by_row()
+    assert receipts() == [("superseded", 7, False, False, None)], (
+        f"a vector of text the record no longer has is still held: {receipts()}")
+    assert provider.calls == []
 
 
 # ---------------------------------------------------------------------------------------------
