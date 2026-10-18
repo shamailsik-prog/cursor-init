@@ -256,8 +256,14 @@ async function deadLetterWhole(db: Firestore, entryId: string, reason: string, n
   })
 }
 
+function stagedAtReadableValue(value: unknown): boolean {
+  // Firestore `stagedAt` inequalities match Timestamp fields only; a numeric millis value is invisible to the stale query.
+  if (typeof value === "number") return false
+  return Number.isFinite(millisOf(value))
+}
+
 function stagedAtReadable(doc: QueryDocumentSnapshot): boolean {
-  return Number.isFinite(millisOf(doc.get("stagedAt")))
+  return stagedAtReadableValue(doc.get("stagedAt"))
 }
 
 /** Entries whose `stagedAt` no index can read (spec ruling 19). */
@@ -398,11 +404,18 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
       let sweep = db.collection(AUDIT_OUTBOX_COLLECTION).orderBy(FieldPath.documentId()).limit(RECONCILE_PAGE_SIZE)
       if (typeof after === "string" && after !== "") sweep = sweep.startAfter(after)
       const slice = await sweep.get()
+      let progressAfter = typeof after === "string" ? after : ""
       for (const doc of slice.docs) {
         if (spent()) break
-        if (!stagedAtReadable(doc)) await handle(doc)
+        if (!stagedAtReadable(doc)) {
+          await handle(doc)
+          const fresh = await doc.ref.get()
+          if (fresh.exists && !stagedAtReadableValue(fresh.get("stagedAt"))) break
+        }
+        progressAfter = doc.id
       }
-      const next = slice.size < RECONCILE_PAGE_SIZE ? "" : slice.docs[slice.docs.length - 1]!.id
+      const lastId = slice.docs[slice.docs.length - 1]?.id
+      const next = slice.size < RECONCILE_PAGE_SIZE && lastId !== undefined && progressAfter === lastId ? "" : progressAfter
       await cursorRef.set({ after: next, updatedAt: FieldValue.serverTimestamp() })
     } catch (err) {
       log.error("audit.outbox_sweep_failed", { code: codeOf(err) })
