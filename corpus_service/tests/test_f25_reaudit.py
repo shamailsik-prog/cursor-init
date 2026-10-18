@@ -33,6 +33,7 @@ import types
 import zlib
 from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 import pytest
 
@@ -747,3 +748,75 @@ def test_a_bomb_in_one_byte_http_chunks_is_refused_with_bounded_memory(env, codi
     result, peak = _peak(lambda: _run_get(_fetcher(env, max_bytes=256 * 1024), f"{env.origin}/b"))
     assert isinstance(result, fp.FetchRefused) and result.reason == fp.TOO_LARGE, result
     assert peak < 4 * MIB, f"peak {peak / MIB:.1f} MiB"
+
+
+# ---------------------------------------------------------------------------------------------
+# Review round (Copilot, thread 4305395602): a falsey hook object must not slip past the gate
+# ---------------------------------------------------------------------------------------------
+class _FalseyBackend(httpcore.AsyncNetworkBackend):
+    def __bool__(self):
+        return False
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        raise AssertionError("a falsey backend must never be installed outside development")
+
+
+class _FalseyResolver:
+    def __bool__(self):
+        return False
+
+    async def __call__(self, host, port):
+        return ["127.0.0.1"]
+
+
+class _FalseyOrigins:
+    """Falsey, yet iterating it yields an origin."""
+
+    def __bool__(self):
+        return False
+
+    def __iter__(self):
+        return iter([("localhost", 8443)])
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [{"inner": _FalseyBackend()}, {"resolver": _FalseyResolver()}, {"loopback_origins": _FalseyOrigins()}],
+    ids=["falsey backend", "falsey resolver", "falsey non-empty origins"],
+)
+@pytest.mark.parametrize("environment", ["production", None])
+def test_falsey_backend_hooks_are_refused_outside_development(monkeypatch, hook, environment):
+    if environment is None:
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+    else:
+        monkeypatch.setenv("ENVIRONMENT", environment)
+    with pytest.raises(RuntimeError):
+        fp._GuardedBackend("t", **hook)
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [{"_test_resolver": _FalseyResolver()}, {"_test_loopback_origins": _FalseyOrigins()}],
+    ids=["falsey resolver", "falsey non-empty origins"],
+)
+def test_falsey_fetcher_hooks_are_refused_outside_development(monkeypatch, hook):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(RuntimeError):
+        fp.PolicyFetcher(NASIR, **hook)
+
+
+def test_a_falsey_origins_iterable_is_installed_as_given_in_development():
+    """In development the hook is installed as given, never silently replaced or dropped."""
+    fetcher = fp.PolicyFetcher(NASIR, _test_loopback_origins=_FalseyOrigins(), _test_resolver=_FalseyResolver())
+    backend = fetcher._transport._pool._network_backend
+    assert backend._loopback == frozenset({("localhost", 8443)})
+    assert isinstance(backend._resolver, _FalseyResolver)
+    inner = _FalseyBackend()
+    assert fp._GuardedBackend("t", inner=inner)._inner is inner
+
+
+@pytest.mark.parametrize("value", [1, "no", "False", None, object()])
+def test_upgrade_http_takes_a_real_bool_only(value):
+    """The only other truthiness-based switch in the boundary: a policy's upgrade flag."""
+    with pytest.raises(TypeError):
+        fp.FetchPolicy(name="S", hosts=frozenset({"x.example"}), upgrade_http=value)

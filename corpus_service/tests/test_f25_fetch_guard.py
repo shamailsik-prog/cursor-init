@@ -345,6 +345,46 @@ def test_guard_round_two_negative_controls(snippet, where):
     assert scan_source(snippet, where) == [], (where, snippet)
 
 
+# Copilot, thread 4305395582: annotations run at import (Python 3.12, no PEP 563 by default), and
+# with ``from __future__ import annotations`` they can still be evaluated later (get_type_hints).
+# Bare type references stay exempt; a call inside an annotation, a default, or a string annotation
+# is checked like any other code.
+EXECUTABLE_ANNOTATION_FORMS = {
+    "parameter annotation": "import httpx\ndef f(x: httpx.get('http://169.254.169.254/')):\n    pass",
+    "return annotation": "import httpx\ndef f() -> httpx.get('http://169.254.169.254/'):\n    pass",
+    "module AnnAssign with a value": "import httpx\nx: httpx.get('http://169.254.169.254/') = None",
+    "module AnnAssign without a value": "import httpx\nx: httpx.get('http://169.254.169.254/')",
+    "class-body annotation": "import httpx\nclass C:\n    x: httpx.get('http://169.254.169.254/')",
+    "keyword-only and *args annotations": "import httpx\ndef f(*a: httpx.post('u'), k: httpx.put('u')):\n    pass",
+    "default argument": "import httpx\ndef f(x=httpx.get('http://169.254.169.254/')):\n    pass",
+    "subscript that calls": "import httpx\ndef f(x: list[httpx.get('http://169.254.169.254/')]):\n    pass",
+    "client built in an annotation": "import httpx\ndef f(x: httpx.AsyncClient()):\n    pass",
+    "future annotations still count": (
+        "from __future__ import annotations\nimport httpx\ndef f(x: httpx.get('http://169.254.169.254/')):\n    pass"
+    ),
+    "string annotation": "import httpx\ndef f(x: \"httpx.get('http://169.254.169.254/')\"):\n    pass",
+}
+
+
+@pytest.mark.parametrize("snippet", list(EXECUTABLE_ANNOTATION_FORMS.values()), ids=list(EXECUTABLE_ANNOTATION_FORMS))
+def test_guard_checks_code_inside_annotations(snippet):
+    assert scan_source(snippet, "scraper/tasks/zz_probe.py"), snippet
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "import httpx\nx: httpx.Response = None",
+        "import httpx\ndef f(c: list[httpx.AsyncClient], *a: httpx.Client) -> dict[str, httpx.Response]: ...",
+        "from __future__ import annotations\nimport httpx\ndef f(c: httpx.AsyncClient) -> httpx.Response: ...",
+        "import httpx\ndef f(c: 'httpx.AsyncClient') -> 'httpx.Response': ...",
+        "import typing\nfrom pydantic import Field\nx: typing.Annotated[int, Field(gt=0)] = 1",
+    ],
+)
+def test_bare_type_references_in_annotations_stay_exempt(snippet):
+    assert scan_source(snippet, "scraper/tasks/x.py") == [], snippet
+
+
 def test_source_policies_are_read_only():
     from scraper.net import fetch_policy
 
