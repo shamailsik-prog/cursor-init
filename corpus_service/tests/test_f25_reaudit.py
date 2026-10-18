@@ -319,8 +319,9 @@ def test_bytes_on_the_wire_are_capped_even_when_the_decoded_body_fits(env):
 
 
 def test_a_declared_length_over_the_cap_is_refused_before_reading_the_body(env):
-    """Content-Length says 10 MiB, the server then stalls: refused at once on the header, not after
-    the deadline (kills M32)."""
+    """Content-Length says 10 MiB, the server then stalls: refused on the header (too_large), not
+    after the deadline (deadline_exceeded), which is what reading the body would end in (kills M32).
+    The reason is the proof; the margins are wide so a loaded machine cannot flip it."""
 
     def stall(handler):
         handler.send_response(200)
@@ -329,15 +330,15 @@ def test_a_declared_length_over_the_cap_is_refused_before_reading_the_body(env):
         try:
             handler.wfile.write(b"x" * 10)
             handler.wfile.flush()
-            time.sleep(3)
+            time.sleep(8)
         except OSError:
             pass
         return None
 
     env.source.routes["/b"] = stall
     started = time.monotonic()
-    assert _refused(_fetcher(env, max_bytes=1 * MIB, deadline=2.5), f"{env.origin}/b").reason == fp.TOO_LARGE
-    assert time.monotonic() - started < 1.5
+    assert _refused(_fetcher(env, max_bytes=1 * MIB, deadline=6), f"{env.origin}/b").reason == fp.TOO_LARGE
+    assert time.monotonic() - started < 6
 
 
 # ---------------------------------------------------------------------------------------------
