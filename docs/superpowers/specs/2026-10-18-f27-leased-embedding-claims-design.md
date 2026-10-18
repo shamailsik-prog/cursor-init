@@ -1,0 +1,103 @@
+# F27: embedding work is claimed under a lease, paid once per operation, and recoverable
+
+Date: 2026-10-18. Base: `origin/main` @ f670d62. Status: approved by the remediation builder under the owner's standing autonomy instruction (brainstorming self-approved and recorded here). The orchestrator's design intent is kept as numbered rulings below; where the code required a refinement, the ruling says what changed and why.
+
+Audit sources:
+- `docs/audit/2026-10-13-forensic-audit.md` F27 (:601), its capability row "Embedding" (:1009) and the P1 queue/chaos drill (:1109: "Kill embedding worker after provider response ... Recovered lease, no duplicate vector/version, bounded paid retries and reconciled run").
+- `docs/audit/2026-10-14-forensic-audit-v2.md` :100: "F27 | HIGH | OPEN | embeddings.py unchanged (no SKIP LOCKED/lease)".
+- `docs/audit/REMEDIATION.md`: rule 2 (closed = merged PR with an end-to-end test of a real flow, RED before and GREEN after) and rule 3 (ticked only after an independent re-audit). This document claims neither closure nor a tick.
+
+Scope (the brief's lane): `corpus_service/scraper/tasks/embeddings.py`; the `EmbeddingQueue` model in `scraper/models.py` and, beside it, the queue's own receipt model `EmbeddingAttempt` (R5 says why a table); a new migration `corpus_service/migrations/004_embedding_queue_leases.py` and its entry in `scraper/migrate.py`'s list; the embedding alert wiring (inside `embeddings.py`, through F28's alert path); the tests and the corpus README. Not touched: the parsers and `pdf_intake.py` (F26, #81), the quarantine routes and `migrations/003_*` (F23, #82), `requirements*.txt`, `functions/**`, `app/api/**`, `platform/**`, `.gitleaks.toml`. `init.sql` and the Annex A DDL do not define the embedding queue (it is an ORM table), so neither changes.
+
+## 1. What main does today (f670d62)
+
+`scraper/tasks/embeddings.py` after F28 (#72, #78):
+
+| Line | Code on main | Problem |
+| --- | --- | --- |
+| :45 | `select(EmbeddingQueue).where(status == "pending").limit(50)` | No `FOR UPDATE SKIP LOCKED`, no status change, no lease, no order. Two batches that start together read the same 50 rows and both call the provider for each (the finding's failure scenario 1). |
+| :50-62 | `if not rec: counts.missing += 1; continue` | A queue row whose record is gone stays `pending` and is selected again by every later batch. With no `ORDER BY`, the same physical rows come back first, so missing rows hold the window (scenario 2). A `table_name` other than `case_law_master` is looked up in `statutes_master`. |
+| :56, :63 | the embed text built from three fields | A record with no text sends `"  "` to the provider and pays for it. |
+| :64-68 | provider call, then the vector, `completed` and `commit()` in one transaction | Nothing is written before the call or after the answer. A worker killed between the answer and the commit leaves no trace that the call was paid, and the next batch pays again (scenario 3). |
+| :78-79 | `attempts += 1; status = "failed" if attempts >= 3 else "pending"` | No `next_attempt_at`: a failed row is retried by the very next batch (5 minutes later) and parked as `failed` after 15 minutes. The row's own `max_attempts` column (default 5) is ignored. |
+
+F28's rulings that this change keeps: R4 (a database error fails the batch at once), R13 (a batch that tried items and completed none raises `BatchFailed`; a batch that claimed work or failed writes one `embed` row; an empty queue and a missing key write none), R19 (the recording wrapper owns the counters, `BatchCounts`), R21-R23 and R26 (the interruption family re-raises; an interrupted batch is recorded as failed; the item in flight stays `pending` with its attempt count unchanged), R7 (no Celery retry for the embedding task). F28's tests (`tests/test_f28_*`) pin all of that and run unchanged.
+
+The provider budget today (F19 and FA-D3C-002): the only provider import in the corpus is `embeddings.py:openai`, allowlisted in `ci_gates/g0_guard_allowlist.json`; one request per row with `text-embedding-3-small`, at most 50 rows per batch, beat every 300 s, and a 0.6 s pause between requests (100 requests a minute). This change keeps all of it (R15).
+
+## 2. Rulings
+
+**R1. Claim: one statement, before any provider call.** A batch draws a fresh lease token (a UUID) and claims with
+
+```sql
+WITH due AS (
+  SELECT id FROM embedding_queue
+   WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+   ORDER BY priority DESC, created_at, id
+   LIMIT 50
+   FOR UPDATE SKIP LOCKED)
+UPDATE embedding_queue q
+   SET status = 'processing', lease_owner = :token, lease_expires_at = now() + :lease,
+       last_attempt_at = now(), updated_at = now()
+  FROM due WHERE q.id = due.id
+RETURNING ...
+```
+
+committed on its own before the first provider call. Two concurrent claims never return the same row: the second skips rows the first has locked, and after the first commits those rows are `processing`. The order is the model's own ("priority: higher = earlier"), then age. *Reason:* the finding's "claim bounded rows transactionally with leases". *Steelman for holding a row lock across the call instead:* simpler, no lease column. Rejected: it ties a database transaction to a paid network call, and a crash then rolls the claim back and leaves nothing behind, which is exactly scenario 3.
+
+**R2. Lease length and fencing.** `LEASE = 3900 s`, Celery's `task_time_limit` (3600 s) plus 300 s. The hard limit kills a worker child at 3600 s after the task started, and the claim happens after the task started, so a live batch never outlasts its lease. A test pins `LEASE > task_time_limit`. Every write to a claimed row is fenced: `WHERE id = :id AND lease_owner = :token AND status = 'processing'`. A fenced write that matches nothing raises `LeaseLost`, which fails the batch (it cannot happen inside the time limits; if it does, it is loud). The database enforces `status = 'processing'` exactly when a lease is held (`ck_embedding_lease_held`).
+
+**R3. Lease recovery is a new bounded reclaim, not F28's R24 sweep.** Before it claims, each batch reclaims up to 50 rows whose lease has expired, by the same `UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED)` shape, so two concurrent reclaims never count the same row twice. Each reclaimed row is a failed attempt, counted once: `attempts + 1`, `error_type = 'lease_expired'`, back to `pending` with R8's backoff, or `dead_letter` (`max_attempts`) when that was its last attempt. In the same transaction the reclaimed rows' `started` receipts become `abandoned`, and so does any `started` receipt older than `LEASE` (an orphan whose queue row was removed). `answered` receipts are kept (R6). *Reason:* R24 closes a source's `running` `scraper_jobs` row; an embedding batch writes its row only at the end (R13), so there is nothing to sweep there, and the unit of recovery here is the queue row, not the run.
+
+**R4. Stable operation identity.** `operation_id = sha256(canonical JSON ["f27-embedding-op-v1", table, record id, model, dimensions, sha256(text)])`, 64 hex characters, where `text` is exactly what is sent to the provider. The text itself is unchanged from main (citation, title and the first 2000 characters; F45 owns the representation), now read with `substr(..., 1, 2000)` in SQL so a batch never loads a whole judgment. A record whose text changes gets a new operation and is paid for once more; the same operation is never paid for twice (R6, R7). The queue row keeps the operation of its current attempt (`operation_id`) and the operation whose vector the record holds (`stored_operation_id`); a CHECK keeps both to 64 lower-case hex characters.
+
+**R5. Attempt receipts: a table, `embedding_attempts`.** One row per provider attempt, never holding the input text, the key or a provider message:
+
+| Column | Meaning |
+| --- | --- |
+| `operation_id`, `queue_id`, `table_name`, `record_id`, `model`, `dimensions` | what was asked for (no foreign key: the receipt outlives its queue row) |
+| `lease_owner`, `attempt` | the batch and the row's attempt number |
+| `outcome` | `started` (committed before the call), `answered` (committed right after the call), `stored`, `failed`, `superseded`, `abandoned`, `interrupted` |
+| `started_at`, `answered_at`, `finished_at`, `token_count`, `error_type` | timing, usage, the error class or code (`outcomes.error_key`) |
+| `embedding` | the answered vector, held only while the receipt is `answered`; cleared when stored or superseded (CHECK) |
+| `reconciled` | stored by a later batch from this receipt's held vector, without a second call |
+
+A unique partial index allows at most one unresolved (`started` or `answered`) receipt per operation, so the database refuses a second provider attempt for an operation while one is in flight or answered and unstored. *Reason:* the finding's "persist provider attempt receipts" and the brief's "visible where it was not [stored]". A table, not columns on the queue row, because a row has several attempts and recovery looks receipts up by operation. *Steelman against holding the vector:* a receipt then carries embedding data. It is derived data, not text or a secret, the same vector the record will hold; the table is an application table (runtime role only, never granted to `corpus_reader`, so FA-DATA-003 does not apply); and it is what makes a crash after the answer reconcilable without paying again.
+
+**R6. Reuse before paying.** For each claimed row, before any call: (a) if `stored_operation_id` equals the operation and the record holds a vector, the row is completed with no call; (b) if an `answered` receipt for the operation holds a vector (a batch that died, was interrupted or failed after the answer), that vector is stored, the receipt becomes `stored` with `reconciled = true`, and no call is made. Both count as completed items (`reused` in the summary).
+
+**R7. The store verifies the operation under the record's lock.** The vector, the queue row's `completed` (fenced) and the receipt's `stored` are one transaction that first reads the record `FOR UPDATE` and recomputes the operation. If the text changed during the call, nothing is stored: the receipt becomes `superseded` (vector dropped), the row goes back to `pending`, due at once, its attempt not charged, and the next batch embeds the new text under its new operation. A record deleted during the call is dead-lettered (`record_missing`). Older `answered` receipts of the same record under another operation are superseded in the same transaction, so held vectors cannot pile up.
+
+**R8. Retry timing.** A failed provider attempt (the client raised, or answered something that is not a finite vector of the row's dimensions: `malformed_response`) charges the row once: `attempts + 1`; `next_attempt_at = now() + outcomes.retry_countdown(attempts - 1)` (300, 600, 1200, 2400 s, capped at 3600, F28's formula); at `attempts >= max_attempts` (the row's own column, default 5) the row becomes `dead_letter` with `error_type = 'max_attempts'` and `error_message` describing the last failure (`outcomes.describe_error`, credentials redacted). The claim takes only due rows. `attempts` keeps F28's meaning, failed attempts: a success leaves it unchanged. *Supersedes* F28 R7's "(3)" and main's `failed` after three back-to-back tries: main ignored the row's `max_attempts` and had no delay, so a 15-minute provider outage parked rows for good.
+
+**R9. Bad input goes to the dead letter with a reason code and never holds a window again.** `unknown_table` (not `case_law_master` or `statutes_master`), `unsupported_model` (the row's model and dimensions are not `text-embedding-3-small` / 1536, the only pair the `vector(1536)` columns hold), `record_missing`, `empty_text` (empty or whitespace only), `malformed_text` (no letter or digit at all). Status `dead_letter`, the code in `error_type` (`ck_embedding_dead_letter_reason`: a dead letter always has one), no provider call. The claim takes only `pending` rows, so a dead letter is never claimed again. Dead letters for bad input are not provider attempts and are not in the batch tally; they are counted in the summary (`dead_lettered`, `dead_letter_reasons`; `missing` keeps counting `record_missing`) and alerted (R11).
+
+**R10. A batch that ends abnormally gives back what it holds.** On an interruption (R26), every row the batch still holds goes back to `pending` with its attempt count unchanged, and its `started` receipt becomes `interrupted` (the call may or may not have been billed; the receipt says so). `answered` receipts are kept for R6. On a database error, or any other exception escaping an item, that item is charged once (it may be the cause; uncharged, a poison row at the head of the queue would fail every batch), the rest go back uncharged, and the exception is re-raised for F28's recording (R4, R13, R19 unchanged). The give-back runs in a fresh session and never replaces the batch's own exception; if it cannot run (the database is gone), the leases expire and R3 recovers the rows.
+
+**R11. Alerts go through F28's corpus alert path.** Each batch that has a key (an empty one too) evaluates two alerts and logs each at ERROR as `F28 source alert: embedding_queue <alert>`, the line F28 logs for sources, and keeps them in the summary and the `embed` record when one is written: `backlog_stale` when the oldest row still waiting (`pending` or `processing`) was queued more than 24 hours ago, and `dead_letter` when the batch dead-lettered rows (with the reasons and the dead-letter total, which counts legacy `failed` rows too, capped at 10 000). *Steelman for repeating the dead-letter alert every batch while any exist:* nothing is missed. Rejected: every 5 minutes for as long as one row sits there is noise that trains operators to ignore the line; the total is in every summary, and a stale backlog keeps alerting on its own.
+
+**R12. What a batch records.** F28 R13's "a batch that claimed work" now also covers a batch that reclaimed expired leases. The summary keeps `outcome`, `claimed`, `completed`, `failed`, `missing`, `errors` and adds `reclaimed`, `dead_lettered`, `dead_letter_reasons`, `reused`, `superseded`, `released`, `provider_calls`, `dead_letter_total` and `alerts`.
+
+**R13. Bounded cost.** Per batch: one claim of at most 50 rows, one reclaim of at most 50, per row a bounded record read (four columns, 2000 characters of text), and alert queries backed by partial indexes (`ix_embedding_waiting_created`, the status index) with the dead-letter count capped. The backlog drains over runs; nothing in a batch grows with the queue.
+
+**R14. Schema: migration 004 and the model, the same definitions.** `embedding_queue` gains `lease_owner`, `lease_expires_at`, `operation_id`, `stored_operation_id`, the CHECKs of R2, R4 and R9 and three partial indexes (the claim order, the lease expiry, the waiting age). `embedding_attempts` is created by the ORM's `create_all` (which `python -m scraper.migrate` runs first) for new and existing databases alike. Migration 004 reads the catalog and adds only what is missing, so a current database gets no DDL at all (it never needs ownership of a table it does not change). Before it adds the lease CHECK, it moves any `processing` row (main never wrote one; only a hand edit could) back to `pending`, uncharged. Legacy `failed` rows are left as they are and counted in the dead-letter total. It does not depend on 003 (#82): either can merge first.
+
+**R15. The provider budget is kept.** The call stays in `embeddings.py` (the allowlisted file and symbol), with the same client construction, model and one request per row; the 0.6 s pause now follows every provider call, failed ones included (main paused only after a success). No new dependency.
+
+**R16. Least privilege.** The worker runs as the runtime role (DML only). It needs `SELECT ... FOR UPDATE` and `UPDATE ... RETURNING` on both tables: production grants it DML on every table the migration role creates (`provision-roles.sh` default privileges); the test fixture's `ORM_TABLES` gains `embedding_attempts`, and a test runs a batch as that role.
+
+## 3. What is not changed or not solved
+
+- The provider can bill a request whose answer never reaches the worker (a kill or interruption during the call). The receipt then reads `abandoned` or `interrupted`: visible, not reconcilable, since the embeddings API has no idempotency key. Recorded as a residual risk.
+- The OpenAI SDK's own retries inside one attempt are unchanged: the client is built as on main (`AsyncOpenAI(api_key=...)`), which F28's tests pin.
+- Receipts are not pruned. Growth is one row per provider attempt. Follow-up: retention.
+- There is no requeue tool for dead letters; an operator sets `status = 'pending', attempts = 0` (documented in the README).
+- Annex A's `corpus_embeddings` is still not filled (F19 spec section 7 left embeddings for Annex A to F27/F45). The finding is about the queue's claim, lease, identity, receipts and retries; filling Annex A needs F45's chunking. Follow-up.
+
+## 4. Tests (section 5 of the plan has the ledger)
+
+The real flow: the `process-embeddings` beat entry's task (`scraper.tasks.embeddings.process_embedding_queue`) run in process with `Task.apply` (as F28's tests do), and in a real `celery worker --pool=prefork` (F28's filesystem broker harness) for the two cases that need real processes, against a fresh Postgres 16 + pgvector database migrated by `python -m scraper.migrate`, with the Annex A DDL applied twice to the server's own database as CI does. The OpenAI package is the one stand-in, an in-process module that counts calls (no network, no key-shaped value).
+
+RED on main (expected failures): two worker children over the same 50 rows each pay for most rows; 50 missing-record rows hold the whole 50-row window in each of three runs while valid rows wait; a worker killed after the provider answered leaves no receipt, and the next batch pays again; a failed row is retried at once and parked `failed` after three; a re-queued unchanged operation is paid again; a record changed during the call is stored with the stale vector; no alert.
+
+GREEN: one provider call per operation under concurrency, every row embedded once; dead letters with reason codes, never re-claimed; retries wait for `next_attempt_at` and dead-letter after `max_attempts`; a killed batch's row returns after its lease expires with the attempt counted once and the receipt showing the paid call, then is stored from the receipt with no second call; F28's tests unchanged and green.
