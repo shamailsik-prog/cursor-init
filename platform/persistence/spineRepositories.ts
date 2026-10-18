@@ -175,6 +175,7 @@ import {
   AuditAppendConflictError,
   auditRowsEqual,
 } from "@/platform/persistence/auditAppendConflictError"
+import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
 
 export { AuditAppendConflictError }
 
@@ -3121,7 +3122,10 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.auditDeadLetters.push(letter)
       },
       async listByFirm(firmId) {
-        return [...store.auditDeadLetters]
+        // Audit F11 / F12 re-audit LOW-2: the firm's letters only, as the Firestore adapter lists them (the owning
+        // firm when the letter names one, else its row's firm).
+        const firm = requireCallerFirmId(firmId, "auditDeadLetter.listByFirm")
+        return store.auditDeadLetters.filter((letter) => (letter.firmId ?? letter.row.firmId) === firm)
       },
     },
     audit: {

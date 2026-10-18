@@ -72,7 +72,8 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   d1ConflictClientWritten: "Firestore trigger, no caller; on a client written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
   d1ConflictPartyWritten: "Firestore trigger, no caller; on a matter party written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
   d1ConflictIndexChunkWritten: "Firestore trigger, no caller; on a name removed from a chunk, breaks only that chunk's firm's name index (audit F37 re-audit)",
-  p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)"
+  p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)",
+  auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
 }
 
 /**

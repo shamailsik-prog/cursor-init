@@ -154,6 +154,9 @@ jobs:
           key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: firebase-emulators-${{ runner.os }}-
       - run: npm ci
+      # The audit F18 e2e (tests/f18-legacy-ai-path.e2e.firestore.test.ts) serves the real Functions `api` router in process.
+      - name: Functions install
+        run: npm --prefix functions ci
       - name: Rules and persistence suites (Firestore emulator)
         run: npm run test:rules
 
@@ -554,7 +557,8 @@ jobs:
     # (twice) to the service database first, which creates the cluster-global corpus roles once
     # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Measured: main c02ebbc 8m03s; F27 branch (#87) 9m44s / 9m45s after F27's leased-claim e2e and prefork tests.
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16

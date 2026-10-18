@@ -19,14 +19,24 @@
  * Spec: docs/superpowers/specs/2026-10-16-f10-durable-next-idempotency-design.md.
  */
 import { createHash, randomUUID } from "node:crypto"
-import type { FenceTransaction, WriteFence } from "@/platform/persistence/firestoreDbModular"
+import { AUDIT_OUTBOX_COLLECTION } from "@/platform/persistence/auditOutboxContract"
+import type { FenceTransaction, OutboxStage, WriteFence } from "@/platform/persistence/firestoreDbModular"
 
 export const KEYS_COLLECTION = "idempotency_keys"
 export const EFFECTS_COLLECTION = "idempotency_effects"
 /** A Firestore document holds at most 1 MiB; a larger completed answer is kept as `omitted` (replay unavailable). */
 export const DURABLE_MAX_RESPONSE_BYTES = 900_000
-/** Collections the fence does not cover: audit rows record a decision (a refusal writes them too), not an effect. */
-export const UNFENCED_COLLECTIONS: readonly string[] = ["audit_log", "audit_dead_letter", KEYS_COLLECTION, EFFECTS_COLLECTION]
+/**
+ * Collections the fence does not cover: audit rows record a decision (a refusal writes them too), not an effect. The F11
+ * audit outbox is the audit of an effect, staged inside that effect's own transaction and released after the flush.
+ */
+export const UNFENCED_COLLECTIONS: readonly string[] = [
+  "audit_log",
+  "audit_dead_letter",
+  AUDIT_OUTBOX_COLLECTION,
+  KEYS_COLLECTION,
+  EFFECTS_COLLECTION,
+]
 /** Settle retries after the first attempt, waiting 100, 200 then 400 ms (as F09). */
 const SETTLE_RETRIES = 3
 
@@ -299,7 +309,10 @@ export class DurableIdempotencyStore {
    * The write fence of `claim` (spec §2.3). `onRefusal` is told when a fenced write is refused, so the request can be
    * answered 409 with that code.
    */
-  fence(claim: DurableClaimRef, onRefusal: (code: IdempotencyFenceError["code"]) => void): WriteFence & { markEffect(kind: string): Promise<void> } {
+  fence(
+    claim: DurableClaimRef,
+    onRefusal: (code: IdempotencyFenceError["code"]) => void
+  ): WriteFence & { markEffect(kind: string, outbox?: OutboxStage | null): Promise<void> } {
     const covers = (path: string) => !UNFENCED_COLLECTIONS.includes(path.split("/")[0] ?? "")
     const transact = async <T>(db: unknown, stage: (tx: FenceTransaction, note: (path: string) => void) => Promise<T>, kind = "transaction", forced = false): Promise<T> => {
       await seam().beforeFencedWrite?.(claim.docId)
@@ -344,9 +357,12 @@ export class DurableIdempotencyStore {
     }
     return {
       covers,
+      operationId: claim.operationId,
       transact: (db, stage) => transact(db, stage),
-      markEffect: async (kind) => {
-        await transact(this.db, async () => undefined, kind, true)
+      // Audit F11: the outbox entry of an external effect commits with its marker, before the effect happens.
+      markEffect: async (kind, outbox) => {
+        await transact(this.db, async (tx) => outbox?.stage(tx, this.db), kind, true)
+        outbox?.committed()
       },
     }
   }
