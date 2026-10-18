@@ -241,24 +241,49 @@ unauthenticated; `/export/cases` (`scraper/routers/export.py`) needs the admin k
 - **Summary DTOs.** Lists return `{"items": [...], "next_cursor": ...}` with summary fields only (no
   text column). Detail routes add the text. No public response carries `embedding`, `search_text`,
   quality fields or provenance (`source_site`, `source_url`, `source_file_path`).
-- **Bounds.** `limit` is 1-100 (`/search` default 10, `/statutes` default 20); out of range is `422`,
-  never clamped. `q` and `statute_name` are trimmed, 2-200 characters, contain no control
-  characters and are not only `%`, `_`, `\` and whitespace (`422`); `%`, `_` and `\` then match
+- **Bounds.** `limit` is 1-100 in plain ASCII digits (`/search` default 10, `/statutes` default 20);
+  anything else (`0`, `101`, `10.0`, `+10`, ` 10`, `1_0`) is `422`, never clamped. `q` and
+  `statute_name` are trimmed, 2-200 characters, contain no control characters and are not only
+  `%`, `_`, `\` and whitespace (`422`); `%`, `_` and `\` then match
   literally (`ILIKE ... ESCAPE '\'`). Pages are keyset pages on the primary key; the cursor is
   opaque, and a malformed one is `400`.
-- **Timeout and quota.** Each request runs in one `READ ONLY` transaction with a transaction-local
-  `statement_timeout` (`PUBLIC_QUERY_TIMEOUT_MS`, default 3000); a cancelled statement is `503` with
-  `Retry-After: 1`. Each client address gets `PUBLIC_RATE_LIMIT_REQUESTS` (60) requests per
-  `PUBLIC_RATE_LIMIT_WINDOW_SECONDS` (60), then `429` with `Retry-After`. The limiter is in-process
-  and keyed by the peer address: behind a reverse proxy, run uvicorn with `--forwarded-allow-ips`
-  naming the proxy, or every client shares one bucket.
+- **Timeout, quota and load cap.** Each request runs in one `READ ONLY` transaction with a
+  transaction-local `statement_timeout` (`PUBLIC_QUERY_TIMEOUT_MS`, default 3000); a cancelled
+  statement is `503` with `Retry-After: 1`. At most `PUBLIC_DB_CONCURRENCY` (8) public reads run at
+  once per process; the next is `503` at once, without waiting. A connection that cannot be had
+  (pool exhausted, database refused or unreachable) is also `503`, never `500`. Each client gets
+  `PUBLIC_RATE_LIMIT_REQUESTS` (60) requests per `PUBLIC_RATE_LIMIT_WINDOW_SECONDS` (60), then `429`
+  with `Retry-After`. A client is its network: an IPv6 /64 or an IPv4 address (IPv4-mapped IPv6
+  counts as IPv4). The table of clients is bounded (`PUBLIC_RATE_LIMIT_MAX_CLIENTS`); when it is
+  full, new clients share one overflow bucket, so rotating addresses never mints fresh quota.
+  `/docs`, `/redoc`, `/openapi.json` and `/dashboard` share the same quota (`/health` is F44's route).
 - **Export.** `format` is `csv` or `jsonl` (`422` otherwise). Published rows only, in id order, at
-  most `EXPORT_MAX_ROWS` (50,000), streamed from a server-side cursor in chunks of
-  `EXPORT_CHUNK_ROWS` (500) under `EXPORT_QUERY_TIMEOUT_MS` (60,000). `X-Export-Row-Cap` gives the
-  cap and `X-Export-Truncated` says whether more published rows existed when the export started.
+  most `EXPORT_MAX_ROWS` (50,000), read in keyset batches of `EXPORT_CHUNK_ROWS` (500). Each batch is
+  its own short read-only transaction (`EXPORT_QUERY_TIMEOUT_MS`, 60,000, per batch), so no database
+  connection is held while the client downloads. `EXPORT_DEADLINE_SECONDS` (120) bounds the whole
+  export, database reads and sends together; past it the transfer is cut without its final chunk.
+  `EXPORT_MAX_CONCURRENT` (2) exports run at once; the next is `503`. CSV cells that start with `=`,
+  `+`, `-`, `@`, a tab or a carriage return get a leading `'` (formula injection); JSONL is exact.
+  `X-Export-Row-Cap` gives the cap and `X-Export-Truncated` says whether more published rows existed
+  when the export started.
 
-**Tests.** `tests/test_f24_public_corpus_db.py` drives the real app against Postgres (needs
-`CORPUS_TEST_DATABASE_URL`); `tests/test_f24_public_corpus_bounds.py` needs no database.
+**Deploy step: the trusted proxy (`FORWARDED_ALLOW_IPS`).** The quota keys on the client address
+uvicorn reports. uvicorn replaces the peer address with the X-Forwarded-For client only for a peer
+listed in `FORWARDED_ALLOW_IPS`, which it reads from the environment; `app.env` sets it to
+`127.0.0.1`, uvicorn's own default. Behind the TLS reverse proxy, set it in `app.env` to the proxy's
+address as the `api` container sees it, as an IP or a CIDR. With the compose file's loopback port
+binding that is a Docker bridge gateway, not the host's loopback; the warning below names the peer
+address the api actually sees. Leaving it at loopback puts every
+client in the proxy's one bucket; `*`, or any address other than the proxy, lets whoever connects
+from there choose a client's key (and uvicorn trusts any peer listed, loopback included). In
+production the api logs a warning at startup while the setting is loopback-only, unset or `*`, and
+once per process when X-Forwarded-For arrives from a peer it does not trust.
+
+**Tests.** `tests/test_f24_public_corpus_db.py` and `tests/test_f24_r2_db.py` (the re-audit round)
+drive the real app against Postgres (need `CORPUS_TEST_DATABASE_URL`);
+`tests/test_f24_public_corpus_bounds.py` and `tests/test_f24_r2_bounds.py` need no database. The
+routers may use only `scraper/public_corpus.py`'s public API; `tests/test_trust_policy.py`
+(`PublicCorpusReadGuardTests`) enforces it.
 
 ## Quick start (no Docker)
 

@@ -120,3 +120,76 @@ Mutation checks (`public_corpus.py` mutated, then restored and its sha256 verifi
 | Claim gate `ci_gates/check_pr_phase_claims.py` on the PR body | recorded in the PR body |
 
 No TypeScript changed, so the root unit, typecheck and lint gates do not apply. Local Python is 3.11.15 with the CI pins (fastapi 0.142.2, sqlalchemy 2.1.3, asyncpg 0.32.0); CI runs 3.12.
+
+## Re-audit round (FAIL 7/10 at 4cbc081)
+
+Findings: MEDIUM R1 (a: IPv6 /64 rotation, b: LRU eviction resets buckets, c: no aggregate DB load cap, d: pool exhaustion is 500); LOWs L1 (trusted proxy implicit), L2 (limiter header policy, mutant M39), L3 (export deadline per FETCH only, mutant M46), L4 (CSV formula injection), L5 (AST guard blind to read SQL and re-exports), M14 (export buffering mutant), strict `limit` parsing, the anonymous pages outside the router. Copilot thread 4305228825 (export transaction held across `yield`) is folded into L3. Rulings: spec section 5.
+
+### Tasks
+
+- [x] Merge `origin/main` (F25, #65) into the branch: 7f92853 (clean). Baseline there: 484 passed, 131 subtests.
+- [x] RED tests: `tests/test_f24_r2_bounds.py` (no database), `tests/test_f24_r2_db.py` (real Postgres), `PublicCorpusReadGuardTests` in `tests/test_trust_policy.py`. Commit 3f6885e.
+- [x] Settings: `PUBLIC_DB_CONCURRENCY`, `EXPORT_MAX_CONCURRENT`, `EXPORT_DEADLINE_SECONDS`.
+- [x] `scraper/rate_limit.py`: `client_key` (/64, /32, mapped, non-IP), reclaim-only-refilled plus the overflow bucket, `RateLimitedPathsMiddleware`.
+- [x] `scraper/client_identity.py`: startup and once-per-process warnings for `FORWARDED_ALLOW_IPS`.
+- [x] `scraper/public_corpus.py`: `ConcurrencyGate` (public and export), connection acquisition apart (`DatabaseUnavailable`) and the 503 mapping, `limit_param`, the routers' API, keyset export batches with the deadline.
+- [x] Routers on the public API; `DeadlineStreamingResponse`; `csv_safe_cell`; `main.py` (middleware, startup warning); `app.env` (`FORWARDED_ALLOW_IPS`).
+- [x] AST guard: re-export resolution, `scan_source_for_master_reads`, `public_router_violations`, `public_corpus_read_violations`.
+- [x] Mutation check of the new tests; full suite; compose policy; G-0; spec, README, ledger; PR body; claim gate.
+
+### Ledger: RED (round 2)
+
+Tree 7f92853 (F24 code as at 4cbc081, F25 merged); same environment as round 1.
+
+| Command | Result |
+| --- | --- |
+| `python -m pytest corpus_service/tests/test_f24_r2_bounds.py corpus_service/tests/test_f24_r2_db.py "corpus_service/tests/test_trust_policy.py::PublicCorpusReadGuardTests" -q -rfE` | **60 failed, 15 passed** |
+
+Decisive lines:
+- R1a: `one /64, a new address per request: [200, 200, ..., 200]` (20 x 200 at quota 3)
+- R1b: `1010 of 1010 requests allowed`; `303 of 303 requests got past the quota` (through the app)
+- R1c: `the third concurrent read: status 200 ... after 5.91s` (no cap: it waited for the lock)
+- R1d: `pool exhausted: 500 after 0.51s: Internal Server Error`; 500 for each simulated acquisition failure
+- strict limit: `/search limit='10.0' was served: status 200: 10 rows` (also `+10`, ` 10`, `1_0`)
+- L3 + Copilot: `a stalled download kept 1 pooled connection(s) checked out`; `DID NOT RAISE` (an export ran past a 1 s deadline); `pooled connections checked out at each yield: [1, 1, 1]`
+- L4: `[['=HYPERLINK("http://evil.invalid","x")', "+cmd|' /C calc'!A0", '@SUM(1+1)', '2099']]`
+- pages: `/openapi.json`, `/docs`, `/redoc`, `/dashboard` at quota 2: `[200, 200, 200]`
+- L5: four re-export forms missed by the scan; the read scan, router guard and read policy did not exist
+
+The 15 passes at RED are by design: six limit values 4cbc081 already refused, four plain-digit acceptances, the control that a programming error stays 500, and the mutant killers for M02, M39 (two) and M46, which pass on correct code.
+
+### Ledger: GREEN (round 2)
+
+Commit 6d947d2.
+
+| Command | Result |
+| --- | --- |
+| the round-2 set (as above) | **75 passed**, 26 subtests |
+| all F24 files plus `test_trust_policy.py` | **195 passed**, 110 subtests |
+| full suite: `CI=1 CORPUS_TEST_DATABASE_URL=... python -m pytest corpus_service/tests -q` | **559 passed**, 157 subtests, 0 skipped (merged baseline 484 + 75) |
+| `python3 ci_gates/check_compose_policy.py corpus_service/docker-compose.yml`; `python3 ci_gates/test_check_compose_policy.py` | PASS; 19 tests OK |
+| `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===` |
+
+Mutation check (`scratchpad/f24r2_mutants.py`; each mutant applied to a source file, the targeted tests run, the file restored and its sha256 verified): **23 of 24 killed**. It ran on the fix just before two cleanups: the dead branch named in the last row was removed, and the compose edit was reverted (see the test change below). Neither touches a mutated line other than the removed branch.
+
+| Mutant | Killed by |
+| --- | --- |
+| R1a-1 raw address as key; R1a-2 mapped IPv6 not folded; R1a-3 non-IP values keep own key | `test_r1a_client_key_groups_ipv6_by_64_and_ipv4_by_32`, `test_r1a_non_ip_peers_share_one_key` |
+| R1b-1 LRU eviction resets buckets; R1b-2 no overflow bucket | `test_r1b_more_keys_than_the_table_cannot_bypass_the_quota[101]` |
+| R1c-1 no cap; R1c-2 slot leaked on failure | `test_r1c_the_cap_refuses_the_next_concurrent_read_with_503` |
+| R1d-1 acquisition failures not mapped | `test_r1d_connection_acquire_failures_are_503_through_the_app[...]` |
+| strict-1 lax integer parsing | `test_strict_limit_refuses_anything_but_ascii_digits[10.0]` |
+| M39 limiter keys on X-Forwarded-For | `test_m39_forwarding_headers_never_change_the_key` |
+| L1-1 no startup call; L1-2 loopback-only accepted | `test_l1_startup_logs_the_warning`, `test_l1_startup_warning_when_the_proxy_looks_unset[...]` |
+| L3-1 no response deadline; L3-2 no deadline at all; Copilot: one transaction held across every yield | `test_l3_stalled_consumer_releases_the_connection_at_the_deadline` |
+| M14 one batch of everything | `test_m14_export_reads_bounded_batches_and_holds_no_connection_between_them` |
+| M46 export reads without the statement timeout | `test_m46_the_export_statement_timeout_applies_to_its_reads` |
+| L4 cells not neutralised | `test_l4_csv_cells_starting_with_a_formula_character_are_quoted[...]` |
+| pages middleware not installed | `test_unauthenticated_pages_are_rate_limited[/openapi.json]` |
+| L5-1 re-exports unresolved; L5-2 helper API unenforced; L5-3 read SQL unscanned | `PublicCorpusReadGuardTests` |
+| M02 NULL trust accepted | `test_m02_published_predicates_have_no_null_escape` |
+| **survived:** R1d-2 the separate pool `TimeoutError` branch in the 503 mapper removed | equivalent: a checkout timeout only arises in `session.connection()`, which already maps it. The branch was dead code and was removed. |
+
+Tests changed after RED (round 2): `test_l1_compose_and_app_env_make_the_proxy_setting_explicit` no longer requires `--proxy-headers` in the compose command. That edit broke 14 F30 compose-policy fixtures, and the flag is uvicorn's default, so the test now requires `FORWARDED_ALLOW_IPS` in `app.env`, `env_file: app.env` on `api`, and no override in the command. The round-1 `test_buckets_are_per_key_and_the_table_is_bounded` had its comment changed only.
+
+Environment note: during the round the shared disk filled transiently (another builder's work) and the local Postgres cluster stopped. It was restarted, recovered cleanly, one leftover per-test database from the interrupted run was dropped, and every run recorded above was taken after that.

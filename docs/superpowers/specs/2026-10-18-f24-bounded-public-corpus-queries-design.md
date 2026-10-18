@@ -116,6 +116,8 @@ Why not slowapi: it is a new runtime dependency (and `limits`), would need addin
 
 ### Ruling 8: export stays admin-only, becomes published-only, streamed in bounded chunks with a cap
 
+> Superseded in part by the re-audit round (section 5, ruling R-L3): the server-side cursor held one transaction and one pooled connection across every `yield`, so a stalled download pinned a connection (Copilot thread 4305228825). The export now reads keyset batches in separate short transactions under one whole-export deadline. The round-1 text below is kept as the record of what was reviewed at 4cbc081.
+
 `GET /export/cases` keeps `require_admin_api_key` and its columns (CSV `citation,title,court,year`; JSONL `{"citation","title"}`). It now:
 - uses the ruling-1 predicate and an explicit column list;
 - accepts only `format=csv|jsonl` (422 otherwise; main silently fell back to CSV);
@@ -183,3 +185,74 @@ No database: LIKE escaping of `%`, `_`, `\` (and their combinations); `q` bounds
 6. **Admin list limits** on `/jobs` and `/quarantine` remain unbounded integers (admin-only, outside F24's affected routes; F23 is changing the quarantine router).
 7. **`/health`** still counts `case_law_master` unauthenticated (F44's route).
 8. **Short queries** (2 characters) cannot use the trigram indexes; they are bounded by the timeout and the quota.
+
+## 5. Re-audit round (FAIL 7/10)
+
+The independent re-audit of PR #64 at 4cbc081 returned **FAIL 7/10**. It confirmed the published-only boundary, the bounds, the DTOs, the cursor, READ ONLY with its timeout and the export cap: about 180 hostile probes found no leak and no 500, and 42 of 46 mutants were killed. It left one MEDIUM (R1) and several LOWs open, and four mutants survived (M02, M14, M39, M46). Copilot's review thread 4305228825 on `public_corpus.py` (an export transaction held across `yield`) overlaps L3 and is fixed with it. The evidence is in the builder's scratchpad (`reaudit-f24/`); the RED and GREEN record is in the plan ledger.
+
+Before this round `origin/main` (F25, #65) was merged into the branch (7f92853, a clean merge), so the round's RED and GREEN ran on the combined tree.
+
+### Rulings
+
+**R-R1a: the quota key is the client's network.** `rate_limit.client_key` reduces the peer address to its /64 for IPv6 and its /32 for IPv4. IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is the IPv4 address, and an IPv6 zone index is dropped. One IPv6 host commonly owns a whole /64, so per-address keys let it mint a bucket per request: the auditor saw 20 x 200 and 0 x 429 inside one /64. A peer value that is not an IP address shares one key (`non-ip`). That covers a test client name, a unix socket, and a malformed X-Forwarded-For value that a trusted proxy passes through (uvicorn then sets it as the client host). Without that, such a proxy would reopen rotation through arbitrary strings.
+
+**R-R1b: eviction never hands out a fresh bucket; new keys share an overflow bucket.** When the key table (`PUBLIC_RATE_LIMIT_MAX_CLIENTS`) is full, a new key takes the slot of the least recently used bucket only if that bucket has refilled to capacity: dropping a full bucket gives nothing away. Otherwise the new key shares one overflow bucket with every other key that found the table full. Cycling 101 keys against 100 slots now allows 101 of 1,010 requests (4cbc081: 1,010). Only the head of the LRU is checked, which keeps the cost O(1) per request. A full bucket deeper in the table is missed, and its new key goes to the overflow bucket, which errs on the strict side.
+
+- *Steelman for failing closed (429 for every new key while the table is full).* Simpler, and no key ever gets unearned tokens. *Answer.* It turns the table into a lockout switch. An attacker with a /48 holds 65,536 /64s; by keeping 10,000 buckets busy he would shut out every new legitimate client for as long as he likes. The overflow bucket bounds his gain to one extra bucket and still serves new clients, degraded, under that attack.
+- *Devil's advocate.* Under that attack, legitimate new clients compete with the attacker's overflow keys for one bucket. That is residual R2-1: per-process limiting cannot tell them apart; a distributed limiter with reputation can.
+
+**R-R1c: a process-wide cap on concurrent public reads, never waiting.** `ConcurrencyGate` is a counter under a threading lock, shared by every event loop and thread in the process. `fetch_rows` takes a slot before it opens a session and gives it back in `finally`. The cap is `PUBLIC_DB_CONCURRENCY`: default 8, bounded 1-40, against a pool of 20 + 30 overflow. The next read gets **503** `too many concurrent queries` with `Retry-After: 1` at once. Exports have their own gate, `EXPORT_MAX_CONCURRENT` (default 2), so admin exports and public reads cannot starve each other, and aggregate corpus-read load is at most 8 + 2 connections.
+
+- *Steelman for a short wait.* A burst of nine legitimate requests gets one 503 that a 50 ms wait would have absorbed. *Answer.* Public reads take milliseconds and run under a 3 s timeout; Retry-After is 1 s. A waiting gate queues work under attack, which is the latency amplification the auditor measured (a victim's trivial search delayed 1.47-2.43 s). It would also need an event-loop-bound primitive. Never waiting is deterministic and testable.
+
+**R-R1d: a connection that cannot be had is 503, never 500.** `public_read_session` acquires the connection on its own (`session.connection()`) before the transaction setup. Every failure there becomes `DatabaseUnavailable` and then **503** `database unavailable` with `Retry-After: 1`: the pool's checkout `TimeoutError`, a DBAPI connect error, an `OSError` such as connection refused, a connect timeout. A connection found dead mid-query (`connection_invalidated`) is also 503, as is the statement timeout. Any other database error still propagates as 500, so a programming error is not disguised as a retryable condition. No driver message reaches the client.
+
+**R-strict-limit: plain ASCII digits.** `limit` is parsed by `public_corpus.limit_param`. It accepts 1-3 ASCII digits with a value from 1 to 100, and anything else gets 422 with a fixed message before any database work. Pydantic's lax integer parsing had accepted `10.0`, `+10`, ` 10`, `10 ` and `1_0` as 10. The OpenAPI type of `limit` is now a string documented as ASCII digits.
+
+**R-L1 / R-L2: the trusted proxy is an explicit, documented deploy step, and a wrong value is logged.**
+- **The setting.** uvicorn applies X-Forwarded-For only for peers in `FORWARDED_ALLOW_IPS`, which it reads from the environment (default `127.0.0.1`), and `--proxy-headers` is its default. `app.env`, which compose hands to the `api` service, now sets `FORWARDED_ALLOW_IPS=127.0.0.1` explicitly, with the deploy step beside it.
+- **Why it is a deploy step.** The right value is the proxy's address as the api container sees it, which only the deployment knows. The compose file publishes the API on host loopback for an external TLS proxy, so the peer is the bridge gateway.
+- **Why the compose command is unchanged.** The F30 compose-policy fixtures (`ci_gates/fixtures/shipped_attacks.py`) anchor on its exact text, and the variable already reaches uvicorn through `app.env`.
+- **The warnings.** `client_identity.log_forwarded_trust_at_startup` warns in production when the setting is unset, loopback-only or `*`. `note_ignored_forwarding`, a public-router dependency, warns once per process when X-Forwarded-For arrives from a peer uvicorn did not trust. It logs the peer address and never the header's content.
+- **L2.** Any peer in `FORWARDED_ALLOW_IPS` can choose the address a client is keyed by, so the value must be exactly the proxy. The limiter itself reads no header: it keys on `request.client` only, and a behavioural test plus a static test kill M39.
+
+**R-L3 (and Copilot 4305228825): keyset batches, no connection across a yield, and one deadline for the whole export.**
+- **Batches.** `stream_export_cases` reads keyset batches of `EXPORT_CHUNK_ROWS`, each through `read_rows` in its own short READ ONLY transaction. Each batch's statement timeout is the smaller of `EXPORT_QUERY_TIMEOUT_MS` and the time left. The session is closed and its connection back in the pool before a batch is yielded, so a slow or stalled download holds no connection.
+- **The deadline.** `EXPORT_DEADLINE_SECONDS` (default 120, bounded 1-3600) runs from the start of the request. It is enforced twice:
+  - between batches, by `stream_export_cases`;
+  - over the response, including every send, by `DeadlineStreamingResponse`. This wraps Starlette's response in `anyio.move_on_after`, which cancels a send blocked on a client that stopped reading.
+- **Cleanup.** It is in `finally` blocks and async context managers. The response closes the body generator, which closes the batch stream and releases the export slot. When the deadline cuts a response, `ExportDeadlineExceeded` is raised after the response has started, so the server ends the transfer without its final chunk and no client takes a cut export for a whole one.
+- **Before the response starts.** The truncation probe and the first batch are read first, so a timeout or an unavailable database there is a 503, not a cut stream.
+- *Steelman for the round-1 design (one transaction, one snapshot).* A single REPEATABLE READ-like snapshot gives a self-consistent export. *Answer.* A snapshot that lives as long as the slowest client is exactly the defect: it pins a pooled connection and an open transaction for as long as the download stalls. Keyset batches on the primary key never duplicate a row. A row published or withdrawn during the export may or may not appear, which is residual R2-4, and the truncation header was already advisory.
+
+**R-L4: CSV formula cells are neutralised.** `export.csv_safe_cell` prefixes a single quote to any CSV cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (OWASP CSV injection). JSONL is data for programs, not a spreadsheet, and is left exact.
+
+**R-L5: the routers use the helper's public API and nothing else.** The guard has three parts, all in `tests/test_trust_policy.py`.
+- **Re-exports resolve.** The master-table AST scan treats a master class reached through any `scraper.*` module as a master class: `pc.CaseLawMaster`, or `from scraper.public_corpus import CaseLawMaster`. This only makes it stricter.
+- **Read SQL is scanned.** A separate read scan (`scan_source_for_master_reads`) sees read SQL in strings, docstrings excluded: `FROM`/`JOIN` a master table, an exact table name, f-string parts. The general scan keeps its documented quiet cases, which are not changed.
+- **Router API allowlist.** `public_router_violations` refuses the following in `scraper.routers.search` and `scraper.routers.export`:
+  - any import of `sqlalchemy`, `scraper.models`, `scraper.database`, a driver, `importlib` or `sys`;
+  - `getattr`, `vars`, `eval`, `exec` and `__import__`;
+  - any `scraper.public_corpus` name outside `PUBLIC_HELPER_API`: the DTOs, the parameter checks, `search_cases`, `case_detail`, `list_statutes`, `statute_detail`, `acquire_export_slot`, `export_is_truncated`, `stream_export_cases` and `ExportDeadlineExceeded`.
+
+  The statement builders, column tuples, `fetch_rows` and `read_rows` are internal. The routers were refactored onto that API, and `public_corpus_read_violations` runs the whole policy over a corpus tree. Tests cover each form (SQL text, alias attribute, re-import, column tuple, statement builder, `getattr`) in rogue copies of both routers.
+
+**R-pages: the anonymous pages share the quota.** `RateLimitedPathsMiddleware` applies the same per-client bucket to `/docs`, `/redoc`, `/openapi.json`, `/docs/oauth2-redirect` and `/dashboard`. None of them touches the database, but each is anonymous work a client can repeat. `/health` is F44's route and is left to it.
+
+**R-mutants.** M14 is killed by `test_m14_export_reads_bounded_batches_and_holds_no_connection_between_them`: batch sizes [10, 10, 5], and 0 pooled connections checked out at every yield. M46 is killed by `test_m46_the_export_statement_timeout_applies_to_its_reads`, a lock-blocked batch cancelled at 300 ms. M39 is killed by `test_m39_forwarding_headers_never_change_the_key` (behavioural) and `test_m39_the_limiter_source_reads_no_header` (static). M02 is pinned by `test_m02_published_predicates_have_no_null_escape`; at runtime it is equivalent, because `scraper_sources.trust_level` is NOT NULL with a CHECK.
+
+### Tests changed after RED (round 2)
+
+- **`test_l1_compose_and_app_env_make_the_proxy_setting_explicit`.**
+  - *Before:* the RED version required `--proxy-headers` in the compose `api` command.
+  - *Why it changed:* adding it broke 14 F30 compose-policy attack fixtures, which anchor on the command's exact text, and the flag is uvicorn's default.
+  - *Now:* the test requires `FORWARDED_ALLOW_IPS=127.0.0.1` in `app.env` (once), `env_file: app.env` on the `api` service, and a command that neither passes `--forwarded-allow-ips` nor `--no-proxy-headers`. L1's requirement (explicit, configurable through compose's `app.env`) is asserted in full; only the redundant flag went.
+- **`test_buckets_are_per_key_and_the_table_is_bounded`** (round 1). The comment was changed only: the third key now shares the overflow bucket rather than evicting the first. The assertions are unchanged.
+
+### Residual risks (round 2)
+
+- **R2-1. One process, one table.** The quota and both gates are per process; N uvicorn workers give N x 8 public reads. A holder of many /64s (a /48) can still occupy up to `PUBLIC_RATE_LIMIT_MAX_CLIENTS` buckets, after which new keys share the overflow bucket with legitimate new clients. A distributed limiter is a follow-up.
+- **R2-2. Others can still exhaust the pool.** The gates bound the public and export reads, not the harvesters or the admin routes. If those exhaust the pool, a public read waits up to the pool's checkout timeout (30 s, SQLAlchemy's default) before its 503, holding a public slot meanwhile.
+- **R2-3. The proxy address is a deploy step.** The warnings make a wrong `FORWARDED_ALLOW_IPS` visible; they cannot set it.
+- **R2-4. The export is not a snapshot.** Batches are separate transactions; a row published or withdrawn mid-export may or may not appear (never twice). A cut export ends without its final chunk, and a client that ignores an incomplete chunked body could still keep a partial file.
+- **R2-5. M02 is equivalent at runtime** (`trust_level` is NOT NULL); the predicate is pinned by a SQL test rather than by a reachable row.
