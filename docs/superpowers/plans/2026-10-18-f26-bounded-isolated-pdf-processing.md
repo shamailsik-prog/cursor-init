@@ -45,3 +45,13 @@ Exact commands and full counts are in the evidence log. Wall-clock tests are rer
 - **R9** (spec): pdfplumber wraps a `MemoryError` (`PdfminerException(e)`); every broad handler in the extractor re-raises a `MemoryError` or a cap found in the exception's chain.
 - **R2** (spec): F25's guard refuses any reference to `PolicyFetcher` outside the boundary; the intake recognises the connector's client by its public `max_bytes`.
 - **R8** (spec): the wall-limit unit test bound is wall + 10 s, so it fails when only the child's alarm (wall + 15 s) ends a parse.
+
+## Review round on PR #76 (CodeQL py/overly-permissive-file x3; Codex P2 4306132181, 4306132184)
+
+| Step | Command | Result |
+|---|---|---|
+| RED, the round's tests on 7821f6c code (60f5711) | `-k "r5_ or r15_ or ocr_text or r6_the_child or test_d_"` | **7 failed, 4 passed**: modes 4 (object 0o444; umask 0 gave `raw-pdf` 0o777, `.lock` 0o644, `.usage` 0o666); ledger 2 (an uncounted object let a third object pass the cap; a killed writer left no count); OCR cap 1 |
+| GREEN (38f7a5f) | same selection; both F26 files | 11 passed; 49 passed |
+| GREEN, full suite (38f7a5f), CI-like venv | `python -m pytest corpus_service/tests -q -rf` | **1044 passed**, 3 warnings, 157 subtests, 0 skipped |
+
+Rulings: **R14** (spec) the raw store is owner-only and requires one uid for every container that mounts it; **R15** (spec) the ledger is written before the link and recounted before any refusal at the cap.
