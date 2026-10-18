@@ -4,7 +4,7 @@
 
 **Rule for closure** (`docs/audit/REMEDIATION.md`): a merged PR with an end-to-end test of a real flow that fails on main and passes after, then an independent re-audit.
 
-## 1. What main does today (written against `origin/main` f3bbcc9; the branch is rebased onto 33fb1b3, which merged F25 and FA-D5 and changes none of the facts below)
+## 1. What main does today (`origin/main` 33fb1b3; written against f3bbcc9, and the F25 and FA-D5 merges in between change no fact below, only line numbers in `fetch_policy.py`)
 
 **The two dependency sets.**
 
@@ -21,8 +21,8 @@ No CI job and no e2e installs `requirements.txt`. The F30 compose e2e deliberate
 |---|---|---|---|
 | `pgvector` | `scraper/models.py:58` | pgvector | **no** |
 | `anyio` | `scraper/routers/export.py:33` | anyio | **no** (transitive: fastapi → starlette) |
-| `certifi` | `scraper/net/fetch_policy.py:53` | certifi | **no** (transitive: httpx) |
-| `httpcore` | `scraper/net/fetch_policy.py:54` | httpcore | **no** (transitive: httpx) |
+| `certifi` | `scraper/net/fetch_policy.py:66` | certifi | **no** (transitive: httpx) |
+| `httpcore` | `scraper/net/fetch_policy.py:67` | httpcore | **no** (transitive: httpx) |
 | `pydantic` | `scraper/config.py:26` | pydantic | **no** (transitive: fastapi, pydantic-settings) |
 | `bs4` | parsers and every court task | beautifulsoup4 | yes |
 | `celery` | `scraper/tasks/*.py` | celery | yes |
