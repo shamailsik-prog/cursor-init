@@ -1,6 +1,6 @@
 # F28 plan: source failures end as failures
 
-Spec: `docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md` (rulings R1-R20; R16-R20 are the PR #72 review round).
+Spec: `docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md` (rulings R1-R30; R16-R20 are the PR #72 review round; R21-R30 are re-audit round 2, section "Re-audit round 2" at the end of this file).
 Branch: `claude/remediate-f28` from origin/main f3bbcc9. Evidence log: scratchpad `evidence-f28.txt`.
 
 ## Tasks
@@ -70,3 +70,72 @@ Filled in as the work runs; exact commands and counts are in the evidence log.
 | GREEN full suite (9ba1003) | `python -m pytest corpus_service/tests -q -rf` | **638 passed**, 3 warnings, 157 subtests, 0 skipped (616 + 22 new) |
 | Gate G-0 (9ba1003) | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines |
 | Mutation check, review round (scratch copy of 9ba1003, one undo per run) | F28 e2e file (34 tests) | every mutation caught: R1 SHC stages an empty extraction: 3 failed; R2 NA skips the signature check: 1; R3 IHC never fails when every feed fails: 1; R4 feed failures not carried into the run: 2; R5 a record-write failure re-raises the raw error: 2; R6 a database-failed embedding item not counted: 1; R7 Nasir accepts any status below 400: 1; R8 SHC listing accepts any status below 400: 1; R9 a skip not checked for staleness: 1 |
+
+## Re-audit round 2 (M1, L1, L3–L6)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans (native: one builder, tasks in order). Steps use checkbox (`- [ ]`) syntax.
+
+**Goal:** a run cut off by Celery's soft time limit (or cancelled, or abandoned) is recorded, counted toward the streak and alerted; plus L1, L3, L4, L5 and the L6 pins.
+
+**Architecture:** the interruption family is classified in `outcomes` and re-raised by the tally; `run_source` and `run_embedding_batch` record it through the existing `finish_failed` / `record_batch` paths before re-raising; the R11 sweep in `job_record.start` counts what it closes and runs `_alerts`. No schema change, no new dependency (`celery` is already declared; `socket` stays out of corpus code, F25 guard).
+
+**Tech stack:** Python 3.12, Celery 5.6 / billiard (prefork), SQLAlchemy 2.1 async + asyncpg, PG16 + pgvector, pytest.
+
+**Spec:** section 6 of the spec, rulings R21–R30.
+
+Branch: `claude/remediate-f28-fu` from origin/main 84025e8. Evidence log: scratchpad `evidence-f28-fu.txt`. Cluster: PG16 + pgvector on 127.0.0.1:55521, Annex A DDL applied twice; venv from `requirements-test.txt` (Python 3.12).
+
+### Global constraints
+
+- Lanes: no change to `scraper/net/*` (F25), `scraper/parsers/pdf_extractor.py` (F26), `functions/src/d1` (F37), `app/api/**` (#44), the F03 R2 adapter or `.github/workflows/gate-g0.yml` (#47), `requirements*.txt`, `models.py`, `conftest.py`.
+- Every new import passes the F31 import contract and the F25 guard (no `socket`).
+- Existing tests change only where a ruling changes recorded content (R30 adds `listing:` keys to two IHC `discovery_errors` assertions); nothing is skipped or weakened.
+
+### Review focus
+
+1. The limit lands while the coroutine awaits on I/O (the common case): the coroutine sees `CancelledError`, not `SoftTimeLimitExceeded`. Pinned by the prefork await case.
+2. The limit lands inside harvester code within a per-item `try`: pinned by the prefork blocking case.
+3. Two sweeps racing on the same abandoned rows must not double count: `UPDATE … RETURNING` under the source row lock (R24); unit-level reasoning only, no race test (residual).
+4. An abandoned row older than the last success must not grow the streak: pinned in the sweep test.
+5. A redaction pattern that swallows ordinary text (over-redaction) is acceptable; a leak is not: the 13-case table asserts no secret survives and that the class name and the non-secret context remain.
+
+### Tasks
+
+**Task 1: RED tests (all three files), committed before any fix.**
+- Create `corpus_service/tests/test_f28_fu_outcomes.py`:
+  - `test_interruptions_are_classified_and_never_retried`: `outcomes.INTERRUPTIONS`, `is_interruption`, `interruption_reason` (`"time limit exceeded"` for `SoftTimeLimitExceeded` and for a `CancelledError` whose `__context__` is one; `"cancelled before it finished"` for a bare `CancelledError`); `is_retryable` False for all three and for `RunInterrupted`.
+  - `test_the_tally_re_raises_an_interruption_and_counts_nothing`.
+  - `test_run_interrupted_survives_celerys_result_serialisation`.
+  - `test_transient_database_connection_faults_are_retried` (gaierror EAI_AGAIN, OSError ENETUNREACH / EHOSTUNREACH, `sa_exc.TimeoutError`; gaierror EAI_NONAME stays permanent).
+  - `test_describe_error_redacts_every_credential_shape` (the auditor's 13 cases, none may leak).
+  - `test_listing_failures_are_recorded_under_listing_keys` (`Tally.add_listing_failures(stage, makes_partial=False)`).
+- Create `corpus_service/tests/test_f28_fu_prefork_e2e.py` (real prefork worker; see spec R21 tests):
+  - `test_m1_time_limit_while_awaiting_is_recorded_counted_and_alerts`: PakistanCode last succeeded 30 days ago, two time-limited runs. Expect FAILURE `SoftTimeLimitExceeded` twice, rows `[("failed", 0), ("failed", 0)]`, each with `records_extracted` 3, `pages_scraped` 1, reason `time limit exceeded`, `interrupted_by` `CancelledError`, `consecutive_failures` 2, `last_failure_reason` `RunInterrupted: time limit exceeded`, 2 `stale` alerts stored and 2 logged.
+  - `test_m1_time_limit_inside_harvester_code_is_not_an_item_failure`: FAILURE, one row `failed`, reason `time limit exceeded`, `interrupted_by` `SoftTimeLimitExceeded`, 3 statutes written and counted, no `SoftTimeLimitExceeded` item error.
+  - `test_l3_cross_reference_then_a_source_job_in_the_same_child`: both SUCCESS, one `completed` row, no `InterfaceError`.
+- Create `corpus_service/tests/test_f28_fu_e2e.py` (in process):
+  - the R24 sweep: three abandoned rows then a failing run (`consecutive_failures` 4, `failing` at the sweep and at the failure, neutral text); a row older than the last success closed but not counted; X1 (a `full` row is left alone).
+  - `test_r25_control_two_refused_runs_on_a_stale_source` (the auditor's control: `consecutive_failures` 2, 2 `stale`).
+  - `test_r26_an_interrupted_embedding_batch_is_recorded_and_its_item_untouched` (SIGALRM emulation).
+  - `test_l3_cross_reference_then_a_source_job_on_the_pooled_engine`.
+  - `test_l4_a_database_dns_blip_at_job_start_is_retried_to_the_bound` (4 lookups, FAILURE).
+  - L1: a court whose seed listings partly fail records `listing:` keys without changing the outcome; Nasir with 4 of 5 reporters down is `partial`, `discovery_failed` 4.
+  - L6: J1, D2, D3, H2, H4, H5, X6, X7 (X1 above).
+- Run the three files on the RED tree; record the failing output in the ledger. Commit, push.
+
+**Task 2: `outcomes` (R21, R23, R25, R28, R29, R30 helpers).** `INTERRUPTIONS: tuple`, `is_interruption(exc) -> bool`, `interruption_reason(exc) -> str`, `REASON_TIME_LIMIT`, `REASON_CANCELLED`, `class RunInterrupted(Exception)(reason: str, interrupted_by: str)` with `.of(exc) -> RunInterrupted`; `Tally.item_failed` re-raises an interruption; `Tally.add_listing_failures(stage, *, makes_partial=False)`; the transient set and `describe_error`. Unit file GREEN. Commit, push.
+
+**Task 3: dispatcher, job record, embeddings, court retry helpers (R21–R26).** `run_source` catches `INTERRUPTIONS` before `Exception`; `finish_failed` records `RunInterrupted`'s reason and `interrupted_by`; `run_embedding_batch` likewise; the embedding item handler and the courts' retry helpers re-raise; `job_record.start` sweeps with counting and alerts. Prefork and sweep tests GREEN. Commit, push.
+
+**Task 4: `cross_reference` (R27).** One line. L3 tests GREEN. Commit, push.
+
+**Task 5: listing failures (R30).** `tally=` on the six courts' `_discover_pdf_urls`; Nasir records its reporters with `makes_partial=True`; update the two IHC `discovery_errors` assertions. L1 tests and the F28 / F20 suites GREEN. Commit, push.
+
+**Task 6: verification.** The three new files, then the full suite as CI runs it; G-0; the F31 import contract; gitleaks 8.30.1 on the diff; the L6 mutation re-run (the auditor's runner, one mutant at a time, on a scratch copy); the claim gate on the PR body. Ledger below. Commit, push.
+
+### Ledger
+
+Filled in as the work runs; exact commands and output are in the evidence log.
+
+| Step | Command | Result |
+|---|---|---|
