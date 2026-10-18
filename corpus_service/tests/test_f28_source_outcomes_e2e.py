@@ -548,7 +548,8 @@ def test_r12_two_runs_in_one_worker_process_both_succeed_on_the_pooled_engine(co
 # port 443 and a certificate for the court's name), so the network edge is the F20 harness's seam:
 # ``fetch_policy.fetcher_for`` returns a client that answers from canned routes. Every URL is still
 # checked against the source's real registered policy first (a refusal raises FetchRefused, as the
-# boundary does). Discovery, the harvesters, the PDF extractor, the dispatcher and Postgres are real.
+# boundary does). Discovery, the harvesters, the PDF extractor, the dispatcher and Postgres are real
+# (audit F26: the extractor runs in the PDF sandbox, behind scraper.tasks.pdf_intake).
 # ---------------------------------------------------------------------------------------------
 UNREADABLE_PDF = b"%PDF-1.4\n%synthetic F28 fixture: no text layer, no image\n" + b"\x00" * 2048
 WHITESPACE_PDF = b"%PDF-1.4\n%F28-WHITESPACE synthetic fixture\n" + b"\x00" * 2048
@@ -611,21 +612,27 @@ def canned_network(monkeypatch, routes):
 
 
 def text_layer_for_fixtures(monkeypatch):
-    """The real extract_pdf_text for every fixture except two markers the test environment cannot
-    produce for real (it has no PDF library): a readable judgment and a whitespace-only text layer.
-    The unreadable fixture goes through the real extractor, which returns ""."""
-    import scraper.parsers.pdf_extractor as pdf_extractor
+    """The real parse for every fixture except two markers: a readable judgment and a whitespace-only
+    text layer. The unreadable fixture goes through the real extractor, which returns "".
 
-    real = pdf_extractor.extract_pdf_text
+    Audit F26: extraction runs in the PDF sandbox, so the seam is ``pdf_sandbox.parse`` (the stored
+    file's path, sha256 and size), which the intake looks up at call time; the real parse still runs
+    the real extractor in the real sandbox."""
+    from pathlib import Path
 
-    def _extract(content, *args, **kwargs):
+    from scraper.parsers import pdf_sandbox
+
+    real = pdf_sandbox.parse
+
+    def _parse(path, sha256, size, **kwargs):
+        content = Path(path).read_bytes()
         if b"F28-READABLE" in content:
-            return READABLE_TEXT
+            return pdf_sandbox.ParseResult(text=READABLE_TEXT, pages=1, ocr_applied=False)
         if b"F28-WHITESPACE" in content:
-            return "  \n\t \n"
-        return real(content, *args, **kwargs)
+            return pdf_sandbox.ParseResult(text="  \n\t \n", pages=1, ocr_applied=False)
+        return real(path, sha256, size, **kwargs)
 
-    monkeypatch.setattr(pdf_extractor, "extract_pdf_text", _extract)
+    monkeypatch.setattr(pdf_sandbox, "parse", _parse)
 
 
 SHC_LISTING = "https://sindhhighcourt.gov.pk/Imp_Judgement_Orders.php"

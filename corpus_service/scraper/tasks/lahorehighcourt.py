@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from scraper.net import fetch_policy
-from scraper.tasks import outcomes
+from scraper.tasks import outcomes, pdf_intake
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,6 @@ async def scrape_lahorehighcourt(source, db):
     # Audit F28: no outer catch. A discovery whose every listing request failed, a database error,
     # or a run whose every PDF failed fails the run; each PDF's outcome is counted.
     from scraper.models import ScraperStaging
-    from scraper.parsers.pdf_extractor import extract_pdf_text
     from scraper.source_identity import stamp_metadata
 
     tally = outcomes.run_tally()
@@ -168,34 +167,31 @@ async def scrape_lahorehighcourt(source, db):
     async with fetch_policy.fetcher_for("LahoreHighCourt") as client:
         for pdf_url in pdf_urls[:20]:
             try:
-                response = await client.get(pdf_url)
-                if response.status_code != 200:
-                    tally.item_failed(f"http_{response.status_code}")
-                    continue
-                if not outcomes.looks_like_pdf(response.content):
-                    tally.item_failed(outcomes.ERROR_NOT_PDF)
-                    continue
-                text = extract_pdf_text(response.content)
-                if not outcomes.has_text(text):
-                    # Audit F28 R16: the signature but no text (parsing and OCR both failed) is a
-                    # failed document: never staged, never progress.
-                    logger.warning("PDF %s has no extractable text; not staged", pdf_url)
-                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
-                    continue
+                # Audit F26: one bounded path per PDF (the size cap at the fetch boundary, the type and
+                # signature checks, the raw store by sha256, the sandboxed parse); a refusal is a
+                # failed document, counted by its code.
+                document = await pdf_intake.intake(client, pdf_url)
                 staging = ScraperStaging(
                     source_id=source.id,
                     source_site="LahoreHighCourt",
                     source_url=pdf_url,
-                    raw_text=text[:50000],
+                    raw_text=document.text[:50000],
+                    raw_pdf_path=document.raw_key,
+                    pdf_page_count=document.pages,
+                    ocr_applied=document.ocr_applied,
                     confidence_score=0.6,
                     quarantined=True,
                     quarantine_reason="review source",
-                    parsing_metadata=stamp_metadata(source, {"listing_url": pdf_sources.get(pdf_url)}),
+                    parsing_metadata=stamp_metadata(
+                        source, {"listing_url": pdf_sources.get(pdf_url), **document.metadata()}
+                    ),
                 )
                 db.add(staging)
                 await db.commit()
                 tally.item_ok(1)
                 await asyncio.sleep(1)
+            except outcomes.DocumentRejected as rejected:
+                tally.item_failed(rejected)
             except Exception as e:
                 if outcomes.is_database_error(e):
                     raise
