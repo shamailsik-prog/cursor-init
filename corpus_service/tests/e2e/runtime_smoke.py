@@ -8,13 +8,16 @@ pgvector it runs the compose entry points the production image runs:
      distribution is installed (the venv was built from it); no local .env (the image has none)
   2. the strict import contract (tests/import_contract.py --strict)
   3. python -c "import scraper.models"            (the finding: pgvector.sqlalchemy)
-  4. every module under scraper/ imports
+  4. every module under scraper/ imports, and bootstrap_harvest
+  4b. bootstrap_harvest.Harvester.harvest_pakistancode() on synthetic pages (fetch stubbed): its
+     BeautifulSoup(..., "lxml") parse, so a runtime without lxml fails here (review round)
   5. python -m scraper.migrate                     (compose `migrate`) on a fresh database
   6. uvicorn scraper.main:app                      (compose `api`), then GET /health: db_connected
   7. celery -A scraper.tasks.celery_app report     (the -A target of worker-embed and celery-beat),
      plus the app's Redis broker transport and result backend and its beat tasks
 
 On main (no pgvector in requirements.txt) steps 2 to 7 fail with ModuleNotFoundError: pgvector.
+Without lxml in requirements.txt, step 2 (by-name contract) and step 4b (FeatureNotFound) fail.
 No Redis server is used: a live broker round trip is the F30 compose e2e; this proves the
 dependency set (building the transport and backend loads the redis client library).
 
@@ -165,6 +168,8 @@ def runtime_modules():
             shadowed.append(".".join(parts))
             continue
         names.append(".".join(parts))
+    # The operator's public-harvest entry point (a RUNTIME_ROOTS file at the project root).
+    names.append("bootstrap_harvest")
     return names, shadowed
 
 
@@ -179,9 +184,10 @@ def step_import_all(env) -> None:
     except (ValueError, IndexError):
         failed = None
     if failed is None:
-        check(f"every scraper module imports ({len(names)} modules)", False, proc.stderr or proc.stdout)
+        check(f"every runtime module imports ({len(names)} modules: scraper/ and bootstrap_harvest)", False,
+              proc.stderr or proc.stdout)
         return
-    check(f"every scraper module imports ({len(names)} modules)", not failed,
+    check(f"every runtime module imports ({len(names)} modules: scraper/ and bootstrap_harvest)", not failed,
           "\n".join(f"{k}: {v.splitlines()[-1]}" for k, v in sorted(failed.items())))
 
 
@@ -234,6 +240,46 @@ def step_api(env) -> None:
         return
     check(f"/health reaches PostgreSQL (status ok, db_connected true, total_cases 0): {json.dumps(body)}",
           body.get("status") == "ok" and body.get("db_connected") is True and body.get("total_cases") == 0, output)
+
+
+# bootstrap_harvest's own PakistanCode path on synthetic pages (dated 2099), with Harvester.get
+# stubbed: no network, output under a temporary directory. The parse is BeautifulSoup(..., "lxml").
+_HARVEST_PROBE = r"""
+import json, shutil, tempfile
+from pathlib import Path
+import bootstrap_harvest as bh
+
+INDEX = '<html><body><a href="UY2099synthetic">Synthetic Statute Act 2099</a></body></html>'
+DETAIL = '<html><body><h1>Synthetic Statute Act 2099</h1><p>No PDF link.</p></body></html>'
+
+class Page:
+    def __init__(self, text):
+        self.text, self.content, self.status_code = text, text.encode(), 200
+
+tmp = Path(tempfile.mkdtemp(prefix="f31-harvest-"))
+bh.ROOT, bh.LIVE = tmp, tmp / "live"
+harvester = bh.Harvester()
+try:
+    harvester.get = lambda url, source: Page(INDEX if "LGu0xAD" in url else DETAIL)
+    harvester.harvest_pakistancode()
+    catalog = json.loads((bh.LIVE / "PakistanCode" / "catalog_A.json").read_text(encoding="utf-8"))
+    print(json.dumps({"catalog": catalog, "pages": harvester.counts["pages"]}))
+finally:
+    harvester.close()
+    shutil.rmtree(tmp, ignore_errors=True)
+"""
+
+
+def step_bootstrap_harvest(env) -> None:
+    proc = run([sys.executable, "-c", _HARVEST_PROBE], env)
+    try:
+        result = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else None
+    except (ValueError, IndexError):
+        result = None
+    titles = [row.get("title") for row in (result or {}).get("catalog", [])]
+    check("bootstrap_harvest PakistanCode path parses synthetic pages with BeautifulSoup(..., 'lxml')",
+          result is not None and titles == ["Synthetic Statute Act 2099"] and result.get("pages") == 1,
+          proc.stderr or proc.stdout)
 
 
 _CELERY_PROBE = r"""
@@ -300,6 +346,7 @@ def main() -> int:
 
     step_models(env)
     step_import_all(env)
+    step_bootstrap_harvest(env)
     try:
         asyncio.run(_admin(admin_url, [f'CREATE DATABASE "{name}"']))
     except Exception as exc:  # noqa: BLE001

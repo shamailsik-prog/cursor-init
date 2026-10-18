@@ -87,6 +87,8 @@ def _check(root: Path, **kw):
     kw.setdefault("aliases", {})
     kw.setdefault("loaded_by_name", {})
     kw.setdefault("dynamic_sites", {})
+    if hasattr(ic, "BY_NAME_EXCEPTIONS"):  # synthetic trees start with no reviewed exception
+        kw.setdefault("by_name_exceptions", {})
     kw.setdefault("distributions", {"pgvector": ["pgvector"], "bs4": ["beautifulsoup4"], "PIL": ["Pillow"]})
     return ic.check(root, **kw)
 
@@ -304,6 +306,106 @@ def test_dynamic_imports_are_classified_by_loader_identity(tmp_path, case):
     files, expected = _LOADER_CASES[case]
     root = _tree(tmp_path, files, "fastapi\n")
     assert _summary(_check(root)) == sorted(expected)
+
+
+# -- distributions loaded by a string: parser features and URL drivers -----------------------------
+# Review round (independent re-audit, MEDIUM): bootstrap_harvest.py calls BeautifulSoup(..., "lxml")
+# four times. With lxml removed from requirements.txt the contract (plain and strict) and the
+# clean-runtime smoke all passed, while Harvester.harvest_pakistancode() raised
+# bs4.exceptions.FeatureNotFound. A parser feature or a URL driver is a dependency like an import.
+
+
+def _by_name_problems(tmp_path, files, requirements, **kw):
+    root = _tree(tmp_path, files, requirements)
+    return _check(root, **kw)
+
+
+def test_lxml_is_loaded_by_name_in_bootstrap_harvest_and_must_be_declared():
+    scan = ic.scan_tree(PROJECT_ROOT)
+    lxml = [u for u in scan.by_name if "lxml" in u.distributions]
+    assert lxml and {u.path for u in lxml} == {"bootstrap_harvest.py"}, lxml
+    assert all(u.what == "BeautifulSoup parser feature 'lxml'" for u in lxml), lxml
+    assert "lxml" in ic.LOADED_BY_NAME and "bootstrap_harvest.py" in ic.LOADED_BY_NAME["lxml"]
+    # The re-audit's demonstration as a test: the real tree with lxml dropped from the manifest.
+    runtime = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    without = "\n".join(line for line in runtime.splitlines() if line.strip() != "lxml") + "\n"
+    assert without != runtime
+    problems = ic.check(PROJECT_ROOT, requirements=without)
+    assert any(p.startswith("undeclared: lxml is loaded by name") and "bootstrap_harvest.py:" in p for p in problems), problems
+
+
+def test_real_tree_url_drivers_are_declared_or_reviewed():
+    scan = ic.scan_tree(PROJECT_ROOT)
+    found = {(u.path, d) for u in scan.by_name for d in u.distributions}
+    assert ("scraper/config.py", "asyncpg") in found and ("scraper/config.py", "redis") in found, found
+    psycopg2 = [u for u in scan.by_name if "psycopg2" in u.distributions]
+    assert psycopg2 and all((u.path, u.function) == ("scraper/config.py", "database_sync_url") for u in psycopg2), psycopg2
+    assert ("scraper/config.py", "database_sync_url", "psycopg2") in ic.BY_NAME_EXCEPTIONS
+
+
+@pytest.mark.parametrize("call, dist", [
+    ('from bs4 import BeautifulSoup\nBeautifulSoup(x, "lxml")\n', "lxml"),
+    ('from bs4 import BeautifulSoup as BS\nBS(x, features="lxml-xml")\n', "lxml"),
+    ('import bs4\nbs4.BeautifulSoup(x, "xml")\n', "lxml"),
+    ('import bs4 as b\nsoup = b.BeautifulSoup\nsoup(x, ["fast", "html"])\n', "lxml"),
+    ('from bs4 import BeautifulSoup\nBeautifulSoup(x, "html5lib")\n', "html5lib"),
+    ('from bs4 import BeautifulSoup\nBeautifulSoup(x, "lxml, html")\n', "lxml"),
+])
+def test_bs4_parser_features_map_to_their_distribution(tmp_path, call, dist):
+    files = {"scraper/a.py": call}
+    problems = _by_name_problems(tmp_path, files, "beautifulsoup4\n")
+    assert len(problems) == 1 and problems[0].startswith(f"undeclared: {dist} is loaded by name"), problems
+    assert "scraper/a.py:" in problems[0]
+    assert _by_name_problems(tmp_path, files, f"beautifulsoup4\n{dist}\n") == []
+
+
+@pytest.mark.parametrize("call", [
+    'BeautifulSoup(x, "html.parser")', "BeautifulSoup(x)", 'BeautifulSoup(x, features="html")',
+])
+def test_stdlib_parser_features_need_nothing(tmp_path, call):
+    assert _by_name_problems(tmp_path, {"scraper/a.py": f"from bs4 import BeautifulSoup\n{call}\n"}, "beautifulsoup4\n") == []
+
+
+@pytest.mark.parametrize("call, start", [
+    ('BeautifulSoup(x, "bogus-parser")', "unknown parser feature 'bogus-parser'"),
+    ("BeautifulSoup(x, parser_name)", "unresolved parser feature"),
+    ("BeautifulSoup(x, features=pick())", "unresolved parser feature"),
+])
+def test_unknown_or_computed_parser_features_fail_closed(tmp_path, call, start):
+    problems = _by_name_problems(tmp_path, {"scraper/a.py": f"from bs4 import BeautifulSoup\n{call}\n"}, "beautifulsoup4\nlxml\n")
+    assert len(problems) == 1 and problems[0].startswith(start) and "scraper/a.py:2" in problems[0], problems
+
+
+@pytest.mark.parametrize("literal, dist", [
+    ("postgresql+asyncpg://u@h/db", "asyncpg"),
+    ("mysql+pymysql://u@h/db", "pymysql"),
+    ("postgresql+psycopg2://u@h/db", "psycopg2"),
+    ("rediss://u@h:6379/0", "redis"),
+    ("redis://h:6379/0", "redis"),
+])
+def test_url_drivers_and_broker_schemes_map_to_their_distribution(tmp_path, literal, dist):
+    files = {"scraper/a.py": f'URL = "{literal}"\n'}
+    problems = _by_name_problems(tmp_path, files, "fastapi\n")
+    assert len(problems) == 1 and problems[0].startswith(f"undeclared: {dist} is loaded by name"), problems
+    assert _by_name_problems(tmp_path, files, f"fastapi\n{dist}\n") == []
+
+
+def test_unknown_url_driver_fails_closed_and_docstrings_are_not_loads(tmp_path):
+    files = {"scraper/a.py": '"""Example: postgresql+psycopg2://u@h/db"""\nURL = f"postgresql+nosuchdriver://{host}/db"\n'}
+    problems = _by_name_problems(tmp_path, files, "fastapi\n")
+    assert len(problems) == 1 and problems[0].startswith("unknown URL driver 'postgresql+nosuchdriver'"), problems
+    assert "scraper/a.py:2" in problems[0]
+
+
+def test_by_name_exceptions_hold_only_while_unreachable(tmp_path):
+    exc = {("scraper/a.py", "sync_url", "psycopg2"): "no caller"}
+    helper = 'class S:\n    @property\n    def sync_url(self):\n        return "postgresql+psycopg2://u@h/db"\n'
+    assert _by_name_problems(tmp_path, {"scraper/a.py": helper}, "fastapi\n", by_name_exceptions=exc) == []
+    reached = {"scraper/a.py": helper, "scraper/b.py": "from scraper.a import S\nS().sync_url\n"}
+    problems = _by_name_problems(tmp_path, reached, "fastapi\n", by_name_exceptions=exc)
+    assert len(problems) == 1 and problems[0].startswith("reviewed by-name exception scraper/a.py:sync_url (psycopg2) is reachable"), problems
+    stale = _by_name_problems(tmp_path, {"scraper/a.py": "x = 1\n", "scraper/b.py": "y = 2\n"}, "fastapi\n", by_name_exceptions=exc)
+    assert stale == ["stale by-name exception: scraper/a.py:sync_url (psycopg2) matches no by-name use"], stale
 
 
 # -- requirements parsing ------------------------------------------------------------------------
