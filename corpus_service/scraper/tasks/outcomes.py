@@ -1,6 +1,6 @@
 """Audit F28: what a corpus job run ended as, and whether Celery may retry it.
 
-Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R1-R15).
+Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R1-R30).
 
 A run ends in one of five outcomes (R1): ``ok`` (rows written, no item failed), ``partial`` (some items
 failed, at least one succeeded), ``empty`` (it worked and found nothing to write), ``skipped`` (a
@@ -17,19 +17,28 @@ retried: network and timeout errors, a lost database connection, a transient SQL
 ``SourceRunFailed`` whose item failures were all transient. An F25 refusal is never retried.
 
 ``describe_error`` is the only text a run record holds about an exception (R8): the class, and for a
-database error only its SQLSTATE, since a driver message can carry row data or the DSN.
+database error only its SQLSTATE, since a driver message can carry row data or the DSN; any other
+message with its credentials redacted (R29).
+
+Re-audit round 2 (R21-R30): Celery's soft time limit, and the cancellation ``asyncio.run`` delivers
+when that limit escapes the event loop, are the interruption family ``INTERRUPTIONS``. The tally
+re-raises one instead of counting it (R23); the dispatcher records it as ``RunInterrupted`` and
+re-raises the original (R21); it is never retried (R25).
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
+import errno
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Optional
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import exc as sa_exc
 
 from scraper.net import fetch_policy
@@ -84,7 +93,23 @@ _TRANSIENT_EXCEPTIONS = (
     httpx.RemoteProtocolError,
     TimeoutError,
     ConnectionError,
+    sa_exc.TimeoutError,  # R28: the pool's checkout timeout (every connection busy), not a fault of the data
 )
+# R28: OSError numbers that describe the network path at this moment, not the configuration.
+_TRANSIENT_ERRNOS = frozenset({errno.ENETUNREACH, errno.EHOSTUNREACH})
+# R28: getaddrinfo's EAI_AGAIN ("temporary failure in name resolution"), carried as socket.gaierror's
+# errno: -3 under glibc and musl (the service's Linux images), 2 on BSD and macOS. The F25 guard keeps
+# the socket module out of corpus code, so the class is recognised by its module and name.
+_EAI_AGAIN = frozenset({-3, 2})
+
+
+def _is_transient_os_error(exc: BaseException) -> bool:
+    if not isinstance(exc, OSError):
+        return False
+    if exc.errno in _TRANSIENT_ERRNOS:
+        return True
+    is_gaierror = any(c.__module__ == "socket" and c.__name__ == "gaierror" for c in type(exc).__mro__)
+    return is_gaierror and exc.errno in _EAI_AGAIN
 
 _ERROR_TEXT_LIMIT = 1000
 
@@ -167,7 +192,61 @@ class BatchFailed(Exception):
         return f"every embedding in the batch failed ({_errors_text(self.errors)})"
 
 
-_NEVER_RETRIED = (SourceRefused, HarvesterContractError, RunRecordFailed, BatchFailed, fetch_policy.FetchRefused)
+# ---------------------------------------------------------------------------------------------
+# Interruptions (R21-R25)
+# ---------------------------------------------------------------------------------------------
+# Celery's soft time limit (billiard raises it from a signal handler), and the cancellation
+# asyncio.run delivers to the run's task when that limit (or anything else) escapes the event loop
+# while it waits on I/O. CancelledError is a BaseException, so an `except Exception` never sees it.
+# KeyboardInterrupt, SystemExit and GeneratorExit are deliberately not here (R22): they propagate.
+INTERRUPTIONS = (SoftTimeLimitExceeded, asyncio.CancelledError)
+
+REASON_TIME_LIMIT = "time limit exceeded"
+REASON_CANCELLED = "cancelled before it finished"
+
+
+def is_interruption(exc: BaseException) -> bool:
+    return isinstance(exc, INTERRUPTIONS)
+
+
+def interruption_reason(exc: BaseException) -> str:
+    """``time limit exceeded`` when the soft limit is ``exc`` or what it was raised while handling
+    (asyncio.run's cancellation carries the limit as its ``__context__``); otherwise ``cancelled
+    before it finished``. Unlike ``_chain``, this follows ``__context__``: that is the only link
+    between the cancellation and its cause."""
+    seen = set()
+    candidate: Optional[BaseException] = exc
+    while candidate is not None and id(candidate) not in seen:
+        seen.add(id(candidate))
+        if isinstance(candidate, SoftTimeLimitExceeded):
+            return REASON_TIME_LIMIT
+        candidate = candidate.__cause__ or candidate.__context__
+    return REASON_CANCELLED
+
+
+class RunInterrupted(Exception):
+    """What a run record says about an interruption (R21): a neutral reason and the class that
+    interrupted the run. Recorded in place of the raw exception; never raised to Celery, which gets
+    the original."""
+
+    def __init__(self, reason: str, interrupted_by: str):
+        self.reason = reason
+        self.interrupted_by = interrupted_by
+        super().__init__(reason, interrupted_by)
+
+    def __str__(self) -> str:
+        return self.reason
+
+    @classmethod
+    def of(cls, exc: BaseException) -> "RunInterrupted":
+        recorded = cls(interruption_reason(exc), type(exc).__name__)
+        return recorded.with_traceback(exc.__traceback__)
+
+
+_NEVER_RETRIED = (
+    SourceRefused, HarvesterContractError, RunRecordFailed, BatchFailed, fetch_policy.FetchRefused,
+    RunInterrupted, *INTERRUPTIONS,  # R25
+)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -220,7 +299,7 @@ def is_retryable(exc: BaseException) -> bool:
         if isinstance(candidate, _NEVER_RETRIED):
             return False
     for candidate in _chain(exc):
-        if isinstance(candidate, _TRANSIENT_EXCEPTIONS):
+        if isinstance(candidate, _TRANSIENT_EXCEPTIONS) or _is_transient_os_error(candidate):
             return True
         if getattr(candidate, "connection_invalidated", False):
             return True
@@ -243,18 +322,49 @@ def error_key(error: Any) -> str:
     return type(error).__name__
 
 
-_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/\s@]*@")
+# R29: credential shapes redacted from an error message, in this order. Over-redaction is the safe
+# side; the class name, the host and the non-secret parameters stay.
+_REDACTIONS = (
+    # URL userinfo up to the last "@" of the token, so a password holding "@" or "/" is covered.
+    (re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)\S*@"), lambda m: m.group("scheme") + "***@"),
+    # An Authorization-style header, with or without its scheme word.
+    (
+        re.compile(
+            r"(?i)\b(?P<name>(?:proxy-)?authorization|x-api-key|api-key|x-auth-token)(?P<sep>\s*[:=]\s*)"
+            r"(?:(?P<scheme>bearer|basic|token|digest)\s+)?[^\s,;'\"]+"
+        ),
+        lambda m: f"{m.group('name')}{m.group('sep')}{m.group('scheme') + ' ' if m.group('scheme') else ''}***",
+    ),
+    (re.compile(r"(?i)\b(?P<scheme>bearer)\s+[A-Za-z0-9._~+/=\-]+"), lambda m: m.group("scheme") + " ***"),
+    # name=value where the name ends in a credential word: query strings and keyword-style DSNs.
+    (
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_\-])(?P<name>[A-Za-z0-9_\-]*?(?:token|key|secret|password|passwd|pwd|sig|signature|credential)s?)"
+            r"(?P<sep>\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^&\s'\",;)]+)"
+        ),
+        lambda m: f"{m.group('name')}{m.group('sep')}***",
+    ),
+    # sk-... style API keys.
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}"), lambda m: "sk-***"),
+)
+
+
+def _redact(message: str) -> str:
+    for pattern, replacement in _REDACTIONS:
+        message = pattern.sub(replacement, message)
+    return message
 
 
 def describe_error(exc: BaseException) -> str:
     """The text a run record may hold about ``exc`` (R8). A database error is its class and
-    SQLSTATE only; anything else is ``Class: message`` with URL userinfo redacted, control characters
+    SQLSTATE only; anything else is ``Class: message`` with credentials redacted (R29: URL userinfo,
+    credential parameters, Authorization-style headers, bearer tokens, sk- keys), control characters
     escaped and the length capped."""
     name = type(exc).__name__
     if is_database_error(exc):
         code = sqlstate(exc)
         return f"{name} (SQLSTATE {code})" if code else name
-    message = _USERINFO.sub(lambda m: m.group("scheme") + "***@", str(exc))
+    message = _redact(str(exc))
     message = "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in message)
     text = f"{name}: {message}" if message else name
     return text if len(text) <= _ERROR_TEXT_LIMIT else text[: _ERROR_TEXT_LIMIT - 14] + "...(truncated)"
@@ -336,7 +446,10 @@ class Tally:
         self.written += int(rows)
 
     def item_failed(self, error: Any) -> None:
-        """One item failed: an exception, or a code such as ``http_404`` or ``not_pdf``."""
+        """One item failed: an exception, or a code such as ``http_404`` or ``not_pdf``. An
+        interruption is not an item failure: it is re-raised, uncounted, and ends the run (R23)."""
+        if isinstance(error, BaseException) and is_interruption(error):
+            raise error
         self.attempted += 1
         self.failed += 1
         self.errors[error_key(error)] += 1
@@ -358,6 +471,16 @@ class Tally:
         on, but those requests failed, so it is partial (R17)."""
         self.discovery_failed += stage.failed
         self.discovery_errors.update(stage.errors)
+
+    def add_listing_failures(self, stage: "Tally", *, makes_partial: bool = False) -> None:
+        """Record a listing stage's failed pages in this run's ``discovery_errors`` under
+        ``listing:<key>`` (R30). A court's listings are recorded only (R17: legacy seeds and guessed
+        child listings fail as expected noise); Nasir's fixed reporters (``makes_partial``) also count
+        in ``discovery_failed``, so the run is partial, not an error-free empty run."""
+        for key, n in stage.errors.items():
+            self.discovery_errors[f"listing:{key}"] += n
+        if makes_partial:
+            self.discovery_failed += stage.failed
 
     def result(self, note: Optional[str] = None) -> HarvestResult:
         return HarvestResult(
