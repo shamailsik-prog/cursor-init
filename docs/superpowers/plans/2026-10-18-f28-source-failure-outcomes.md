@@ -31,7 +31,8 @@ Filled in as the work runs; exact commands and counts are in the evidence log.
 | GREEN | both F28 files | **57 passed** (52 + the R15 round-trip test's 5 cases) |
 | Combined with PR #67 (scratch tree: this branch + PR #67's `fetch_policy.py`, `pdf_writer.py`, guard) | PR #67's `test_f25_fetch_guard.py`, `test_f28_outcomes.py`, `test_trust_policy.py`; then both e2e files on real PG | 192 passed, 110 subtests; 15 passed |
 | GREEN full suite (fix 5bcdb1c) | `python -m pytest corpus_service/tests -q -rf` | **616 passed**, 3 warnings, 157 subtests, 0 skipped (main: 559) |
-| Mutation check (scratch copy of 5bcdb1c, one undo per run) | F28 e2e file | M1 PakistanCode swallows its index failure: 4 failed; M2 nothing retryable: 2 failed; M3 SHC discovery never fails: 1 failed; M4 an all-failed embedding batch succeeds: 1 failed; M5 no engine disposal: 1 failed; M6 Nasir stages a 5xx page: 2 failed; M7 no run record: 8 failed |
+| GREEN full suite at 8bafa03 (after the docstring-only edits) | `python -m pytest corpus_service/tests -q -rf` | **616 passed**, 3 warnings, 157 subtests, 0 skipped |
+| Mutation check (scratch copy of 5bcdb1c, one undo per run) | F28 e2e file | M1 PakistanCode swallows its index failure: 4 failed; M2 nothing retryable: 2 failed; M3 SHC discovery never fails: 1 failed; M4 an all-failed embedding batch succeeds: 1 failed; M5 no engine disposal: 1 failed; M6 Nasir stages a 5xx page: 2 failed; M7 the run record's `result_summary` left empty: 8 failed |
 | Gate G-0 | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===` |
 | gitleaks 8.30.1 | `gitleaks dir` over `log -p origin/main..HEAD` (repository mode is refused by this session's worktree guard) | no leaks found |
 
