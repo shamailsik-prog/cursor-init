@@ -130,9 +130,21 @@ TRANSPORT_STUB_PATTERNS = (
 )
 
 
+# Cursor Bugbot appends a generated summary of the diff to PR bodies between these markers. It is
+# a third party's description, not the author's claim, so it is neither a COMPLETE claim nor a
+# place to declare flags (PR #72: its prose "work that cannot complete" read as a claim). Only a
+# closed block is removed; an unterminated marker leaves the text in place, so it is still read.
+# Each marker must stand on its own line (CRLF allowed): a summary that quotes the closing marker
+# does not end the block early, and markers written inline in the author's text are not stripped.
+BOT_SUMMARY_RE = re.compile(
+    r"^<!-- CURSOR_SUMMARY -->[ \t]*\r?$.*?^<!-- /CURSOR_SUMMARY -->[ \t]*\r?$",
+    re.DOTALL | re.MULTILINE,
+)
+
+
 def read_pr_claim_text() -> str:
     title = os.getenv("PR_TITLE", "")
-    body = os.getenv("PR_BODY", "")
+    body = BOT_SUMMARY_RE.sub("", os.getenv("PR_BODY", ""))
     return f"{title}\n{body}".strip()
 
 
