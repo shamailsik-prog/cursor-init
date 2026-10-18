@@ -81,3 +81,41 @@ Each ruling records the decision and the reason (owner's standing instruction).
 | R12 two runs in one process on the pooled engine | both SUCCESS on the first attempt | second run fails its first attempt (RED) |
 
 Plus unit tests (`test_f28_outcomes.py`) for the classifier, the tally, the backoff and error-text redaction (no credential or row data reaches `error_message`).
+
+## 5. Review round (PR #72: Codex x2, Cursor Bugbot, Copilot x6)
+
+Every finding was a case where a run could still report success, or record the wrong thing, after a real failure. Each was fixed test first (RED on the reviewed code, then GREEN). These rulings amend R3, R10, R13 and R8.
+
+**R16. An unreadable PDF is a failed document, never progress (Codex 4305694221, Copilot 4305705140 and 4305705122; amends R3).** `extract_pdf_text` returns `""` when parsing and OCR both fail (`pdf_extractor.py:290`). On the reviewed head, the harvesters called `item_ok(1)` on that and staged an empty record. A run of unreadable PDFs therefore ended `ok` and reset the failure streak. National Assembly took an empty or non-PDF body to `item_ok(0)`, an empty success.
+
+Every harvester that extracts PDFs (SHC, Supreme Court, Lahore, Peshawar, Balochistan, Islamabad, National Assembly) now checks two things:
+- the `%PDF-` signature **before** extraction (`outcomes.looks_like_pdf`; failure key `not_pdf`). This replaces the courts' looser 4-byte `%PDF` check; National Assembly had no check.
+- the text **after** it (`outcomes.has_text`: empty or whitespace only is `empty_pdf_text`, Copilot's key).
+
+Either failure is a failed item: never staged or written, and not progress. A run whose every PDF is unreadable fails ("every document request failed", not retried, so the streak grows); a mix is `partial`. Nasir and PakistanCode extract HTML, not PDFs. PakistanLawSite copies import files without extracting them. `pdf_extractor.py` itself is untouched, since its bounds and sandboxing are F26's. *Reason:* an empty extraction is the parse failure R2 names. Staging it would be the silent stale corpus the finding describes.
+
+**R17. Every IHC feed request is counted (Codex 4305694225, Copilot 4305705087).** On the reviewed head, an IHC listing page that loaded and named its AJAX feed was a discovery success, while the feed requests themselves were never counted. Every feed failing, with no direct PDF in the markup, left discovery empty, and the run became an empty success. Discovery now keeps a feed tally. A feed fails on an exception, an answer other than 200, or a payload that does not parse (`feed_unparseable`; `_parse_feed_rows` tells it from a valid empty list). Two cases follow:
+- **Every feed failed, and no other discovery path found a PDF:** the run fails with `SourceRunFailed("every feed request failed")` before anything is written. It carries the feed error counts and their transient classification, so a set of 5xx answers is retried.
+- **Otherwise:** the feed failures go into the run's result (`HarvestResult.discovery_failed` / `discovery_errors`) and make it `partial`.
+
+*Reason:* Copilot's wording, which is "required only when nothing else was found". A judgment found in the markup is real work (R1 partial), and failing at discovery keeps a retry free of duplicate writes.
+
+*Sweep:* I checked every request site in every harvester. The court listing crawls (including child listings), the Nasir reporter and case pages, the National Assembly index and PDFs, and the PakistanCode index and slugs were already counted. The IHC feed was the only uncounted secondary discovery request.
+
+Listing pages other than the seeds still do not make a run partial on failure, as R2 already set out. The court seeds include deliberate legacy fallbacks ("retained as a fallback"), and child listings are keyword-matched link guesses, so their failures are expected noise. A feed, by contrast, is an endpoint named by a live page.
+
+**R18. A run whose record cannot be written is not a harvest failure (Bugbot 4305696998; amends R8).** On 9403795, `finish_skipped` sat inside the harvest `try`. A failed skip record was therefore recorded as a failed run: it grew the failure streak, and on a transient SQLSTATE it was retried. Cursor's Autofix commit c6af66d moved the skip's record write out of that `try`, the same way the finished path already was. It was reviewed, found correct and in scope, and kept as is (fast-forwarded, not rebased).
+
+Added on top of c6af66d:
+- one `except` covers both paths and logs at ERROR: `F28 run record failed: <source> <outcome> run could not be recorded (<class> (SQLSTATE x)); not retried, freshness unchanged`;
+- the sweep found one more write outside that isolation, the embedding batch's success record, whose failure surfaced as the raw database error. It now raises `RunRecordFailed` with the same line, and the batch's own work stands.
+
+`RunRecordFailed` is never retried and never touches the streak. For a source attempt, the row opened at the start stays `running` until R11 closes it. An embedding batch is different: it inserts its record only after processing, and R11 reconciles source jobs only. So a batch whose terminal insert fails leaves no row to recover; the ERROR line is its only record (Copilot 4305832756).
+
+**R19. A failed embedding batch records what it did (Copilot 4305705063; amends R13).** An exception escaping the item loop, such as a database error after earlier items had committed, carried no counts. The failed record therefore said attempted, written and failed were all 0. The recording wrapper now owns the counters (`BatchCounts`: the item tally, claimed, missing) and passes them in. A database-failed item is counted before the re-raise, and the failed record is filled from the counters. The original exception is still raised.
+
+**R20a. Only an HTTP 200 is a loaded page (Copilot 4305705102).** Nasir staged a case page on any status below 400, so a 204, or a 302 without a `Location` (which `PolicyFetcher` returns), was staged as a judgment. Every check that accepted 2xx/3xx was swept: the six court listing crawls, the IHC feed, the Nasir reporter and case pages, and the National Assembly index all used `>= 400`. All now require 200 and count anything else as `http_<status>`, as the PDF and statute-page checks already did. The PakistanCode index status stays unread, because its body is not used.
+
+**R20b. A skipped source is still checked for staleness (Copilot 4305705096; amends R10).** A skip closed its record with no source effect, which bypassed `_alerts`. An inactive, blocked or untrusted source could therefore go stale silently. The alerts (`stale`, `failing`) are now evaluated on a skip too. The freshness counters are still not touched, since a skip is not a run.
+
+**Test seam for this round.** The new e2e tests need pages on the courts' real hostnames. A local server cannot serve those: it would need port 443 and a certificate for the court's name. So the network edge for these tests is the F20 harness's seam, `fetch_policy.fetcher_for` returning canned answers. Every URL is still checked against the source's real registered policy first. The harvesters, the PDF extractor (the real one for unreadable bytes; the test environment has no PDF library, so a readable text layer is a marked fixture), the dispatcher and Postgres are all real. Discovery is real in the SHC and IHC discovery scenarios, but the six-court unreadable-PDF test replaces `_discover_pdf_urls` with a fixed result (`tests/test_f28_source_outcomes_e2e.py:697–711`). That test proves the per-document accounting, not discovery, for all six courts (Copilot 4305832771).

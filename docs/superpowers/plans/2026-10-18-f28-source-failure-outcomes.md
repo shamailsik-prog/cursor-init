@@ -1,6 +1,6 @@
 # F28 plan: source failures end as failures
 
-Spec: `docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md` (rulings R1-R15).
+Spec: `docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md` (rulings R1-R20; R16-R20 are the PR #72 review round).
 Branch: `claude/remediate-f28` from origin/main f3bbcc9. Evidence log: scratchpad `evidence-f28.txt`.
 
 ## Tasks
@@ -39,3 +39,34 @@ Filled in as the work runs; exact commands and counts are in the evidence log.
 ## Rulings added while going GREEN
 
 - **R15** (spec): the first GREEN run returned `UnpickleableExceptionWrapper` for `SourceRunFailed` / `BatchFailed`; every F28 exception now keeps its constructor arguments as `args`, pinned by `test_failures_survive_celerys_result_serialisation`.
+
+## Review round (PR #72: Codex x2, Cursor Bugbot, Copilot x6)
+
+### Tasks
+
+1. Fetch the branch and review the foreign commit c6af66d (Cursor Autofix, Bugbot 4305696998). It is correct and in scope, so it is kept: fast-forwarded, not rebased.
+2. RED tests (553c5ff: Codex P1 and P2, Bugbot; 87efe8e: Copilot x6, key renamed to `empty_pdf_text`).
+3. Fixes, one commit per thread group, each pushed after a fetch-and-compare:
+   - bbca52e R16 (empty extraction, PDF signature);
+   - 1af93fd R17 (IHC feeds);
+   - 95c8ce2 R18 (record writes);
+   - 4ebc605 R19 (embedding counters);
+   - 73dcb6f R20a (only 200);
+   - 9ba1003 R20b (skip alerts).
+4. Port PR #73's claim-gate fix (cherry-pick `-x` 07e7397, 32e7e5b, as 5d05440, 5226c9e).
+5. GREEN: the F28 files, the full suite as CI runs it, G-0, the mutation check, the claim gate.
+6. PR #72 merged at head 9ba1003 (squash ae50c5b on main). This write-up of the round lands separately (documentation only).
+
+### Ledger
+
+| Step | Command | Result |
+|---|---|---|
+| RED, c6af66d's code + round tests (553c5ff) | both F28 files | **16 failed**, 57 passed: every P1 case SUCCESS; both P2 cases SUCCESS / not partial; the two Bugbot source-run tests fail only on the missing ERROR line; the embedding record test gets `DBAPIError` |
+| RED for Bugbot on 9403795's dispatcher (scratch copy) | the skip record-write test | **1 failed**: `DBAPIError`; `Job failed for NasirLawSite` logged 4 times (the skip was retried 3 times) |
+| RED, + Copilot tests (87efe8e) | both F28 files | **22 failed**, 57 passed (the 16 above + 6 Copilot cases) |
+| Claim-gate port (5226c9e) | `vitest run tests/pr-phase-claim-gate.test.ts` (temporary read-only `node_modules` symlink, removed) | 41 passed |
+| GREEN per commit | targeted `-k` runs of the F28 files with the F20/F25/IHC suites they touch | bbca52e 20 passed; 1af93fd 19 passed; 95c8ce2 15 passed; 4ebc605 5 passed; 73dcb6f 15 passed |
+| GREEN (9ba1003) | both F28 files | **79 passed** (45 unit + 34 e2e) |
+| GREEN full suite (9ba1003) | `python -m pytest corpus_service/tests -q -rf` | **638 passed**, 3 warnings, 157 subtests, 0 skipped (616 + 22 new) |
+| Gate G-0 (9ba1003) | `BASE=origin/main bash ci_gates/gate_g0.sh` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines |
+| Mutation check, review round (scratch copy of 9ba1003, one undo per run) | F28 e2e file (34 tests) | every mutation caught: R1 SHC stages an empty extraction: 3 failed; R2 NA skips the signature check: 1; R3 IHC never fails when every feed fails: 1; R4 feed failures not carried into the run: 2; R5 a record-write failure re-raises the raw error: 2; R6 a database-failed embedding item not counted: 1; R7 Nasir accepts any status below 400: 1; R8 SHC listing accepts any status below 400: 1; R9 a skip not checked for staleness: 1 |

@@ -8,9 +8,9 @@ name: Gate G-0
 # Cost (Actions minutes are billed on this private repository): a draft PR runs none of these jobs; they run when it
 # is opened ready, marked ready for review, or pushed to while ready, and on every push to the branches below. A PR
 # converted to draft starts a run whose jobs all skip, and that run cancels the one in flight (concurrency below). On a
-# PR, the Postgres DDL, corpus_service pytest and document-vault mutation jobs run only when files they depend on
-# changed (the `changes` job);
-# on a push they always run. The Gates G-0/G-1/G-2 job is never path-gated.
+# PR, the Postgres DDL, corpus_service pytest, corpus_service runtime and document-vault mutation jobs run only when
+# files they depend on changed (the `changes` job); on a push they always run. The Gates G-0/G-1/G-2 job is never
+# path-gated.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -61,9 +61,11 @@ jobs:
           #   postgres/ddl) and `npm run probe:fa-data-001` (docs/audit/probes/probe_fa_data_001.mjs).
           # - corpus-service: `python -m pytest corpus_service/tests` with corpus_service/requirements-test.txt; the
           #   Annex A suites read postgres/ddl and tests/fixtures/corpus.
+          # - corpus-runtime (audit F31): `bash corpus_service/tests/e2e/runtime_smoke.sh`, a venv from
+          #   corpus_service/requirements.txt; it shares corpus-service's path gate (the corpus_service output).
           # - mutation-documents: `npm run mutation:documents` (Stryker on platform/documents with the F03 unit
           #   suites in vitest.stryker.documents.config.ts; those suites drive the documents route and uploadDocument).
-          # All three also depend on this workflow file.
+          # All of them also depend on this workflow file.
           postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
           corpus_service_re='^(corpus_service/|postgres/|tests/fixtures/corpus/|\.github/workflows/gate-g0\.yml$)'
           documents_re='^(platform/documents/|platform/http/validation\.ts$|app/api/d1/documents/|services/d1-6/|tests/f03-document-|tests/helpers/s3-document-vault\.ts$|tests/setup/|stryker\.config\.mjs$|stryker\.documents\.config\.mjs$|vitest\.config\.ts$|vitest\.stryker\.documents\.config\.ts$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
@@ -582,3 +584,44 @@ jobs:
         env:
           CORPUS_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/corpus_ci
         run: python -m pytest corpus_service/tests -q
+
+  corpus-runtime:
+    name: corpus_service runtime dependencies (F31)
+    needs: changes
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.corpus_service == 'true'
+    # Audit F31: the production image installs corpus_service/requirements.txt, not the pinned test set above. This
+    # job builds a clean Python 3.12 venv from requirements.txt ONLY and runs tests/e2e/runtime_smoke.py in it against
+    # real Postgres: the strict import contract, `import scraper.models`, every scraper module, `python -m
+    # scraper.migrate`, the API started as compose starts it (uvicorn scraper.main:app) answering /health with
+    # db_connected, and the Celery app with its Redis broker transport and result backend (no Redis server: the live
+    # broker round trip is the F30 compose e2e). requirements.txt is unpinned until F46, so this job resolves current
+    # releases; a failure without a source change is a real break in what the image would install. The production
+    # Docker image itself (apt packages, browser) is not built here (F46).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: corpus_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d corpus_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: corpus_service/requirements.txt
+      - name: Clean runtime venv from requirements.txt only; import, migrate, API /health and Celery app (real Postgres)
+        env:
+          CORPUS_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/corpus_ci
+          PYTHON: python
+        run: bash corpus_service/tests/e2e/runtime_smoke.sh
