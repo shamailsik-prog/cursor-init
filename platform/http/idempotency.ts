@@ -307,11 +307,6 @@ type RequestClaims = { scope: IdempotencyScope; claims: IdempotencyClaim[] }
 
 const requestClaims = new AsyncLocalStorage<RequestClaims>()
 
-/** Claims taken during the current request (empty outside `runWithIdempotencyScope`). */
-export function currentIdempotencyClaims(): readonly IdempotencyClaim[] {
-  return requestClaims.getStore()?.claims ?? []
-}
-
 /** A refusal the route answered itself (status and JSON body), kept when the attempt's effect committed. */
 export type StorableRefusal = { status: number; json: string }
 

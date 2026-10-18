@@ -27,18 +27,6 @@ import { normalizeAuditEntryInPlace } from "@/platform/persistence/auditWriteThr
 import { deleteDoc, doc, installAuditOutbox, type OutboxSession } from "@/platform/persistence/firestoreDbModular"
 import type { AuditEntry, SpineStore } from "@/platform/spine/store"
 
-/** True when the request may delete its outbox entries after a successful flush (spec ruling 18). */
-export function requestReachedAuditedEnd(
-  auditRows: readonly AuditEntry[],
-  responseStatus: number,
-  claims: ReadonlyArray<{ isCompleted: boolean }>
-): boolean {
-  if (responseStatus < 200 || responseStatus >= 300) return false
-  if (claims.length === 0) return true
-  if (!claims.every((claim) => claim.isCompleted)) return false
-  return auditRows.some((row) => row.action !== "permission_check")
-}
-
 /** Who and what a request is, as its outbox entries record it. */
 export type RequestOutboxMeta = {
   /** The session firm; null for a request with no session (public routes, an unknown insecure-dev identity). */

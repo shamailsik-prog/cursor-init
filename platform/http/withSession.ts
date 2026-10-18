@@ -39,8 +39,8 @@ import { attachParsedBody, DEFAULT_JSON_BODY_BYTES, readBodyLimited } from "@/pl
 import { undeclaredQueryParam, unknownParamResponse, type RouteSurface } from "@/platform/http/surface"
 import { runWithRequestAudit } from "@/platform/audit/requestAudit"
 import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
-import { openRequestOutbox, requestReachedAuditedEnd, type RequestOutboxMeta } from "@/platform/persistence/auditOutbox"
-import { currentIdempotencyClaims, runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
+import { openRequestOutbox, type RequestOutboxMeta } from "@/platform/persistence/auditOutbox"
+import { runWithIdempotencyScope, type IdempotencyScope } from "@/platform/http/idempotency"
 
 /**
  * The caller as seen by a handler. `null` only for public routes and for
@@ -311,18 +311,9 @@ async function runAuditedInner(
     )
     return errorResponse(503, "AUDIT_UNAVAILABLE", "audit log unavailable")
   }
+  await outbox.release()
   if ("error" in outcome) throw outcome.error
-  const response = outcome.value
-  if (
-    requestReachedAuditedEnd(
-      outcome.rows,
-      response instanceof Response ? response.status : 200,
-      currentIdempotencyClaims()
-    )
-  ) {
-    await outbox.release()
-  }
-  return response
+  return outcome.value
 }
 
 export async function withSession(
