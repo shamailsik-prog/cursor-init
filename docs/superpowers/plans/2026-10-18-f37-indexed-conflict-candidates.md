@@ -91,3 +91,69 @@ Intent kept in every case; nothing skipped or weakened.
 - `p2.registry-discipline.emu.test.ts`, `setup/registryWriteRecorder.ts`: new recorder rules for the name index (chunk writes bump; `no_name_index`).
 - `tests/firestore.rules.d1-phase2a.test.ts`: `conflict_name_index` joins `SERVER_ONLY`.
 - `f37-screening-guards.emu.test.ts` (PR #80 review): the corrupt-index case expected the job to fail permanently with `name_index_corrupt`; it now expects the job to rebuild the index and the check to succeed (ruling 13). The reconciliation result gains `rebuilt`, and the job's only error code is `reconcile_contended`.
+
+---
+
+## Follow-up: the re-audit at 2b6ef08 (FAIL 6.5/10)
+
+**Spec:** rulings 14 to 18, and the generation in ruling 16. **Base:** `origin/main` 957fe26; `origin/main` c02ebbc (F38 #84) merged in as 5a2325c. **Branch:** `claude/remediate-f37-fu`.
+
+**Findings:** FA-D1C-001 (MEDIUM, a lowered pointer read as complete), FA-D1C-002 (MEDIUM, out-of-band writes missed by name; ruled fixed, not a residual), FA-D1C-003 (LOW, a heal between the counter and chunk reads), FA-D1C-004 (LOW, a name removed inside a chunk), FA-D1C-005 (LOW, the recorder checked creates only), FA-D1C-006 (LOW, six surviving mutants; INFO, no query concurrency cap). One more was found in review here: a row's stamp could outlive the rebuild that dropped its name (fixed with the index generation).
+
+### Tasks
+
+- [x] RED through the real routes on main: `functions/test/f37-fu-reaudit.emu.test.ts` (001 to 004 and the controls) and the FA-D1C-005 cases in `p2.registry-discipline.emu.test.ts` (adf59fd).
+- [x] Fix (76193db): every chunk of the firm read with the counter in one read-only transaction (001, 003); row stamps and the three registry triggers that break the index (002, 004); the recorder checks every screened name a product write sets (005); `inLists` and `QUERY_CONCURRENCY` (006).
+- [x] Survivor tests: `f37-fu-gaps.emu.test.ts` (M18, M19, N08, N09, N10), unit tests for M05 and the cap.
+- [x] Mutation run on the change; X02 and X06 survived and got tests (d14eba1).
+- [x] The real trigger delivery through the Functions emulator, with its latency (`f37-fu-trigger-pipeline.emu.test.ts`; bd22965, 4fb44fd).
+- [x] The stale stamp: RED 538a848, fix dec20e6 (`nameIndexGen`), mutants X12 to X18.
+- [x] Merge `origin/main` c02ebbc (5a2325c).
+- [x] Spec rulings 14 to 18, the P2 README, this ledger, the PR body.
+
+### Recipes
+
+- Emulator suites: a scratch `firebase.json` with firestore 8497, auth 9497, hub 4987, logging 4999, ui off; `firebase emulators:exec --config <scratch> --only auth,firestore --project demo-sikander "cd functions && CI=true npx vitest run --no-cache <files>"`. Parallel reruns used a second set of probed free ports.
+- Trigger pipeline: `npm --prefix functions run build`, then a scratch config that adds a functions emulator port and `"functions": {"source": "<path to functions, relative to the config file's directory>"}` (an absolute source loses its leading slash), and `firebase emulators:exec --config <scratch> --only auth,firestore,functions --project demo-sikander "cd functions && F37_TRIGGER_PIPELINE=1 npx vitest run --no-cache test/f37-fu-trigger-pipeline.emu.test.ts"`. On main the same recipe runs main's `functions/lib`.
+- Main trees: `git archive` exports of `origin/main` with the branch's test files copied in and `node_modules` symlinked.
+
+### RED/GREEN ledger (follow-up)
+
+| Finding | Command (files under `functions/test/`) | main 957fe26 | branch |
+| --- | --- | --- | --- |
+| FA-D1C-001 | `f37-fu-reaudit.emu.test.ts`: pointer lowered 1→0; lowered 2→0 with chunk 1 deleted; a chunk beyond the pointer | 3/3 FAIL, "expected an ApiError, the call succeeded" (the screen answered) | 3/3 PASS: both routes 503, nothing written, the job rebuilds, then the hit and the matter |
+| FA-D1C-002 | same file: O1 rename, O2 client insert, O3 opposing insert, O5 role flip, O6 move between firms (trigger delivered in process) | 5/5 FAIL, same message | 5/5 PASS |
+| FA-D1C-002, delivery | `f37-fu-trigger-pipeline.emu.test.ts` through the Functions emulator, 5 out-of-band renames | FAIL: the mirror never breaks; every screen answers CLEAR for 60 s | PASS in 5 runs (25 renames; the last at dec20e6): first 503 0.1 to 26 s after the write, median 1.4 s, the slowest on each run's first event; one more run at load 16 failed only its old 20 s wait |
+| Stale stamp (own review) | same reaudit file, `-t 'stale stamps'`: O7 restore after a reset, O8 rename back after a reset, O9 restore after a chunk removal, a post-reset control | at 4fb44fd: O7, O8 FAIL "expected an ApiError, the call succeeded"; on the pre-fix src all 4 FAIL | 4/4 PASS (dec20e6) |
+| FA-D1C-003 | same file: the heal race; the reset-and-partial-rebuild race | 2/2 FAIL, `during=CLEAR` | 2/2 PASS, `during=POSSIBLE_CANDIDATE_REVIEW+HIT` |
+| FA-D1C-004 | same file: CT2, the conflicting name removed from chunk 0 | FAIL, "expected an ApiError, the call succeeded" | PASS |
+| FA-D1C-005 | `p2.registry-discipline.emu.test.ts` | 2 FAIL, "expected [] to deeply equal [ 'clients:no_name_index' ]" (8 pass) | 10/10 |
+| FA-D1C-006 | the auditor's survivors M05, M18, M19, N08, N09, N10 against the new tests | survived the shipped suite | 6/6 killed |
+| Controls | product writers, closeMatter, a deletion leave the index current | pass (no triggers) | pass |
+
+The main run of the reaudit and discipline files together: 13 failed, 9 passed (22). The branch run of the reaudit, unit and discipline files: 47/47.
+
+Mutation (each mutant one exact edit in an exported tree, its targeted files): the six survivors and the new mutants X01 to X11 on the fix are all killed, each on its intended assertion. X02 (chunks outside the snapshot), X06 (a break that enqueues no reindex) and X11 (verdicts judging unchanged names) survived at first and were killed by the partial-rebuild race test, an assertion that the trigger enqueues the job before any screen, and running the verdict units. The generation mutants X12 to X18 (trigger ignores the generation; break or reset keeps it; either writer stamps 0; a malformed generation accepted; the trigger never reads it) are all killed by O7 to O9, the post-reset control and the generation unit test. Every earlier mutant, re-run on the final source (X03, X05 and X08 re-anchored to the new code), is still killed: 24 of 24.
+
+Read counts (`f37-conflict-reads.e2e.emu.test.ts`): runConflictCheck 23 and openMatter 27 at N = 500 and N = 2,000 (unchanged; the chunk read is one document per chunk through the id-range query). K = 40 candidates: 144 or 145 at both N, 40 of 40 hits; one `matter_parties` read varies from run to run at the same source. The triggers add no request-path reads. Each one reads one counter document when a write sets a new, stamped screened name.
+
+Recall (`f37-conflict-recall.emu.test.ts`, in the full run at dec20e6): Part 1, 300 registries and 900 subject sets, 7,749 hits (4,803 by name, 629 of them sharing no token), 0 mismatches; Part 2 through the real writers, 36 subject sets and 181 name hits, equal.
+
+| Verification at dec20e6 | Result |
+| --- | --- |
+| Whole functions suite (mirrors `test:emu`, `CI=true`, `--no-cache`) | 89 of 91 files pass, 1 skipped (the trigger pipeline, which needs the Functions emulator); 2,429 tests pass, 1 fails: `d4.gate` "G-1 test 4" at its 15 s limit (18.1 s) |
+| G-2 functions part (`G2_GATE=1`) | 7 of 8; the HTTP-api sweep hit its 15 s limit. Run alone with 120 s limits: 8/8 on the branch (18.2 s) and 8/8 on main (20.4 s) |
+| Typecheck, `eslint --max-warnings 0 functions`, `gate_g0.sh` | 0 errors, 0 warnings, PASSED |
+
+Load note: the machine ran at load 4 to 20 with other agents. The two time-outs are wall-clock bound on both trees: "G-1 test 4" takes 11 to 21 s alone on the branch and on main, and the G-2 HTTP sweep fails at 15 s on main too. They are not an F37 effect.
+
+### Changed test expectations (follow-up)
+
+Intent kept in every case; nothing skipped or weakened.
+
+- `f37-index-integrity.emu.test.ts`: the two refusals run at one router clock, so they share the firm's single on-demand reindex run (now keyed per PKT minute); still exactly one job.
+- `f37-screening-guards.emu.test.ts`: the burst's job id uses `pktMinuteKey` at a fixed clock; the minute key is unit-tested; index contents are read with `readIndexedNames(firmId).names` (the loader no longer returns them).
+- `f37-conflict-recall.emu.test.ts`, `f37-conflict-reads.e2e.emu.test.ts`: `readIndexedNames(firmId).names`; the K = 40 case uses distinct names and matches each hit to its own matter (M05).
+- `p2.boot`, `p5.identity`, `g2.cross-firm` (`NOT_TENANT_ENDPOINTS`): the three trigger exports, with their region, document path and retry.
+- `p2.registry-discipline.emu.test.ts`, `setup/registryWriteRecorder.ts`: stamped creates carry `{ firmId, name, gen }`; two new cases; the F37 describes delete their firm's documents.
+- `f37-name-index.test.ts`: the verdict takes the current generation.
