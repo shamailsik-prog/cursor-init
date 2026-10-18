@@ -4,7 +4,9 @@ what cannot succeed, give back what a failed batch holds, and record and alert o
 Audit F27 (spec docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md, R1-R16):
 
 1. Reclaim (R3): rows whose lease expired return to `pending` with the attempt counted once (or go
-   to the dead letter at `max_attempts`); their `started` receipts become `abandoned`.
+   to the dead letter at `max_attempts`); their `started` receipts become `abandoned`. A row whose
+   current operation has a paid answer held by a receipt is not charged and is due at once (review
+   round 1), so a paid answer is never stranded in the dead letter.
 2. Claim (R1, R2): one `UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 50)` marks the due
    rows `processing` under this batch's lease token, committed before any provider call. Every later
    write to a claimed row is fenced on the token.
@@ -72,6 +74,9 @@ OPERATION_IN_FLIGHT = "operation_in_flight"
 
 LEASE_EXPIRED_TEXT = (
     "lease expired: the batch that held this row ended without giving it back; cause unknown"
+)
+LEASE_EXPIRED_ANSWERED_TEXT = (
+    "lease expired after the provider answered: the held answer is stored by the next claim, with no new request"
 )
 
 # The text embedded per table: (title-like, label-like, body) columns, as main built it.
@@ -164,16 +169,40 @@ _CHARGE_SET = """
        error_message = :message,
        lease_owner = NULL, lease_expires_at = NULL, updated_at = now()"""
 
-RECLAIM_SQL = f"""
-WITH expired AS (
-  SELECT id FROM embedding_queue
-   WHERE status = 'processing' AND lease_expires_at <= now()
-   ORDER BY lease_expires_at, id
-   LIMIT :limit
-   FOR UPDATE SKIP LOCKED)
+# R3: the expired rows this batch reclaims, locked until its reclaim commits (two reclaims never take
+# the same row).
+EXPIRED_SQL = """
+SELECT id, table_name, record_id, embedding_model, embedding_dimensions FROM embedding_queue
+ WHERE status = 'processing' AND lease_expires_at <= now()
+ ORDER BY lease_expires_at, id
+ LIMIT :limit
+ FOR UPDATE SKIP LOCKED"""
+
+# R3 (review round 1): which of these operations already has a paid answer held by a receipt.
+HELD_ANSWERS_SQL = """
+SELECT operation_id FROM embedding_attempts
+ WHERE operation_id = ANY(:ops) AND outcome = 'answered' AND embedding IS NOT NULL"""
+
+# An expired row with no usable held answer: the lost attempt is charged once (R3, R8).
+RECLAIM_CHARGE_SQL = f"""
 UPDATE embedding_queue q SET {_CHARGE_SET}
-  FROM expired WHERE q.id = expired.id
+ WHERE q.id = ANY(:ids)
 RETURNING q.id, q.status"""
+
+# An expired row whose current operation has a held answer: the attempt was paid and answered, so it
+# is not charged; the row is due at once and R6 (b) stores the answer on its next claim.
+RECLAIM_ANSWERED_SQL = """
+UPDATE embedding_queue SET status = 'pending', next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
+       error_type = :error_type, error_message = :message, updated_at = now()
+ WHERE id = ANY(:ids)"""
+
+# R7 in the reclaim: a held answer for one of these records under another operation (its text
+# changed, or the record cannot be embedded any more) can never be stored; its vector is dropped.
+SUPERSEDE_STALE_SQL = """
+UPDATE embedding_attempts a SET outcome = 'superseded', embedding = NULL, finished_at = now()
+  FROM unnest(CAST(:tables AS text[]), CAST(:records AS uuid[]), CAST(:ops AS text[])) AS k(table_name, record_id, op)
+ WHERE a.table_name = k.table_name AND a.record_id = k.record_id AND a.outcome = 'answered'
+   AND (k.op IS NULL OR a.operation_id <> k.op)"""
 
 # Receipts left `started` by the reclaimed rows' dead batch, and any `started` receipt older than a
 # lease (its batch's lease has expired, so the batch is gone: R2).
@@ -287,6 +316,7 @@ class BatchCounts:
         self.claimed = 0
         self.missing = 0
         self.reclaimed = 0
+        self.reclaimed_answered = 0  # review round 1: reclaimed rows not charged (a paid answer was held)
         self.dead_lettered: Counter = Counter()
         self.reused = 0
         self.superseded = 0
@@ -304,6 +334,7 @@ class BatchCounts:
             "missing": self.missing,
             "errors": dict(self.tally.errors),
             "reclaimed": self.reclaimed,
+            "reclaimed_answered": self.reclaimed_answered,
             "dead_lettered": sum(self.dead_lettered.values()),
             "dead_letter_reasons": dict(self.dead_lettered),
             "reused": self.reused,
@@ -331,6 +362,13 @@ class _Batch:
         return {"base": float(outcomes.RETRY_BASE_SECONDS), "cap": float(outcomes.RETRY_MAX_SECONDS)}
 
     async def run(self) -> None:
+        try:
+            await self._run()
+        except (Exception, *outcomes.INTERRUPTIONS) as exc:
+            await self._alerts_after_failure(exc)  # R11: a failed batch alerts too (review round 1)
+            raise
+
+    async def _run(self) -> None:
         async with SessionLocal() as db:
             self.db = db
             await self._reclaim()
@@ -349,22 +387,56 @@ class _Batch:
                     self.counts.tally.item_failed(exc)
                 await self._give_back(exc)
                 raise
-            finally:
-                await self._alerts()
+            await self._alerts(db)
 
     # -- R3 ------------------------------------------------------------------------------------
     async def _reclaim(self) -> None:
-        reclaimed = (await self.db.execute(text(RECLAIM_SQL), {
-            "limit": RECLAIM_LIMIT, "error_type": LEASE_EXPIRED, "message": LEASE_EXPIRED_TEXT, **self._backoff(),
-        })).all()
-        await self.db.execute(text(ABANDON_SQL), {"ids": [r.id for r in reclaimed], "lease": float(LEASE_SECONDS)})
+        """Reclaim up to RECLAIM_LIMIT expired leases in one transaction. Review round 1 (Codex
+        4307196399): a row whose current operation has an answered receipt holding a vector is not
+        charged (its attempt was paid and answered; only the store was lost) and is due at once, so
+        even on its last attempt it is never dead-lettered with its paid answer stranded. Every other
+        expired row is charged once, or dead-lettered at max_attempts. Held answers of these records
+        under any other operation are superseded (R7)."""
+        expired = (await self.db.execute(text(EXPIRED_SQL), {"limit": RECLAIM_LIMIT})).all()
+        current = {row.id: await self._current_operation(row) for row in expired}
+        ops = sorted({op for op in current.values() if op is not None})
+        held = set((await self.db.execute(text(HELD_ANSWERS_SQL), {"ops": ops})).scalars()) if ops else set()
+        spared = [row.id for row in expired if current[row.id] in held]
+        charged = [row.id for row in expired if current[row.id] not in held]
+        if spared:
+            await self.db.execute(text(RECLAIM_ANSWERED_SQL), {
+                "ids": spared, "error_type": LEASE_EXPIRED, "message": LEASE_EXPIRED_ANSWERED_TEXT,
+            })
+        statuses = []
+        if charged:
+            statuses = (await self.db.execute(text(RECLAIM_CHARGE_SQL), {
+                "ids": charged, "error_type": LEASE_EXPIRED, "message": LEASE_EXPIRED_TEXT, **self._backoff(),
+            })).all()
+        if expired:
+            await self.db.execute(text(SUPERSEDE_STALE_SQL), {
+                "tables": [row.table_name for row in expired], "records": [row.record_id for row in expired],
+                "ops": [current[row.id] for row in expired],
+            })
+        await self.db.execute(text(ABANDON_SQL), {"ids": [row.id for row in expired], "lease": float(LEASE_SECONDS)})
         await self.db.commit()
-        self.counts.reclaimed = len(reclaimed)
-        for row in reclaimed:
+        self.counts.reclaimed = len(expired)
+        self.counts.reclaimed_answered = len(spared)
+        for row in statuses:
             if row.status == DEAD_LETTER:
                 self.counts.dead_lettered[MAX_ATTEMPTS] += 1
-        if reclaimed:
-            logger.warning("F27: reclaimed %d embedding row(s) whose lease expired", len(reclaimed))
+        if expired:
+            logger.warning("F27: reclaimed %d embedding row(s) whose lease expired: %d charged, %d with a paid "
+                           "answer held (not charged)", len(expired), len(charged), len(spared))
+
+    async def _current_operation(self, row) -> Optional[str]:
+        """The operation a row would embed now, or None when it cannot be embedded (R9 would
+        dead-letter it on its next claim)."""
+        if row.table_name not in SOURCES or SUPPORTED_MODELS.get(row.embedding_model) != row.embedding_dimensions:
+            return None
+        record = await self._read_record(row, lock=False)
+        if record is None or text_problem(record[0]) is not None:
+            return None
+        return operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, record[0])
 
     # -- R1 ------------------------------------------------------------------------------------
     async def _claim(self) -> List[Any]:
@@ -527,8 +599,10 @@ class _Batch:
     # -- R10 -----------------------------------------------------------------------------------
     async def _give_back(self, exc: BaseException) -> None:
         """Give back what the batch still holds, in a fresh session, never replacing the batch's own
-        exception. On an interruption nothing is charged (F28 R26); otherwise the row in flight is
-        charged once. If this cannot run, the leases expire and the next batch reclaims the rows (R3)."""
+        exception. On an interruption nothing is charged (F28 R26) and a request still out is
+        `interrupted`; otherwise the row in flight is charged once and its `started` receipt is
+        `failed` with the row's error type (review round 1, Bugbot 4307214719; kept from Autofix
+        c2266ae). If this cannot run, the leases expire and the next batch reclaims the rows (R3)."""
         await self._discard_session()
         charge = None if outcomes.is_interruption(exc) else self.current
         try:
@@ -539,12 +613,11 @@ class _Batch:
                         await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
                     except LeaseLost:
                         logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
-                released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
-                if charge is not None:
                     await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
                         "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
                     })
-                else:
+                released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
+                if outcomes.is_interruption(exc):
                     await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
                 await db.commit()
                 self.counts.released = len(released)
@@ -575,11 +648,26 @@ class _Batch:
             logger.warning("F27: dropping the failed embedding batch's connection: %s", outcomes.describe_error(exc))
 
     # -- R11 -----------------------------------------------------------------------------------
-    async def _alerts(self) -> None:
-        now, oldest, total = (await self.db.execute(text(ALERT_STATE_SQL), {
+    async def _alerts_after_failure(self, exc: BaseException) -> None:
+        """R11 for a batch that failed (review round 1, Bugbot 4307214725): evaluated in a fresh session
+        (the batch's own may be broken). An alert that cannot be evaluated is logged and never replaces
+        the batch's own exception; only a new interruption propagates (F28 R23)."""
+        try:
+            async with SessionLocal() as db:
+                await self._alerts(db)
+        except Exception as alert_exc:
+            if outcomes.is_interruption(alert_exc):
+                raise
+            logger.error(
+                "F27: could not evaluate the embedding alerts after the batch failed (%s); the batch's own error: %s",
+                outcomes.describe_error(alert_exc), outcomes.describe_error(exc),
+            )
+
+    async def _alerts(self, db) -> None:
+        now, oldest, total = (await db.execute(text(ALERT_STATE_SQL), {
             "cap_plus_one": DEAD_LETTER_COUNT_CAP + 1,
         })).one()
-        await self.db.commit()
+        await db.commit()
         self.counts.dead_letter_total = min(int(total), DEAD_LETTER_COUNT_CAP)
         total_text = f"{DEAD_LETTER_COUNT_CAP}+" if total > DEAD_LETTER_COUNT_CAP else str(total)
         alerts = []
