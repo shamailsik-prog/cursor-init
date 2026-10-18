@@ -17,7 +17,8 @@ A scheduled job is a cron tick that enqueues one run per firm per period. The ru
 
 | jobType | Cron (PKT) | Period |
 | --- | --- | --- |
-| none in Phase 3a | | |
+| `d1.autoconfirm` | `15 2 * * *` | day |
+| `d1.conflict.reindex` | `35 2 * * *` | day |
 
 To add one: register its handler in `registry.ts`, add a `ScheduledJobSpec` to `SCHEDULED_JOBS` in `scheduled.ts`, and export `scheduledJobFunction(spec)` from `functions.ts` (and list the export in `NOT_TENANT_ENDPOINTS` in `functions/test/g2.cross-firm.test.ts`).
 
@@ -52,4 +53,20 @@ carrying codes only, never payload values. Create the log-based alert policy at 
 
 ## Scheduled job types
 
-`d1.autoconfirm` (Phase 3c, P3-43) is the one scheduled type: `SCHEDULED_JOBS` in `scheduled.ts`, deployed as `d1AutoConfirmTick`. Every scheduled tick retries up to 3 times (60 s to 600 s backoff, `SCHEDULE_RETRY`, O-43); runs are idempotent per firm and period, so a retry reuses what the failed tick created.
+Two scheduled types, both in `SCHEDULED_JOBS` (`scheduled.ts`). Every scheduled tick retries up to 3 times (60 s to 600 s backoff, `SCHEDULE_RETRY`, O-43); runs are idempotent per firm and period, so a retry reuses what the failed tick created.
+
+- `d1.autoconfirm` (Phase 3c, P3-43), deployed as `d1AutoConfirmTick`.
+- `d1.conflict.reindex` (audit F37; spec `docs/superpowers/specs/2026-10-18-f37-indexed-conflict-candidates-design.md` ruling 7), deployed as `d1ConflictReindexTick`, daily at 02:35 PKT. It reconciles the firm's conflict name index (`conflict_name_index/{firmId}_{n}`, state on `counters/{firmId}_registry.nameIndex`) with the firm's clients and opposing parties. It also runs on demand: when a screen finds the index missing, stale, of another schema or unreadable, `runConflictCheck` and `openMatter` answer 503 `screening_unavailable` and enqueue one run for the firm per PKT hour (run key `d1.conflict.reindex:stale:<YYYY-MM-DDTHH>`).
+
+### Deploy backfill for `d1.conflict.reindex` (F37)
+
+Firms that existed before F37 have no name index, and their screens answer 503 `screening_unavailable` until their first reconciliation. Right after the deploy, run the day's reconciliation for every firm:
+
+    npm --prefix functions run build
+    npm --prefix functions run jobs:backfill -- d1.conflict.reindex <today> <today>
+
+`<today>` is the PKT day key (`YYYY-MM-DD`). Firms created after the deploy need nothing: their first `registerClient` creates the index current.
+
+### Runbook: `name_index_corrupt`
+
+`d1.conflict.reindex` fails permanently with `name_index_corrupt` (and dead-letters) when the firm's index is malformed: a chunk that is missing below the pointer, belongs to another firm, or holds something other than an array of strings, or a malformed `nameIndex` state. Only an out-of-band edit produces one. The firm's screens refuse (503) until it is rebuilt. To rebuild: delete every `conflict_name_index/{firmId}_*` document of the firm **and** the `nameIndex` field of `counters/{firmId}_registry` (leave `version`), then run the backfill above for the firm's day, or let the next refused screen enqueue a run. Deleting only one of the two leaves the index corrupt or missing.

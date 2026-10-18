@@ -202,8 +202,12 @@ function clientOf(caller: Caller, client: DocumentData | undefined): { entityId:
  * (P3-40, nothing written; a check already marked stale answers check_stale first); a listed member
  * who is not an active same-firm staff user 400 invalid_member.
  * Before the transaction the stored subjects are re-screened against the current registry (the
- * runConflictCheck engine, no daily-limit spend, no check written); a non-NONE hit the check does not
- * already hold (or hold resolved) marks the check stale in the transaction and answers 409 check_stale.
+ * runConflictCheck engine and its F37 candidate loader, which reads only the rows that can hit; no
+ * daily-limit spend, no check written); a non-NONE hit the check does not already hold (or hold resolved)
+ * marks the check stale in the transaction and answers 409 check_stale. When the firm's conflict name index
+ * cannot be trusted (missing, another schema, behind the registry version, unreadable) the open is refused
+ * before any write with 503 screening_unavailable and a `d1.conflict.reindex` run is enqueued
+ * (conflict/screening.ts).
  * The screen is tied to the transaction by the firm's registry version (`counters/{firmId}_registry`,
  * registryVersion.ts; Bugbot PR #8): read before the screen and again first in the transaction. A
  * moved version (a registry write committed in between) makes the round write nothing, no audit row

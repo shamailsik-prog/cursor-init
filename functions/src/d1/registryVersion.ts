@@ -3,29 +3,40 @@ import { adminDb } from "../admin"
 
 /**
  * The firm's conflict-registry version (Bugbot PR #8; spec P2-6, P2-30). `openMatter` re-screens a
- * check against `loadRegistry` before its transaction; this counter makes that screen consistent with
- * the transaction. Every write that changes what `loadRegistry` reads (and the screen consumes) bumps
- * it in that write's own transaction:
+ * check before its transaction; this counter makes that screen consistent with the transaction. Every
+ * write that changes what the screen consumes (what `loadRegistry` reads, and since F37 the conflict name
+ * index) bumps it in that write's own transaction:
  *
- * - registerClient: `clients` (+ `entities`) and candidate `entity_links`;
- * - openMatter: `matters` and `matter_parties`;
+ * - registerClient: `clients` (+ `entities`), candidate `entity_links`, and the client's name in the index;
+ * - openMatter: `matters` and `matter_parties`, and the opposing names the index lacks;
  * - closeMatter: `matters.status` and `matter_parties.matterStatus`;
  * - confirmMerge, disputeLink, rejectLink: `entity_links` state;
- * - unmergeEntity and the un-merge saga jobs (`d1.unmerge.links`, `d1.unmerge.checks`): `entity_links` state.
+ * - unmergeEntity and the un-merge saga jobs (`d1.unmerge.links`, `d1.unmerge.checks`): `entity_links` state;
+ * - the auto-confirm job (`d1.autoconfirm`): `entity_links` state;
+ * - the name index reconciliation (`d1.conflict.reindex`): the index's chunks and state.
+ *
+ * Audit F37: the doc also holds the name index state (`nameIndex = { schema, version, chunk, bytes }`,
+ * `conflict/nameIndex.ts`). Every bump moves `nameIndex.version` with `version`, so the index reads current
+ * exactly while every registry write goes through `bumpRegistryVersion`; a write that bumps the version
+ * alone (an older instance during a deploy, a manual edit) leaves the index stale and the screen refuses.
+ * One read of this doc gives the screen its version and the index state together.
  *
  * Not bumped: advanceStage (writes `matters.stage`, which the screen never reads); the `firms` doc
  * writers (prefixes, MFA policy, onboarding: fields the screen never reads; `featureFlags.L17_2_ENABLED`
  * has no writer in functions/src); `transliteration_map` (no writer in functions/src).
  *
- * Enforced at test time (spec P3-20): `REGISTRY_SCOPE` below names what `loadRegistry` reads, and the
- * vitest setup file `functions/test/setup/registryWriteRecorder.ts` fails any functions test in which
- * code under functions/src writes an in-scope field of those collections in a transaction that stages
- * no bump (or writes one outside a transaction). `p2.registry-discipline.emu.test.ts` proves the
- * recorder reports a missing bump and that `loadRegistry` reads exactly these collections.
+ * Enforced at test time (spec P3-20): `REGISTRY_SCOPE` below names what `loadRegistry` reads (with
+ * `PROJECTION_SCOPE`, the name index chunks), and the vitest setup file
+ * `functions/test/setup/registryWriteRecorder.ts` fails any functions test in which code under
+ * functions/src writes an in-scope field of those collections in a transaction that stages no bump (or
+ * writes one outside a transaction), or creates a named client or opposing party without the index-aware
+ * bump of `stageRegistryWrite`. `p2.registry-discipline.emu.test.ts` proves the recorder reports both and
+ * that `loadRegistry` reads exactly `REGISTRY_SCOPE`.
  *
  * The doc lives with the other per-firm counters, `counters/{firmId}_registry` (server-only under
  * firestore.rules: `counters` denies every client read and write). The bump is a blind
- * `FieldValue.increment` write, so it needs no read and may sit anywhere among a transaction's writes.
+ * `FieldValue.increment` write, so it needs no read and may sit anywhere among a transaction's writes;
+ * the writers that add names read the doc first (`readRegistryStateTx`) for the index's open chunk.
  */
 
 /** A collection's registry scope: every field, every field but some, or only some (top-level names). */

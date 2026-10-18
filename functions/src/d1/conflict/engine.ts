@@ -9,9 +9,11 @@ import { screen, summarise, type Candidate, type Hit, type IdentityBasis, type K
 
 /**
  * Firestore side of the Module 6 conflict engine (spec P2-3..P2-5, P2-13, P2-18; L18 §7).
- * Loads the firm's registry (clients, opposing `matter_parties`, matters, `entity_links`,
- * `transliteration_map`), tailors each candidate's link state to the subject being screened
- * (only the link on the matched key counts), and runs the pure `screen`.
+ * Builds the screening registry (clients, opposing `matter_parties`, matters, `entity_links`,
+ * `transliteration_map`) with `buildRegistry`, tailors each candidate's link state to the subject being
+ * screened (only the link on the matched key counts), and runs the pure `screen`. Screens get their rows
+ * from the candidate loader (`candidates.ts`, audit F37), which reads only the rows that can hit;
+ * `loadRegistry` reads the whole registry and is the full-scan oracle.
  */
 
 /** Entity link auto-confirm window (P2-5, L18 §7.1); defined with the link state model. */
