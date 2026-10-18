@@ -356,7 +356,8 @@ describe("F39 lockfile guard: install surfaces install frozen", () => {
     expectFail(
       root,
       '.cursor/environment.json:2: non-frozen npm command "npm install"',
-      '.claude/hooks/session-start.sh:3: non-frozen npm command "npm install --prefix"',
+      // Review round 2: the quoted value no longer ends the command, so the whole command is reported.
+      '.claude/hooks/session-start.sh:3: non-frozen npm command "npm install --prefix $dir --no-audit"',
       'package.json: scripts.setup: non-frozen npm command "npm install"',
     )
   })
@@ -389,6 +390,12 @@ describe("F39 lockfile guard: install surfaces install frozen", () => {
       ].join("\n"),
     )
     write(root, ".claude/hooks/session-start.sh", '#!/bin/bash\n# npm ci installs exactly what the lockfile pins.\nnpm ci --prefix "$dir" --no-audit\n')
+    // Review round 2: a variable npm ci target fails closed unless the allowlist vouches for it.
+    write(root, "ci_gates/lockfile_install_allowlist.json", {
+      entries: [
+        { surface: ".claude/hooks/session-start.sh", command: "npm ci --prefix $dir --no-audit", directories: [".", "functions"], reason: "fixture" },
+      ],
+    })
     const r = guard(root)
     expect(r.out).toContain("PASS: install surfaces install frozen (npm ci)")
     expect(r.code).toBe(0)
@@ -528,10 +535,14 @@ describe("F39 lockfile guard: review round (Codex P2 x2 on PR #66)", () => {
     )
   })
 
-  it("P2-2: npm ci where a lockfile exists passes, and a prefix held in a variable is not guessed", () => {
+  it("P2-2: npm ci where a lockfile exists passes, and a prefix held in a variable passes once vouched for", () => {
     const root = tree()
     write(root, "tools/site/package.json", { name: "site", version: "1.0.0", private: true })
     write(root, ".claude/hooks/session-start.sh", '#!/bin/bash\nfor dir in . functions; do npm ci --prefix "$dir"; done\n')
+    // Review round 2: a variable target is no longer skipped; it fails closed unless vouched for (see the round 2 cases).
+    write(root, "ci_gates/lockfile_install_allowlist.json", {
+      entries: [{ surface: ".claude/hooks/session-start.sh", command: "npm ci --prefix $dir", directories: [".", "functions"], reason: "fixture" }],
+    })
     write(root, ".cursor/environment.json", { install: "npm ci && npm --prefix ./functions ci && npm ci --prefix=functions/" })
     const r = guard(root)
     expect(r.out).toContain("PASS: install surfaces install frozen (npm ci)")

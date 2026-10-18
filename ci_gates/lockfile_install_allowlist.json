@@ -1,0 +1,23 @@
+{
+  "_doc": "Audit F39 (spec ruling R3c): every directory an install surface runs `npm ci` in must hold a package.json and a lockfile. ci_gates/check_lockfiles.py reads the target from the command's --prefix or -C, the step's working-directory and any cd before it. When it cannot (a variable, or a cd to an absolute or computed path), the command fails closed unless an entry here vouches for it: the surface file, the npm command exactly as the guard prints it (quotes removed), the directories it installs, which the guard then checks, and why. An entry that no longer matches any command fails as stale.",
+  "entries": [
+    {
+      "surface": ".claude/hooks/session-start.sh",
+      "command": "npm ci --prefix $dir --no-audit --no-fund --no-update-notifier --loglevel=error",
+      "directories": [".", "functions"],
+      "reason": "Inside install_pkg(), which the hook calls only as `install_pkg .` and `install_pkg functions` (lines 26-27), after it cds to the project directory (line 13)."
+    },
+    {
+      "surface": ".cursor/environment.json",
+      "command": "npm ci",
+      "directories": ["."],
+      "reason": "The install command first cds to the checkout (/agent/repos/cursor-init, or $(git rev-parse --show-toplevel)), which is the repository root."
+    },
+    {
+      "surface": ".cursor/environment.json",
+      "command": "npm --prefix functions ci",
+      "directories": ["functions"],
+      "reason": "Same command, after the cd to the repository root: --prefix functions is functions/."
+    }
+  ]
+}

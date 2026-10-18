@@ -87,8 +87,14 @@ function buildBaseTree(): string {
     // Root Playwright e2e tooling: the one sanctioned Playwright use (root devDependency,
     // root config, root tests/ specs, and the script that runs them).
     "package.json",
-    // Check [18] (audit F39) requires the root manifest's lockfile beside it, matching it.
+    // Check [18] (audit F39) requires the root manifest's lockfile beside it, matching it, and the install surfaces
+    // that ci_gates/lockfile_install_allowlist.json vouches for (an entry without its surface fails as stale), with
+    // the directories they install (the root and functions/).
     "package-lock.json",
+    ".claude/hooks",
+    ".cursor/environment.json",
+    "functions/package.json",
+    "functions/package-lock.json",
     "playwright.config.ts",
     "tests/e2e",
     "scripts/e2e-console-auth.sh",

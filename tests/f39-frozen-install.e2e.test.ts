@@ -27,6 +27,8 @@ const CHECKED_IN = [
   ".github/workflows",
   ".cursor/environment.json",
   ".claude/hooks",
+  // Vouches for the hook's and the Cursor environment's npm ci targets (review round 2).
+  "ci_gates/lockfile_install_allowlist.json",
 ]
 // npx may download npm the first time; a dry run itself takes a few seconds.
 const NPM_TIMEOUT_MS = 180_000
