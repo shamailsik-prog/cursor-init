@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { concurrencyLimit, IN_LIMIT, inLists, matchingNames } from "../src/d1/conflict/candidates"
 import { NAME_THRESHOLD, nameScore, screen, type Candidate, type Subject } from "../src/d1/conflict/match"
-import { indexedNamesOf, NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
+import { indexedNamesOf, isChunkIdOf, NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
 import { chunkWriteVerdict, rowWriteVerdict } from "../src/d1/conflict/registryTriggers"
 import { nameForms, usesFallback } from "../src/d1/conflict/normalise"
-import { nameIndexGenOf, registryStateOf, type RegistryState } from "../src/d1/registryVersion"
+import { nameIndexGenOf, nextNameIndexGen, registryStateOf, type RegistryState } from "../src/d1/registryVersion"
 
 /** Audit F37: the pure parts of the name index and the name tier (no emulator). */
 
@@ -261,3 +261,17 @@ describe("the registry triggers' verdicts (F37 re-audit FA-D1C-002, FA-D1C-004)"
   })
 })
 
+describe("PR #89 review: chunk ids and the absolute generation", () => {
+  it("a chunk id is the firm id, an underscore and a canonical number: a longer firm id's chunk or `_01` is no chunk of the firm", () => {
+    for (const id of ["F_0", "F_1", "F_10", "F_400"]) expect([id, isChunkIdOf("F", id)]).toEqual([id, true])
+    for (const id of ["F_01", "F_00", "F_1_0", "F_", "F_x", "G_1", "F1"]) expect([id, isChunkIdOf("F", id)]).toEqual([id, false])
+  })
+
+  it("the generation a reset or a break writes is above the stored one and above the version (a malformed one reads 0)", () => {
+    expect(nextNameIndexGen(state({ version: 10, nameIndexGen: 3 }))).toBe(11)
+    expect(nextNameIndexGen(state({ version: 10, nameIndexGen: 20 }))).toBe(21)
+    expect(nextNameIndexGen(registryStateOf(true, { version: 7, nameIndexGen: "x" }))).toBe(8)
+    expect(nextNameIndexGen(registryStateOf(true, { version: 7, nameIndexGen: 2.5 }))).toBe(8)
+    expect(nextNameIndexGen(registryStateOf(false, undefined))).toBe(1)
+  })
+})
