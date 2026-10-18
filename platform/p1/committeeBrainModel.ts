@@ -25,6 +25,7 @@ import {
   partyNamesFromProviderOptions,
   promptToTurns,
 } from "@/platform/p1/promptText"
+import { PROVIDER_KEY_IN_RUNTIME_REASON, checkProviderKeys } from "@/platform/p1/providerKeyGuard"
 
 const EMPTY_USAGE: LanguageModelV3Usage = {
   inputTokens: {
@@ -44,34 +45,32 @@ function blockedAssistantText(reason: string): string {
   return `P1 Committee Brain blocked the provider call. ${reason}`
 }
 
+/**
+ * A refusal the bridge makes before it reaches callCommitteeBrain. Audit F18 (R5; PR #88 review round 1): callCommitteeBrain
+ * runs the provider-key check first, so these two exits run it themselves: the alert line is logged on every bridge path,
+ * and in production with a key the key reason is reported, as callCommitteeBrain reports it.
+ */
+function refusedBeforeP1(reason: string, raw: string): LanguageModelV3GenerateResult {
+  const keys = checkProviderKeys("p1-call")
+  return {
+    content: [{ type: "text", text: blockedAssistantText(keys.refuse ? PROVIDER_KEY_IN_RUNTIME_REASON : reason) }],
+    finishReason: { unified: "error", raw: keys.refuse ? "provider key in runtime" : raw },
+    usage: EMPTY_USAGE,
+    warnings: [],
+  }
+}
+
 async function runP1(
   options: LanguageModelV3CallOptions
 ): Promise<LanguageModelV3GenerateResult> {
   const classification = classificationFromProviderOptions(options.providerOptions)
   if (!classification) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: blockedAssistantText(
-            "classification missing from providerOptions.sikander — P1 refuses the call"
-          ),
-        },
-      ],
-      finishReason: { unified: "error", raw: "omitted classification" },
-      usage: EMPTY_USAGE,
-      warnings: [],
-    }
+    return refusedBeforeP1("classification missing from providerOptions.sikander — P1 refuses the call", "omitted classification")
   }
 
   const converted = promptToTurns(options.prompt)
   if (!converted.ok) {
-    return {
-      content: [{ type: "text", text: blockedAssistantText(converted.reason) }],
-      finishReason: { unified: "error", raw: "unsupported prompt part" },
-      usage: EMPTY_USAGE,
-      warnings: [],
-    }
+    return refusedBeforeP1(converted.reason, "unsupported prompt part")
   }
 
   const result = await callCommitteeBrain({

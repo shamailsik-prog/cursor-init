@@ -7,7 +7,7 @@ import {
   setTransportForTests,
 } from "@/platform/p1/internalAICaller"
 import type { OutboundRequest } from "@/platform/p1/internalAICaller"
-import { readGatewayApiKey } from "@/platform/p1/gatewayTransport"
+import { providerKeysPresent } from "@/platform/p1/providerKeyGuard"
 import committeeAgent from "@/agent/agent"
 import { classificationPolicy, maskPreview, normaliseCaseNumber } from "@/platform/p1/eveTools"
 
@@ -16,8 +16,9 @@ afterEach(() => {
 })
 
 describe("eve Committee Brain — P1 is the only outbound path", () => {
-  it("does not expose a live Gateway key in Phase 0", () => {
-    expect(readGatewayApiKey()).toBeUndefined()
+  // Audit F18 (R12): `readGatewayApiKey` went with the deleted Next transport; the runtime guard reads the keys now.
+  it("runs with no provider key in the test environment (the Next/eve runtime holds none)", () => {
+    expect(providerKeysPresent()).toEqual([])
   })
 
   it("wires the eve agent to the P1 LanguageModel, not a Gateway string", () => {

@@ -154,6 +154,9 @@ jobs:
           key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: firebase-emulators-${{ runner.os }}-
       - run: npm ci
+      # The audit F18 e2e (tests/f18-legacy-ai-path.e2e.firestore.test.ts) serves the real Functions `api` router in process.
+      - name: Functions install
+        run: npm --prefix functions ci
       - name: Rules and persistence suites (Firestore emulator)
         run: npm run test:rules
 
