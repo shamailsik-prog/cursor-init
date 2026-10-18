@@ -143,6 +143,7 @@ Registering a job type and a schedule touches the documented extension points (`
 ### Ruling 12: tests
 
 - e2e (the real flow): `functions/test/f37-conflict-reads.e2e.emu.test.ts`, registerClient → runConflictCheck → openMatter through the HTTP router with P5 auth, N = 500 and 2,000; reads counted by `functions/test/readCounter.ts`.
+- e2e, candidates: the same file adds K = 40 clients the name rule matches (more than one `in` chunk) to firms of N = 500 and 2,000: every candidate hits, the reads K adds are per candidate (client, matter, and the caller's membership read when the hit is disclosed: at most 3K + 3⌈K/30⌉ + 2), and the total is flat in N.
 - Differential (recall): `functions/test/f37-conflict-recall.emu.test.ts`, 300 random registries seeded out of band and reconciled, with Roman variants and typos, Urdu-script names (seed table and firm map words), honorifics, shared and differing keys, entities and links in every state, closed and live matters, foreign and unknown matter ids and labels, the L17.2 flag on and off. For each registry and several random subject sets, the indexed screen's `EngineResult` must deep-equal the oracle's. A second part builds registries only through the real writers (no reconciliation) and compares the same way.
 - Fail closed: missing, stale (version moved without the mirror), wrong schema and corrupt chunk each answer 503 `screening_unavailable`, enqueue one reindex job, and write nothing; after the job runs the same call succeeds.
 - Race: a client whose name fuzzily matches an opposing party (no shared token) registered between the pre-screen and the transaction is caught (`check_stale`).
@@ -164,6 +165,7 @@ Registering a job type and a schedule touches the documented extension points (`
 4. Conservative byte counting can close chunks early (each `registerClient` counts its name even when present); worst case one extra chunk read per 512 KiB of repeated names. No compaction yet.
 5. A firm cannot screen between deploy and its first reconciliation (ruling 5).
 6. A corrupt chunk (out-of-band edit) refuses screening until an operator deletes the firm's chunks and its `nameIndex` field and the job rebuilds them (runbook in the P2 README).
+7. Test cost: the recall differential runs ~10 minutes on the shared development machine at low load (22 minutes at load ~23); from per-file timing ratios against CI it should add about 6 to 9 minutes to the CI functions job (about 10 minutes today, 30-minute limit). It deletes the ~300 to 390 `firms` docs it creates when it ends, because the P2 scheduled-tick suites are O(firms) in the shared emulator.
 
 ## 6. Follow-ups
 
