@@ -32,4 +32,14 @@ Environment: one Python 3.12 venv from `corpus_service/requirements-test.txt`; P
 
 ## 3. RED/GREEN ledger
 
-(filled in as the work proceeds; each row gives the command, the tree and the counts)
+Runner: `scratchpad/f21-pytest.sh <tree> <log> [args]` = `CI=1 CORPUS_TEST_DATABASE_URL=postgresql+asyncpg://postgres:***@127.0.0.1:55591/corpus_ci python -m pytest corpus_service/tests -q -p no:cacheprovider [args]`; `scratchpad/f21-only.sh` runs only the named files. Main's tree is `git archive c02ebbc` under `/tmp/f21-pg/main-tree`.
+
+| # | Step | Tree | Command | Result |
+| --- | --- | --- | --- | --- |
+| L1 | Baseline | main c02ebbc | full suite | 1168 passed, 157 subtests, 516 s |
+| L2 | RED | main c02ebbc + the two F21 test files (commit f0de9b9) | full suite | 19 failed, 1169 passed (the 1 extra pass is the scanner self-test); 552 s |
+| L3 | RED detail, test (a) | main | as L2 | after 2 harvests and 3 ticks: case records `{('NasirLawSite', 'main:unnormalised'): 10}`, 0 review-queue rows, 0 `statutes_staging` rows, 8 `statutes_master` rows written by the harvests (PakistanCode 4, NationalAssembly 4: NA duplicated on its second run), second PakistanCode harvest FAILURE `IntegrityError (SQLSTATE 23505)`, 0 outbox rows, no transition log |
+| L4 | RED detail, (b)-(h) and rules | main | as L2 | (b) `({('NasirLawSite', 'main:unnormalised'): 5}, 0)` review rows; (c)(f)(g)(h) `UndefinedColumn` (no lifecycle state, no `state_changed_at`: no stalled-row visibility); (d)(e) `KeyError 'normalise-corpus'` (no consumer on the beat); rules: direct routes `{NationalAssembly, PakistanCode}`, master writers `pakistancode` :46, :51 and `nationalassembly` :35 |
+| L5 | First GREEN run of the F21 files | branch, uncommitted | `f21-only.sh` e2e, `-x` | 1 failed: every assertion of (a) held except "every tick succeeded": the reconcile tick raised `DBAPIError ... invalid input for query argument $1: '604800 seconds'` (asyncpg types `CAST(:p AS interval)` as an interval and wants a `timedelta`). Fixed in `reconcile.py` (pass `timedelta`) |
+| L6 | Second run | branch | `f21-only.sh` e2e | 8 passed, 1 failed: (d) one worker claimed all 40 records and the second hung in `BEGIN` until teardown. Cause (systematic debugging): two event loops racing a brand-new engine's first connect, the artefact F20's concurrency test documents and avoids by connecting once first. Fix in the test (connect once before the threads; each production worker has its own engine). Also made the race real: each worker's first step now waits until the other holds a claim (a barrier inside the step), so a single worker can no longer drain the batch before the other starts; the consumer steps are looked up when called (late binding) so a test can wrap one |
+| L7 | Third run | branch | `f21-only.sh` e2e + rules | 22 passed, 31 s |

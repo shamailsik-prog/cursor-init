@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from scraper.net import fetch_policy
-from scraper.tasks import outcomes, pdf_intake
+from scraper.tasks import lifecycle, outcomes, pdf_intake
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +180,9 @@ async def scrape_lahorehighcourt(source, db):
                     pdf_page_count=document.pages,
                     ocr_applied=document.ocr_applied,
                     confidence_score=0.6,
-                    quarantined=True,
-                    quarantine_reason="review source",
+                    # Audit F21 (spec R6, R7): no pre-gate quarantine label; the review gate decides, and
+                    # writes the review-queue row a reviewer works from. The run that staged it (R5).
+                    job_id=lifecycle.run_job_id(),
                     parsing_metadata=stamp_metadata(
                         source, {"listing_url": pdf_sources.get(pdf_url), **document.metadata()}
                     ),

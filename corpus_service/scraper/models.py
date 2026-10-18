@@ -13,6 +13,7 @@ Tables:
 - scraper_jobs
 - quarantine_queue
 - quarantine_decisions (audit F23, append-only)
+- corpus_lifecycle_transitions (audit F21, one row per lifecycle move)
 - embedding_queue
 
 FINAL_2: no limitation_periods table (legal rules are not held here).
@@ -63,6 +64,17 @@ from pgvector.sqlalchemy import Vector
 from scraper.database import Base
 from scraper import quarantine_ledger
 from scraper.trust import DEFAULT_TRUST_LEVEL, trust_check_sql
+from scraper.tasks import lifecycle as _lifecycle
+
+
+def _lifecycle_columns(prefix: str):
+    """Audit F21 (spec R1, R3): the lifecycle's CHECKs and claim index on a staging table. Migration
+    005 adds the same definitions to a table created before them."""
+    return (
+        CheckConstraint(_lifecycle.states_check_sql(), name=f"ck_{prefix}_lifecycle_state"),
+        CheckConstraint(_lifecycle.reason_check_sql(), name=f"ck_{prefix}_lifecycle_reason"),
+        Index(f"ix_{prefix}_lifecycle_claim", "lifecycle_state", "created_at", "id"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +407,7 @@ class ScraperStaging(Base):
         Index("ix_staging_extracted_year", "extracted_year"),
         Index("ix_staging_job_id", "job_id"),
         CheckConstraint("confidence_score >=0 AND confidence_score <=1", name="ck_staging_confidence_range"),
+        *_lifecycle_columns("staging"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -454,6 +467,14 @@ class ScraperStaging(Base):
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    # Audit F21 (spec R1): where the record is in its lifecycle, since when and why; the retrieval row it
+    # was published as (case_law_master). Assigned only by scraper.tasks.lifecycle.move.
+    lifecycle_state: Mapped[str] = mapped_column(String(20), default=_lifecycle.ENTRY_STATE,
+                                                 server_default=text(f"'{_lifecycle.ENTRY_STATE}'"), nullable=False)
+    state_changed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    state_reason: Mapped[Optional[str]] = mapped_column(String(_lifecycle.MAX_REASON_CHARS), nullable=True)
+    published_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
     def __repr__(self) -> str:
         return f"<ScraperStaging id={self.id} citation={self.extracted_citation} conf={self.confidence_score}>"
 
@@ -474,6 +495,7 @@ class StatutesStaging(Base):
         Index("ix_statutes_staging_job_id", "job_id"),
         Index("ix_statutes_staging_confidence", "confidence_score"),
         CheckConstraint("confidence_score >=0 AND confidence_score <=1", name="ck_statutes_staging_conf_range"),
+        *_lifecycle_columns("statutes_staging"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -523,6 +545,13 @@ class StatutesStaging(Base):
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    # Audit F21 (spec R1): as on scraper_staging; published_id is the statutes_master row.
+    lifecycle_state: Mapped[str] = mapped_column(String(20), default=_lifecycle.ENTRY_STATE,
+                                                 server_default=text(f"'{_lifecycle.ENTRY_STATE}'"), nullable=False)
+    state_changed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    state_reason: Mapped[Optional[str]] = mapped_column(String(_lifecycle.MAX_REASON_CHARS), nullable=True)
+    published_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
     def __repr__(self) -> str:
         return f"<StatutesStaging id={self.id} act={self.extracted_short_name} sec={self.extracted_section_number}>"
 
@@ -541,7 +570,9 @@ class ScraperJob(Base):
         Index("ix_jobs_next_retry_at", "next_retry_at"),
         CheckConstraint("retry_count >=0", name="ck_jobs_retry_nonneg"),
         CheckConstraint("status IN ('pending','running','completed','failed','paused','cancelled')", name="ck_jobs_status_values"),
-        CheckConstraint("job_type IN ('full_scrape','incremental','retry_failed','embed','cross_ref','cause_list','bench')", name="ck_jobs_type_values"),
+        # Audit F21 (spec R5): the corpus lifecycle's consumer ticks (normalise, promote, publish,
+        # reconcile) after the original seven.
+        CheckConstraint(_lifecycle.job_type_check_sql(), name="ck_jobs_type_values"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -725,6 +756,44 @@ class QuarantineDecision(Base):
 # The table never exists without its append-only triggers: create_all makes them in the same
 # transaction (scraper.quarantine_ledger; migration 002 repairs them on every migrate).
 event.listen(QuarantineDecision.__table__, "after_create", quarantine_ledger.make_append_only)
+
+
+# ---------------------------------------------------------------------------
+# 8c. CorpusLifecycleTransition - one row per lifecycle move of a staged record (audit F21)
+# ---------------------------------------------------------------------------
+class CorpusLifecycleTransition(Base):
+    """Every move of a scraper_staging / statutes_staging record through its lifecycle, written by
+    scraper.tasks.lifecycle.move in the transaction that makes the move, with the consumer (actor) and
+    the scraper_jobs run (job_id) that made it. A NULL from_state is migration 005's backfill entry.
+    No foreign keys: the history outlives a deleted record or job row (F23 ruling 5's pattern).
+    Spec: docs/superpowers/specs/2026-10-18-f21-corpus-lifecycle-design.md (R1, R3)."""
+
+    __tablename__ = "corpus_lifecycle_transitions"
+    __table_args__ = (
+        Index("ix_lifecycle_transitions_record", "record_table", "record_id", "at"),
+        Index("ix_lifecycle_transitions_job_id", "job_id"),
+        CheckConstraint(
+            f"record_table IN ('{_lifecycle.CASE_TABLE}', '{_lifecycle.STATUTE_TABLE}')",
+            name="ck_lifecycle_transition_table",
+        ),
+        CheckConstraint(_lifecycle.legal_pairs_sql(), name="ck_lifecycle_transition_legal"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    record_table: Mapped[str] = mapped_column(String(30), nullable=False)
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    from_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String(_lifecycle.MAX_REASON_CHARS), nullable=True)
+    actor: Mapped[str] = mapped_column(String(50), nullable=False)
+    job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("clock_timestamp()"), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<CorpusLifecycleTransition {self.record_table} {self.record_id} {self.from_state}->{self.to_state}>"
 
 
 # ---------------------------------------------------------------------------

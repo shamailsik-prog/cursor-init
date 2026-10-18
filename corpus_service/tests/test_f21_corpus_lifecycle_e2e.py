@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from test_f20_trust_policy_db import assert_migrated, run
+from test_f20_trust_policy_db import assert_migrated, fetch, run
 
 PDF = b"%PDF-1.4 synthetic F21 fixture, not a real statute"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -391,6 +391,10 @@ def test_c_a_trusted_record_is_published_into_annex_a_then_the_retrieval_store(c
     prepare(corpus_db)
     install_offline_sources(monkeypatch)
     (sid,) = _stage_trusted_cases(corpus_db, 1)
+    # A second copy of the same judgment from another page of the source: Annex A attaches it
+    # (unchanged), and the retrieval store attaches it to the same row (R8), never a second one.
+    (copy,) = _stage_trusted_cases(corpus_db, 1)
+    admin_exec(corpus_db, "UPDATE scraper_staging SET source_url = source_url || '?copy', created_at = now() WHERE id = :i", i=copy)
     with corpus_db.app_engine_as(*corpus_db.runtime_role()):
         tick()
         from scraper.main import app
@@ -405,9 +409,15 @@ def test_c_a_trusted_record_is_published_into_annex_a_then_the_retrieval_store(c
     assert row[0][1] == expected_id
     judgment = admin_fetch(corpus_db, "SELECT review_status FROM judgment WHERE id = :i", i=row[0][2])
     assert judgment == [("promoted",)]
+    attached = admin_fetch(corpus_db, "SELECT lifecycle_state, published_id, promoted_to_id FROM scraper_staging WHERE id = :i", i=copy)
+    assert attached == [("embedded", expected_id, row[0][2])]
+    assert count(corpus_db, "case_law_master") == 1
     assert outbox(corpus_db) == Counter({("case_law_master", "pending"): 1})
     assert transition_paths(corpus_db, "scraper_staging") == Counter({
-        ("parsed>normalised", "normalised>approved", "approved>published", "published>embedded"): 1})
+        ("parsed>normalised", "normalised>approved", "approved>published", "published>embedded"): 2})
+    details = admin_fetch(corpus_db, "SELECT details FROM corpus_lifecycle_transitions WHERE record_id = :i AND to_state = 'published'",
+                          i=copy)[0][0]
+    assert details["attached"] is True and details["published_id"] == str(expected_id)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -430,25 +440,51 @@ def _stage_statutes(db, n, *, source="PakistanCode", state=None):
     return ids
 
 
-def _two_workers(entry):
-    """Fire one beat entry from two threads at once; each tick claims its first row only after both
-    threads are inside the task."""
-    barrier = threading.Barrier(2, timeout=60)
+STEP_FUNCTIONS = {
+    "normalise-corpus": ("scraper.tasks.normalise", "normalise"),
+    "promote-corpus": ("scraper.tasks.promotion", "gate"),
+    "publish-corpus": ("scraper.tasks.publish", "publish"),
+}
+
+
+def _two_workers(entry, monkeypatch):
+    """Fire one beat entry from two threads at once. Each worker's first step waits until the other
+    worker is inside a step too, so both hold a claimed record at the same moment: the race is real,
+    not a sequence."""
+    import importlib
+
+    module, name = STEP_FUNCTIONS[entry]
+    module = importlib.import_module(module)
+    real = getattr(module, name)
+    inside = threading.Barrier(2, timeout=60)
+    local = threading.local()
+
+    async def held_step(db, row, *, job_id=None):
+        if not getattr(local, "met", False):
+            local.met = True
+            await asyncio.to_thread(inside.wait)
+        return await real(db, row, job_id=job_id)
+
+    monkeypatch.setattr(module, name, held_step)
+    start = threading.Barrier(2, timeout=60)
     results, errors = [], []
 
     def worker():
         try:
-            barrier.wait()
+            start.wait()
             res = fire(entry)
             results.append((res.state, res.result))
         except Exception as exc:  # noqa: BLE001 - reported below
             errors.append(repr(exc))
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(240)
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(240)
+    finally:
+        monkeypatch.setattr(module, name, real)
     assert not errors and len(results) == 2, (errors, results)
     return results
 
@@ -458,9 +494,14 @@ def test_d_two_concurrent_workers_never_move_the_same_record(corpus_db, monkeypa
     install_offline_sources(monkeypatch)
     ids = _stage_statutes(corpus_db, 40)
     with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        # Connect once first, as F20's concurrency test does: two event loops racing a brand-new
+        # engine's first connect (its dialect initialisation) is a test artefact; each production
+        # worker process has an engine of its own.
         for entry in ("normalise-corpus", "promote-corpus", "publish-corpus"):
-            results = _two_workers(entry)
+            assert run(fetch("SELECT 1")) == [(1,)]
+            results = _two_workers(entry, monkeypatch)
             assert [state for state, _r in results] == ["SUCCESS", "SUCCESS"], results
+            assert all(r["claimed"] > 0 for _s, r in results), results
 
     moves = admin_fetch(corpus_db, "SELECT record_id, from_state, to_state, job_id FROM corpus_lifecycle_transitions "
                                    "WHERE from_state IS NOT NULL")
@@ -648,6 +689,113 @@ def test_g_the_reconciler_repairs_published_records_and_dead_letters_unreviewabl
     assert admin_fetch(corpus_db, "SELECT lifecycle_state, state_reason FROM scraper_staging") == [
         ("dead_letter", "quarantined_without_review_row")]
     assert admin_fetch(corpus_db, "SELECT table_name, record_id FROM embedding_queue") == [("statutes_master", master_id)]
+
+
+# ---------------------------------------------------------------------------------------------
+# (i) a record whose step fails does not stop the tick, and is tried again by the next one
+# ---------------------------------------------------------------------------------------------
+def test_i_a_failing_record_is_tried_once_per_tick_and_the_rest_move_on(corpus_db, monkeypatch, caplog):
+    from scraper.tasks import normalise
+
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    bad, *good = _stage_statutes(corpus_db, 4)  # the oldest, so it is claimed first
+    real = normalise.normalise
+
+    async def boom_on_bad(db, row, *, job_id=None):
+        if row.id == bad:
+            raise RuntimeError("synthetic F21 fault with row data")
+        return await real(db, row, job_id=job_id)
+
+    monkeypatch.setattr(normalise, "normalise", boom_on_bad)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()), caplog.at_level(logging.WARNING):
+        first = fire("normalise-corpus")
+        monkeypatch.setattr(normalise, "normalise", real)
+        second = fire("normalise-corpus")
+    assert (first.state, first.result["claimed"], first.result["failed"], first.result["moved"]) == (
+        "SUCCESS", 4, 1, {"normalised": 3}), first.result
+    assert (second.state, second.result["claimed"], second.result["moved"]) == ("SUCCESS", 1, {"normalised": 1})
+    states = dict(admin_fetch(corpus_db, "SELECT id, lifecycle_state FROM statutes_staging"))
+    assert set(states.values()) == {"normalised"}
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert f"lifecycle.record_failed consumer=normalise phase=normalise table=statutes_staging id={bad}" in messages
+    assert "row data" not in messages
+    jobs = [(t, s, r["failed"]) for t, s, r in lifecycle_jobs(corpus_db)]
+    assert jobs == [("normalise", "completed", 1), ("normalise", "completed", 0)]
+
+
+# ---------------------------------------------------------------------------------------------
+# (j) trust is read again at publication: a source no longer trusted is never published
+# ---------------------------------------------------------------------------------------------
+def test_j_a_source_demoted_after_the_gate_is_not_published(corpus_db, monkeypatch):
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    _stage_statutes(corpus_db, 1)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        fire("normalise-corpus")
+        fire("promote-corpus")
+        assert admin_fetch(corpus_db, "SELECT lifecycle_state FROM statutes_staging") == [("approved",)]
+        admin_exec(corpus_db, "UPDATE scraper_sources SET trust_level = 'review' WHERE source_name = 'PakistanCode'")
+        assert fire("publish-corpus").state == "SUCCESS"
+    assert admin_fetch(corpus_db, "SELECT lifecycle_state, state_reason FROM statutes_staging") == [
+        ("dead_letter", "source_not_promotable:review_source")]
+    assert count(corpus_db, "statutes_master") == 0 and count(corpus_db, "embedding_queue") == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# (k) two workers normalising two copies of one document keep exactly one
+# ---------------------------------------------------------------------------------------------
+def test_k_two_workers_on_two_copies_of_one_document_keep_one(corpus_db, monkeypatch):
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    first, second = _stage_statutes(corpus_db, 2)
+    # The same document twice: same source, URL, act, section and text.
+    admin_exec(corpus_db, "UPDATE statutes_staging s SET source_url = o.source_url, extracted_section_number = o.extracted_section_number, "
+                          "extracted_section_text = o.extracted_section_text, raw_text = o.raw_text "
+                          "FROM statutes_staging o WHERE s.id = :b AND o.id = :a", a=first, b=second)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert run(fetch("SELECT 1")) == [(1,)]
+        results = _two_workers("normalise-corpus", monkeypatch)
+    assert sorted(r["claimed"] for _s, r in results) == [1, 1], results
+    states = Counter(s for (s,) in admin_fetch(corpus_db, "SELECT lifecycle_state FROM statutes_staging"))
+    assert states == Counter({"normalised": 1, "duplicate": 1})
+    kept = admin_fetch(corpus_db, "SELECT id FROM statutes_staging WHERE lifecycle_state = 'normalised'")[0][0]
+    reason = admin_fetch(corpus_db, "SELECT state_reason FROM statutes_staging WHERE lifecycle_state = 'duplicate'")[0][0]
+    assert reason == f"duplicate_of:{kept}"
+
+
+# ---------------------------------------------------------------------------------------------
+# (l) statutes pass the same review gate: a review source's statute waits for a reviewer
+# ---------------------------------------------------------------------------------------------
+def test_l_a_review_source_statute_is_held_for_review_and_can_be_rejected(corpus_db, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from scraper.config import settings
+
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    admin_exec(corpus_db, "UPDATE scraper_sources SET trust_level = 'review' WHERE source_name = 'PakistanCode'")
+    (sid,) = _stage_statutes(corpus_db, 1)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        for _ in range(2):
+            tick()
+        held = admin_fetch(corpus_db, "SELECT lifecycle_state, quarantine_reason FROM statutes_staging")
+        queue = admin_fetch(corpus_db, "SELECT id, staging_id, statutes_staging_id, reason, extracted_section FROM quarantine_queue")
+        assert held == [("quarantined", "review_source")]
+        assert [(q[1], q[2], q[3], q[4]) for q in queue] == [(None, sid, "review_source", "0")]
+        from scraper.main import app
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            # F23's promote needs a case record (spec R7, residual R-1); reject works.
+            promote = client.post(f"/quarantine/{queue[0][0]}/promote", json={"reviewer": REVIEWER, "reason": REASON},
+                                  headers={"X-API-Key": settings.ADMIN_API_KEY})
+            reject = client.post(f"/quarantine/{queue[0][0]}/reject", json={"reviewer": REVIEWER, "reason": REASON},
+                                 headers={"X-API-Key": settings.ADMIN_API_KEY})
+        assert (promote.status_code, promote.json()["detail"]["error"]) == (409, "staging_record_missing")
+        assert reject.status_code == 200, reject.text
+        tick()
+    assert admin_fetch(corpus_db, "SELECT lifecycle_state, state_reason FROM statutes_staging") == [("rejected", "review_rejected")]
+    assert count(corpus_db, "statutes_master") == 0 and count(corpus_db, "embedding_queue") == 0
 
 
 # ---------------------------------------------------------------------------------------------

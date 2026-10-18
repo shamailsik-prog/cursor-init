@@ -256,6 +256,9 @@ MASTER_WRITER_ALLOWLIST = {
     # Annex A through publish_batch, which the Annex A scan below checks.)
     # Manual reviewer promotion endpoint; audit F23, deliberately out of scope for F20.
     "scraper.routers.quarantine": "manual quarantine promotion (F23)",
+    # Audit F21 (spec R8): the corpus lifecycle's retrieval projection, the one place an approved record
+    # is written into case_law_master / statutes_master (after the review gate, never by a source task).
+    "scraper.publication.retrieval": "retrieval projection of approved records (F21)",
 }
 # Updaters only: they change rows already in a master table by assigning attributes on instances
 # they loaded, which the scan does not count as a write. Their scanned `writes` must stay empty, so
@@ -273,6 +276,8 @@ MASTER_READ_ONLY_ALLOWLIST = {
     # read the master tables only through this published-only helper, so neither router is listed
     # here: a direct CaseLawMaster / StatutesMaster reference in either fails this scan.
     "scraper.public_corpus": "published-only public reads and export (F24)",
+    # Audit F21 (spec R13): migration 005 reads master-table ids to backfill existing records' states.
+    "migrations.005_corpus_lifecycle": "lifecycle backfill reads master ids (F21)",
 }
 
 MASTER_CLASSES = {"scraper.models.CaseLawMaster", "scraper.models.StatutesMaster"}
@@ -639,7 +644,9 @@ class HarvesterStaticGuardTests(unittest.TestCase):
         kinds = {name: (route[2] if isinstance(route, tuple) and len(route) == 3 else None)
                  for name, route in dispatcher.ROUTES.items()}
         self.assertEqual({k for k in kinds.values()} - {"staging", "direct"}, set(), kinds)
-        self.assertEqual({name for name, kind in kinds.items() if kind == "direct"}, {"PakistanCode", "NationalAssembly"})
+        # Audit F21 (spec R12): PakistanCode and NationalAssembly stage like every other source; no
+        # route writes a master table (was {"PakistanCode", "NationalAssembly"}).
+        self.assertEqual({name for name, kind in kinds.items() if kind == "direct"}, set())
 
     def test_every_master_table_writer_is_a_direct_route_or_explicitly_allowed(self):
         """Round-2 L1(b), round-3 LOW-A/B6: an AST scan of every non-test module under

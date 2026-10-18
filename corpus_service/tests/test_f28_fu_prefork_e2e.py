@@ -32,7 +32,8 @@ CROSS_REFERENCE = "scraper.tasks.cross_reference.cross_reference_citations"
 # PakistanCode network edge. F28_SLOW_MODE picks how the slow statute fetch waits: "await" (the event
 # loop waits on I/O, the common case) or "block" (the thread is busy inside harvester code). The slow
 # statute is read from <root>/slow_slug at each request, so a test can move it between runs
-# (statutes_master is unique on short name and section: a second run must not write the same act).
+# (on main statutes_master was unique on short name and section, so a second run could not write the same act;
+# since audit F21 the act is staged, and the test keeps moving the slow statute between runs).
 APP_MODULE = '''
 import asyncio, os, time, types
 import httpx
@@ -180,7 +181,8 @@ def test_m1_a_time_limit_while_awaiting_is_recorded_counted_and_alerts_like_any_
     assert src.consecutive_failures == 2, src
     assert src.last_failure_reason == "RunInterrupted: time limit exceeded", src
     assert src.last_scraped_at is not None and src.total_records_extracted == 3, src
-    assert count("statutes_master") == 3
+    # Audit F21 (spec R12): the sections a run writes before the cut-off are staged, never written to master.
+    assert (count("statutes_staging"), count("statutes_master")) == (3, 0)
     assert len(worker_lines(log_path, "F28 source alert: PakistanCode stale")) == 2, log_path.read_text()[-3000:]
 
 
@@ -201,7 +203,7 @@ def test_m1_a_time_limit_inside_harvester_code_is_not_counted_as_a_failed_statut
         "time limit exceeded", "SoftTimeLimitExceeded", {}), summary
     src = source_row("PakistanCode")
     assert (src.consecutive_failures, src.last_failure_reason) == (1, "RunInterrupted: time limit exceeded"), src
-    assert count("statutes_master") == 3, "the run stopped at the time limit"
+    assert (count("statutes_staging"), count("statutes_master")) == (3, 0), "the run stopped at the time limit"
 
 
 def test_l3_cross_reference_then_a_source_job_in_the_same_worker_child(corpus_db, tmp_path):

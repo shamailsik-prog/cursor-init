@@ -12,6 +12,7 @@ Spec: docs/superpowers/specs/2026-10-18-f21-corpus-lifecycle-design.md (R2, R3, 
 """
 
 import ast
+import re
 import shutil
 import unittest
 from pathlib import Path
@@ -125,10 +126,11 @@ class TransitionTableTests(unittest.TestCase):
             reason = found[f"{prefix}_lifecycle_reason"]
             self.assertTrue(all(f"'{s}'" in reason for s in NEEDS_REASON), reason)
         log = checks(models.CorpusLifecycleTransition.__table__)["ck_lifecycle_transition_legal"]
-        pairs = {f"'{a}>{b}'" for a, outs in SPEC_MOVES.items() for b in outs}
-        self.assertTrue(all(p in log for p in pairs), log)
-        self.assertEqual(log.count(">"), len(pairs), "the CHECK lists a pair the spec does not")
-        self.assertEqual(lifecycle.legal_pairs_sql().count(">"), len(pairs))
+        pairs = {f"{a}>{b}" for a, outs in SPEC_MOVES.items() for b in outs}
+        listed = set(re.findall(r"'([a-z_]+>[a-z_]+)'", log))
+        self.assertEqual(listed, pairs, "the CHECK's pairs are not the spec's")
+        self.assertEqual(set(re.findall(r"'([a-z_]+>[a-z_]+)'", lifecycle.legal_pairs_sql())), pairs)
+        self.assertIn("from_state IS NULL OR", log)
 
 
 class BeatScheduleTests(unittest.TestCase):
@@ -143,6 +145,33 @@ class BeatScheduleTests(unittest.TestCase):
         # Pipeline order inside the schedule (a test tick fires them in this order).
         order = [name for name in schedule if name in BEAT]
         self.assertEqual(order, list(BEAT))
+
+
+class RetrievalProjectionTests(unittest.TestCase):
+    """R8: the projection serialises with F23's promote and never collides with its ids."""
+
+    def test_the_projection_takes_f23s_citation_lock(self):
+        from scraper.publication import retrieval
+        from scraper.routers import quarantine
+
+        self.assertEqual(retrieval.F23_CITATION_LOCK_NAMESPACE, quarantine.CITATION_LOCK_NAMESPACE)
+
+    def test_published_ids_are_deterministic_and_distinct_from_f23s(self):
+        import uuid
+
+        from scraper.publication import retrieval
+        from scraper.routers import quarantine
+
+        sid = uuid.UUID("00000000-0000-4000-8000-000000000210")
+        self.assertEqual(retrieval.case_publication_id(sid),
+                         uuid.uuid5(uuid.NAMESPACE_URL, f"corpus-service:case_law_master:staging/{sid}"))
+        self.assertNotEqual(retrieval.case_publication_id(sid), quarantine.publication_id(sid))
+        a = retrieval.statute_key("PakistanCode", "Act", "ppc1860", "302")
+        b = retrieval.statute_key("NationalAssembly", "Act", "ppc1860", "302")
+        c = retrieval.statute_key("NationalAssembly", "Act", None, "302")
+        self.assertEqual(a, b, "a short name keys a section by the table's unique key, whatever the source")
+        self.assertNotEqual(b, c)
+        self.assertEqual(retrieval.statute_publication_id(a), retrieval.statute_publication_id(b))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -209,6 +238,37 @@ class DirectWriteGateTests(unittest.TestCase):
         routes = dict(dispatcher.ROUTES)
         routes["PakistanCode"] = ("scraper.tasks.pakistancode", "scrape_pakistancode", "direct")
         self.assertEqual(direct_write_violations(routes=routes).get("dispatcher.ROUTES"), ["direct route PakistanCode"])
+
+
+class HarvesterStagingTests(unittest.TestCase):
+    """R5, R6, R12: every staging row a source task writes names its source and its run, and none
+    carries a pre-gate quarantine decision."""
+
+    def test_every_staged_row_names_its_source_and_run_and_decides_nothing(self):
+        sites = []
+        for path in sorted((PROJECT_ROOT / "scraper" / "tasks").glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) in ("ScraperStaging", "StatutesStaging"):
+                    kw = {k.arg: ast.unparse(k.value) for k in node.keywords}
+                    sites.append((path.name, node.func.id, kw))
+        self.assertEqual(
+            sorted((name, cls) for name, cls, _kw in sites),
+            sorted([(f, "ScraperStaging") for f in ("balochistanhighcourt.py", "islamabadhighcourt.py", "lahorehighcourt.py",
+                                                     "nasirlawsite.py", "peshawarhighcourt.py", "shc.py", "supremecourt.py")]
+                   + [("nationalassembly.py", "StatutesStaging"), ("pakistancode.py", "StatutesStaging")]),
+        )
+        problems = {}
+        for name, cls, kw in sites:
+            wrong = []
+            if kw.get("source_id") != "source.id" or not kw.get("parsing_metadata", "").startswith("stamp_metadata(source"):
+                wrong.append("source stamp")
+            if kw.get("job_id") != "lifecycle.run_job_id()":
+                wrong.append("run job id")
+            if {"quarantined", "quarantine_reason", "normalised", "promoted", "lifecycle_state"} & set(kw):
+                wrong.append("a lifecycle decision")
+            if wrong:
+                problems[f"{name}:{cls}"] = wrong
+        self.assertEqual(problems, {})
 
 
 # ---------------------------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from scraper.parsers.citation_extractor import extract_citations, score_confiden
 from scraper.database import SessionLocal
 from scraper.models import ScraperStaging
 from scraper.source_identity import stamp_metadata
-from scraper.tasks import outcomes
+from scraper.tasks import lifecycle, outcomes
 logger = logging.getLogger(__name__)
 
 REPORTER_URLS = [
@@ -77,6 +77,7 @@ async def scrape_nasirlawsite(source, db):
                         staging = ScraperStaging(
                             source_id=source.id,
                             source_site="NasirLawSite",
+                            job_id=lifecycle.run_job_id(),  # audit F21 (spec R5): the run that staged it
                             source_url=full,
                             raw_html=raw_html[:50000],
                             raw_text=cleaned[:50000],

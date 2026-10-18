@@ -316,6 +316,52 @@ async def _alerts(db, source: ScraperSource, job_id: uuid.UUID, now: datetime, *
 
 
 # ---------------------------------------------------------------------------------------------
+# A corpus lifecycle tick (audit F21 R5): one row, written by scraper.tasks.corpus_pipeline when the
+# tick claimed a record or failed (an idle tick writes none, R13's rule), or every reconcile tick.
+# The id is drawn before the first claim, so every transition the tick writes can name it.
+# ---------------------------------------------------------------------------------------------
+async def record_consumer_run(
+    *,
+    job_id: uuid.UUID,
+    job_type: str,
+    status: str,
+    summary: Dict[str, Any],
+    started: datetime,
+    attempted: int,
+    written: int,
+    failed: int,
+    celery_task_id: Optional[str] = None,
+    worker: Optional[str] = None,
+    exc: Optional[BaseException] = None,
+) -> None:
+    from scraper.tasks import lifecycle
+
+    now = utcnow()
+    async with database.SessionLocal() as db:
+        db.add(ScraperJob(
+            id=job_id,
+            source_id=None,
+            source_site=lifecycle.LIFECYCLE_SITE,
+            job_type=job_type,
+            status=status,
+            celery_task_id=celery_task_id,
+            worker_hostname=worker,
+            retry_count=0,
+            max_retries=0,
+            started_at=started,
+            finished_at=now,
+            duration_seconds=max(int((now - started).total_seconds()), 0),
+            pages_scraped=attempted,
+            records_extracted=written,
+            records_failed=failed,
+            error_message=outcomes.describe_error(exc) if exc is not None else None,
+            error_traceback=_frames(exc) if exc is not None else None,
+            result_summary=summary,
+        ))
+        await db.commit()
+
+
+# ---------------------------------------------------------------------------------------------
 # An embedding batch (one row, written when the batch claimed work or failed; R13)
 # ---------------------------------------------------------------------------------------------
 async def record_batch(

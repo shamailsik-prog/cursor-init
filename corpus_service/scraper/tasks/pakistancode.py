@@ -3,10 +3,38 @@ from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
 from scraper.parsers.statute_parser import split_into_sections, detect_statute_name
 from scraper.parsers.text_cleaner import clean_html
+from datetime import datetime, timezone
 from scraper.database import SessionLocal
-from scraper.models import StatutesMaster
-from scraper.tasks import outcomes
+from scraper.models import StatutesStaging
+from scraper.source_identity import stamp_metadata
+from scraper.tasks import lifecycle, outcomes
 logger = logging.getLogger(__name__)
+
+# Audit F21 (spec R12): the confidence statutes_master gave the rows this route wrote on main (its
+# column default); the review gate (F20) then decides them like any other record.
+STATUTE_CONFIDENCE = 0.85
+
+
+def _staged(source, url, act_name, short_name, section_number, section_text, section_title=None):
+    """One statutes_staging row (audit F21: no source task writes statutes_master; R12). It enters the
+    lifecycle at `parsed`, stamped with its source and the harvest run that staged it."""
+    return StatutesStaging(
+        source_id=source.id,
+        source_site="PakistanCode",
+        source_url=url,
+        job_id=lifecycle.run_job_id(),
+        raw_text=section_text,
+        extracted_act_name=act_name,
+        extracted_short_name=short_name,
+        extracted_section_number=section_number,
+        extracted_section_title=section_title,
+        extracted_section_text=section_text,
+        confidence_score=STATUTE_CONFIDENCE,
+        parsing_metadata=stamp_metadata(source, {
+            "extraction_method": "html",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }),
+    )
 
 TARGET_SLUGS = ["ppc1860","crpc1898","cpc1908","constitution1973","limitation-act1908","specific-relief-act1877","transfer-of-property-act1882","contract-act1872","evidence-act1872","companies-act2017"]
 
@@ -42,14 +70,12 @@ async def scrape_pakistancode(source, db):
                     full_text = clean_html(rr.text)
                     parsed = split_into_sections(full_text, act_name)
                     for p in parsed:
-                        # save to master
-                        sm = StatutesMaster(statute_name=act_name, short_name=slug[:10], section_number=p["section_number"], section_title=p["section_title"][:500], section_text=p["section_text"][:20000], source_site="PakistanCode", source_url=url)
-                        db.add(sm)
+                        db.add(_staged(source, url, act_name, slug[:10], p["section_number"], p["section_text"][:20000],
+                                       section_title=p["section_title"][:500]))
                         rows += 1
                 else:
                     for sec in sections[:50]:
-                        sm = StatutesMaster(statute_name=act_name, short_name=slug[:10], section_number=sec[:20], section_text=sec[:20000], source_site="PakistanCode", source_url=url)
-                        db.add(sm)
+                        db.add(_staged(source, url, act_name, slug[:10], sec[:20], sec[:20000]))
                         rows += 1
                 await db.commit()
                 tally.item_ok(rows)

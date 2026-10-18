@@ -48,8 +48,17 @@ that count.
 
 case_law_master is no longer written here and nothing is queued for embedding (F19, spec ruling 10;
 Annex A embeddings are audit F27); the duplicate check against case_law_master that PR #48 added is
-replaced by the publication's own decision against Annex A. Nothing schedules this routine yet
-(audit F21).
+replaced by the publication's own decision against Annex A.
+
+Audit F21 (docs/superpowers/specs/2026-10-18-f21-corpus-lifecycle-design.md, R4, R7): this is the
+lifecycle's review gate. Every decision also moves the record's lifecycle state in the same
+transaction (``normalised`` -> ``quarantined`` | ``approved``; a record a writer staged with
+``normalised = true`` is first moved ``parsed`` -> ``normalised``). The scheduled consumer
+(scraper.tasks.corpus_pipeline, beat ``promote-corpus``) claims one normalised record per transaction
+with ``FOR UPDATE SKIP LOCKED`` and calls ``gate``; ``promote_staging_records``
+keeps its own full-backlog loop and its blocking row lock. Statutes pass the same F20 decision and get
+a review-queue row (``statutes_staging_id``) when held back; they are never published into Annex A
+(R7). An interruption (Celery's soft time limit, a cancellation) is re-raised, never counted (F28 R23).
 """
 
 import logging
@@ -59,13 +68,15 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from scraper.database import SessionLocal
-from scraper.models import QuarantineQueue, ScraperSource, ScraperStaging
+from scraper.models import QuarantineQueue, ScraperSource, ScraperStaging, StatutesStaging
 from scraper.publication.annex_a import publish_batch
 from scraper.publication.batch import BATCH_SCHEMA, BatchError
 from scraper.publication.citations import CitationError, canonical_key
 from scraper.publication.from_staging import STAGING_ACTOR_ID, staging_batch, staging_outcome
 from scraper.publication.vocabulary import REASON_BATCH_INVALID_PREFIX
 from scraper.source_identity import META_SOURCE_ID, META_SOURCE_NAME, as_source_uuid, is_present
+from scraper.tasks import lifecycle
+from scraper.tasks.outcomes import INTERRUPTIONS
 from scraper.trust import REASON_CITATION_MISSING, promotion_error_reason, publication_decision
 
 logger = logging.getLogger(__name__)
@@ -161,6 +172,25 @@ def record_validation_reason(exc: BaseException) -> Optional[str]:
     return None
 
 
+FAILURE_TRANSIENT = "transient"
+FAILURE_RECORD = "record"
+FAILURE_SYSTEMIC = "systemic"
+
+
+def failure_kind(exc: BaseException) -> Tuple[str, Optional[str]]:
+    """Audit F21: promote_staging_records' classification of one record's failure, for the lifecycle
+    consumers (scraper.tasks.corpus_pipeline): ("transient", None), ("record", <durable reason>:
+    batch_invalid:<code> or promotion_error:<Class>) or ("systemic", None)."""
+    validation_reason = record_validation_reason(exc)
+    if validation_reason is not None:
+        return FAILURE_RECORD, validation_reason
+    if is_transient_db_error(exc):
+        return FAILURE_TRANSIENT, None
+    if is_record_specific_db_error(exc):
+        return FAILURE_RECORD, promotion_error_reason(exc)
+    return FAILURE_SYSTEMIC, None
+
+
 async def _source_by_name(db, name: str) -> Optional[ScraperSource]:
     return (await db.execute(select(ScraperSource).where(ScraperSource.source_name == name))).scalars().first()
 
@@ -196,23 +226,35 @@ async def _resolve_source(db, st: ScraperStaging) -> Tuple[Optional[ScraperSourc
     return None, None
 
 
+def _enter_gate(db, st, job_id) -> None:
+    """Audit F21: a record a writer staged with ``normalised = true`` (a curated or legacy writer, the
+    F19/F20 fixtures) reaches the gate still at ``parsed``; record that its writer normalised it."""
+    if st.lifecycle_state == lifecycle.PARSED:
+        lifecycle.move(db, st, lifecycle.NORMALISED, actor=lifecycle.ACTOR_GATE, job_id=job_id,
+                       details={"normalised_by": "writer"})
+
+
 def _quarantine(
     db,
-    st: ScraperStaging,
+    st,
     src: Optional[ScraperSource],
     reason: str,
     resolved_by: Optional[str],
     extra_details: Optional[Mapping[str, object]] = None,
+    job_id=None,
 ) -> None:
+    statute = isinstance(st, StatutesStaging)
     db.add(
         QuarantineQueue(
-            staging_id=st.id,
+            staging_id=None if statute else st.id,
+            statutes_staging_id=st.id if statute else None,
             source_id=src.id if src is not None else None,
             source_site=st.source_site,
             source_url=st.source_url,
-            extracted_citation=st.extracted_citation,
-            extracted_title=st.extracted_title,
-            extracted_court=st.extracted_court,
+            extracted_citation=None if statute else st.extracted_citation,
+            extracted_title=st.extracted_act_name if statute else st.extracted_title,
+            extracted_court=None if statute else st.extracted_court,
+            extracted_section=st.extracted_section_number if statute else None,
             confidence_score=st.confidence_score,
             reason=reason,
             details={
@@ -224,18 +266,22 @@ def _quarantine(
     )
     st.quarantined = True
     st.quarantine_reason = reason
+    # Audit F21 (R7): the review gate's hold, in the same transaction as the review-queue row.
+    _enter_gate(db, st, job_id)
+    lifecycle.move(db, st, lifecycle.QUARANTINED, actor=lifecycle.ACTOR_GATE, job_id=job_id,
+                   reason=reason[:lifecycle.MAX_REASON_CHARS])
 
 
-async def _decide(db, st: ScraperStaging) -> str:
+async def _decide(db, st: ScraperStaging, job_id=None) -> str:
     """Apply the decision for one record; return "promoted", "attached" or "quarantined"."""
     src, resolved_by = await _resolve_source(db, st)
     citation = (st.extracted_citation or "").strip()
     if not citation:
-        _quarantine(db, st, src, REASON_CITATION_MISSING, resolved_by)
+        _quarantine(db, st, src, REASON_CITATION_MISSING, resolved_by, job_id=job_id)
         return "quarantined"
     decision = publication_decision(src.trust_level if src is not None else None, st.confidence_score)
     if not decision.promote:
-        _quarantine(db, st, src, decision.reason, resolved_by)
+        _quarantine(db, st, src, decision.reason, resolved_by, job_id=job_id)
         return "quarantined"
     # Trust first, then the publication (re-audit LOW-4), serialised per citation so two concurrent
     # runs cannot both decide the same citation unpublished. Since F19 the duplicate decision is the
@@ -252,16 +298,45 @@ async def _decide(db, st: ScraperStaging) -> str:
     result = await publish_batch(conn, staging_batch(st, src), STAGING_ACTOR_ID)
     outcome = staging_outcome(result)
     if not outcome.promoted:
-        _quarantine(db, st, src, outcome.reason, resolved_by, extra_details=outcome.details)
+        _quarantine(db, st, src, outcome.reason, resolved_by, extra_details=outcome.details, job_id=job_id)
         return "quarantined"
     st.promoted = True
     st.promoted_at = func.now()
     st.promoted_to_id = outcome.judgment_id
+    # Audit F21 (R7, R8): Annex A promoted it, so it is approved; the publish consumer projects it into
+    # the retrieval store and hands it to the embedding outbox.
+    _enter_gate(db, st, job_id)
+    lifecycle.move(db, st, lifecycle.APPROVED, actor=lifecycle.ACTOR_GATE, job_id=job_id,
+                   details={**outcome.details, "attached": outcome.attached, "source_resolved_by": resolved_by})
     # Attach and skip: an unchanged re-stage of the published judgment wrote nothing in Annex A.
     return "attached" if outcome.attached else "promoted"
 
 
-async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Optional[str] = None) -> None:
+async def _decide_statute(db, st: StatutesStaging, job_id=None) -> str:
+    """Audit F21 (R7): the same F20 decision for a statute record. Held back: a review-queue row
+    (statutes_staging_id) and ``quarantined``. Promotable: ``approved``, then published into the
+    retrieval store by the publish consumer; never into Annex A, whose statute histories come from
+    curated batches. Its identity (act + section) was checked by the normaliser."""
+    src, resolved_by = await _resolve_source(db, st)
+    decision = publication_decision(src.trust_level if src is not None else None, st.confidence_score)
+    if not decision.promote:
+        _quarantine(db, st, src, decision.reason, resolved_by, job_id=job_id)
+        return "quarantined"
+    _enter_gate(db, st, job_id)
+    lifecycle.move(db, st, lifecycle.APPROVED, actor=lifecycle.ACTOR_GATE, job_id=job_id,
+                   details={"trust_level": src.trust_level, "source_resolved_by": resolved_by})
+    return "promoted"
+
+
+async def gate(db, st, *, job_id=None) -> str:
+    """The scheduled gate's decision for one claimed record, in the caller's transaction (audit F21)."""
+    if isinstance(st, StatutesStaging):
+        return await _decide_statute(db, st, job_id=job_id)
+    return await _decide(db, st, job_id=job_id)
+
+
+async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Optional[str] = None,
+                                 model=ScraperStaging, job_id=None) -> None:
     """Make a failed record's outcome durable (re-audit LOW-3): after its own work is rolled back,
     quarantine it in a fresh transaction, as ``reason`` (batch_invalid:<code>) or else as
     promotion_error:<ExceptionClass>. If even that fails, log it (identifier and class only) and
@@ -269,10 +344,13 @@ async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Op
     reason = reason or promotion_error_reason(exc)
     try:
         async with db.begin_nested():
-            st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
-            if st is not None and not st.promoted and not st.quarantined:
-                _quarantine(db, st, None, reason, None)
+            st = await db.get(model, staging_id, populate_existing=True, with_for_update=True)
+            if (st is not None and not st.promoted and not st.quarantined
+                    and st.lifecycle_state in (lifecycle.PARSED, lifecycle.NORMALISED)):
+                _quarantine(db, st, None, reason, None, job_id=job_id)
         await db.commit()
+    except INTERRUPTIONS:
+        raise  # audit F28 R23: an interruption ends the run; it is never a record's failure
     except Exception as second:  # noqa: BLE001 - the batch must continue
         await db.rollback()
         logger.error("promotion.error_quarantine_failed staging_id=%s error=%s", staging_id, type(second).__name__)
@@ -300,6 +378,8 @@ async def promote_staging_records() -> dict:
                     ScraperStaging.normalised.is_(True),
                     ScraperStaging.promoted.is_(False),
                     ScraperStaging.quarantined.is_(False),
+                    # Audit F21: a record the normaliser failed or set aside is never decided.
+                    ScraperStaging.lifecycle_state.in_((lifecycle.PARSED, lifecycle.NORMALISED)),
                 )
                 .order_by(ScraperStaging.id)  # one lock order for every concurrent run
             )
@@ -308,11 +388,14 @@ async def promote_staging_records() -> dict:
             try:
                 async with db.begin_nested():
                     st = await db.get(ScraperStaging, staging_id, populate_existing=True, with_for_update=True)
-                    if st is None or not st.normalised or st.promoted or st.quarantined:
+                    if (st is None or not st.normalised or st.promoted or st.quarantined
+                            or st.lifecycle_state not in (lifecycle.PARSED, lifecycle.NORMALISED)):
                         outcome = "skipped"  # decided elsewhere since the list was read
                     else:
                         outcome = await _decide(db, st)
                 await db.commit()  # one record per transaction; also releases the row lock when skipped
+            except INTERRUPTIONS:
+                raise  # audit F28 R23: Celery's soft time limit or a cancellation ends the run, uncounted
             except Exception as exc:  # noqa: BLE001 - one record must not stop the batch
                 await db.rollback()
                 counts["failed"] += 1
