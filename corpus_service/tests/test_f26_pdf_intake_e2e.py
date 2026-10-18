@@ -30,10 +30,12 @@ import tracemalloc
 import types
 from pathlib import Path
 
+import pytest
+
 import pdf_fixtures as F
 from f25_servers import RecordingServer, client_tls_context, make_test_pki, server_tls_context, serving
 from test_f20_trust_policy_db import assert_migrated, fetch, run
-from test_f28_source_outcomes_e2e import fire, jobs, no_proxy, no_sleep, source_row
+from test_f28_source_outcomes_e2e import COURT_PDF_SOURCES, canned_network, fire, jobs, no_proxy, no_sleep, source_row
 
 SOURCE = "LahoreHighCourt"
 ENTRY = "scrape-lahorehighcourt"
@@ -207,12 +209,15 @@ def staged_only(checks, url, golden):
 # ---------------------------------------------------------------------------------------------
 # (a)/(b) hostile documents: refused within the limits, counted as failed, the run goes on
 # ---------------------------------------------------------------------------------------------
-def test_b_a_pdf_over_the_size_cap_is_refused_at_the_boundary_and_the_run_goes_on(corpus_db, monkeypatch, tmp_path):
+def test_b_a_pdf_over_the_size_cap_is_refused_at_the_boundary_and_the_run_goes_on(corpus_db, monkeypatch, tmp_path, caplog):
     """The operator's PDF_MAX_SIZE_MB (here 1) is the cap. One oversized but valid PDF declares its
-    length, one streams it with no Content-Length; both are refused by the fetch boundary while it reads
-    (spec R2: `pdf_too_large`), never stored, and the normal judgment after them is staged. On main the
+    length, one streams it with no Content-Length; the fetch boundary refuses both while it reads, the
+    first on its declared length before any body byte, the second once 1 MiB has arrived (spec R2:
+    `pdf_too_large`); neither is stored, and the normal judgment after them is staged. On main the
     setting is read by nothing: both are downloaded whole (F25's 100 MiB is the only cap), parsed in
     the worker and staged."""
+    import logging
+
     from scraper import config
 
     assert_migrated(corpus_db.migrate(), corpus_db)
@@ -220,7 +225,8 @@ def test_b_a_pdf_over_the_size_cap_is_refused_at_the_boundary_and_the_run_goes_o
     big = F.padded_pdf(F.judgment_lines(6, seed="OVERSIZE"), 2 * MIB + 4096)
     golden = golden_pdf("golden-one-page")
     with lhc_court(monkeypatch, tmp_path, [("declared", big), ("streamed", streamed(big)), ("normal", golden)]) as court:
-        result = fire(ENTRY)
+        with caplog.at_level(logging.WARNING):
+            result = fire(ENTRY)
 
     checks = Checks()
     checks(result.state == "SUCCESS", f"task state {result.state}: {result.result!r}")
@@ -228,6 +234,11 @@ def test_b_a_pdf_over_the_size_cap_is_refused_at_the_boundary_and_the_run_goes_o
     staged_only(checks, court.urls[2], "golden-one-page")
     checks(set(stored_objects(court.vault)) == {sha256(golden) + ".pdf"},
            f"raw store: want only the normal judgment, got {sorted(stored_objects(court.vault))}")
+    # Where each was refused: by the boundary while reading (its reasons), not after a full download.
+    refusals = [r.getMessage() for r in caplog.records if r.getMessage().startswith("F26 PDF refused")]
+    for name, reason in (("declared", f"Content-Length {len(big)} > {MIB}"), ("streamed", f"body over {MIB} bytes on the wire")):
+        checks(any(f"/{name}.pdf (pdf_too_large: {reason})" in m for m in refusals),
+               f"{name}: no boundary refusal '{reason}' among {refusals}")
     checks.verify()
 
 
@@ -384,4 +395,73 @@ def test_e_a_run_of_only_active_content_pdfs_fails_and_is_not_retried(corpus_db,
         checks(rows[-1].result_summary.get("retryable") is False, f"retryable: {rows[-1].result_summary.get('retryable')}")
     checks(staged() == [], "an active-content PDF was staged")
     checks(source_row(SOURCE).consecutive_failures == 1, f"failure streak {source_row(SOURCE).consecutive_failures}")
+    checks.verify()
+
+
+# ---------------------------------------------------------------------------------------------
+# R1: every PDF harvester takes the same path (the six courts and National Assembly)
+# ---------------------------------------------------------------------------------------------
+# Their hostnames cannot be served locally (port 443, a certificate for the court's name), so the
+# network edge here is F28's canned client (every URL still checked against the source's real
+# registered policy); discovery, the harvester, the intake, the raw store, the sandbox, the dispatcher
+# and Postgres are real.
+PDF_HARVEST_ENTRIES = sorted(COURT_PDF_SOURCES) + ["scrape-na"]
+
+
+@pytest.mark.parametrize("entry", PDF_HARVEST_ENTRIES)
+def test_r1_every_pdf_harvester_refuses_active_content_and_keeps_its_judgment(corpus_db, monkeypatch, tmp_path, entry):
+    """Each PDF harvester gets one JavaScript PDF and one golden judgment: the first is refused
+    (`pdf_active_content`) and counted, the second is parsed in the sandbox, kept by its sha256 and
+    written (a court stages it with its raw key; National Assembly writes its sections). On main every
+    harvester extracts and writes both."""
+    from scraper import config
+
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    vault = tmp_path / "live"
+    vault.mkdir()
+    monkeypatch.setattr(config.settings, "PDF_STORAGE_PATH", str(vault))
+    hostile = F.javascript_pdf(F.judgment_lines(6, seed="R1"))
+    golden = golden_pdf("golden-three-pages")
+    digest = sha256(golden)
+    if entry == "scrape-na":
+        source = "NationalAssembly"
+        js_url, golden_url = "https://na.gov.pk/uploads/f26-js-act-2099.pdf", "https://na.gov.pk/uploads/f26-act-2099.pdf"
+        canned_network(monkeypatch, {
+            "https://na.gov.pk/en/legis.php": (200, b"<html><a href='/uploads/f26-js-act-2099.pdf'>Hostile Act 2099</a>"
+                                                    b"<a href='/uploads/f26-act-2099.pdf'>Synthetic Act 2099</a></html>"),
+            js_url: (200, hostile), golden_url: (200, golden),
+        })
+    else:
+        source, module, js_url = COURT_PDF_SOURCES[entry]
+        golden_url = js_url.replace(".pdf", "-golden.pdf")
+        canned_network(monkeypatch, {js_url: (200, hostile), golden_url: (200, golden)})
+        mod = __import__(f"scraper.tasks.{module}", fromlist=["_discover_pdf_urls"])
+        listing = "https://f26.example.invalid/list"
+        provenance = {"listing_url": listing, "feed_url": None, "discovery_method": "f26"}
+
+        async def _discover(*args, **kwargs):
+            urls = [js_url, golden_url]
+            return urls, {u: provenance if module == "islamabadhighcourt" else listing for u in urls}
+
+        monkeypatch.setattr(mod, "_discover_pdf_urls", _discover)
+
+    result = fire(entry)
+
+    checks = Checks()
+    checks(result.state == "SUCCESS", f"{source}: task state {result.state}: {result.result!r}")
+    rows = jobs(source)
+    got = [(r.status, r.result_summary.get("errors")) for r in rows]
+    checks(got == [("completed", {"pdf_active_content": 1})], f"{source}: run records {got}")
+    checks(set(stored_objects(vault)) == {sha256(hostile) + ".pdf", digest + ".pdf"},
+           f"{source}: raw store {sorted(stored_objects(vault))}")
+    if entry == "scrape-na":
+        written = run(fetch("SELECT source_url, section_text FROM statutes_master"))
+        checks(written and {u for u, _ in written} == {golden_url}, f"{source}: statutes_master rows from {sorted({u for u, _ in written})}")
+    else:
+        key = f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}/{digest}.pdf"
+        got_rows = [(r.source_url, r.raw_pdf_path, r.pdf_page_count, (r.parsing_metadata or {}).get("raw_sha256")) for r in staged()]
+        checks(got_rows == [(golden_url, key, 3, digest)], f"{source}: staged {got_rows}")
+        if got_rows:
+            checks(staged()[0].raw_text == golden_text("golden-three-pages"), f"{source}: staged text differs from main's")
     checks.verify()

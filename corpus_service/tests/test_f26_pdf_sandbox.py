@@ -121,7 +121,10 @@ def test_r1_every_pdf_harvester_takes_its_pdfs_through_the_intake():
         calls = {ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
         if "pdf_intake.intake" not in calls:
             problems[module] = "never calls pdf_intake.intake"
-        stray = sorted(n for n in names if "extract_pdf" in n or "pdf_extractor" in n or n.endswith("looks_like_pdf"))
+        stray = sorted(
+            n for n in names
+            if "pdf_extractor" in n or n.rsplit(".", 1)[-1] in {"extract_pdf_text", "extract_pdf", "looks_like_pdf"}
+        )
         if stray:
             problems[module] = f"still parses or checks PDFs itself: {stray}"
     assert not problems, problems
