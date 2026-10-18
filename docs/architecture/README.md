@@ -76,9 +76,9 @@ Re-enabling:
 ## Running the gates and scans locally
 
 CI is `.github/workflows/gate-g0.yml` (seven independent jobs) plus `pr-phase-claim-gate.yml`. Each command below is
-what the matching CI job runs. Requirements: Node 22 with npm 10.9 (pinned in both manifests, audit F39: npm 11 or
-later refuses with `EBADDEVENGINES`; `corepack npm …` runs the pinned npm), Java 21+ (Firebase emulators), Python 3.12,
-and both installs (`npm ci` and `npm ci --prefix functions`).
+what the matching CI job runs. Requirements: Node 22 with npm 10.9 (pinned in both manifests, audit F39; another npm
+warns with `EBADDEVENGINES` and still installs the same tree, `gate:lockfiles` fails on it; `corepack npm …` runs the
+pinned npm), Java 21+ (Firebase emulators), Python 3.12, and both installs (`npm ci` and `npm ci --prefix functions`).
 
 | CI job | Command (repo root) | Notes |
 |---|---|---|
@@ -101,7 +101,7 @@ Gates:
   `SIKANDER_LIVE=1` also runs the live checks when `ci_gates/gate_g0_live.sh` exists.
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
-  (`packageManager` + `devEngines.packageManager`, `onFail: error`, one pin for every manifest), no directory holds
+  (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds
   two lockfiles, the root and every directory an install surface runs `npm ci` in has one, and no workflow,
   `.cursor/environment.json`, `.claude/hooks/*` or package script installs without the lockfile. Commands are read
   with a shell lexer (a step's `working-directory` and a preceding `cd` are followed); an `npm ci` whose target it
