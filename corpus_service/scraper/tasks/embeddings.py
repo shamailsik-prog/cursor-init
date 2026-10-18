@@ -610,22 +610,13 @@ class _Batch:
             async with SessionLocal() as db:
                 await db.execute(text(f"SET LOCAL lock_timeout = '{GIVE_BACK_LOCK_TIMEOUT}'"))
                 if charge is not None:
-                    op = await self._current_operation(charge, db=db)
-                    held = set((await db.execute(text(HELD_ANSWERS_SQL), {"ops": [op]})).scalars()) if op else set()
-                    if op in held:
-                        await db.execute(text(RECLAIM_ANSWERED_SQL), {
-                            "ids": [charge.id],
-                            "error_type": outcomes.error_key(exc),
-                            "message": outcomes.describe_error(exc),
-                        })
-                    else:
-                        try:
-                            await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
-                        except LeaseLost:
-                            logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
-                        await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
-                            "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
-                        })
+                    try:
+                        await self._charge(db, charge, outcomes.error_key(exc), outcomes.describe_error(exc))
+                    except LeaseLost:
+                        logger.error("F27: embedding row %s was no longer held by the failed batch", charge.id)
+                    await db.execute(text(FAIL_STARTED_RECEIPTS_SQL), {
+                        "owner": self.owner, "queue_id": charge.id, "error_type": outcomes.error_key(exc),
+                    })
                 released = (await db.execute(text(RELEASE_SQL), {"owner": self.owner})).all()
                 if outcomes.is_interruption(exc):
                     await db.execute(text(INTERRUPT_RECEIPTS_SQL), {"owner": self.owner})
