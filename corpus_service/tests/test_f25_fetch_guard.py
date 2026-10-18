@@ -347,6 +347,16 @@ MORE_BYPASS_FORMS = {
     "cffi": "from cffi import FFI",
     "sys.modules lookup": "import sys\nsys.modules['socket']",
     "__builtins__": "__builtins__['__import__']('socket')",
+    # anyio is allowed for its cancel scopes only; its network and process APIs are not.
+    "anyio.connect_tcp imported by name": "from anyio import connect_tcp\nconnect_tcp('h', 80)",
+    "anyio.connect_unix": "import anyio\nanyio.connect_unix('/var/run/docker.sock')",
+    "anyio.create_udp_socket": "import anyio\nanyio.create_udp_socket(remote_host='h')",
+    "anyio.create_tcp_listener": "import anyio\nanyio.create_tcp_listener(local_port=1)",
+    "anyio.open_process": "import anyio\nanyio.open_process(['curl', 'http://h'])",
+    "anyio.run_process": "import anyio\nanyio.run_process(['wget', 'http://h'])",
+    "anyio.getaddrinfo": "import anyio\nanyio.getaddrinfo('h', 80)",
+    "anyio.abc socket streams": "from anyio.abc import SocketStream",
+    "anyio.streams.tls": "from anyio.streams.tls import TLSStream",
 }
 
 
@@ -370,6 +380,9 @@ def test_guard_catches_every_reaudit_probe_form(snippet):
         ("from scraper.net import fetch_policy\np = fetch_policy.SOURCE_POLICIES['NasirLawSite']\nq = fetch_policy.policy_for('X')", "scraper/tasks/x.py"),
         ("from scraper.net import fetch_policy\nwith fetch_policy.sync_fetcher_for('PakistanCode', headers=h) as c:\n    c.get(u)", "bootstrap_harvest.py"),
         ("import re\npattern = re.compile(r'x')\nimport sys\nsys.path.insert(0, p)", "scraper/x.py"),
+        # anyio's cancel scopes open nothing (F24's export router bounds a query with one, #64).
+        ("import anyio\nwith anyio.move_on_after(5) as scope:\n    pass\nwith anyio.fail_after(1):\n    pass", "scraper/routers/export.py"),
+        ("from anyio import move_on_after, CancelScope\nwith move_on_after(5):\n    pass", "scraper/routers/x.py"),
     ],
 )
 def test_guard_round_two_negative_controls(snippet, where):
