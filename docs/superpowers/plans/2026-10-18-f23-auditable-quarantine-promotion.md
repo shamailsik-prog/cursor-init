@@ -147,7 +147,7 @@ Reading the F20 tests showed that `test_b` and `test_j` build a "today's tables"
 | M16 review sources refused | (a) (b) (d) (e) (f) (g), unit |
 | M17 unknown source allowed | (e), 19 unit cases |
 
-M05 and M12 were re-run after the ledger refactor (both killed). Not mutated: the source row's `FOR SHARE` lock, which no test can observe deterministically.
+M05 and M12 were re-run after the ledger refactor (both killed). Not mutated: the source row's `FOR SHARE` lock, which no test can observe deterministically. *Corrected in round 2 (spec ruling 24): that was wrong; the wait is visible in `pg_stat_activity`, and `test_l2_*` now observes it and kills mutants Q08 and Q09.*
 
 ### Verification
 
@@ -214,3 +214,31 @@ Threads on PR #74: Copilot 4305754687 (HIGH: `is_current` accepts a WHEN (false)
 - `BASE=origin/main bash ci_gates/gate_g0.sh` at 57a2bb0: `=== Gate G-0 PASSED (static) ===`.
 - gitleaks 8.30.1 over `git diff origin/main` (the F23 changes only), with the repository's `.gitleaks.toml` and with the default rules: no leaks found.
 - Claim gate (`ci_gates/check_pr_phase_claims.py` as merged with #73) on the updated PR body: `PASS: PR phase-claim gate.`
+
+## Re-audit round 2 (M1, L1–L8)
+
+Spec section 7, rulings 13–26. Branch `claude/remediate-f23-fu` from `origin/main` @ 84025e8. Local runs: Python 3.12 venv from `requirements-test.txt` (plus the two pins this round adds), `CI=1`, a private PG16 + pgvector cluster on 127.0.0.1:55531 with Annex A 001/003/004 applied twice to `corpus_ci`, as the CI job does (`scratchpad/f23fu-pytest.sh`).
+
+**Goal:** the review routes refuse an unauthenticated, oversized or stalled body before reading it, never echo input in a 422, map contention to 409 / 503, refuse a reused `Idempotency-Key` with another body, refuse visually blank names, and the 11 surviving mutants are killed.
+
+**Files:**
+- `corpus_service/scraper/routers/quarantine.py`: the routes take `Request` (no body field) behind `Depends(require_admin_api_key)` listed first; `ReviewRoute(APIRoute)` (route class of the two POST routes: own 422 rendering, `Connection: close` while the body is incomplete); `read_review_body(request) -> ReviewDecisionIn` (content type, `MAX_BODY_BYTES = 32768`, `BODY_READ_SECONDS = 10`, `model_validate_json`); `request_fingerprint(decision, reviewer, reason) -> str`; the SQLSTATE map; the visible-character rule.
+- `corpus_service/scraper/models.py`: `QuarantineDecision.request_fingerprint` and its CHECK (additive).
+- `corpus_service/migrations/003_quarantine_decision_fingerprint.py` (new) and `scraper/migrate.py` (`NUMBERED_MIGRATIONS` gains it).
+- `corpus_service/requirements-test.txt`: `uvicorn==0.54.0`, `httptools==0.7.1` (inserted after `httpx`, away from #76's lines at the end).
+- Tests: `tests/test_f23_review_body_guard_e2e.py` (new, real uvicorn), `tests/test_f23_review_hardening_db.py` (new, real Postgres), `tests/test_f23_quarantine_review_db.py` (`test_i` drifts re-enabled ALWAYS, `origin_enabled` drift), `tests/test_f23_quarantine_review_rules.py` (L7, L4/L5 renderer, fingerprint, structural route test, L8 escapes).
+- `corpus_service/README.md` (review section).
+- Not touched: `scraper/main.py`, `scraper/auth.py`, `scraper/tasks/*`, `scraper/net/*`, F24's modules, `tests/conftest.py`, `requirements.txt`, `functions/src/d1`, `app/api/**`, the PDF extractor and `tests/fixtures`.
+
+### Tasks
+
+- [ ] **Task R2-1: spec and plan.** Spec section 7 (rulings 13–26, residuals); this section.
+- [ ] **Task R2-2: RED tests, committed alone.** The new test files and the `test_i` change, run on 84025e8's code; the failing output recorded below. Expected RED: every M1 probe (no 401 within 1 s for a 1 GB declared body; no 413; no 408; RSS growth), L3 (500), L4 (500), L5 (echoed input), L6 (200 replayed), L7 (200), the new migration (no column). Expected GREEN on 84025e8: the L1 and L2 pins (their RED is the mutant run).
+- [ ] **Task R2-3: M1 and L4/L5.** Rulings 13–18. GREEN: the body-guard e2e under h11 and httptools, the L4/L5 tests, the structural route test, both F23 files and the F24 files unchanged.
+- [ ] **Task R2-4: L3.** Ruling 19. GREEN: the four SQLSTATE cases.
+- [ ] **Task R2-5: L6.** Rulings 20–21. GREEN: key reuse 422, fingerprint stored, legacy NULL row compared by recomputation, migration 003 idempotent.
+- [ ] **Task R2-6: L7 and L8.** Rulings 22, 25. GREEN: the blank-name cases, unit and e2e.
+- [ ] **Task R2-7: mutation.** `mutate3.py` (the auditor's, with only its runner path and test list pointed at this branch) over the 11 survivors, then all 44.
+- [ ] **Task R2-8: verification.** Full suite as CI runs it, G-0, F31 import contract, gitleaks 8.30.1 over `git diff origin/main HEAD`, claim gate on the PR body; README.
+
+### Ledger: round 2
