@@ -291,14 +291,27 @@ routers may use only `scraper/public_corpus.py`'s public API; `tests/test_trust_
 admin key) decide one `quarantine_queue` record. Spec:
 `docs/superpowers/specs/2026-10-18-f23-auditable-quarantine-promotion-design.md`.
 
-- **Request.** Body `{"reviewer": "<name>", "reason": "<why>"}`, both required (reviewer 1-255
-  characters, reason 1-2000, no control characters; unknown fields refused), and optionally an
-  `Idempotency-Key` header (1-128 characters of `A-Z a-z 0-9 . _ : -`). Anything malformed is `422`.
+- **Request.** Body `{"reviewer": "<name>", "reason": "<why>"}` as `application/json`, both required
+  (reviewer 1-255 characters, reason 1-2000; no control, format or line/paragraph-separator
+  characters; each must contain a visible letter or digit; unknown fields refused), and optionally
+  an `Idempotency-Key` header (1-128 characters of `A-Z a-z 0-9 . _ : -`). Anything malformed is
+  `422`, and a `422` never echoes the input (type, location and message only, at most ten errors).
+- **The key before the body.** The admin key is checked before any of the body is read: a missing
+  or wrong key is `401` at once, whatever body the request declares. With the key, a body over
+  32 KiB is `413` (refused unread when `Content-Length` says so, or as soon as a streamed body passes
+  the cap), and a body that has not arrived 10 s after the read began is `408`. A response sent
+  before the body was completely received closes the connection (`Connection: close`). Spec
+  rulings 13-18 (re-audit round 2, M1).
 - **One transaction, one transition.** The queue row is locked (`FOR UPDATE`) and decided only while
   pending. A second decision, the loser of two concurrent ones, and a row resolved before this change
   are `409 already_resolved` (the body names the existing decision). A request repeating the winning
-  decision with the same `Idempotency-Key` gets the stored result again (`"replayed": true`) and
-  writes nothing; a client that may retry should send one. An unknown id is `404`.
+  decision with the same `Idempotency-Key` and the same reviewer and reason gets the stored result
+  again (`"replayed": true`) and writes nothing; the same key with another reviewer or reason is
+  `422 idempotency_key_reused` (each decision stores `request_fingerprint`, the SHA-256 of its
+  canonical decision, reviewer and reason). A client that may retry should send a key. An unknown id
+  is `404`. Contention the transaction loses is answered after rollback, never `500`: SQLSTATE
+  40001 or 40P01 is `409 transaction_aborted`, 55P03 or 57014 is `503 database_busy` with
+  `Retry-After: 1`; both carry `"retryable": true`.
 - **Promote.** Refused with `409`, writing nothing, when the record has no staging row
   (`staging_record_missing`), its staging row is already promoted (`staging_already_promoted`), its
   source, resolved from the staging row by promotion's rule and read now, is `blocked` or unknown
@@ -324,11 +337,14 @@ admin key) decide one `quarantine_queue` record. Spec:
   migration `migrations/002_quarantine_decisions.py`, run by `python -m scraper.migrate`, compares
   the function and both triggers attribute by attribute (a `WHEN` clause, an `UPDATE OF` column
   list, a statement-level, disabled or origin-only trigger, a replaced function body) and drops and
-  recreates all three on any difference.
+  recreates all three on any difference. Migration `migrations/003_quarantine_decision_fingerprint.py`
+  adds `request_fingerprint` and its CHECK to a table created before them.
 
-**Tests.** `tests/test_f23_quarantine_review_db.py` drives the real app against Postgres (needs
-`CORPUS_TEST_DATABASE_URL`), with quarantine rows made by the real promotion;
-`tests/test_f23_quarantine_review_rules.py` needs no database.
+**Tests.** `tests/test_f23_quarantine_review_db.py` and `tests/test_f23_review_hardening_db.py`
+drive the real app against Postgres (need `CORPUS_TEST_DATABASE_URL`), with quarantine rows made by
+the real promotion; `tests/test_f23_review_body_guard_e2e.py` starts the API with uvicorn (h11 and
+httptools) and probes the body guard over raw sockets; `tests/test_f23_quarantine_review_rules.py`
+needs no database.
 
 ## Quick start (no Docker)
 

@@ -687,6 +687,9 @@ class QuarantineDecision(Base):
             "AND published_id IS NULL AND embedding_outbox_id IS NULL)",
             name="ck_quarantine_decisions_publication",
         ),
+        # F23 re-audit round 2 (spec rulings 20-21; migrations/003_quarantine_decision_fingerprint.py).
+        CheckConstraint("request_fingerprint IS NULL OR request_fingerprint ~ '^[0-9a-f]{64}$'",
+                        name="ck_quarantine_decisions_request_fingerprint"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -710,6 +713,9 @@ class QuarantineDecision(Base):
     published_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     embedding_outbox_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     request_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="Idempotency-Key")
+    # SHA-256 of the canonical decision, reviewer and reason of the request that made this decision
+    # (scraper.routers.quarantine.request_fingerprint); NULL on rows written before migration 003.
+    request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     decided_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self) -> str:
