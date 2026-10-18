@@ -687,6 +687,37 @@ def test_r11_a_batch_that_fails_after_dead_lettering_still_raises_its_alerts(cor
     assert kinds == ["backlog_stale", "dead_letter"], f"the failed batch recorded alerts {record[0].result_summary.get('alerts')}"
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith(ALERT)]
     assert sorted(line[len(ALERT):].split(":")[0] for line in lines) == ["backlog_stale", "dead_letter"], lines
+
+
+def test_r11_alerts_that_cannot_be_evaluated_never_replace_a_failed_batchs_own_error(corpus_db, monkeypatch, caplog):
+    """Review round 1, on Bugbot Autofix c2266ae: evaluating the alerts in a `finally` meant an alert
+    query that fails (here it divides by zero, SQLSTATE 22012) replaced the batch's own error, so the
+    batch was recorded and raised as the alert's failure instead of its own (an interruption would
+    have been lost the same way). The batch's error (the refused vector write, 23514) must reach Celery
+    and its record; the alert failure is logged."""
+    from scraper.tasks import embeddings
+
+    migrated(corpus_db)
+    seed_statutes(1, 1)
+    corpus_db.admin(
+        "CREATE FUNCTION f27_refuse_vector() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF NEW.embedding IS NOT NULL THEN "
+        "RAISE EXCEPTION 'synthetic F27 vector write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$",
+        "CREATE TRIGGER f27_refuse_vector BEFORE UPDATE ON statutes_master FOR EACH ROW EXECUTE FUNCTION f27_refuse_vector()",
+    )
+    monkeypatch.setattr(embeddings, "ALERT_STATE_SQL", "SELECT now(), now(), 1 / (CAST(:cap_plus_one AS int) * 0)")
+    Provider().install(monkeypatch)
+    no_sleep(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("process-embeddings")
+
+    assert (result.state, type(result.result).__name__) == ("FAILURE", "IntegrityError"), repr(result.result)
+    record = jobs("embedding_queue", job_type="embed")
+    assert [r.status for r in record] == ["failed"] and "23514" in record[0].error_message, (
+        [(r.status, r.error_message) for r in record])
+    assert any("could not evaluate the embedding alerts" in r.getMessage() and "22012" in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records][-5:]
 def test_r11_a_stale_backlog_and_new_dead_letters_raise_the_corpus_alert(corpus_db, monkeypatch, caplog):
     """A row queued two days ago is waiting for its retry, and a row whose record is gone is next.
     On main nothing alerted (and the waiting row was retried at once). Here the batch dead-letters
