@@ -91,11 +91,19 @@ async def run_embedding_batch(*, celery_task_id=None, worker=None):
             )
         raise
     if summary["claimed"]:
-        await job_record.record_batch(
-            status=job_record.STATUS_COMPLETED, summary=summary, started=started,
-            attempted=summary["completed"] + summary["failed"], written=summary["completed"], failed=summary["failed"],
-            celery_task_id=celery_task_id, worker=worker,
-        )
+        try:
+            await job_record.record_batch(
+                status=job_record.STATUS_COMPLETED, summary=summary, started=started,
+                attempted=summary["completed"] + summary["failed"], written=summary["completed"], failed=summary["failed"],
+                celery_task_id=celery_task_id, worker=worker,
+            )
+        except Exception as exc:
+            # F28 R18: the batch's work stands; only its record failed (the same mechanism as a run).
+            logger.error(
+                "F28 run record failed: %s %s batch could not be recorded (%s)",
+                job_record.EMBED_SITE, summary["outcome"], outcomes.describe_error(exc),
+            )
+            raise outcomes.RunRecordFailed(job_record.EMBED_SITE) from exc
     return summary
 
 

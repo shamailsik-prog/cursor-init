@@ -87,14 +87,19 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
             retry_in=retry_in,
         )
         raise
-    if isinstance(decision, outcomes.Skipped):
-        try:
-            return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
-        except Exception as exc:
-            raise outcomes.RunRecordFailed(source_name) from exc
+    # F28 R18 (Bugbot 4305696998; the isolation of the skip is Cursor's c6af66d): a run that
+    # succeeded or was skipped and whose record cannot be written is not a harvest failure. It never
+    # goes through finish_failed, never changes freshness and is never retried: RunRecordFailed.
+    outcome = outcomes.OUTCOME_SKIPPED if isinstance(decision, outcomes.Skipped) else decision.outcome
     try:
+        if isinstance(decision, outcomes.Skipped):
+            return await job_record.finish_skipped(job_id, source_name, decision.reason, started)
         return await job_record.finish_completed(job_id, source_name, decision, started)
     except Exception as exc:
+        logger.error(
+            "F28 run record failed: %s %s run could not be recorded (%s); not retried, freshness unchanged",
+            source_name, outcome, outcomes.describe_error(exc),
+        )
         raise outcomes.RunRecordFailed(source_name) from exc
 
 
