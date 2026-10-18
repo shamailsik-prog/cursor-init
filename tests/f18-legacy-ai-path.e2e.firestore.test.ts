@@ -194,6 +194,7 @@ const SWEPT_BY_FIRM = [
   "idempotency_keys",
   "idempotency_effects",
   "audit_log",
+  "audit_outbox",
   "events",
 ] as const
 
@@ -644,6 +645,35 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F18: no paid AI call leaves the Ne
     expect(String(answer.result?.reason)).toMatch(KEY_REFUSAL)
     expect(server.received, "nothing forwarded while a key is present").toEqual([])
     expect(sanctioned.calls).toBe(0)
+  })
+
+  // Audit F11 (PR #86, spec ruling 18) on F18's paths: a request releases its audit-outbox entries only at its audited
+  // end. On the forward path Next writes nothing (R6), so it stages no entry; a forward failure leaves none either; the
+  // local blocked row (a key in production, R5) stages one, and the route's own `committee_brain_output_create` row lets
+  // the request release it. No entry is left for the reconciler to turn into a `request_effect_recovered` row.
+  it("audit F11: the forward path stages no audit-outbox entry, a forward failure leaves none, and the local blocked row's entry is released", async () => {
+    const { member, matterId } = await firmWithMatter()
+    const outboxOf = async () => (await adminDb().collection("audit_outbox").where("firmId", "==", member.firmId).get()).docs.map((d) => d.get("effectPaths"))
+    const actionsOf = async () => (await adminDb().collection("audit_log").where("firmId", "==", member.firmId).get()).docs.map((d) => String(d.get("action")))
+
+    const forwarded = await ask(member, matterId)
+    expect(forwarded.status, JSON.stringify(forwarded.json)).toBe(200)
+    expect(server.received).toHaveLength(1)
+    expect(await outboxOf(), "the forward path").toEqual([])
+
+    vi.stubEnv("SIKANDER_FUNCTIONS_API_BASE_URL", `http://127.0.0.1:${await closedLoopbackPort()}`)
+    const unreachable = await ask(member, matterId)
+    expect(unreachable.status, JSON.stringify(unreachable.json)).toBe(503)
+    expect(await outboxOf(), "a forward failure").toEqual([])
+
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_PROVIDER_KEY)
+    const local = await ask(member, matterId)
+    expect(local.status, JSON.stringify(local.json)).toBe(200)
+    expect(local.result?.blocked).toBe(true)
+    expect(await outboxOf(), "the local blocked row").toEqual([])
+    const actions = await actionsOf()
+    expect(actions.filter((action) => action === "committee_brain_output_create")).toHaveLength(1)
+    expect(actions).not.toContain("request_effect_recovered")
   })
 
   it("leaves nothing behind: every document and Auth user the suite created is gone", async () => {

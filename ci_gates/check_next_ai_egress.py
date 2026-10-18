@@ -207,6 +207,8 @@ FUNCTIONS_IMPORT_ALLOWLIST: dict[tuple[str, str], str] = {
     ("tests/f18-legacy-ai-path.e2e.firestore.test.ts", "functions/src/p1/transportTestSeam"): "installs the Functions fake transport; the seam holds no paid code and refuses in production",
     ("tests/helpers/functions-router-fetch.ts", "functions/src/http/router"): "F02 console e2e helper: calls the real Functions api router in process",
     ("tests/helpers/functions-router-fetch.ts", "functions/test/emu"): "F02 console e2e helper: the Functions suite's mock express response (mockRes)",
+    ("tests/f11-atomic-request-audit.e2e.firestore.test.ts", "functions/src/p5/auditOutbox"): "F11 e2e: runs the Functions audit-outbox reconciler (a Firestore handle in; no transport) on what Next left",
+    ("tests/f11-audit-outbox.firestore.test.ts", "functions/src/p5/auditOutbox"): "F11: drives the Functions audit-outbox reconciler (a Firestore handle in; no transport) on the emulator",
     ("tests/p5.identity-policy.parity.test.ts", "functions/src/p5/auth"): "P5 parity: the Functions identity policy must equal the Next one",
     ("tests/p5.permission-decision.parity.test.ts", "functions/src/p5/permission"): "P5 parity: the Functions permission decision must equal the Next one",
 }

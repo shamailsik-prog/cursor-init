@@ -2,6 +2,7 @@ import type { Firestore } from "@/platform/persistence/firestoreDbModular"
 import {
   FIRM_SCOPED_LIST_LIMIT,
   getDocs,
+  queryByFieldEquals,
   queryByFirmId,
   queryByFirmIdAndField,
   validateFirmListCursor,
@@ -134,6 +135,28 @@ export async function listAllRowsByFirmAndField<T extends { id?: string }>(
     db,
     collectionName,
     (fetchLimit) => queryByFirmIdAndField(db, collectionName, firm, field, fieldValue, fetchLimit),
+    firm,
+    pageLimit
+  )
+}
+
+/**
+ * Every row whose `firmFieldPath` (for example `row.firmId`) equals the caller's firm, read page by page as
+ * listAllRowsByFirm reads (F12). For stored shapes that keep the firm elsewhere than top-level `firmId`: audit F11 reads
+ * the dead letters stored before the fix through it. The database applies the firm filter.
+ */
+export async function listAllRowsByFirmField<T extends { id?: string }>(
+  db: Firestore,
+  collectionName: string,
+  firmId: string,
+  firmFieldPath: string,
+  pageLimit: number = FIRM_SCOPED_LIST_LIMIT
+): Promise<FirmScopedPage<T>> {
+  const firm = requireCallerFirmId(firmId, "listAllRowsByFirmField")
+  return listAllPages<T>(
+    db,
+    collectionName,
+    (fetchLimit) => queryByFieldEquals(db, collectionName, firmFieldPath, firm, fetchLimit),
     firm,
     pageLimit
   )

@@ -13,6 +13,7 @@ import {
   asFirmScopedList,
   listAllRowsByFirm,
   listAllRowsByFirmAndField,
+  listAllRowsByFirmField,
   type FirmScopedList,
 } from "@/platform/persistence/firmScopedList"
 import type {
@@ -2109,15 +2110,19 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         // Full row kept (R3 N13); undefined fields dropped because Firestore rejects them.
         const row = JSON.parse(JSON.stringify(letter.row)) as AuditEntry
         const id = `${row.id ?? "noid"}_${letter.deadLetteredAt}`
-        await setDoc(doc(db, "audit_dead_letter", id), { row, reason: letter.reason, deadLetteredAt: letter.deadLetteredAt })
+        // Audit F11 / F12 re-audit LOW-2: the letter belongs to its row's firm, at the top level where the firm-scoped
+        // listing reads it. A row with no firm (the reason it was dead-lettered) belongs to no firm and is listed by none.
+        const owner = typeof row.firmId === "string" && row.firmId !== "" ? { firmId: row.firmId } : {}
+        await setDoc(doc(db, "audit_dead_letter", id), { row, reason: letter.reason, deadLetteredAt: letter.deadLetteredAt, ...owner })
       },
       async listByFirm(firmId) {
-        const page = await listAllRowsByFirm<AuditDeadLetter & { firmId: string; id?: string }>(
-          db,
-          "audit_dead_letter",
-          firmId
-        )
-        return page.items
+        const firm = requireCallerFirmId(firmId, "auditDeadLetter.listByFirm")
+        type Stored = AuditDeadLetter & { id?: string }
+        // The letters the firm owns, plus those stored before F11 (no top-level firmId, the firm only in `row.firmId`).
+        // A letter the reconciler filed under a request's firm is never listed by the firm its row names.
+        const owned = await listAllRowsByFirm<Stored & { firmId: string }>(db, "audit_dead_letter", firm)
+        const legacy = await listAllRowsByFirmField<Stored>(db, "audit_dead_letter", firm, "row.firmId")
+        return [...owned.items, ...legacy.items.filter((letter) => letter.firmId === undefined)]
       },
     },
     audit: {
