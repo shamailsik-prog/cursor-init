@@ -113,3 +113,16 @@ Rulings: **R14** (spec) the raw store is owner-only and requires one uid for eve
 | Gates (f58c685) | G-0; F31 runtime smoke; gitleaks 8.30.1 `--log-opts=origin/main..HEAD` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines; F31 runtime smoke all checks passed (billiard resolves to 4.3.1 there too); no leaks found |
 
 Rulings: **R16-R25** (spec section 7). No ruling changed while going GREEN; one note was added to R23 (the pid in a scratch name is meaningful only because compose shares no `/tmp` between containers).
+
+### Review round 1 on PR #81 (Codex P2, thread 4306593931)
+
+`_scratch_owner` accepted any `isdigit()` run, so a young `f26-pdf-999999999999999999999-x` (`os.kill` raises `OverflowError`) or `f26-pdf-²-x` (`int('²')` raises `ValueError`) in the temporary directory made every `parse()` abort until the directory aged out. A name above the kernel's `pid_max` was swept although young. Ruling: spec R23 is amended so the owner is parsed strictly and the liveness check never raises.
+
+| Step | Command | Result |
+|---|---|---|
+| RED, each name alone through `_sweep_stale_scratch` on 0b55327 | `f26fu_rr1_sweep_probe.py` | `999999999999999999999`: **OverflowError** escapes; `²`: **ValueError** escapes; `32769` (`pid_max` + 1 here): **swept although young**; `0` and `007`: kept |
+| RED, the two new tests on b377fef's code (archive copy) | `-k r23_` | **2 failed, 1 passed**: through `parse()`, `ValueError: invalid literal for int() with base 10: '²'`; the owner/liveness test, `_worker_gone` missing. The pass is the existing killed-pool test |
+| GREEN (59c3769) | `-k r23_`; the probe again | 3 passed; every name kept while young |
+| Mutation (copy of 59c3769), the R23 mutants plus one per part of the fix | `f26fu_mutate.py N21 N22 N23 N25-N34` | **13 of 13 killed**. Two of the kills depend on this machine: N32 (`pid_max` never read) and N34 (the sweep ignores the kernel's `pid_max`) are killed through `parse()` because `pid_max` is 32,768 here. On a host whose `pid_max` is the 4,194,304 ceiling, N34 is equivalent; N32 is still killed by the reader's own unit case |
+| GREEN, full suite as CI runs it (59c3769) | `python -m pytest corpus_service/tests -q -rfEs` | **1143 passed**, 157 subtests, 0 skipped (load ~20). Both F26 files are part of this run (82 tests) |
+| Gates (59c3769) | G-0; gitleaks `--log-opts=origin/main..HEAD` | `=== Gate G-0 PASSED (static) ===`, 0 FAIL lines; no leaks found |
