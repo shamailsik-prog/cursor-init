@@ -8,7 +8,8 @@ Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (r
   role's DML on it already exist, so there is no schema change.
 * The ``scraper_sources`` row carries freshness (R9): ``last_scraped_at``, ``last_success_at``,
   ``consecutive_failures`` (failed attempts, retries included), ``last_failure_reason`` and the totals.
-* Alerts (R10), logged at ERROR as ``F28 source alert: <source> <alert>`` and kept in the summary:
+* Alerts (R10), on every recorded run of a source, skips included (R20b, without touching its
+  counters), logged at ERROR as ``F28 source alert: <source> <alert>`` and kept in the summary:
   ``failing`` (3 consecutive failed attempts), ``no_progress`` (the last 3 runs that ran all completed
   and wrote nothing), ``stale`` (no successful run for 2x the source's scrape frequency).
 * Before an attempt starts, rows of the same source and job type still ``running`` after 2 hours are
@@ -213,6 +214,14 @@ async def _close(
                 else:
                     source.consecutive_failures = (source.consecutive_failures or 0) + 1
                     source.last_failure_reason = outcomes.describe_error(exc)[:1000] if exc is not None else None
+                alerts = await _alerts(db, source, job_id, now, status=status, written=written)
+        else:
+            # F28 R20b (Copilot 4305705096): a skip is not a run, so it changes no freshness counter,
+            # but a skipped source can still go stale (or still be failing): the alerts are evaluated.
+            source = (
+                await db.execute(select(ScraperSource).where(ScraperSource.source_name == source_name))
+            ).scalars().first()
+            if source is not None:
                 alerts = await _alerts(db, source, job_id, now, status=status, written=written)
         summary = {**summary, "alerts": alerts}
         job = await db.get(ScraperJob, job_id)
