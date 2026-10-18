@@ -169,6 +169,30 @@ def test_r25_control_two_refused_runs_on_a_stale_source_alert_twice(corpus_db, m
     assert len([m for m in alert_lines(caplog, "PakistanCode") if " stale: " in m]) == 2
 
 
+def test_r21_a_time_limit_while_the_record_is_written_is_reported_as_the_time_limit(corpus_db, monkeypatch, tmp_path, caplog):
+    """The run itself finished; the soft limit lands while its record is written. The task reports
+    the time limit (not RunRecordFailed, which would claim the record write failed on its own), the
+    row stays running and the sweep closes it later (R24)."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from scraper.tasks import job_record
+
+    idle_import_folder(monkeypatch, tmp_path)
+
+    async def cut_off(*args, **kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(job_record, "finish_completed", cut_off)
+
+    with caplog.at_level(logging.ERROR):
+        result = fire("scrape-pakistanlawsite")
+
+    assert result.state == "FAILURE" and type(result.result).__name__ == "SoftTimeLimitExceeded", repr(result.result)
+    assert [(r.status, r.retry_count) for r in jobs("PakistanLawSite")] == [("running", 0)]
+    assert not any(r.getMessage().startswith("F28 run record failed") for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------------------------
 # M1 / R26: an embedding batch cut off by the time limit
 # ---------------------------------------------------------------------------------------------

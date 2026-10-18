@@ -252,6 +252,8 @@ async def _request_with_retries(
             return await client.get(url)
         except fetch_policy.FetchRefused:
             raise  # Audit F25: a refused URL is never retried
+        except outcomes.INTERRUPTIONS:
+            raise  # Audit F28 R23: the time limit ends the run; it is never a reason to retry the URL
         except Exception as exc:  # pragma: no cover - depends on network path.
             last_error = exc
             if attempt < attempts:
@@ -274,6 +276,8 @@ async def _post_json_with_retries(
             return await client.post(url, json=payload)
         except fetch_policy.FetchRefused:
             raise  # Audit F25: a refused URL is never retried
+        except outcomes.INTERRUPTIONS:
+            raise  # Audit F28 R23: the time limit ends the run; it is never a reason to retry the URL
         except Exception as exc:  # pragma: no cover - depends on network path.
             last_error = exc
             if attempt < attempts:

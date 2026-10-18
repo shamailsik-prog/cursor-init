@@ -86,6 +86,36 @@ def test_the_tally_re_raises_an_interruption_and_counts_nothing(make):
     assert (tally.attempted, tally.succeeded, tally.failed, tally.written, dict(tally.errors)) == (1, 1, 0, 3, {})
 
 
+COURT_RETRY_HELPERS = [
+    ("balochistanhighcourt", "_request_with_retries"),
+    ("islamabadhighcourt", "_request_with_retries"),
+    ("islamabadhighcourt", "_post_json_with_retries"),
+    ("peshawarhighcourt", "_request_with_retries"),
+]
+
+
+@pytest.mark.parametrize("module, helper", COURT_RETRY_HELPERS, ids=lambda v: v)
+def test_a_court_retry_helper_never_retries_through_the_time_limit(module, helper):
+    """R23: the courts' request helpers retry any exception; the time limit landing inside a request
+    must end the run at once, not be retried twice more."""
+    import importlib
+
+    calls = []
+
+    class _Client:
+        async def get(self, url, *args, **kwargs):
+            calls.append(url)
+            raise SoftTimeLimitExceeded()
+
+        post = get
+
+    function = getattr(importlib.import_module(f"scraper.tasks.{module}"), helper)
+    args = ("https://f28.example.invalid/listing",) + (({},) if helper == "_post_json_with_retries" else ())
+    with pytest.raises(SoftTimeLimitExceeded):
+        asyncio.run(function(_Client(), *args, attempts=3, pause_seconds=0))
+    assert calls == ["https://f28.example.invalid/listing"], calls
+
+
 # ---------------------------------------------------------------------------------------------
 # R28 (L4): transient database connection faults
 # ---------------------------------------------------------------------------------------------
