@@ -4,7 +4,7 @@
 
 **Goal:** a conflict screen (runConflictCheck, and openMatter's re-screen) reads O(keys + candidates) documents plus one packed name-index read per ~20,000 distinct names, never the whole registry, with exactly the hits of the old full scan, failing closed when the index cannot be trusted.
 
-**Spec:** `docs/superpowers/specs/2026-10-18-f37-indexed-conflict-candidates-design.md` (rulings 1 to 12).
+**Spec:** `docs/superpowers/specs/2026-10-18-f37-indexed-conflict-candidates-design.md` (rulings 1 to 13).
 
 **Base:** `origin/main` 7364b2b. **Branch:** `claude/remediate-f37`.
 
@@ -74,6 +74,8 @@ Emulator runs use a scratch `firebase.json` with private ports (firestore 8197, 
 | RED 3 (found in verification) | full functions suite, run 2 | 4 `p2.jobs-scheduled` tests timed out (15 s) after the recall file. Cause: recall leaves ~300 to 390 `firms` docs; the scheduled tick is O(firms). Reproduced in one emulator: first test 0.5 s fresh, 10.9 s after 380 firm docs (backfill test 0.8 s to 19.0 s). |
 | GREEN 6 | recall, then a firm-count probe, then `p2.jobs-scheduled`, one emulator | PASS. 0 recall or writer firm docs left; `p2.jobs-scheduled` 6/6 in 6.4 s (first test 1.2 s). |
 | Full suite | the whole functions suite (mirrors `test:emu`), run 3 at e8ad3fb | 84 of 85 files pass; 2,351 tests pass, 0 fail, 6 skipped. The 6 are `p2.jobs-scheduled`, whose `beforeAll` (three firm-doc writes) hit the 10 s hook timeout as the first file on a cold emulator (vitest's results cache ran the previously failed file first). Alone on a fresh emulator at load 15: the same timeout on the branch and on main's src. With a warm emulator, right after recall (GREEN 6): 6/6. |
+| RED 4 (PR #80 review, thread 4306418755) | `vitest run test/f37-index-integrity.emu.test.ts` at 8c26094 | FAIL 10/10. 200 instead of 503 (fail open) for a state missing `chunk`, a state missing `bytes`, chunk 0 missing under a state claiming an empty index, an empty counted chunk, and a wrong chunk number (`expected an ApiError, the call succeeded`); 503 but the job dead-lettered instead of rebuilding for chunk 0 missing, a middle chunk missing, names not an array, a non-string name, another firm's chunk (`expected 'dead_lettered' to be 'done'`). |
+| GREEN 7 | same file after ruling 13 (strict state, whole-or-nothing chunk reads, self-healing reconciliation) | PASS 10/10: both routes answer 503 and write nothing; the job rebuilds the index; the conflict is then found and the matter opens. Parser unit tests 10/10 (5 new). Guards 11/11, e2e 2/2 (reads unchanged: 23 / 27, K=40 144), d1 conflict, matter, client, decisions and limit 131/131, p2 boot, engine and scheduled 17/17. |
 | Typecheck | `npm --prefix functions run typecheck` | Was 6 × TS2322 in `f37-name-index.test.ts` (helper type) at dd0b123; 0 after 2480f14. |
 
 Load note: the machine is shared (4 cores, load average 5 to 26). Wall-clock failures were rerun alone; both runs are in the evidence log.
@@ -88,3 +90,4 @@ Intent kept in every case; nothing skipped or weakened.
 - `p2.boot`, `p2.engine`, `p2.scheduled`, `p5.identity`, `g2.cross-firm` (`NOT_TENANT_ENDPOINTS`): the new job type, schedule and `d1ConflictReindexTick` export are listed.
 - `p2.registry-discipline.emu.test.ts`, `setup/registryWriteRecorder.ts`: new recorder rules for the name index (chunk writes bump; `no_name_index`).
 - `tests/firestore.rules.d1-phase2a.test.ts`: `conflict_name_index` joins `SERVER_ONLY`.
+- `f37-screening-guards.emu.test.ts` (PR #80 review): the corrupt-index case expected the job to fail permanently with `name_index_corrupt`; it now expects the job to rebuild the index and the check to succeed (ruling 13). The reconciliation result gains `rebuilt`, and the job's only error code is `reconcile_contended`.

@@ -114,12 +114,12 @@ Cost of the ruling: a firm cannot screen between a deploy and its first reconcil
 ### Ruling 7: reconciliation is a P2 job, rare and off the request path
 
 `d1.conflict.reindex` (`conflict/reindexJob.ts`) runs `reconcileNameIndex(firmId)`:
-1. read the state (version `v0`, mirror `n0`) and the chunks;
+1. read the state (version `v0`, mirror `n0`) and the chunks; a damaged index (ruling 13) is reset in one transaction (the firm's chunk documents deleted, `nameIndex` replaced by an unplaced, schema-less state, a bump) and the round starts over on the empty index;
 2. scan the firm's client and opposing-party names (paged by document id, `select` of the name field only);
 3. append the missing names, each transaction through `stageRegistryWrite` (so it bumps);
-4. if the index is not fresh, mark it: in one transaction, require `version - v0 == nameIndex.version - n0` (every write since step 1 maintained the index; otherwise a non-maintaining writer raced the scan and the run starts over, at most 3 times, then fails retryably), then set `nameIndex.schema` and `nameIndex.version = version + 1` with the bump.
+4. if the index is not fresh, mark it: in one transaction, require `version - v0 == nameIndex.version - n0` (every write since step 1 maintained the index; otherwise a non-maintaining writer raced the scan and the run starts over, at most 4 rounds, then fails retryably with `reconcile_contended`), then set `nameIndex.schema` and `nameIndex.version = version + 1` with the bump. An index with no name gets an empty chunk 0 when it is marked, so a current index always has its chunks.
 
-A fresh index with nothing missing costs reads only. A run that finds drift (names added out of band) repairs it and its bump makes in-flight openings re-screen. It is idempotent (append-only, state-derived), so the engine's at-least-once delivery and a stale lease holder are harmless; it writes through ordinary transactions, not `runFenced`, because no effect needs exactly-once.
+A fresh index with nothing missing costs reads only. A run that finds drift (names added out of band) repairs it and its bump makes in-flight openings re-screen. It is idempotent (append-only apart from the reset, state-derived), so the engine's at-least-once delivery and a stale lease holder are harmless; it writes through ordinary transactions, not `runFenced`, because no effect needs exactly-once.
 
 Triggers: daily at 02:35 PKT (`NAME_REINDEX_SPEC`, after auto-confirm at 02:15), on demand when a screen finds the index unavailable (ruling 5), and the deploy backfill through the existing `jobs:backfill` CLI.
 
@@ -139,6 +139,16 @@ Registering a job type and a schedule touches the documented extension points (`
 
 - `firestore.rules`: `match /conflict_name_index/{id} { allow read, write: if false; }`. The catch-all already denied it; the explicit block documents it and puts it in G-2's rules sweep (which derives its collection list from the `match` blocks).
 - `firestore.indexes.json`: composite indexes for every new query shape (clients `firmId` + each key field and `canonicalName`; opposing parties `firmId` + `role` + `name`, `entityId` and each `keys.*`; matters `firmId` + `clientId`); `entity_links` (`firmId`, `leftId`/`rightId`) and clients (`firmId`, `entityId`) already exist. `conflict_name_index.names` is exempt from single-field indexing: an array of 20,000 names would otherwise cost 20,000 index entries per write and approach the 40,000-entry document limit.
+
+### Ruling 13: the index is read whole or not at all, and a damaged index is rebuilt (PR #80 review, thread 4306418755)
+
+The first cut defaulted a missing `nameIndex.chunk` or `bytes` to 0 and accepted a missing open chunk when `bytes` read 0. A state with `schema` and a current mirror but no `chunk` then read chunk 0 only, and a conflict held in a later chunk screened CLEAR.
+
+- **State** (`registryStateOf` in `registryVersion.ts`). Every writer of `nameIndex` writes `version` (the bump's mirror increment), and every write that sets `schema` also writes `chunk` and `bytes` (`stageRegistryWrite`). So once the map exists, `version` is required, and `chunk` and `bytes` are required whenever `schema` is set. Without `schema` they come together or not at all: both are absent only on an index never placed (a pre-F37 firm whose non-indexing writers bumped the mirror alone), which has no schema, reads `missing` and is refused anyway. Any other partial or malformed map is `valid: false` and reads `corrupt`. So does a state the placement cannot produce: a pointer at or past the cap, or an open chunk past 0 with no bytes counted (`nameIndexStateCorrupt`).
+- **Chunks** (`readIndexedNames`). Every chunk from 0 to `chunk` must exist, carry this firm and its own chunk number, and hold only strings. A closed chunk must hold names, and the open one must hold names exactly when bytes were counted into it. A missing chunk is never read as empty while the index reads current. The one chunk that may be absent is chunk 0 of an index never placed and without a schema, which only the reconciliation reads.
+- **A current index always has its chunks.** The reconciliation's mark creates an empty chunk 0 for a firm with no names.
+- **Healing.** A damaged index is reset and rebuilt by the reconciliation (ruling 7). The permanent `name_index_corrupt` failure and its operator runbook are gone. The run fails only retryably, so every refusal clears without an operator.
+- **Tests.** `functions/test/f37-index-integrity.emu.test.ts`: for a state missing `chunk`, a state missing `bytes`, a missing chunk 0, a missing chunk 0 under a state claiming an empty index, a missing middle chunk, and five malformed chunk bodies, both routes answer 503 and write nothing, and the job, run through the real P2 worker, rebuilds the index so the same calls find the conflict and open the matter. Unit tests pin the strict state parser.
 
 ### Ruling 12: tests
 
@@ -164,7 +174,7 @@ Registering a job type and a schedule touches the documented extension points (`
 3. A common-token subject ("Muhammad Ali") legitimately matches thousands of names under the 0.80 token-set rule (a short remainder scores 0.80 against any name sharing the long token); the candidate reads then grow with those true matches. That is the rule's cost, not the retrieval's.
 4. Conservative byte counting can close chunks early (each `registerClient` counts its name even when present); worst case one extra chunk read per 512 KiB of repeated names. No compaction yet.
 5. A firm cannot screen between deploy and its first reconciliation (ruling 5).
-6. A corrupt chunk (out-of-band edit) refuses screening until an operator deletes the firm's chunks and its `nameIndex` field and the job rebuilds them (runbook in the P2 README).
+6. A damaged index (out-of-band edit) refuses screening until the reindex run the refusal enqueued rebuilds it (ruling 13). A name removed from inside a chunk, with the chunk otherwise well formed, cannot be detected without per-name checksums; the daily reconciliation re-adds it (it rescans every name), and until then that name is invisible to the name tier.
 7. Test cost: the recall differential runs ~10 minutes on the shared development machine at low load (22 minutes at load ~23); from per-file timing ratios against CI it should add about 6 to 9 minutes to the CI functions job (about 10 minutes today, 30-minute limit). It deletes the ~300 to 390 `firms` docs it creates when it ends, because the P2 scheduled-tick suites are O(firms) in the shared emulator.
 
 ## 6. Follow-ups
