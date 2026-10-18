@@ -1,6 +1,6 @@
 """Audit F28: the durable record of a corpus job run and its source's freshness.
 
-Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R8-R12).
+Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (rulings R8-R12, R18-R21, R24).
 
 * One ``scraper_jobs`` row per attempt (R8): inserted as ``running`` before the harvest, closed as
   ``completed`` (ok / partial / empty), ``cancelled`` (skipped) or ``failed``, with its counts, timing,
@@ -13,7 +13,11 @@ Spec: docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md (r
   ``failing`` (3 consecutive failed attempts), ``no_progress`` (the last 3 runs that ran all completed
   and wrote nothing), ``stale`` (no successful run for 2x the source's scrape frequency).
 * Before an attempt starts, rows of the same source and job type still ``running`` after 2 hours are
-  closed as ``failed`` / ``abandoned`` (R11): the task time limit is 1 hour.
+  closed as ``failed`` / ``abandoned`` (R11): the task time limit is 1 hour. Each closed row that
+  started after the last success counts toward the failure streak, with a reason that names no
+  cause, and the alerts are evaluated (R24, re-audit round 2).
+* A run cut off by the soft time limit, or cancelled, is recorded by the dispatcher through
+  ``finish_failed`` as ``outcomes.RunInterrupted`` (R21).
 * ``in_task_loop`` disposes the engine's pool before a task's event loop closes (R12).
 
 Error text comes only from ``outcomes.describe_error``; a traceback is kept as frame locations without
@@ -46,6 +50,9 @@ STATUS_CANCELLED = "cancelled"
 STATUS_FAILED = "failed"
 
 ABANDONED_AFTER = timedelta(hours=2)  # celery_app task_time_limit is 3600 s
+# R24: the sweep cannot know why a row was left running (a hard kill, a restart, a record that could
+# not be written), so its text names no cause.
+ABANDONED_TEXT = "abandoned: still running 2 hours after it started, with no outcome recorded; cause unknown"
 ALERT_STREAK = 3
 STALE_FACTOR = 2
 _TRACEBACK_LIMIT = 4000
@@ -84,28 +91,22 @@ async def start(
     attempt: int,
     max_retries: int,
 ) -> uuid.UUID:
-    """Close the source's abandoned rows (R11) and insert this attempt's ``running`` row."""
+    """Close the source's abandoned rows, counting and alerting on them (R11, R24), and insert this
+    attempt's ``running`` row."""
     now = utcnow()
+    alerts: List[str] = []
     async with database.SessionLocal() as db:
         source_id = (
             await db.execute(select(ScraperSource.id).where(ScraperSource.source_name == source_name))
         ).scalar()
-        await db.execute(
-            update(ScraperJob)
-            .where(
-                ScraperJob.source_site == source_name,
-                ScraperJob.job_type == JOB_TYPE_SOURCE,
-                ScraperJob.status == STATUS_RUNNING,
-                ScraperJob.started_at < now - ABANDONED_AFTER,
-            )
-            .values(
-                status=STATUS_FAILED,
-                finished_at=now,
-                error_message="abandoned: still running after the task time limit; its worker was lost",
-                result_summary={"outcome": outcomes.OUTCOME_FAILED, "reason": "abandoned"},
-            )
-            .execution_options(synchronize_session=False)
+        abandoned = (
+            ScraperJob.source_site == source_name,
+            ScraperJob.job_type == JOB_TYPE_SOURCE,
+            ScraperJob.status == STATUS_RUNNING,
+            ScraperJob.started_at < now - ABANDONED_AFTER,
         )
+        if (await db.execute(select(ScraperJob.id).where(*abandoned).limit(1))).first() is not None:
+            alerts = await _sweep(db, source_name, abandoned, now)
         job = ScraperJob(
             source_id=source_id,
             source_site=source_name,
@@ -120,7 +121,48 @@ async def start(
         )
         db.add(job)
         await db.commit()
-        return job.id
+    for alert in alerts:
+        logger.error("F28 source alert: %s %s", source_name, alert)
+    return job.id
+
+
+async def _sweep(db, source_name: str, abandoned, now: datetime) -> List[str]:
+    """R24: close the abandoned rows as failed with a neutral reason, add each one that started after
+    the source's last success to its failure streak, and evaluate the alerts. The source row is
+    locked first (the lock order ``_close`` uses), and ``UPDATE ... RETURNING`` re-checks each row's
+    status under its lock, so two concurrent sweeps never close or count the same row."""
+    source = (
+        await db.execute(select(ScraperSource).where(ScraperSource.source_name == source_name).with_for_update())
+    ).scalars().first()
+    closed = (
+        await db.execute(
+            update(ScraperJob)
+            .where(*abandoned)
+            .values(
+                status=STATUS_FAILED,
+                finished_at=now,
+                error_message=ABANDONED_TEXT,
+                result_summary={"outcome": outcomes.OUTCOME_FAILED, "reason": "abandoned"},
+            )
+            .returning(ScraperJob.id, ScraperJob.started_at)
+            .execution_options(synchronize_session=False)
+        )
+    ).all()
+    if source is None or not closed:
+        return []
+    last_success = source.last_success_at
+    counted = [row for row in closed if last_success is None or row.started_at > last_success]
+    if counted:
+        source.consecutive_failures = (source.consecutive_failures or 0) + len(counted)
+        source.last_failure_reason = ABANDONED_TEXT
+    alerts = await _alerts(db, source, closed[-1].id, now, status=STATUS_FAILED, written=0)
+    await db.execute(
+        update(ScraperJob)
+        .where(ScraperJob.id.in_([row.id for row in closed]))
+        .values(result_summary={"outcome": outcomes.OUTCOME_FAILED, "reason": "abandoned", "alerts": alerts})
+        .execution_options(synchronize_session=False)
+    )
+    return alerts
 
 
 async def finish_completed(job_id: uuid.UUID, source_name: str, result: outcomes.HarvestResult, started: datetime) -> Dict[str, Any]:
@@ -151,9 +193,10 @@ async def finish_failed(
 ) -> None:
     """Record a failed attempt. Never raises: a failure to record is logged and the caller re-raises
     the run's own exception (R8)."""
+    reasoned = (outcomes.SourceRunFailed, outcomes.SourceRefused, outcomes.RunInterrupted)
     summary = {
         "outcome": outcomes.OUTCOME_FAILED,
-        "reason": getattr(exc, "reason", None) if isinstance(exc, (outcomes.SourceRunFailed, outcomes.SourceRefused)) else None,
+        "reason": getattr(exc, "reason", None) if isinstance(exc, reasoned) else None,
         "error_class": type(exc).__name__,
         "retryable": outcomes.is_retryable(exc),
         "will_retry": retry_in is not None,
@@ -168,6 +211,8 @@ async def finish_failed(
         "discovery_failed": tally.discovery_failed,
         "discovery_errors": dict(tally.discovery_errors),
     }
+    if isinstance(exc, outcomes.RunInterrupted):
+        summary["interrupted_by"] = exc.interrupted_by  # R21: the class that cut the run off
     try:
         await _close(
             job_id, source_name, status=STATUS_FAILED, summary=summary, started=started,

@@ -99,6 +99,57 @@ parallel wrong codes" (15 s timeout) and `p5.identity.test.ts`
 "two concurrent calls on one target are serialised". Both pass in plain
 `npm --prefix functions run test:emu` runs.
 
+## Document vault (`npm run mutation:documents`, per PR)
+
+Audit FA-D16-002 (v2 audit): the F03 integrity checks were never exercised;
+`documentObjectStore.ts` scored 57.65 %, with the content-hash, key-length and
+format-version checks uncovered. Configuration: `stryker.documents.config.mjs`
+(the Next configuration, narrowed) with `vitest.stryker.documents.config.ts`,
+which runs only the four F03 unit suites. Those suites need neither emulator
+nor MinIO: the fault proxy in `tests/helpers/s3-document-vault.ts` serves an
+in-memory S3 and injects hangs, hostile errors, lost PUTs and oversized
+bodies. Non-incremental, break 85, run per PR by Gate G-0 ("Mutation floor
+(document vault)"), because `mutation.yml` is disabled in the repository
+settings.
+
+| Module | Mutants | Before (main 62d1d66, main's tests) | After (PR #47) | Remaining (survived + no coverage) |
+| --- | ---: | ---: | ---: | ---: |
+| `platform/documents/documentObjectStore.ts` | 196 → 361 | 57.65% | 96.40% | 13 |
+| `platform/documents/documentObjectS3.ts` | (new) 467 | - | 93.36% | 31 |
+| **All** | 828 | **57.65%** | **94.69%** | 44 |
+
+Before: 113 killed, 54 survived, 29 no coverage. The hash, key and version
+checks (main's lines 47, 93 and 112) were among the uncovered and surviving
+mutants. After: 780 killed, 4 timed out, 33 survived, 11 no coverage; every
+mutant on those three checks, and on the new one-byte-repeated key check, is
+killed. The mutant count grew because the store gained the S3 backend
+selection and production rules, and the S3 adapter is new.
+
+Remaining mutants, by kind (all checked by hand):
+
+| Location | Mutant | Why it is equivalent / unkillable |
+| --- | --- | --- |
+| documentObjectS3.ts:214 | client cache bypassed | A new client per call behaves the same; only cost differs. |
+| documentObjectS3.ts:247, 294 | one `typeof` guard dropped | `Number.isInteger` / the code regex reject a non-number / non-string anyway. |
+| documentObjectS3.ts:317-318 | no `clearTimeout` | The timer then aborts a controller whose call has already finished: no effect. |
+| documentObjectS3.ts:334-335 (5) | `if (!body)` | Unreachable: the SDK returns a body stream for every 200 GET. |
+| documentObjectS3.ts:338 | `typeof ContentLength` guard dropped | `undefined > cap` is false. |
+| documentObjectS3.ts:339, 351, 343 | `body.destroy?.()` to `body.destroy()` | The SDK body always has `destroy`. |
+| documentObjectS3.ts:343-344, 356-359 (9) | our own abort listener on the body, and the post-loop abort check | The SDK destroys the request, and so the body, when the same signal aborts; ours is a second guard. A stalled body is still cut at the deadline (asserted). |
+| documentObjectS3.ts:373 | `ContentType` to `""` | The SDK then sends `application/octet-stream` itself (asserted on the wire). |
+| documentObjectS3.ts:411, 420-421 (5) | settle-loop boundaries (`<=` to `<`, the bottom break) | At most one extra poll interval inside the budget; the budget assertions allow it. |
+| documentObjectS3.ts:452 | `httpStatus !== null` to `true` | `null >= 500` is false. |
+| documentObjectS3.ts:70 | `?.trim()` on the backend name | Killable (backend unset while the SSE mode is resolved); not exercised. Accepted. |
+| documentObjectStore.ts:178 | hook flag initialised `true` | Every test resets the hooks before use. |
+| documentObjectStore.ts:223-224 (5) | path-escape check | Unreachable: every segment already passed `SAFE_SEGMENT`. Kept as defence in depth. |
+| documentObjectStore.ts:280-282 (4) | production branch of the rollback delete for a non-s3 path | Unreachable: in production every object path is `s3://`, and the rollback deletes the path the same call built. |
+| documentObjectStore.ts:330-331 (3) | byte comparison after the hash check | Equal firm-keyed hashes imply equal bytes; kept as a direct check. |
+
+Runtime: 13 to 26 minutes on 4 shared cores (load 10 to 20), 3 workers;
+the dry run is 62 tests in 9 seconds. With `related: true` every static mutant
+ran the whole unit suite (2162 tests, 208 static mutants, 97 % of the time),
+which is why the vault run lists its suites instead.
+
 ## Tests added to kill survivors
 
 | Commit | File | Kills |

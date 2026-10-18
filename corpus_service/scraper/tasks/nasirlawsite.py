@@ -101,4 +101,7 @@ async def scrape_nasirlawsite(source, db):
                 logger.error(f"Nasir reporter {url} error {e}")
                 listings.item_failed(e)
     listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    # Audit F28 R30: the five reporters are fixed, live listing pages (not R17's legacy seeds), so a
+    # failed one is recorded and makes the run partial: never an error-free empty run.
+    tally.add_listing_failures(listings, makes_partial=True)
     return tally.finish()
