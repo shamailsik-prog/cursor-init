@@ -159,3 +159,14 @@ The auditor's `bomb_case.py` (process RSS), against this branch:
 - **17 new mutants (N01–N17):** all killed. N04 (data after the stream end), N08 (httpx URL errors not converted) and N15 (wire cap off) survived the first run against 5a9d4ea and are killed against 7cc0cc2.
 - **Killed now, having survived the re-audit:** M07, M09, M16, M25, M31, M32, M35, M43, M45.
 - **G-0** static: PASSED. **gitleaks 8.30.1** on `origin/main..HEAD`: no leaks. **Claim gate:** PASS (see the PR body).
+
+**Review round (Codex P2 + Copilot ×3), spec section 6:**
+
+| Thread | RED | GREEN | Fix |
+|---|---|---|---|
+| Codex 4305386005 and Copilot 4305395619 | 245a08e: 5 failed | 84b5ddb | raw deflate decided on its first two bytes, prefix replayed |
+| Copilot 4305395602 | 9a13709: 12 failed | fcee71a | hooks gated by identity; `upgrade_http` must be a bool |
+| Copilot 4305395582 | 9a13709: 10 failed | 9331dba | the guard checks calls in annotations, defaults and string annotations |
+
+At 9331dba: `test_f25_reaudit.py` 150 passed, `test_f25_fetch_guard.py` 105, `test_f25_fetch_policy.py` 139, e2e 1, F20 3; full suite 616 passed, 3 warnings; G-0 PASSED.
+

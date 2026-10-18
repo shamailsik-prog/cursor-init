@@ -302,3 +302,19 @@ Positive controls: each of the 20 probe forms (p17, an attribute-only reference,
 8. An endless identity (uncompressed) body is held up to `max_bytes` (100 MiB) before it is refused: that is the cap itself.
 9. Strict decoding and redirect rules refuse some malformed-but-harmless responses (trailing bytes after gzip, truncated gzip, ambiguous `Location`). They fail closed by design; such a page is logged and skipped.
 10. A static guard cannot see code it does not parse (residual of R21); network egress (F25-FU1) is the backstop.
+
+**Review round (Codex P2 + Copilot ×3) on #67 at ed3b7ae.** Each item was fixed test-first.
+
+- **Raw-deflate fragmentation** (Codex P2, thread 4305386005; Copilot, thread 4305395619).
+  - *Problem:* `_BoundedDecoder` tried the zlib-wrapped decoder and fell back to raw deflate on its first error. A one-byte first chunk gave neither output nor error, which switched the fallback off, so whether a valid raw-deflate body decoded depended on how the server split it. Simply relaxing `_started` would have lost the byte already consumed.
+  - *Ruling:* decide on the first two bytes with zlib's own RFC 1950 header test (CM 8, CINFO <= 7, FCHECK). The undecided prefix (at most one byte) is held and replayed into the chosen decoder. The 64 KiB step and both caps are unchanged, and a deflate body under two bytes is truncated.
+  - *Evidence:* RED 245a08e (5 failed: every raw-deflate one-byte case and the prefix check); GREEN 84b5ddb.
+- **Falsey hooks** (Copilot, thread 4305395602).
+  - *Problem:* `_GuardedBackend` gated its hooks by truthiness but installed them by identity.
+  - *Ruling:* a hook counts when it is not None. The origins are materialised once with `tuple(...)`, and that same tuple is gated and installed. `PolicyFetcher` passes its origins through as given. The sweep for other truthiness switches found `upgrade_http`, which must now be a real bool (TypeError otherwise).
+  - *Evidence:* RED 9a13709 (12 failed); GREEN fcee71a.
+- **Executable annotations** (Copilot, thread 4305395582).
+  - *Ruling:* only bare type references in annotations are exempt from the guard. Calls inside annotations (parameter, return, module, class body, a calling subscript), defaults and string annotations are checked like other code, including under PEP 563.
+  - *Evidence:* RED 9a13709 (10 failed); GREEN 9331dba.
+- **Counts at 9331dba:** `test_f25_reaudit.py` 150 passed; `test_f25_fetch_guard.py` 105 passed; full suite 616 passed; G-0 PASSED.
+
