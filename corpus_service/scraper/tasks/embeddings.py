@@ -12,32 +12,53 @@ logger = logging.getLogger(__name__)
 # counts are committed, so a failed item is never `completed`. The claim (selection, lease, retry
 # timing, missing records) is unchanged: that is audit F27.
 
-async def process_embedding_queue():
+class BatchCounts:
+    """A batch's counters, owned by the caller that records the batch, so a batch that fails part way
+    still records what it did (F28 R19, Copilot 4305705063)."""
+
+    def __init__(self):
+        self.tally = outcomes.Tally()
+        self.claimed = 0
+        self.missing = 0
+
+    def summary(self, outcome):
+        return {
+            "outcome": outcome,
+            "claimed": self.claimed,
+            "completed": self.tally.succeeded,
+            "failed": self.tally.failed,
+            "missing": self.missing,
+            "errors": dict(self.tally.errors),
+        }
+
+
+async def process_embedding_queue(counts=None):
     from scraper.config import settings
+    counts = counts if counts is not None else BatchCounts()
     if not settings.OPENAI_API_KEY:
         logger.info("No OPENAI_API_KEY, skip embeddings")
-        return {"outcome": outcomes.OUTCOME_SKIPPED, "reason": "no_openai_api_key", "claimed": 0, "completed": 0, "failed": 0, "missing": 0}
+        return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "no_openai_api_key"}
     import openai
     client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    tally = outcomes.Tally()
-    missing = 0
+    tally = counts.tally
     async with SessionLocal() as db:
         result = await db.execute(select(EmbeddingQueue).where(EmbeddingQueue.status=="pending").limit(50))
         queue_items = result.scalars().all()
+        counts.claimed = len(queue_items)
         for item in queue_items:
             try:
                 if item.table_name=="case_law_master":
                     res = await db.execute(select(CaseLawMaster).where(CaseLawMaster.id==item.record_id))
                     rec = res.scalars().first()
                     if not rec:
-                        missing += 1
+                        counts.missing += 1
                         continue
                     embed_text = f"{rec.citation or ''} {rec.case_title or ''} {rec.full_text[:2000] if rec.full_text else ''}"
                 else:
                     res = await db.execute(select(StatutesMaster).where(StatutesMaster.id==item.record_id))
                     rec = res.scalars().first()
                     if not rec:
-                        missing += 1
+                        counts.missing += 1
                         continue
                     embed_text = f"{rec.statute_name or ''} {rec.section_number or ''} {rec.section_text[:2000] if rec.section_text else ''}"
                 emb = await client.embeddings.create(model="text-embedding-3-small", input=embed_text)
@@ -49,39 +70,34 @@ async def process_embedding_queue():
                 await asyncio.sleep(0.6)  # 100 RPM limit
             except Exception as e:
                 if outcomes.is_database_error(e):
+                    tally.item_failed(e)  # counted before the batch fails, so its record keeps it
                     raise
                 logger.error("Embedding failed %s: %s", item.id, outcomes.describe_error(e))
                 item.attempts+=1
                 item.status="failed" if item.attempts>=3 else "pending"
                 await db.commit()
                 tally.item_failed(e)
-    summary = {
-        "outcome": tally.result().outcome,
-        "claimed": len(queue_items),
-        "completed": tally.succeeded,
-        "failed": tally.failed,
-        "missing": missing,
-        "errors": dict(tally.errors),
-    }
     if tally.all_failed:
         raise outcomes.BatchFailed(errors=tally.errors)
-    return summary
+    return counts.summary(tally.result().outcome)
 
 
 async def run_embedding_batch(*, celery_task_id=None, worker=None):
     """One batch with its run record: a `scraper_jobs` row (job type `embed`) when the batch claimed
     work or failed; an empty queue or a skipped batch writes none (F28 R13)."""
     started = job_record.utcnow()
+    counts = BatchCounts()
     try:
-        summary = await process_embedding_queue()
+        summary = await process_embedding_queue(counts)
     except Exception as exc:
-        errors = dict(getattr(exc, "errors", None) or {})
-        failed = sum(errors.values())
+        # F28 R19: the failed record comes from the batch's own counters, so items done before the
+        # failure are kept (an exception escaping the item loop carries no counts of its own).
+        tally = counts.tally
         try:
             await job_record.record_batch(
                 status=job_record.STATUS_FAILED,
-                summary={"outcome": outcomes.OUTCOME_FAILED, "error_class": type(exc).__name__, "errors": errors},
-                started=started, attempted=failed, written=0, failed=failed,
+                summary={**counts.summary(outcomes.OUTCOME_FAILED), "error_class": type(exc).__name__},
+                started=started, attempted=tally.attempted, written=tally.succeeded, failed=tally.failed,
                 celery_task_id=celery_task_id, worker=worker, exc=exc,
             )
         except Exception as record_exc:
