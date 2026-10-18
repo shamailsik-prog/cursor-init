@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from scraper.net import fetch_policy
+from scraper.tasks import outcomes
 
 logger = logging.getLogger(__name__)
 
@@ -197,21 +198,30 @@ def _extract_feed_urls(html: str, base_url: str) -> list[str]:
     return _dedupe_preserve_order(feed_urls)
 
 
-def _extract_pdf_urls_from_feed_payload(payload_text: str, feed_url: str) -> list[str]:
+def _parse_feed_rows(payload_text: str) -> list | None:
+    """The rows of a feed payload (``{"d": [...]}`` or ``{"d": "<json list>"}``), or None when the
+    payload does not parse (audit F28 R17: an unparseable feed answer is a failed feed request)."""
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError:
-        return []
-
+        return None
+    if not isinstance(payload, dict):
+        return None
     data = payload.get("d")
     if isinstance(data, str):
         try:
             rows = json.loads(data)
         except json.JSONDecodeError:
-            return []
-    elif isinstance(data, list):
-        rows = data
-    else:
+            return None
+        return rows if isinstance(rows, list) else None
+    if isinstance(data, list):
+        return data
+    return None
+
+
+def _extract_pdf_urls_from_feed_payload(payload_text: str, feed_url: str) -> list[str]:
+    rows = _parse_feed_rows(payload_text)
+    if rows is None:
         return []
 
     pdf_urls: list[str] = []
@@ -272,11 +282,18 @@ async def _post_json_with_retries(
     raise last_error
 
 
-async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
+async def _discover_pdf_urls(tally: outcomes.Tally | None = None) -> tuple[list[str], dict[str, dict[str, str]]]:
     pdf_sources: dict[str, dict[str, str]] = {}
     visited_listing_urls: set[str] = set()
     visited_feed_urls: set[str] = set()
     listing_queue = deque(IHC_LISTING_SEED_URLS)
+
+    # Audit F28: every listing request is counted; when all of them fail the run fails.
+    listings = outcomes.Tally()
+    # Audit F28 R17: every AJAX feed request too (a failure, a 4xx/5xx, an unparseable payload).
+    # Every feed failing with nothing found any other way fails the run; otherwise the feed failures
+    # go into the run's tally (``tally``) and make it partial.
+    feeds = outcomes.Tally()
 
     # Audit F25: listing pages are external input. Every request (and every redirect hop)
     # goes through the IslamabadHighCourt fetch policy: https, its hosts on 443, public addresses only.
@@ -291,16 +308,19 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                 response = await _request_with_retries(client, listing_url)
             except Exception as e:
                 logger.warning("IHC listing request failed %s: %s", listing_url, repr(e))
+                listings.item_failed(e)
                 continue
 
-            if response.status_code >= 400:
+            if response.status_code != 200:
                 logger.warning(
                     "IHC listing returned status %s for %s",
                     response.status_code,
                     listing_url,
                 )
+                listings.item_failed(f"http_{response.status_code}")
                 continue
 
+            listings.item_ok()
             child_listings, discovered_pdfs = _extract_listing_and_pdf_links(response.text, str(response.url))
             for pdf_url in discovered_pdfs:
                 pdf_sources.setdefault(
@@ -324,14 +344,21 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
                     feed_response = await _post_json_with_retries(client, feed_url, {})
                 except Exception as e:
                     logger.warning("IHC feed request failed %s: %s", feed_url, repr(e))
+                    feeds.item_failed(e)
                     continue
-                if feed_response.status_code >= 400:
+                if feed_response.status_code != 200:
                     logger.warning(
                         "IHC feed returned status %s for %s",
                         feed_response.status_code,
                         feed_url,
                     )
+                    feeds.item_failed(f"http_{feed_response.status_code}")
                     continue
+                if _parse_feed_rows(feed_response.text) is None:
+                    logger.warning("IHC feed returned an unparseable payload for %s", feed_url)
+                    feeds.item_failed(outcomes.ERROR_FEED_UNPARSEABLE)
+                    continue
+                feeds.item_ok()
 
                 for pdf_url in _extract_pdf_urls_from_feed_payload(feed_response.text, feed_url):
                     pdf_sources.setdefault(
@@ -349,50 +376,70 @@ async def _discover_pdf_urls() -> tuple[list[str], dict[str, dict[str, str]]]:
         len(visited_feed_urls),
         len(pdf_sources),
     )
+    listings.raise_if_all_failed(outcomes.REASON_LISTINGS_FAILED)
+    if not pdf_sources:
+        # The feeds were the only discovery path left: all of them failing fails the run, before
+        # anything is written, with their error counts (a transient set is retried).
+        feeds.raise_if_all_failed(outcomes.REASON_FEEDS_FAILED)
+    if tally is not None:
+        tally.add_discovery_failures(feeds)
     return list(pdf_sources.keys()), pdf_sources
 
 
 async def scrape_islamabadhighcourt(source, db):
-    try:
-        from scraper.models import ScraperStaging
-        from scraper.parsers.pdf_extractor import extract_pdf_text
-        from scraper.source_identity import stamp_metadata
+    # Audit F28: no outer catch. A discovery whose every listing request failed, a database error,
+    # or a run whose every PDF failed fails the run; each PDF's outcome is counted.
+    from scraper.models import ScraperStaging
+    from scraper.parsers.pdf_extractor import extract_pdf_text
+    from scraper.source_identity import stamp_metadata
 
-        pdf_urls, pdf_sources = await _discover_pdf_urls()
-        if not pdf_urls:
-            logger.warning(
-                "IslamabadHighCourt: no PDF links discovered from configured listing URLs"
-            )
-            return
+    tally = outcomes.run_tally()
+    pdf_urls, pdf_sources = await _discover_pdf_urls(tally=tally)
+    if not pdf_urls:
+        logger.warning(
+            "IslamabadHighCourt: no PDF links discovered from configured listing URLs"
+        )
+        return tally.finish(note="no PDF links discovered")
 
-        async with fetch_policy.fetcher_for("IslamabadHighCourt") as client:
-            for pdf_url in pdf_urls[:60]:
-                try:
-                    response = await _request_with_retries(client, pdf_url)
-                    if response.status_code != 200:
-                        continue
-                    if response.content[:4] != b"%PDF":
-                        continue
-                    text = extract_pdf_text(response.content)
-                    provenance = pdf_sources.get(pdf_url, {})
-                    staging = ScraperStaging(
-                        source_id=source.id,
-                        source_site="IslamabadHighCourt",
-                        source_url=pdf_url,
-                        raw_text=text[:50000],
-                        confidence_score=0.6,
-                        quarantined=True,
-                        quarantine_reason="review source",
-                        parsing_metadata=stamp_metadata(source, {
-                            "listing_url": provenance.get("listing_url"),
-                            "feed_url": provenance.get("feed_url"),
-                            "discovery_method": provenance.get("discovery_method"),
-                        }),
-                    )
-                    db.add(staging)
-                    await db.commit()
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    logger.error("IslamabadHighCourt PDF %s error %s", pdf_url, e)
-    except Exception as e:
-        logger.error("IslamabadHighCourt scraper error %s", e)
+    async with fetch_policy.fetcher_for("IslamabadHighCourt") as client:
+        for pdf_url in pdf_urls[:60]:
+            try:
+                response = await _request_with_retries(client, pdf_url)
+                if response.status_code != 200:
+                    tally.item_failed(f"http_{response.status_code}")
+                    continue
+                if not outcomes.looks_like_pdf(response.content):
+                    tally.item_failed(outcomes.ERROR_NOT_PDF)
+                    continue
+                text = extract_pdf_text(response.content)
+                if not outcomes.has_text(text):
+                    # Audit F28 R16: the signature but no text (parsing and OCR both failed) is a
+                    # failed document: never staged, never progress.
+                    logger.warning("PDF %s has no extractable text; not staged", pdf_url)
+                    tally.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
+                    continue
+                provenance = pdf_sources.get(pdf_url, {})
+                staging = ScraperStaging(
+                    source_id=source.id,
+                    source_site="IslamabadHighCourt",
+                    source_url=pdf_url,
+                    raw_text=text[:50000],
+                    confidence_score=0.6,
+                    quarantined=True,
+                    quarantine_reason="review source",
+                    parsing_metadata=stamp_metadata(source, {
+                        "listing_url": provenance.get("listing_url"),
+                        "feed_url": provenance.get("feed_url"),
+                        "discovery_method": provenance.get("discovery_method"),
+                    }),
+                )
+                db.add(staging)
+                await db.commit()
+                tally.item_ok(1)
+                await asyncio.sleep(1)
+            except Exception as e:
+                if outcomes.is_database_error(e):
+                    raise
+                logger.error("IslamabadHighCourt PDF %s error %s", pdf_url, e)
+                tally.item_failed(e)
+    return tally.finish()
