@@ -274,4 +274,34 @@ describe.skipIf(!EMULATORS)("PR #89 review (Bugbot, thread 4307596177): a malfor
     await reconcileNameIndex(f.firmId)
     expect(await outcome(f)).toBe("HIT")
   }, 180_000)
+
+  it("C3: a break landing on a malformed generation also writes one above every stamp, so a row restored with an old stamp is not trusted", async () => {
+    const f = await registeredFirm(["Zubair Hashmi"])
+    const deliver = await rowHandler()
+    const damageAndRebuild = async () => {
+      await nameIndexChunkRef(f.firmId, 0).update({ chunk: 7 })
+      expect(await reconcileNameIndex(f.firmId)).toMatchObject({ rebuilt: true, marked: true })
+    }
+    await damageAndRebuild()
+    const c = await registerClient({ token: f.token, data: { firmId: f.firmId, name: CONFLICT, type: "individual", primaryMobile: nextMobile(), classification: "internal" } } as never)
+    const ref = adminDb().collection("clients").doc(c.clientId)
+    const saved = (await ref.get()).data() as DocumentData
+    const stamped = saved.nameIndexed?.gen as number
+    await ref.delete()
+    await deliver("clients", ref.id, saved, undefined, Date.now(), `evt-c3a-${f.firmId}`)
+    await damageAndRebuild()
+    // The generation is corrupted, and an out-of-band rename breaks the index before any reset rewrites it.
+    await registryVersionRef(f.firmId).update({ nameIndexGen: "x" })
+    const ev = await renameOutOfBand(f, "Zubair Hashmi", "Omer Daryani")
+    await deliver("clients", ev.id, ev.before, ev.after, Date.now(), `evt-c3b-${f.firmId}`)
+    const gen = (await registryVersionRef(f.firmId).get()).data()?.nameIndexGen
+    console.log(`F37-FU-R1 C3 stamp gen ${stamped}, gen after the break ${JSON.stringify(gen)}`)
+    expect(Number.isInteger(gen) && (gen as number) > stamped).toBe(true)
+    await reconcileNameIndex(f.firmId)
+    await ref.set(saved)
+    await deliver("clients", ref.id, undefined, saved, Date.now(), `evt-c3c-${f.firmId}`)
+    expect(await outcome(f)).toBe("503 screening_unavailable")
+    await reconcileNameIndex(f.firmId)
+    expect(await outcome(f)).toBe("HIT")
+  }, 180_000)
 })
