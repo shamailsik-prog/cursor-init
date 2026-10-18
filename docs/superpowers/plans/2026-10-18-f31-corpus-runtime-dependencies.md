@@ -4,7 +4,7 @@
 
 **Goal:** the production image's dependency set (`corpus_service/requirements.txt`) declares every third-party module the runtime imports, starting with `pgvector`, and a clean environment built from that file alone migrates, starts the API against PostgreSQL and loads the Celery app.
 
-**Spec:** `docs/superpowers/specs/2026-10-18-f31-corpus-runtime-dependencies-design.md` (rulings R1 to R9).
+**Spec:** `docs/superpowers/specs/2026-10-18-f31-corpus-runtime-dependencies-design.md` (rulings R1 to R9; review round R10 to R13).
 
 **Base:** `origin/main` f3bbcc9 when written; rebased onto 33fb1b3 (F25 #67 and FA-D5 #69 merged meanwhile; neither touches the files below except `scraper/net/fetch_policy.py` and `scraper/parsers/pdf_writer.py`, which the contract only reads). **Branch:** `claude/remediate-f31`.
 
@@ -51,6 +51,15 @@ Locally: a PG16 cluster under `/tmp/f31-pg` on 127.0.0.1:55471 (pgvector 0.6.0; 
 - [x] Claim gate: `ci_gates/check_pr_phase_claims.py` with the PR body. **Expected: PASS.**
 - [x] Push, write the PR body to the scratchpad (the PR is not opened here), stop the local cluster.
 
+### Task 6: Review round (Copilot x2, independent re-audit, Cursor Bugbot), PR #71
+- [x] **Copilot 4305672181** (`runtime_smoke.sh:28`): RED `tests/test_f31_runtime_smoke_script.py` (4a3310e), fix: resolve `F31_RUNTIME_VENV` to an absolute path first (5da7e35).
+- [x] **Copilot 4305672214** (`import_contract.py:145`): RED 16 loader-identity cases (2e5a748), fix: classify dynamic imports by the loader's identity, follow aliases, fail closed on what cannot be resolved (5cb0b9e).
+- [x] **Independent re-audit (MEDIUM): lxml loaded by name** (`bootstrap_harvest.py:163, 195, 256, 305`): RED by-name tests and the smoke's harvest step (c9de14e), fix: by-name scan of parser features and URL drivers, lxml in `LOADED_BY_NAME`, reviewed `BY_NAME_EXCEPTIONS` (882c6df).
+- [x] Cursor Bugbot thread 4305697404 flagged 2e5a748 (the intentional RED commit); fixed by 5cb0b9e.
+- [x] **Cursor Bugbot 4305754112** (bs4 aliases, on 882c6df): RED untracked BeautifulSoup references and star imports (1c3d3c7); Autofix 34ddbf4 (Cursor Agent) arrived on the branch meanwhile, inspected, in scope, no test weakened: merged (3e268c5); fix completing and adjusting it (079e671).
+- [x] Re-run: contract and script tests, the smoke (RED and GREEN), the full suite as CI runs it, G-0, the claim gate; spec section 5, this ledger and the PR body updated.
+- [x] Before every push: `git fetch origin claude/remediate-f31` and compare (Cursor Bugbot Autofix is on). One foreign commit appeared, 34ddbf4 (Cursor Agent); my push of 1c3d3c7 was refused as non-fast-forward, nothing was overwritten, and it was merged as above. No force-push.
+
 ---
 
 ## Ledger (RED and GREEN evidence)
@@ -63,10 +72,34 @@ Locally: a PG16 cluster under `/tmp/f31-pg` on 127.0.0.1:55471 (pgvector 0.6.0; 
 | 1b | RED on 33fb1b3 (commit bb382c1, after the rebase) | contract file, as row 1 | **2 failed**, 19 passed; same five modules (`fetch_policy.py` lines now 66 and 67) |
 | 2b | RED on 33fb1b3 (commit bb382c1), final test files | e2e, as row 2 | **exit 1, 7 checks failed**, the same seven; 79 distributions installed, pgvector absent |
 | 3 | GREEN, fix 98db18b (pre-rebase run on f3bbcc9 gave the same) | contract file | **21 passed** (inside the full suite, row 5) |
-| 4 | GREEN, fix 98db18b | e2e | **exit 0, 15 checks passed**: strict contract; `import scraper.models`; 47 modules; migrate (9/9 tables, 15 sources); uvicorn `/health` `{"status": "ok", "db_connected": true, "total_cases": 0, …}`; `celery report`; `kombu.transport.redis.Transport` + `celery.backends.redis.RedisBackend`; 3 beat tasks registered |
+| 4 | GREEN, fix 98db18b | e2e | **exit 0, 14 checks passed**: strict contract; `import scraper.models`; 47 modules; migrate (9/9 tables, 15 sources); uvicorn `/health` `{"status": "ok", "db_connected": true, "total_cases": 0, …}`; `celery report`; `kombu.transport.redis.Transport` + `celery.backends.redis.RedisBackend`; 3 beat tasks registered |
 | 4b | RED vs GREEN runtime venvs | `pip list --format=freeze`, diffed | the only difference is `+ pgvector==0.5.0` (79 → 80 distributions) |
 | 5 | GREEN, fix 98db18b | full suite, as row 0 | **814 passed, 0 skipped**, 157 subtests passed (444 s); 814 collected = 793 on 33fb1b3 + 21 F31 |
 
 **Test correction inside the branch (not a changed expectation of an existing test).** The first GREEN e2e run failed one check: it looked for the app name `legal_scraper` in `celery report`, which the report does not print (root cause read from the report output: it prints `transport:redis`, the `redis:<version>` client on the software line, and the beat schedule). The check now looks for those. Rows 2b and 4 use the corrected check.
 
 **Rebase.** `origin/main` moved from f3bbcc9 to 33fb1b3 (F25 #67, FA-D5 #69) during the work. The branch, then one pushed RED commit, was rebased and the RED commit re-pushed with `--force-with-lease` to this branch only (never `main`), so the RED commit sits directly on current main for the re-audit.
+
+### Review round ledger (PR #71; base of the round c865145)
+
+| # | Item | Tree | Command | Result |
+|---|---|---|---|---|
+| R1 | Copilot 4305672181 | 4a3310e (RED) | `pytest corpus_service/tests/test_f31_runtime_smoke_script.py` | **6 failed**, 2 passed: relative, nested relative, `~/x` and `~` exit 127 (the venv looked up under `corpus_service/`); existing path not named absolutely; `~user` not refused. Absolute and default pass. |
+| G1 | Copilot 4305672181 | 5da7e35 | same | **8 passed** |
+| R2 | Copilot 4305672214 | 2e5a748 (RED) | `pytest corpus_service/tests/test_f31_import_contract.py` | **13 failed**, 24 passed: of the 16 identity cases only `module alias`, `star import from importlib` and the control passed; `from importlib import import_module as load; load("missing_dep")` gave `[]` (neither dependency nor dynamic import) |
+| G2 | Copilot 4305672214 | 5cb0b9e | same + script tests | **47 passed** (39 contract + 8 script). Two cases added while implementing (class-body alias, `sys.modules`) and a `hasattr` false positive failed against the first draft before passing. Real tree unchanged: one dynamic site, `dispatcher.py:80`. |
+| R3a | re-audit: lxml | c865145's smoke, manifest without lxml | `runtime_smoke.sh` | **exit 0, 14/14**, 79 distributions, no lxml: the gap the re-audit showed |
+| R3b | re-audit: lxml | c9de14e (RED) | contract file | **18 failed** (every new by-name test), 42 passed |
+| R3c | re-audit: lxml | c9de14e, manifest without lxml | `runtime_smoke.sh` | **exit 1**: `bootstrap_harvest` harvest step, `bs4.exceptions.FeatureNotFound: ... lxml` |
+| G3a | re-audit: lxml | 882c6df | contract + script tests | **68 passed** (60 + 8) |
+| G3b | re-audit: lxml | 882c6df, manifest as committed (lxml declared) | `runtime_smoke.sh` | **exit 0, 15/15** (80 distributions), harvest step included |
+| G3c | re-audit: lxml | 882c6df, manifest without lxml | `runtime_smoke.sh` | **exit 1, 2 failed**: strict contract (`undeclared: lxml is loaded by name ... bootstrap_harvest.py:163, 195, 256, 305`) and the harvest step (`FeatureNotFound`) |
+| G4a | all three | 882c6df | full suite, as CI | **861 passed, 0 skipped**, 157 subtests passed (533 s) |
+| R4 | Bugbot 4305754112 | 1c3d3c7 (RED) | contract file | **7 failed** (five escapes: class-body alias, list, dict, `functools.partial`, escaped bs4 module; star from bs4; star the check cannot enumerate), 64 passed |
+| R4b | Bugbot 4305754112 | 34ddbf4 (Autofix) merged as 3e268c5 | contract file | **7 failed**: the five escapes reported as unreviewed dynamic imports, not as BeautifulSoup references; unenumerable star not covered; `isinstance()`/attribute-use control flagged |
+| G4b | Bugbot 4305754112 | 079e671 | contract + script tests | **79 passed** (71 + 8). Real tree unchanged (lxml x4 in `bootstrap_harvest.py`, one dynamic site, no by-name problem) |
+| G5a | all four | 079e671 | `runtime_smoke.sh`, manifest as committed | **exit 0, 15/15** (80 distributions) |
+| R5a | all four | 079e671, `origin/main`'s manifest (no pgvector) | `runtime_smoke.sh` | **exit 1, 7 failed** (the same seven as row 2b; the harvest step passes, since main declares lxml) |
+| G5b | all four | 079e671 | full suite, as CI | **872 passed, 0 skipped**, 157 subtests passed (738 s); 872 = 793 pre-existing + 79 F31 |
+
+**Count corrections.** The smoke had **14** checks before this round, not 15: rows 4 and the first PR body said "15 checks passed", and commit c9de14e said the c865145 smoke passed "15/15" on the lxml-free manifest (it was 14/14; the re-audit's own count was 15/15). With the harvest step it has **15** checks: commit 882c6df's "16/16" should read 15/15 (rows R3a, G3b and 4 are corrected above). The counts here are from `grep -c '^PASS'` of each log. Pushed commit messages are not rewritten (no force-push); this note is the correction.
