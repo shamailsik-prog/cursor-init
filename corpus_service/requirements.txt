@@ -30,3 +30,8 @@ anyio
 certifi
 httpcore
 pydantic
+# Audit F26: scraper/parsers/pdf_sandbox.py starts the PDF parser's process with billiard (Celery's
+# process library; stdlib multiprocessing refuses children of Celery's daemonic pool processes), and
+# scraper/parsers/pdf_extractor.py imports pdfminer (pdfplumber's parser) for the active-content scan.
+billiard
+pdfminer.six

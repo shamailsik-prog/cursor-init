@@ -38,10 +38,10 @@ FIRST_PARTY = frozenset({"scraper"})
 # module -> (distribution, reason). Only where importlib.metadata.packages_distributions() cannot
 # map the module in the pinned test environment. Reviewed: keep it small, and give every entry a
 # reason. The runtime e2e (strict mode) checks each entry against the real installed metadata.
+# Audit F26: PIL (pillow) and pdfplumber left this table when the pinned test set gained the PDF
+# parser stack; their installed metadata maps them now.
 ALIASES: Dict[str, Tuple[str, str]] = {
-    "PIL": ("pillow", "module name differs from the distribution; not in the pinned test set"),
     "openai": ("openai", "runtime-only (tasks/embeddings.py); not in the pinned test set"),
-    "pdfplumber": ("pdfplumber", "runtime-only (parsers/pdf_extractor.py); not in the pinned test set"),
     "pytesseract": ("pytesseract", "runtime-only (parsers/pdf_extractor.py); not in the pinned test set"),
     "reportlab": ("reportlab", "runtime-only (parsers/pdf_writer.py); not in the pinned test set"),
 }

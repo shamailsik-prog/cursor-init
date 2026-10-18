@@ -53,6 +53,19 @@ ERROR_FEED_UNPARSEABLE = "feed_unparseable"  # a discovery feed answered 200 wit
 
 REASON_FEEDS_FAILED = "every feed request failed"
 
+# Audit F26 (spec docs/superpowers/specs/2026-10-18-f26-bounded-isolated-pdf-processing-design.md, R10):
+# why the PDF intake refused a document. Each is a failed document, never progress, never retried.
+ERROR_PDF_TOO_LARGE = "pdf_too_large"  # over PDF_MAX_SIZE_MB, refused by the fetch boundary while reading
+ERROR_PDF_ACTIVE_CONTENT = "pdf_active_content"  # JavaScript, a launch action, an attachment, XFA
+ERROR_RAW_STORE_FULL = "raw_store_full"  # the raw PDF store is at its bound
+ERROR_RAW_STORE_FAILED = "raw_store_failed"  # the raw PDF store could not keep the document
+ERROR_PDF_PARSE_TIMEOUT = "pdf_parse_timeout"  # the sandbox's wall or CPU limit
+ERROR_PDF_MEMORY_LIMIT = "pdf_memory_limit"  # the sandbox's address-space limit
+ERROR_PDF_PAGE_LIMIT = "pdf_page_limit"
+ERROR_PDF_TEXT_LIMIT = "pdf_text_limit"
+ERROR_PDF_PARSE_CRASHED = "pdf_parse_crashed"  # the sandbox died on a signal
+ERROR_PDF_PARSE_FAILED = "pdf_parse_failed"  # the sandbox gave no usable answer
+
 PDF_SIGNATURE = b"%PDF-"
 
 
@@ -117,6 +130,20 @@ class SourceRunFailed(Exception):
     def __str__(self) -> str:
         detail = _errors_text(self.errors)
         return f"{self.reason} ({detail})" if detail else self.reason
+
+
+class DocumentRejected(Exception):
+    """Audit F26: the PDF intake refused one document (``code``: ``not_pdf``, ``empty_pdf_text``, an
+    ``ERROR_PDF_*`` / ``ERROR_RAW_STORE_*`` code, or ``http_<status>``). The tally counts it by its code;
+    only a transient ``http_<status>`` is worth retrying. ``detail`` never holds document content."""
+
+    def __init__(self, code: str, detail: Optional[str] = None):
+        self.code = code
+        self.detail = detail
+        super().__init__(code, detail)
+
+    def __str__(self) -> str:
+        return f"{self.code} ({self.detail})" if self.detail else self.code
 
 
 class SourceRefused(Exception):
@@ -214,6 +241,8 @@ def is_retryable(exc: BaseException) -> bool:
     """R7: only a transient fault is worth retrying."""
     if isinstance(exc, SourceRunFailed):
         return exc.retryable
+    if isinstance(exc, DocumentRejected):
+        return _is_transient_http(exc.code)
     if isinstance(exc, str):
         return _is_transient_http(exc)
     for candidate in _chain(exc):
@@ -234,10 +263,13 @@ def will_retry(exc: BaseException, attempt: int, max_retries: int) -> bool:
 
 
 def error_key(error: Any) -> str:
-    """How a per-item failure is counted: a code such as ``http_404`` / ``not_pdf`` as is, an F25
-    refusal with its reason, any other exception by its class name."""
+    """How a per-item failure is counted: a code such as ``http_404`` / ``not_pdf`` as is, an F26
+    ``DocumentRejected`` by its code, an F25 refusal with its reason, any other exception by its class
+    name."""
     if isinstance(error, str):
         return error
+    if isinstance(error, DocumentRejected):
+        return error.code
     if isinstance(error, fetch_policy.FetchRefused):
         return f"FetchRefused({error.reason})"
     return type(error).__name__

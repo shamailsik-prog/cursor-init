@@ -14,6 +14,17 @@ export type ConsoleApiCallOptions = {
   idempotencyKey?: string
 }
 
+function committeeBrainValidationError(
+  code: string,
+  message: string
+): FunctionsCallResult {
+  return {
+    ok: false,
+    status: 400,
+    body: { error: { code, message } },
+  }
+}
+
 /** Next console paths that are routed to Cloud Functions when a typed route exists. */
 export async function tryDispatchConsoleCallToFunctions(
   auth: ConsoleAuthContext,
@@ -22,8 +33,19 @@ export async function tryDispatchConsoleCallToFunctions(
 ): Promise<FunctionsCallResult | null> {
   if (options.method === "POST" && options.path === "/api/p1/committee-brain") {
     const body = options.body as Record<string, unknown> | undefined
-    if (!body || typeof body.body !== "string") return null
-    const classification = typeof body.classification === "string" ? body.classification : "internal"
+    if (!body || typeof body.body !== "string") {
+      return committeeBrainValidationError(
+        "invalid_committee_body",
+        "committee-brain body must be a string"
+      )
+    }
+    if (typeof body.classification !== "string" || !body.classification.trim()) {
+      return committeeBrainValidationError(
+        "classification_required",
+        "classification is required"
+      )
+    }
+    const classification = body.classification.trim()
     const purpose = typeof body.purpose === "string" ? body.purpose : "ops-audit"
     const partyNames = Array.isArray(body.partyNames)
       ? body.partyNames.filter((n): n is string => typeof n === "string")
@@ -82,5 +104,4 @@ export const CONSOLE_NEXT_ONLY_API_PREFIXES = [
   "/api/d4/drafts",
   "/api/d4/filings",
   "/api/p5/tenancy",
-  "/api/p1/committee-brain",
 ] as const
