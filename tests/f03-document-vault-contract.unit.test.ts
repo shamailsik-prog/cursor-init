@@ -7,7 +7,7 @@
  * Test keys are derived at run time (no key-shaped literals in the repository).
  */
 import { createHash } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -804,5 +804,66 @@ describe("store hooks and filesystem edges", () => {
     expect(errors).toHaveBeenCalledTimes(1)
     // The padded root was trimmed: the first object (whose delete was blocked) is under it.
     expect(readFileSync(join(root, "firmA", "documents", "doc_hook_once", "v1.enc")).length).toBeGreaterThan(29)
+  })
+})
+
+describe("restore follows the read and delete path rules (Bugbot thread 4306188335)", () => {
+  it("production, s3 backend: an fs:// restore fails closed and writes no local file", async () => {
+    setEnv({ ...productionS3, SIKANDER_DOCUMENT_OBJECT_ROOT: root })
+    const backup = join(root, "backup.enc")
+    writeFileSync(backup, Buffer.alloc(64, 1))
+    const fsPath = "fs://firmA/documents/doc_restore_prod/v1"
+    await expect(restoreDocumentObjectFile(fsPath, backup)).rejects.toThrow(
+      new DocumentObjectConfigurationError("production document object restores require s3:// storage paths")
+    )
+    expect(existsSync(join(root, "firmA"))).toBe(false)
+  })
+
+  it("s3 backend outside production: an fs:// restore is refused too, never written locally", async () => {
+    vaultOnS3({ SIKANDER_DOCUMENT_OBJECT_ROOT: root })
+    const backup = join(root, "backup.enc")
+    writeFileSync(backup, Buffer.alloc(64, 1))
+    await expect(restoreDocumentObjectFile("fs://firmA/documents/doc_restore_dev/v1", backup)).rejects.toThrow(
+      new DocumentObjectConfigurationError("document object restores under the S3 backend require s3:// storage paths")
+    )
+    expect(existsSync(join(root, "firmA"))).toBe(false)
+    expect(proxy.seen).toHaveLength(0)
+  })
+
+  it("an s3:// restore is refused when the backend is not S3, as a read is", async () => {
+    setEnv({ SIKANDER_DOCUMENT_OBJECT_BACKEND: "memory" })
+    const backup = join(root, "backup.enc")
+    writeFileSync(backup, Buffer.alloc(64, 1))
+    const s3Path = "s3://firmA/documents/doc_restore_mem/v1"
+    await expect(restoreDocumentObjectFile(s3Path, backup)).rejects.toThrow(
+      new DocumentObjectConfigurationError("document storage path uses s3:// but the active backend is not S3-compatible")
+    )
+    // Nothing was stored in the memory vault under the s3:// path either.
+    await expect(getImmutableDocumentObject(newStore(), "firmA", s3Path, "h")).rejects.toThrow(
+      "document storage path uses s3:// but the active backend is not S3-compatible"
+    )
+  })
+})
+
+describe("a configuration error on PUT is not an ambiguous write (Bugbot thread 4306188339)", () => {
+  it("a bad SSE setting fails at once with the configuration error: no request, no settle reads", async () => {
+    vaultOnS3({ SIKANDER_DOCUMENT_OBJECT_S3_SSE: "aws:kms", SIKANDER_DOCUMENT_OBJECT_S3_SETTLE_MS: "3000" })
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+    const started = performance.now()
+    const error = await writeS3Payload("s3://firmA/documents/doc_bad_sse/v1", Buffer.from("p")).catch((e) => e)
+    const elapsed = performance.now() - started
+    expect(error).toBeInstanceOf(DocumentObjectConfigurationError)
+    expect((error as Error).message).toBe("unsupported SIKANDER_DOCUMENT_OBJECT_S3_SSE value (expected none or AES256)")
+    expect(seenFor("doc_bad_sse")).toHaveLength(0)
+    expect(errors).not.toHaveBeenCalled()
+    // Far below the 3000 ms settle budget a settle loop would spend.
+    expect(elapsed).toBeLessThan(1_500)
+  })
+
+  it("the same through putImmutableDocumentObject: no object, no rollback, the configuration error", async () => {
+    vaultOnS3({ SIKANDER_DOCUMENT_OBJECT_S3_SSE: "bogus", SIKANDER_DOCUMENT_OBJECT_S3_SETTLE_MS: "3000" })
+    await expect(putImmutableDocumentObject(putInput("doc_bad_sse_put"))).rejects.toThrow(DocumentObjectConfigurationError)
+    expect(seenFor("doc_bad_sse_put")).toHaveLength(0)
+    expect(proxy.memory.size).toBe(0)
   })
 })
