@@ -47,6 +47,8 @@ export default defineConfig({
             "tests/f10-durable-idempotency.firestore.test.ts",
             "tests/f10-next-idempotency.e2e.firestore.test.ts",
             "tests/f16-next-output-size.firestore.test.ts",
+            "tests/f01-production-identity.e2e.firestore.test.ts",
+            "tests/f12-firm-scoped-reads.e2e.firestore.test.ts",
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
           ]),

@@ -70,7 +70,7 @@ async function ensureMatterAccess(
 ) {
   const store = getRuntimeStore()
   const actor = ensureActor(actorId)
-  const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId))
+  const matter = store.matters.get(matterId) ?? (await repos.matters.get(matterId, actor.firmId))
   if (!matter) throw new PublicError("unknown matter")
   store.matters.set(matter.id, matter)
   if (matter.firmId !== actor.firmId) throw new PublicError("cross-firm access denied")
@@ -236,7 +236,9 @@ async function handlePost(request: Request) {
       const actor = ensureActor(parsed.actorId)
       await syncFirmMembers(store, repo, actor.firmId)
       await syncFirmMatters(store, repo, actor.firmId)
-      const matter = store.matters.get(parsed.matterId) ?? (await repo.matters.get(parsed.matterId))
+      const matter =
+        store.matters.get(parsed.matterId) ??
+        (await repo.matters.get(parsed.matterId, actor.firmId))
       if (matter) store.matters.set(matter.id, matter)
       let assignment: ReturnType<typeof validateMatterAssignment>
       try {
@@ -273,7 +275,7 @@ async function handlePost(request: Request) {
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
       if (updatedMatter) {
-        await repo.matters.update(parsed.matterId, {
+        await repo.matters.update(parsed.matterId, actor.firmId, {
           status: updatedMatter.status,
         })
         await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
@@ -292,7 +294,9 @@ async function handlePost(request: Request) {
       })
       const payload = {
         action: "confirm_engagement",
-        matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
+        matter:
+          (await repo.matters.get(parsed.matterId, actor.firmId)) ??
+          store.matters.get(parsed.matterId),
       }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -321,7 +325,7 @@ async function handlePost(request: Request) {
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
       if (updatedMatter) {
-        await repo.matters.update(parsed.matterId, {
+        await repo.matters.update(parsed.matterId, actor.firmId, {
           caseNumber: updatedMatter.caseNumber,
           caseNumberStatus: updatedMatter.caseNumberStatus,
         })
@@ -341,7 +345,9 @@ async function handlePost(request: Request) {
       const payload = {
         action: "record_case_number",
         result,
-        matter: (await repo.matters.get(parsed.matterId)) ?? store.matters.get(parsed.matterId),
+        matter:
+          (await repo.matters.get(parsed.matterId, actor.firmId)) ??
+          store.matters.get(parsed.matterId),
       }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

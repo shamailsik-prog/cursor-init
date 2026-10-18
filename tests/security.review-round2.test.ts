@@ -207,7 +207,7 @@ describe("N3 repository reads never persist a request-scoped ceiling", () => {
     const { syncFirmUsers } = await import("@/platform/persistence/userSync")
     const repos = await getRuntimeRepositories(store)
     await runWithSession({ userId: "partner_a", firmId: "firmA", clearance: "internal" }, async () => {
-      expect((await repos.users.get("partner_a"))?.clearanceLevel).toBe("privileged-restricted")
+      expect((await repos.users.get("partner_a", "firmA"))?.clearanceLevel).toBe("privileged-restricted")
       await syncFirmUsers(store, repos, "firmA")
     })
     expect(storedUserRecord(store, "partner_a")?.clearanceLevel).toBe("privileged-restricted")

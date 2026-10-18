@@ -52,9 +52,10 @@ export function strictestClassification(labels: Classification[]): Classificatio
 async function loadMatter(
   store: SpineStore,
   repos: SpineRepositories,
-  matterId: string
+  matterId: string,
+  firmId: string
 ): Promise<Matter | null> {
-  const matter = (await repos.matters.get(matterId)) ?? store.matters.get(matterId)
+  const matter = (await repos.matters.get(matterId, firmId)) ?? store.matters.get(matterId)
   if (matter) store.matters.set(matter.id, matter)
   return matter ?? null
 }
@@ -67,11 +68,11 @@ export async function canAccessMatter(
   matterId: string,
   action = "committee_brain"
 ): Promise<{ allow: boolean; reason: string; matter: Matter | null }> {
-  const matter = await loadMatter(store, repos, matterId)
+  const matter = await loadMatter(store, repos, matterId, actor.firmId)
   if (!matter) return { allow: false, reason: "unknown-matter", matter: null }
   const key = store.memberKey(matterId, actor.id)
   if (!store.members.has(key)) {
-    const member = await repos.members.get(matterId, actor.id)
+    const member = await repos.members.get(matterId, actor.id, actor.firmId)
     if (member) store.members.set(key, member)
   }
   const decision = checkPermission(store, actor.id, action, matterId)
@@ -97,14 +98,16 @@ export async function resolveCommitteeScope(
   const matter = decision.matter
   const labels: Classification[] = [readableLabel(matter.classification)]
   const partyNames = new Set<string>()
-  const client = store.entities.get(matter.clientId) ?? (await repos.entities.get(matter.clientId))
+  const client =
+    store.entities.get(matter.clientId) ?? (await repos.entities.get(matter.clientId, actor.firmId))
   if (client && client.firmId === actor.firmId && client.canonicalName) {
     partyNames.add(client.canonicalName)
   }
 
   const documentIds = [...new Set(input.documentIds ?? [])]
   for (const documentId of documentIds) {
-    const doc = store.documents.get(documentId) ?? (await repos.documents.get(documentId))
+    const doc =
+      store.documents.get(documentId) ?? (await repos.documents.get(documentId, actor.firmId))
     // Cross-firm documents are reported as unknown: no existence oracle.
     if (!doc || doc.firmId !== actor.firmId) {
       throw new CommitteeScopeError(404, "unknown document", "NOT_FOUND")

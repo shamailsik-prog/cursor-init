@@ -31,6 +31,7 @@
  * Every other app/api route requires a session (enforced by
  * tests/auth.route-coverage.test.ts).
  */
+import { assertInsecureDevAuthContext } from "@/platform/p5/insecureDevAuth"
 import { AuthError, loadUserRecord, resolveSession, type Session } from "@/platform/p5/session"
 import { runWithSession } from "@/platform/p5/requestSession"
 import { errorResponse, internalErrorResponse } from "@/platform/http/errors"
@@ -228,6 +229,17 @@ function claimedIdentity(url: URL, parsed: unknown): string | null {
   return null
 }
 
+function claimedFirmIdForInsecureDev(url: URL, parsed: unknown): string | undefined {
+  assertInsecureDevAuthContext("claimedFirmIdForInsecureDev")
+  const fromQuery = url.searchParams.get("firmId")
+  if (fromQuery) return fromQuery
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const firmId = (parsed as Record<string, unknown>).firmId
+    return typeof firmId === "string" && firmId ? firmId : undefined
+  }
+  return undefined
+}
+
 /**
  * Runs the handler with a request-scoped audit collector and persists every audit row it
  * created (checkPermission decisions included) before the response leaves — GET and POST
@@ -311,7 +323,11 @@ export async function withSession(
       const devRefused = refuseUndeclaredQuery(devRequest, options)
       if (devRefused) return devRefused
       const claimed = claimedIdentity(url, body.parsed)
-      const record = claimed ? await loadUserRecord(claimed) : null
+      const record = claimed
+        ? await loadUserRecord(claimed, {
+            firmId: claimedFirmIdForInsecureDev(url, body.parsed),
+          })
+        : null
       const devSession: HandlerSession | null = record
         ? {
             userId: record.id,

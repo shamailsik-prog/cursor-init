@@ -81,7 +81,7 @@ function openMatter(): string {
 
 async function raise(matterId: string, classification: "privileged" | "privileged-restricted"): Promise<void> {
   const repos = await getRuntimeRepositories(getRuntimeStore())
-  expect(await repos.matters.update(matterId, { classification })).toMatchObject({ classification })
+  expect(await repos.matters.update(matterId, "firmA", { classification })).toMatchObject({ classification })
 }
 
 describe("F14 download door: the Next documents routes apply the matter's current label", () => {
