@@ -99,3 +99,21 @@ RED: the main `0e6981b` tree plus the two new test files only. GREEN: commit `3f
 | Two periods at once | no continuation | 30 confirmed once, every job `done` |
 | Unit file (8 tests) | import fails | 8 pass |
 | Existing P3 auto-confirm suite (14) | 14 pass | 14 pass, unchanged |
+
+### Verification on the merged tree (F37 `f670d62` and main `957fe26` merged)
+
+The machine is shared; its load average ran 9 to 32 on 4 cores. Every failure below was re-run against main, either in the same run or alone at the same load.
+
+| Check | Branch | Main, same load |
+| --- | --- | --- |
+| F38 e2e and unit, after the final merge | 21/21; core `[15,15,15]`, runs `[5,1,1]` | — |
+| What the F38 e2e leaves behind (census before and after) | 0 → 0 in every collection it writes (firms, jobs, `entity_links`, entities, merge events, events, audit rows, counters, deferral records) | — |
+| Auto-confirm, then scheduled and sweeper, in one session | 35/35, then 32/32 (scheduled 4.7 s) | — |
+| Full functions `test:emu` set, run side by side | 2,390/2,393; 3 timeouts at load 26 | 2,371/2,372; 1 timeout (the same `p2.jobs-invariants` first test) |
+| The 3 timed-out files, alone and side by side | 44/44 | 44/44 |
+| `npm run gate:g4:phase3c` steps 1–4 | routes 21 + 4; boot; **42 named passed, 0 failed**; lint | — |
+| G-2 (gate step 5), re-run at load ~7 | all 4 rules tests pass, firm-B denial covering `autoconfirm_deferrals` included; HTTP-api test times out at 15 s; root file fails at import | HTTP-api test times out at 15 s; root file fails at import |
+| Rules (`test:rules` file list) | 6/6 rules files; D1 2a 110/110 (7 new) | — |
+| Static | typecheck 0; eslint `--max-warnings 0 functions` 0; G-0 PASSED | — |
+
+The borrowed `node_modules` predates F03 and lacks `@aws-sdk/client-s3`. Every root test that imports `platform/documents` fails at import on branch and main alike.
