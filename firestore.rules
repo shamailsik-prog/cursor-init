@@ -196,6 +196,8 @@ service cloud.firestore {
       allow read: if sameFirm() && isStaff() && cleared(resource.data.classification);
       allow create, update, delete: if false;
     }
+    // Audit F38: why the auto-confirm job passed a pair over (codes and ids only); written and read by Cloud Functions only.
+    match /autoconfirm_deferrals/{id} { allow read, write: if false; }
     match /conflict_checks/{id} {
       // Partner only: the stored row is unredacted (hits[].matterId / matterNo / matterClassification,
       // boundMatterId); discloseFor redacts those server-side, so the requester reads via getConflictResult.

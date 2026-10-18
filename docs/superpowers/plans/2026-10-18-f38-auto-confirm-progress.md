@@ -44,7 +44,7 @@
 - [ ] **Step 2: E2E tests** (helpers seed pairs per kind in batches and purge every doc by firm, plus the tick's job rows by run key):
   1. "F38 RED/GREEN: more than 2,000 ineligible head pairs never starve the eligible pairs behind them": 2,002 ineligible pairs (each R3 reason), 15 eligible pairs created later, three simulated days through `enqueueScheduledRuns` + `onJobCreatedCore` + drain. Assert cumulative eligible confirmed per day `[15, 15, 15]`, runs on day 1 ≤ 5, every ineligible pair still a candidate with rows unchanged and a deferral record with its reason, one merge event per eligible pair.
   2. "F38 alert": 481 entity-missing head pairs + 5 eligible. After run 1, `backlog.alert === "stale"` and one `autoconfirm.backlog_stale` error. After the chain, `alert === null` and one `autoconfirm.backlog_cleared`.
-  3. "F38 crash and retry": 500 eligible pairs, one `createdAt`. The checkpoint seam throws on run 1 attempt 1, and the retry enqueues c1 once. c1's step seam throws at index 1 on attempt 1, and the retry finishes. A duplicate delivery is dropped. Exactly one merge event, `entity.confirmed` and audit row per pair. c1's fenced steps are `autoconfirm-0..2`.
+  3. "F38 crash and retry": 500 eligible pairs, one `createdAt`. The checkpoint seam throws on run 1 attempt 1, and the retry enqueues c1 once. c1's step seam throws at index 1 on attempt 1, and the retry finishes. A duplicate delivery is dropped. Exactly one merge event, `entity.confirmed` and audit row per pair. c1's fenced steps are `autoconfirm-0` and `autoconfirm-1`: position 0 is spent on the retry and its chunk runs at position 1.
   4. "F38 fencing": c1's lease is reclaimed mid-run (the clock passes the lease inside the step seam and the reclaim runs to done). The stale attempt ends `lease_lost`, and every pair is confirmed exactly once.
   5. "F38 flag off mid-continuation": 480 entity-missing + 20 eligible. In c1 the flag goes off at index 1: 10 are confirmed, there is no c2, and the cursor stays at the last committed step. With the flag back on, the next day's run confirms the other 10. A separate check: the flag off at the checkpoint writes nothing.
   6. "F38 rechecks": a deferred `entity_missing` pair whose entity is restored is confirmed when its recheck falls due. A deferred pair that left the backlog has its record deleted. A record not yet due is not handed to a step.
@@ -80,6 +80,22 @@
 
 ## RED/GREEN ledger
 
-| Test | main `0e6981b` (RED) | branch (GREEN) |
+RED: the main `0e6981b` tree plus the two new test files only. GREEN: commit `3f752f5`. Both ran under `scratchpad/f38/emu.sh` (Auth and Firestore emulators on private ports, project `demo-sikander`) with `npm --prefix functions test -- <files>`. Load average was about 11 on 4 cores.
+
+| Test | main (RED) | branch (GREEN) |
 | --- | --- | --- |
-| (filled in Task 1 Step 3 and Task 3 Step 3) | | |
+| Core: 2,002 old ineligible pairs (9 reasons), then 15 eligible; real tick; 3 days | eligible confirmed by day `[0,0,0]` of 15; runs `[1,1,1]`; `event_exists_skip` repeated daily | `[15,15,15]`; runs `[5,1,1]`; every head pair a candidate, rows unchanged, one record with its reason |
+| Alert fires, then clears | no log line (1 run, no continuation) | `backlog_stale` after run 1 (age 30 d − 480 ms), `backlog_cleared` after c1 |
+| Stale state on the progress doc | no progress doc | `alert: "stale"`, `pendingSince`, `outcome: "continued"`, `deferred: 480` |
+| Last continuation (c23) | payload refused | `backlog_remaining` warn, no c24, the next day resumes |
+| Crash at checkpoint, crash mid-c1, duplicates | no continuation | one c1; c1 steps `0,1`; 500 events / audits / `entity.confirmed`, max 1 per pair |
+| Fencing: c1 lease reclaimed mid-run | dead-lettered (payload refused) | stale attempt `lease_lost`, reclaim `done`, 30 confirmed once |
+| Flag off mid-c1 | 1 run | 10 confirmed, no c2, cursor at the 10th, next day 20 |
+| Flag off at checkpoint | no progress doc | no `lastRun`/`backlog`, no c1 |
+| Rechecks | no records | repaired pair confirmed at its due time; left-backlog record deleted; not-due not re-read |
+| Cross-firm | 1 run | A's chain leaves B untouched; per-firm records for one shared pair id |
+| Straddling rows | 1 run | pair confirmed once with both rows; rejected pair `checks: 2`, rows unchanged |
+| 2,001 rows that cannot name a pair | eligible never reached | `skippedRows` 2,000 then 1; 5 confirmed |
+| Two periods at once | no continuation | 30 confirmed once, every job `done` |
+| Unit file (8 tests) | import fails | 8 pass |
+| Existing P3 auto-confirm suite (14) | 14 pass | 14 pass, unchanged |
