@@ -84,17 +84,21 @@ def looks_like_pdf(content: Optional[bytes]) -> bool:
     return has_pdf_signature(content)
 
 
-# FA-corpus-004: whitespace, separators, control and format characters (ZWNJ, ZWJ, WORD JOINER,
-# SOFT HYPHEN, LRM/RLM, BOM, ZWSP, bidi embeddings/isolates) carry no text on their own.
-_NO_TEXT_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cc", "Cf"})
+# FA-corpus-004 / FA-corpus-008: real text has at least one letter or digit (Unicode L*/N*) that is
+# not a default-ignorable filler (the Hangul fillers are Lo); private use, combining marks, symbols
+# such as BRAILLE BLANK, U+FFFD and pdfplumber's "(cid:N)" tokens for unmapped glyphs are not text.
+_IGNORABLE_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
+_CID_TOKEN = re.compile(r"\(cid:\d+\)")
 
 
 def has_text(text: Optional[str]) -> bool:
-    """R16: an extraction that is empty, or only whitespace and invisible characters, is a parse
-    failure, never progress. Urdu text with ZWNJ/ZWJ between letters still counts; the text is not
-    changed (FA-corpus-004)."""
-    return bool(text) and any(
-        not ch.isspace() and unicodedata.category(ch) not in _NO_TEXT_CATEGORIES for ch in text
+    """R16: an extraction with no real letter or digit is a parse failure, never progress. Urdu text
+    with ZWNJ/ZWJ between letters still counts; the text is not changed (FA-corpus-004/008)."""
+    if not text:
+        return False
+    return any(
+        unicodedata.category(ch)[0] in "LN" and ch not in _IGNORABLE_LETTERS
+        for ch in _CID_TOKEN.sub("", text)
     )
 
 # ---------------------------------------------------------------------------------------------
