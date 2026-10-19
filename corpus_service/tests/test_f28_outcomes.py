@@ -279,6 +279,42 @@ def test_fa_corpus_005_what_is_still_not_a_pdf(body):
     assert outcomes.looks_like_pdf(body) is False
 
 
+# Re-audit of PR #91 (REAUDIT_PR91.md): FA-corpus-007 and FA-corpus-009.
+NOT_PDF_ERROR_PAGES = {
+    "html_leading_comment": b"<!-- x --><html>%PDF-1.4",
+    "html_head_only": b"<head><title>Error</title></head>%PDF-1.4",
+    "xml_declaration": b"<?xml version='1.0'?><html>%PDF-1.4",
+    "json_error": b'{"error":"file %PDF-1.4 not found"}',
+    "text_error": b"Error: %PDF-1.4 document unavailable",
+    "zip_polyglot": b"PK\x03\x04" + b"A" * 100 + b"%PDF-1.4",
+    "text_after_whitespace": b" \r\n Not found: %PDF-1.4",
+}
+
+
+@pytest.mark.parametrize("name", sorted(NOT_PDF_ERROR_PAGES))
+def test_fa_corpus_007_only_junk_may_precede_the_signature(name):
+    """FA-corpus-007: before ``%PDF-`` only whitespace, a BOM or NUL padding may come; an error page
+    (markup, XML, JSON, plain text, another format) that mentions ``%PDF-`` is not a PDF."""
+    assert outcomes.looks_like_pdf(NOT_PDF_ERROR_PAGES[name] + b"\x00" * 64) is False
+
+
+@pytest.mark.parametrize("name", ["html_leading_comment", "html_head_only", "xml_declaration"])
+def test_fa_corpus_007_the_extractor_refuses_markup_error_pages(name):
+    """The extractor refuses a markup error page with its HTML error, whatever tag it opens with."""
+    from scraper.parsers import pdf_extractor
+
+    with pytest.raises(pdf_extractor.PDFDownloadError, match="got HTML"):
+        pdf_extractor._validate_pdf_bytes(NOT_PDF_ERROR_PAGES[name] + b"\x00" * 2048, "f28://007")
+
+
+@pytest.mark.parametrize("pad", [b" ", b"\x00", b"\n"])
+@pytest.mark.parametrize("offset,accepted", [(0, True), (1018, True), (1019, True), (1020, False), (1021, False), (1024, False)])
+def test_fa_corpus_009_the_signature_must_lie_wholly_inside_the_first_1024_bytes(pad, offset, accepted):
+    """FA-corpus-009, documented semantics: the five bytes ``%PDF-`` must lie within bytes 0..1023.
+    Starting at 1019 it ends at 1023 (accepted); starting at 1020 it crosses the boundary (refused)."""
+    assert outcomes.looks_like_pdf(pad * offset + b"%PDF-1.4\n" + b"\x00" * 64) is accepted
+
+
 PARITY_INPUTS = [
     b"%PDF-1.7\n" + b"\x00" * 2048,
     b"\r\n%PDF-1.4\n" + b"\x00" * 2048,
@@ -287,6 +323,9 @@ PARITY_INPUTS = [
     b"\x00" * 1024 + b"%PDF-1.4\n" + b"\x00" * 2048,
     b"<html>%PDF-1.4" + b"\x00" * 2048,
     b"GIF89a" + b"\x00" * 2048,
+    *(body + b"\x00" * 2048 for body in NOT_PDF_ERROR_PAGES.values()),
+    b" " * 1019 + b"%PDF-1.4" + b"\x00" * 2048,
+    b" " * 1020 + b"%PDF-1.4" + b"\x00" * 2048,
 ]
 
 
@@ -317,6 +356,22 @@ INVISIBLE_ONLY = [
     " \u00a0\n\u200c\t\u2060 \r",  # mixed with whitespace and NBSP
     "\x00\x07\u200c",              # control characters (Cc) with a ZWNJ
     "\u3000\u2028\u2029\u200d",    # Zs / Zl / Zp separators with a ZWJ
+
+
+    # FA-corpus-008: no letter or digit that is real text
+    "\u0301\u0302\u0303",          # combining marks only (Mn)
+    "\u064b\u064e\u0650",          # Arabic harakat only
+    "\ufe0f\ufe0e",                # variation selectors
+    "\u034f",                      # COMBINING GRAPHEME JOINER
+    "\u3164 \u115f\u1160\uffa0",   # Hangul fillers (Lo, default-ignorable)
+    "\u2800\u2800",                # BRAILLE PATTERN BLANK
+    "\ue000\ue001\uf8ff",          # private use only
+    "(cid:12)(cid:34)(cid:56)",     # pdfplumber's unmapped glyphs
+    " (cid:3)\n(cid:1234) ",
+    "\ufffd\ufffd",                # replacement characters
+    "\U000e0080",                  # unassigned
+    "\U000e0041\U000e0042",        # tag characters
+    "...!?-",                      # punctuation only
 ]
 
 
@@ -327,7 +382,10 @@ def test_fa_corpus_004_invisible_characters_alone_are_no_text(text):
     assert outcomes.has_text(text) is False
 
 
-@pytest.mark.parametrize("text", ["a", "7", "\u200cA\u200d", "ہو\u200cگا", "پاکستان\u200c کی عدالت"])
+@pytest.mark.parametrize("text", [
+    "a", "7", "\u200cA\u200d", "ہو\u200cگا", "پاکستان\u200c کی عدالت", "\u0644\u200d\u0627",
+    "(cid:12) Order 7", "\u0301e", "\u0663",
+])
 def test_fa_corpus_004_real_text_still_counts_including_urdu_with_zwnj(text):
     """Urdu legitimately carries ZWNJ/ZWJ between letters: only text with NOTHING else is rejected,
     and has_text does not change the text it is given."""

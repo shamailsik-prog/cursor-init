@@ -562,6 +562,11 @@ BOM_READABLE_PDF = b"\xef\xbb\xbf" + READABLE_PDF
 INVISIBLE_PDF = b"%PDF-1.4\n%F28-INVISIBLE synthetic fixture\n" + b"\x00" * 2048
 INVISIBLE_TEXT = "\u200c\u200d \u2060\u00ad\u200e\ufeff\n"
 URDU_PDF = b"%PDF-1.4\n%F28-URDU synthetic fixture\n" + b"\x00" * 2048
+# Re-audit of PR #91: FA-corpus-007 (a JSON error page mentioning %PDF-) and FA-corpus-008 (a text
+# layer of unmapped glyphs and blank characters).
+JSON_ERROR_BODY = b'{"error":"file %PDF-1.4 not found"}' + b"\x00" * 64
+GLYPHS_PDF = b"%PDF-1.4\n%F28-GLYPHS synthetic fixture\n" + b"\x00" * 2048
+GLYPHS_TEXT = "(cid:12)(cid:34)\n\u0301\u3164 \u2800\ue000\ufffd\ufe0f\u034f"
 URDU_TEXT = "مصنوعی فیصلہ\u200c ہو\u200cگا۔ 2099 SCMR 902. Synthetic F28 fixture, not a real judgment."
 
 
@@ -640,6 +645,8 @@ def text_layer_for_fixtures(monkeypatch):
             return pdf_sandbox.ParseResult(text="  \n\t \n", pages=1, ocr_applied=False)
         if b"F28-INVISIBLE" in content:
             return pdf_sandbox.ParseResult(text=INVISIBLE_TEXT, pages=1, ocr_applied=False)
+        if b"F28-GLYPHS" in content:
+            return pdf_sandbox.ParseResult(text=GLYPHS_TEXT, pages=1, ocr_applied=False)
         if b"F28-URDU" in content:
             return pdf_sandbox.ParseResult(text=URDU_TEXT, pages=1, ocr_applied=False)
         return real(path, sha256, size, **kwargs)
@@ -799,6 +806,40 @@ def test_fa_corpus_004_urdu_text_with_zwnj_is_staged_unchanged_beside_an_invisib
     assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 1)], rows
     summary = rows[0].result_summary
     assert summary["outcome"] == "partial" and summary["errors"] == {"empty_pdf_text": 1}, summary
+
+
+def test_fa_corpus_007_an_error_page_mentioning_the_signature_is_not_pdf(corpus_db, monkeypatch):
+    """FA-corpus-007: a JSON error page whose text mentions %PDF- was stored and parsed and counted
+    as empty_pdf_text. It is refused before intake as not_pdf, nothing staged."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: JSON_ERROR_BODY}))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "FAILURE", repr(result.result)
+    assert count("scraper_staging") == 0
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"not_pdf": 1})], rows
+
+
+def test_fa_corpus_008_a_text_layer_of_unmapped_glyphs_and_blanks_is_no_text(corpus_db, monkeypatch):
+    """FA-corpus-008: (cid:N) glyphs, combining marks, Hangul filler, braille blank, private use and
+    U+FFFD with no real letter or digit ended SUCCESS with a staged row. It is empty_pdf_text."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: GLYPHS_PDF, 2: URDU_PDF}))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    staged = run(fetch("SELECT source_url FROM scraper_staging"))
+    assert [u for (u,) in staged] == [SHC_PDF.format(n=2)], staged
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 1)], rows
+    assert rows[0].result_summary["errors"] == {"empty_pdf_text": 1}, rows[0].result_summary
 
 
 def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypatch):
