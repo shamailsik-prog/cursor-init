@@ -139,6 +139,12 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13: both API stacks read and writ
     const opened = await openViaFunctions(partner)
     const id = opened.matterId
 
+    // The Functions writer stores the canonical shape itself (a read default must not be what hides a missing field).
+    const stored = await matterDoc(id)
+    expect(stored).toMatchObject({ courtId: null, caseNumber: null, caseNumberStatus: "pending", stage: "pre_filing", createdBy: partner.uid })
+    expect(stored).not.toHaveProperty("id")
+    expect(opened).toMatchObject({ courtId: null, caseNumber: null, caseNumberStatus: "pending" })
+
     const repo = createFirestoreRepositories(adminDb())
     const viaNext = await repo.matters.get(id, firmId)
     const canonical = {
@@ -164,6 +170,10 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13: both API stacks read and writ
     expect(viaFunctions).toMatchObject({ matterId: id, ...fields })
     // The document id is authoritative: neither stack hands out a stored `id` field that could disagree with it.
     expect(viaFunctions).not.toHaveProperty("id")
+
+    // A Next update that would leave the matter outside the canonical shape is refused, and nothing is written.
+    await expect(repo.matters.update(id, firmId, { status: "reopened" } as never)).rejects.toThrow(/malformed/)
+    expect((await matterDoc(id))?.status).toBe("engagement_unconfirmed")
   })
 
   it("D1: a malformed matter document (status outside the canonical set) is refused by both stacks", async () => {
@@ -179,6 +189,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13: both API stacks read and writ
     const err = await fnError(getMatter({ token: partner.token, data: { firmId, matterId: opened.matterId } } as never))
     expect(err.status).toBe(409)
     expect(err.code).toBe("matter_malformed")
+    const listed = await listMatters({ token: partner.token, data: { firmId, limit: "10" } } as never)
+    expect(listed.items.map((row) => row.matterId)).not.toContain(opened.matterId)
   })
 
   it("D3: Next confirm_engagement does not reopen a matter Cloud Functions closed", async () => {

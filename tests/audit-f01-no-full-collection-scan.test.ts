@@ -93,9 +93,10 @@ describe("FA-F01-001 no admin full-collection scans", () => {
   })
 
   it("behavioural: two firms — listByFirm only returns the scoped firm", async () => {
+    // Audit F13: canonical matter rows (the shared validator never returns a partial one).
     const docs: Record<string, { id: string; firmId: string; title: string }> = {
-      mA: { id: "mA", firmId: "firmA", title: "A" },
-      mB: { id: "mB", firmId: "firmB", title: "B" },
+      mA: { id: "mA", firmId: "firmA", title: "A", clientId: "c", status: "live", classification: "internal" },
+      mB: { id: "mB", firmId: "firmB", title: "B", clientId: "c", status: "live", classification: "internal" },
     }
     const db = {
       collection: (_name: string) => ({

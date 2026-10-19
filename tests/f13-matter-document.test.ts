@@ -12,6 +12,9 @@ import {
   isCanonicalMatterMemberRow,
   readMatterDocument,
 } from "@/platform/d1/matterDocument"
+import { PublicError } from "@/platform/http/publicError"
+import { newStore } from "@/platform/spine/store"
+import { confirmEngagement } from "@/services/d1-2/matters"
 
 /** Exactly what Cloud Functions openMatter stored before the fix (no court given). */
 const functionsRow = {
@@ -153,5 +156,15 @@ describe("F13: one schema owner, imported by both stacks", () => {
 
   it("the stage list is the one Functions has always enforced", () => {
     expect(MATTER_STAGES).toEqual(["pre_filing", "filed", "hearing", "reserved", "decided", "archived"])
+  })
+})
+
+describe("F13: the canonical status set includes closed", () => {
+  it("confirmEngagement never reopens a closed matter (a Cloud Functions closeMatter transition)", () => {
+    const store = newStore()
+    const matter = { ...nextRow, id: "mat_closed", status: "closed" as const, courtId: null, caseNumberStatus: "pending" as const, classification: "internal" as const }
+    store.matters.set(matter.id, matter)
+    expect(() => confirmEngagement(store, matter.id)).toThrow(PublicError)
+    expect(store.matters.get(matter.id)?.status).toBe("closed")
   })
 })

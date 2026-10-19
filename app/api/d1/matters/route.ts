@@ -205,6 +205,10 @@ async function handlePost(request: Request) {
         caseNumberStatus: "pending" as const,
         status: "engagement_unconfirmed" as const,
         classification: parsed.classification,
+        // Audit F13: the canonical shape Cloud Functions writes (no number is allocated on this check-free path).
+        matterNo: null,
+        stage: "pre_filing" as const,
+        createdBy: parsed.actorId,
       }
       await repo.matters.create(matter)
       await repo.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
@@ -213,7 +217,7 @@ async function handlePost(request: Request) {
       // Audit F14 R7: each membership is persisted first and cached only once the write has succeeded, so a member sync
       // whose snapshot holds it always lists it (every member was validated above, before anything was persisted).
       for (const userId of memberIds) {
-        const member = { matterId: matter.id, userId, firmId: matter.firmId }
+        const member = { matterId: matter.id, userId, firmId: matter.firmId, addedBy: parsed.actorId }
         await repo.members.upsert(member)
         cacheMember(store, member)
         recordMatterMemberAdd(store, parsed.actorId, matter, userId)
@@ -254,7 +258,8 @@ async function handlePost(request: Request) {
         throw err
       }
       // Audit F14 R7: validate, persist, then cache; a failed write leaves nothing cached and nothing audited.
-      const { matter: assigned, member } = assignment
+      const { matter: assigned } = assignment
+      const member = { ...assignment.member, addedBy: parsed.actorId }
       await repo.members.upsert(member)
       cacheMember(store, member)
       recordMatterMemberAdd(store, parsed.actorId, assigned, member.userId)
@@ -271,6 +276,10 @@ async function handlePost(request: Request) {
       await syncFirmMembers(store, repo, actor.firmId)
       await syncFirmMatters(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
+      // Audit F13: closing is a Cloud Functions transition (closeMatter); Next never reopens a closed matter.
+      if (matter.status === "closed") {
+        return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
+      }
       const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
       confirmEngagement(store, parsed.matterId, parsed.atMs)
       const updatedMatter = store.matters.get(parsed.matterId)
