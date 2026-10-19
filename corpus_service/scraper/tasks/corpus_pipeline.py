@@ -189,27 +189,14 @@ def _claim(model, phase: Phase, seen: List[uuid.UUID]):
 
 
 async def _claim_oldest(db, phase: Phase, seen: Dict[Any, List[uuid.UUID]]):
-    """Claim the oldest row in the phase across case and statute staging (created_at, then id; R4).
-
-    Each table's oldest candidate is read without a lock to order the tables; the claim itself is
-    ``_claim`` (FOR UPDATE SKIP LOCKED). If a table's claim finds nothing (its rows are locked
-    elsewhere), the next table is tried, so one stuck row cannot stall the tick (R4)."""
-    candidates: List[Tuple[Tuple[Any, uuid.UUID], int]] = []
-    for index, model in enumerate(MODELS):
-        candidate = (await db.execute(
-            select(model.id, model.created_at)
-            .where(model.lifecycle_state == phase.state, *phase.conditions(model), model.id.not_in(seen[model]))
-            .order_by(model.created_at, model.id)
-            .limit(1)
-        )).first()
-        if candidate is not None:
-            candidates.append(((candidate.created_at, candidate.id), index))
-    for _key, index in sorted(candidates):
-        model = MODELS[index]
-        row = (await db.execute(_claim(model, phase, seen[model]))).scalars().first()
-        if row is not None:
-            return row
-    return None
+    """Claim the oldest claimable row in the phase across case and statute staging (created_at, then
+    id; R4). Each table's oldest row is taken with FOR UPDATE SKIP LOCKED (``_claim``) before the
+    tables are compared, so a row locked elsewhere is skipped, never stalls the tick, and never lets
+    a newer row of its table jump ahead of the other table's older one (FA-F21-001). The other
+    table's candidate stays locked only until this row's transaction ends."""
+    claimed = [row for model in MODELS
+               if (row := (await db.execute(_claim(model, phase, seen[model]))).scalars().first()) is not None]
+    return min(claimed, key=lambda row: (row.created_at, row.id), default=None)
 
 
 def _error_code(exc: BaseException) -> str:

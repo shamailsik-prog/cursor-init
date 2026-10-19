@@ -27,7 +27,7 @@ async def scrape_nationalassembly(source, db):
         soup = BeautifulSoup(r.text, "html.parser")
         pdf_entries = []
         for anchor in soup.find_all("a", href=re.compile(r"\.pdf$", re.I)):
-            act_name = (anchor.get_text() or "").strip()
+            act_name = " ".join((anchor.get_text() or "").split())  # FA-F21-002: one identity per act
             href = anchor.get("href")
             if not href or not act_name or ("Act" not in act_name and "Ordinance" not in act_name):
                 continue
