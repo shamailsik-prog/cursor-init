@@ -11,6 +11,7 @@ import {
 } from "@/platform/persistence/firestoreDbModular"
 import {
   canonicalMatterDocument,
+  MatterClosedError,
   canonicalMatterMemberDocument,
   isCanonicalMatterMemberRow,
   matterMemberDocId,
@@ -302,10 +303,32 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       async update(id, firmId, patch) {
         const current = matterFromRow(id, await getById<StoredRow>(db, "matters", id, firmId))
         if (!current) return null
+        // FA-F13-007: closing is final (Cloud Functions closeMatter); Next writes nothing to a closed matter.
+        if (current.status === "closed") throw new MatterClosedError()
         const { id: _id, ...fields } = patch
         // A patch that would leave the matter outside the canonical shape is refused before anything is written.
         canonicalMatterDocument({ ...current, ...fields })
         return matterFromRow(id, await updateById<StoredRow>(db, "matters", id, fields as Partial<StoredRow>, firmId))
+      },
+      async confirmEngagement(id, firmId, intimation) {
+        const firm = requireCallerFirmId(firmId, "matters.confirmEngagement")
+        // FA-F13-005 / 009: the closed check and both writes are one transaction, so a Functions closeMatter that
+        // commits first is seen here (or retries this one) and a closed matter is never reopened. The intimation id is
+        // the idempotency key: concurrent confirms commit one transition and one intimation.
+        return runTransaction(db, async (tx) => {
+          const matterRef = doc(db, "matters", id)
+          const snap = await tx.get(matterRef)
+          if (!snap.exists()) return null
+          const row = snap.data() as StoredRow
+          if (row.firmId !== firm) return null
+          const current = matterFromRow(id, row)
+          if (!current) return null
+          if (current.status === "closed") return { outcome: "closed" as const, matter: current }
+          if (current.status === "live") return { outcome: "already_live" as const, matter: current }
+          tx.update(matterRef, { status: "live" })
+          tx.set(doc(db, "intimation_register", intimation.id), { ...intimation, firmId: firm, matterId: id })
+          return { outcome: "confirmed" as const, matter: { ...current, status: "live" as const } }
+        })
       },
       async listByFirm(firmId) {
         // F12: a firm-scoped query (the listing attaches each row's document id, F14 R8).
@@ -397,10 +420,12 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           const memberRef = doc(db, "matter_members", key)
           const current = await tx.get(memberRef)
           const stored = current.exists() ? (current.data() as Record<string, unknown>) : null
-          if (stored && isCanonicalMatterMemberRow(stored, row.matterId, row.userId, row.firmId)) return
           const matterSnap = await tx.get(doc(db, "matters", row.matterId))
           const matter = matterSnap.exists() ? readMatterDocument(matterSnap.data()) : null
           if (!matter || matter.firmId !== row.firmId) throw new Error("matter member upsert: no canonical matter of the member's firm")
+          // FA-F13-007: no membership change on a closed matter (checked in the transaction that writes it).
+          if (matter.status === "closed") throw new MatterClosedError()
+          if (stored && isCanonicalMatterMemberRow(stored, row.matterId, row.userId, row.firmId)) return
           tx.set(memberRef, {
             ...canonicalMatterMemberDocument({ ...row, addedBy: row.addedBy ?? stored?.addedBy ?? null, classification: matter.classification }),
             createdAt: stored?.createdAt ?? serverTimestampFor(db),

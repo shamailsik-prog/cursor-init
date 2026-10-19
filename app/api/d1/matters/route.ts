@@ -22,9 +22,9 @@ import type { SpineRepositories } from "@/platform/persistence/spineRepositories
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
+import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   cacheMember,
-  confirmEngagement,
   MembershipAssignmentError,
   recordMatterMemberAdd,
   validateMatterAssignee,
@@ -244,6 +244,10 @@ async function handlePost(request: Request) {
         store.matters.get(parsed.matterId) ??
         (await repo.matters.get(parsed.matterId, actor.firmId))
       if (matter) store.matters.set(matter.id, matter)
+      // FA-F13-007: a closed matter takes no new member (the repository re-checks in the write's transaction).
+      if (matter?.status === "closed") {
+        return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
+      }
       let assignment: ReturnType<typeof validateMatterAssignment>
       try {
         assignment = validateMatterAssignment(store, {
@@ -280,20 +284,25 @@ async function handlePost(request: Request) {
       if (matter.status === "closed") {
         return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
       }
-      const priorIntimationIds = new Set(store.intimations.map((row) => row.id))
-      confirmEngagement(store, parsed.matterId, parsed.atMs)
-      const updatedMatter = store.matters.get(parsed.matterId)
-      if (updatedMatter) {
-        await repo.matters.update(parsed.matterId, actor.firmId, {
-          status: updatedMatter.status,
-        })
-        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
+      // FA-F13-005 / 009: the closed check above is a fast path only. The repository re-reads the matter and writes the
+      // transition with its intimation in one transaction (the intimation id is the idempotency key), so a Functions
+      // close that lands after the check still answers 409 and concurrent confirms record one intimation.
+      const intimation = {
+        id: `int_${parsed.matterId}_engagement`,
+        firmId: actor.firmId,
+        matterId: parsed.matterId,
+        notifiedAt: parsed.atMs ?? Date.now(),
+        confirmedAt: null,
       }
-      const newIntimations = store.intimations.filter(
-        (row) => row.matterId === parsed.matterId && !priorIntimationIds.has(row.id)
-      )
-      for (const row of newIntimations) {
-        await repo.intimations.upsert(row)
+      const confirmation = await repo.matters.confirmEngagement(parsed.matterId, actor.firmId, intimation)
+      if (!confirmation) throw new PublicError("unknown matter")
+      store.matters.set(confirmation.matter.id, confirmation.matter)
+      if (confirmation.outcome === "closed") {
+        return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
+      }
+      if (confirmation.outcome === "confirmed") {
+        if (!store.intimations.some((row) => row.id === intimation.id)) store.intimations.push(intimation)
+        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(confirmation.matter))
       }
       store.audit.push({
         action: "matter_confirm_engagement",
@@ -303,9 +312,7 @@ async function handlePost(request: Request) {
       })
       const payload = {
         action: "confirm_engagement",
-        matter:
-          (await repo.matters.get(parsed.matterId, actor.firmId)) ??
-          store.matters.get(parsed.matterId),
+        matter: confirmation.matter,
       }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
@@ -322,6 +329,10 @@ async function handlePost(request: Request) {
       await syncFirmMembers(store, repo, actor.firmId)
       await syncFirmMatters(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
+      // FA-F13-007: a closed matter takes no case number (the repository update re-checks before writing).
+      if (matter.status === "closed") {
+        return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
+      }
       // R2 N6: the case number feeds the citation gate's own-case exemption; only a partner
       // member records it (D6-1 owns it, L18 §3.2), and it is audited below.
       if (actor.role !== "partner") {
@@ -364,6 +375,9 @@ async function handlePost(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    if (err instanceof MatterClosedError) {
+      return NextResponse.json({ error: err.message, code: err.code }, { status: 409 })
+    }
     const message = publicErrorMessage(err, "matter operation failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }

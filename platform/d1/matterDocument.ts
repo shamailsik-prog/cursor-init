@@ -54,6 +54,15 @@ export class MatterShapeError extends Error {
   }
 }
 
+/** FA-F13-005 / 007: a write refused because the stored matter is closed (closing is final; Next never reopens). */
+export class MatterClosedError extends Error {
+  readonly code = "matter_closed"
+  constructor() {
+    super("matter is closed")
+    this.name = "MatterClosedError"
+  }
+}
+
 const isNonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim() !== ""
 const oneOf = <T extends string>(values: readonly T[], v: unknown): v is T => typeof v === "string" && (values as readonly string[]).includes(v)
 

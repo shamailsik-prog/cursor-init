@@ -260,7 +260,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     const checkId = uniq("g2checkA")
     const stamp = { firmId: firmA, classification: "internal", createdAt: Timestamp.now() }
     await adminDb().collection("clients").doc(clientId).set({ ...stamp, name: "G2 Alpha Client", clientCode: "ALPHA-0001" })
-    await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "intake", status: "open" })
+    // Audit F13: a canonical matter row (both stacks refuse a stage / status outside the shared shape with 409 matter_malformed).
+    await adminDb().collection("matters").doc(matterId).set({ ...stamp, title: "G2 Alpha Matter", clientId, stage: "pre_filing", status: "live" })
     await adminDb().collection("matter_members").doc(`${matterId}_${aMembers.partner.uid}`).set({ ...stamp, matterId, userId: aMembers.partner.uid })
     await adminDb().collection("conflict_checks").doc(checkId).set({ ...stamp, status: "CLEAR", subjects: [{ role: "client", name: "G2 Alpha Client" }] })
     // P3-64: firm A holds a budget and a rate, so a cross-firm budget write or AI call would have something to change or spend.
