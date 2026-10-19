@@ -21,7 +21,10 @@ import { mintIdToken, uniq } from "@/functions/test/emu"
 /** FA-F13-005: runs between the route's own closed check and the repository write (a Functions close landing there). */
 const hooks: { beforeMatterWrite?: (id: string) => Promise<void> } = {}
 vi.mock("@/platform/persistence/firestoreSpineRepositories", async (orig) => {
-  type Repos = { matters: Record<string, ((...args: never[]) => Promise<unknown>) | undefined> }
+  type Repos = {
+    matters: Record<string, ((...args: never[]) => Promise<unknown>) | undefined>
+    members: { upsert: (row: { matterId: string }) => Promise<void> }
+  }
   const mod = (await orig()) as Record<string, unknown> & { createFirestoreRepositories: (db: unknown) => Repos }
   return {
     ...mod,
@@ -38,6 +41,15 @@ vi.mock("@/platform/persistence/firestoreSpineRepositories", async (orig) => {
           }
           return fn.apply(repos.matters, args)
         }) as never
+      }
+      const upsert = repos.members.upsert.bind(repos.members)
+      repos.members.upsert = async (row) => {
+        const h = hooks.beforeMatterWrite
+        if (h) {
+          hooks.beforeMatterWrite = undefined
+          await h(row.matterId)
+        }
+        return upsert(row)
       }
       return repos
     },
@@ -284,6 +296,21 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 re-audit: client SDK path, rac
     // Cloud Functions keeps a closed matter closed as well: no further stage transition.
     const advanced = await fnError(advanceStage({ token: partner.token, data: { firmId, matterId: m.matterId, to: "filed" } } as never))
     expect(advanced.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it("FA-F13-007: a Functions close landing just before the member write is refused by the write's transaction", async () => {
+    const firmId = await newFirm()
+    const partner = await user(firmId, "partner")
+    const associate = await user(firmId, "associate")
+    const m = await openViaFunctions(partner)
+    await signInToNext(associate)
+    hooks.beforeMatterWrite = async (id) => {
+      await close(partner, id)
+    }
+    const am = await nextPost(partner, { action: "add_member", actorId: partner.uid, matterId: m.matterId, memberUserId: associate.uid })
+    expect(am.status, JSON.stringify(am.body)).toBe(409)
+    expect(am.body.code).toBe("matter_closed")
+    expect(await memberDoc(m.matterId, associate.uid)).toBeUndefined()
   })
 
   it("FA-F13-007: a Functions close landing just before the case-number write is refused by the write itself", async () => {
