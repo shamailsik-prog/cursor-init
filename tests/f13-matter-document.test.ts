@@ -168,3 +168,32 @@ describe("F13: the canonical status set includes closed", () => {
     expect(store.matters.get(matter.id)?.status).toBe("closed")
   })
 })
+
+// FA-F13-008: the two read-side null-court paths, each guarded by a test that fails on its revert (mutants M8, M10).
+describe("F13 re-audit: null-court read paths", () => {
+  const courtless = {
+    id: "m_null_court",
+    firmId: "firm_a",
+    clientId: "client_a",
+    title: "Recovery suit",
+    classification: "internal",
+    status: "engagement_unconfirmed",
+    courtId: null,
+    caseNumber: null,
+    caseNumberStatus: "pending",
+  } as const
+
+  it("M8: the search index row of a matter with no court and no case number has an empty detail", async () => {
+    const { buildMatterSearchIndexRow } = await import("@/platform/persistence/matterClientSearchIndex")
+    const row = buildMatterSearchIndexRow(courtless as never, { updatedAt: 1 })
+    expect(row.detail).toBe("")
+    expect(row.tags).not.toContain("null")
+  })
+
+  it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", async () => {
+    const { ownCaseReferenceMatcher } = await import("@/services/d4-1/drafts")
+    const isOwn = ownCaseReferenceMatcher({ courtId: null, caseNumber: "CP 12/2019" })
+    expect(isOwn("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(isOwn("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(false)
+  })
+})

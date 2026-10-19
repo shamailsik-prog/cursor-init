@@ -63,6 +63,7 @@ export default defineConfig({
             "tests/f11-atomic-request-audit.e2e.firestore.test.ts",
             "tests/f18-legacy-ai-path.e2e.firestore.test.ts",
             "tests/f13-canonical-matter-shapes.e2e.firestore.test.ts",
+            "tests/f13-reaudit.e2e.firestore.test.ts",
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
           ]),
