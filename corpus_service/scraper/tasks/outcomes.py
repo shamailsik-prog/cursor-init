@@ -84,9 +84,11 @@ def looks_like_pdf(content: Optional[bytes]) -> bool:
     return has_pdf_signature(content)
 
 
-# FA-corpus-004 / FA-corpus-008: real text has at least one letter or digit (Unicode L*/N*) that is
+# FA-corpus-004 / FA-corpus-008: real text has at least one letter (Lu/Ll/Lt/Lo) or digit (N*) that is
 # not a default-ignorable filler (the Hangul fillers are Lo); private use, combining marks, symbols
 # such as BRAILLE BLANK, U+FFFD and pdfplumber's "(cid:N)" tokens for unmapped glyphs are not text.
+# FA-corpus-010: modifier letters (Lm: tatweel U+0640, U+02C6) carry no content on their own.
+_TEXT_LETTERS = frozenset({"Lu", "Ll", "Lt", "Lo"})
 _IGNORABLE_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
 _CID_TOKEN = re.compile(r"\(cid:\d+\)")
 
@@ -97,7 +99,8 @@ def has_text(text: Optional[str]) -> bool:
     if not text:
         return False
     return any(
-        unicodedata.category(ch)[0] in "LN" and ch not in _IGNORABLE_LETTERS
+        (unicodedata.category(ch) in _TEXT_LETTERS or unicodedata.category(ch)[0] == "N")
+        and ch not in _IGNORABLE_LETTERS
         for ch in _CID_TOKEN.sub("", text)
     )
 
