@@ -555,6 +555,14 @@ UNREADABLE_PDF = b"%PDF-1.4\n%synthetic F28 fixture: no text layer, no image\n" 
 WHITESPACE_PDF = b"%PDF-1.4\n%F28-WHITESPACE synthetic fixture\n" + b"\x00" * 2048
 READABLE_PDF = b"%PDF-1.4\n%F28-READABLE synthetic fixture\n" + b"\x00" * 2048
 READABLE_TEXT = "Synthetic F28 fixture judgment. 2099 SCMR 901. Not a real judgment. " * 4
+# Re-audit F28: FA-corpus-005 (a valid PDF with bytes before its header) and FA-corpus-004 (a text
+# layer made only of invisible characters; Urdu text with ZWNJ as the control).
+CRLF_READABLE_PDF = b"\r\n" + READABLE_PDF
+BOM_READABLE_PDF = b"\xef\xbb\xbf" + READABLE_PDF
+INVISIBLE_PDF = b"%PDF-1.4\n%F28-INVISIBLE synthetic fixture\n" + b"\x00" * 2048
+INVISIBLE_TEXT = "\u200c\u200d \u2060\u00ad\u200e\ufeff\n"
+URDU_PDF = b"%PDF-1.4\n%F28-URDU synthetic fixture\n" + b"\x00" * 2048
+URDU_TEXT = "مصنوعی فیصلہ\u200c ہو\u200cگا۔ 2099 SCMR 902. Synthetic F28 fixture, not a real judgment."
 
 
 class CannedNetwork:
@@ -630,6 +638,10 @@ def text_layer_for_fixtures(monkeypatch):
             return pdf_sandbox.ParseResult(text=READABLE_TEXT, pages=1, ocr_applied=False)
         if b"F28-WHITESPACE" in content:
             return pdf_sandbox.ParseResult(text="  \n\t \n", pages=1, ocr_applied=False)
+        if b"F28-INVISIBLE" in content:
+            return pdf_sandbox.ParseResult(text=INVISIBLE_TEXT, pages=1, ocr_applied=False)
+        if b"F28-URDU" in content:
+            return pdf_sandbox.ParseResult(text=URDU_TEXT, pages=1, ocr_applied=False)
         return real(path, sha256, size, **kwargs)
 
     monkeypatch.setattr(pdf_sandbox, "parse", _parse)
@@ -723,6 +735,70 @@ def test_p1_every_pdf_extracting_court_fails_a_run_of_unreadable_pdfs(corpus_db,
     assert count("scraper_staging") == 0, f"{source}: an empty extraction was staged"
     rows = jobs(source)
     assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"empty_pdf_text": 1})], rows
+
+
+def test_fa_corpus_005_pdfs_with_a_leading_crlf_or_bom_are_harvested(corpus_db, monkeypatch):
+    """FA-corpus-005: valid PDFs whose header follows a CRLF or a BOM (allowed by the PDF spec and
+    by the extractor) were failed as not_pdf before extraction. They are harvested and staged."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: CRLF_READABLE_PDF, 2: BOM_READABLE_PDF}))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    staged = run(fetch("SELECT source_url FROM scraper_staging ORDER BY source_url"))
+    assert [u for (u,) in staged] == [SHC_PDF.format(n=1), SHC_PDF.format(n=2)], staged
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 2, 0)], rows
+    assert rows[0].result_summary["outcome"] == "ok", rows[0].result_summary
+
+
+@pytest.mark.parametrize("entry", sorted(COURT_PDF_SOURCES))
+def test_fa_corpus_004_every_court_fails_a_text_layer_of_invisible_characters_only(corpus_db, monkeypatch, entry):
+    """FA-corpus-004: an extraction made only of ZWNJ/ZWJ/WORD JOINER/SOFT HYPHEN/LRM/BOM ended as
+    SUCCESS with an empty-looking staged row. It is a failed document (empty_pdf_text) in every
+    court harvester's shared PDF intake path."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    source, module, pdf_url = COURT_PDF_SOURCES[entry]
+    canned_network(monkeypatch, {pdf_url: (200, INVISIBLE_PDF)})
+    mod = __import__(f"scraper.tasks.{module}", fromlist=["_discover_pdf_urls"])
+    provenance = {"listing_url": "https://f28.example.invalid/list", "feed_url": None, "discovery_method": "f28"}
+
+    async def _discover(*args, **kwargs):
+        return [pdf_url], {pdf_url: provenance if module == "islamabadhighcourt" else provenance["listing_url"]}
+
+    monkeypatch.setattr(mod, "_discover_pdf_urls", _discover)
+
+    result = fire(entry)
+
+    assert result.state == "FAILURE", f"{source}: an invisible-only text layer was recorded as {result.state}"
+    assert count("scraper_staging") == 0, f"{source}: an invisible-only extraction was staged"
+    rows = jobs(source)
+    assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"empty_pdf_text": 1})], rows
+
+
+def test_fa_corpus_004_urdu_text_with_zwnj_is_staged_unchanged_beside_an_invisible_only_pdf(corpus_db, monkeypatch):
+    """The control: Urdu text with embedded ZWNJ is real text and is staged byte for byte; the
+    invisible-only PDF in the same run is the one failed document."""
+    assert_migrated(corpus_db.migrate(), corpus_db)
+    no_sleep(monkeypatch)
+    text_layer_for_fixtures(monkeypatch)
+    canned_network(monkeypatch, _shc_routes({1: URDU_PDF, 2: INVISIBLE_PDF}))
+
+    result = fire("scrape-shc-public")
+
+    assert result.state == "SUCCESS", repr(result.result)
+    staged = run(fetch("SELECT source_url, raw_text FROM scraper_staging"))
+    assert [u for u, _ in staged] == [SHC_PDF.format(n=1)], staged
+    assert "\u200c" in staged[0][1] and "ہو\u200cگا" in staged[0][1], "stored Urdu text lost its ZWNJ"
+    rows = jobs("SindhHighCourtPublic")
+    assert [(r.status, r.records_extracted, r.records_failed) for r in rows] == [("completed", 1, 1)], rows
+    summary = rows[0].result_summary
+    assert summary["outcome"] == "partial" and summary["errors"] == {"empty_pdf_text": 1}, summary
 
 
 def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypatch):

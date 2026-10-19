@@ -151,7 +151,7 @@ def test_an_empty_text_layer_is_a_failed_document_never_progress():
     assert [outcomes.has_text(t) for t in ("", "   \n\t ", None)] == [False, False, False]
     # Copilot 4305705122: the signature is checked before extraction wherever a body is assumed a PDF.
     assert outcomes.looks_like_pdf(b"%PDF-1.7\n...") is True
-    assert [outcomes.looks_like_pdf(b) for b in (b"", b"%PDF", b"<html>%PDF-1.4", b" %PDF-1.4")] == [False] * 4
+    assert [outcomes.looks_like_pdf(b) for b in (b"", b"%PDF", b"<html>%PDF-1.4")] == [False] * 3
     unreadable = outcomes.Tally()
     unreadable.item_failed(outcomes.ERROR_EMPTY_PDF_TEXT)
     with pytest.raises(outcomes.SourceRunFailed) as caught:
@@ -249,3 +249,88 @@ def test_error_keys():
     assert outcomes.error_key(
         fetch_policy.FetchRefused(fetch_policy.BLOCKED_ADDRESS, "https://x.invalid/", "NasirLawSite")
     ) == "FetchRefused(blocked_address)"
+
+
+# ---------------------------------------------------------------------------------------------
+# Re-audit F28 (REAUDIT_F28.md): FA-corpus-005 and FA-corpus-004.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("body", [
+    b"\r\n%PDF-1.4\n...",                 # a leading CRLF
+    b"\xef\xbb\xbf%PDF-1.7\n...",          # a UTF-8 BOM
+    b" \n%PDF-1.5\n...",                   # leading whitespace
+    b"\x00" * 1000 + b"%PDF-1.4\n",       # junk before the header, signature ends inside the window
+])
+def test_fa_corpus_005_the_signature_may_sit_anywhere_in_the_first_1024_bytes(body):
+    """FA-corpus-005: the PDF spec allows bytes before the header, and the extractor has always
+    accepted the signature anywhere in the first 1024 bytes; the harvesters' check must agree."""
+    assert outcomes.looks_like_pdf(body) is True
+
+
+@pytest.mark.parametrize("body", [
+    None,
+    b"",
+    b"%PDF1.4\n",                                        # no dash: not the PDF header
+    b"\x00" * 1024 + b"%PDF-1.4\n",                      # the signature starts past the window
+    b"<html><body>" + b"x" * 1100 + b"%PDF-1.4</body></html>",  # an HTML page mentioning it late
+    b"<html>%PDF-1.4",                                    # an HTML error page is never a PDF
+    b"  <!DOCTYPE html><p>%PDF-1.4</p>",                 # nor with whitespace before it
+])
+def test_fa_corpus_005_what_is_still_not_a_pdf(body):
+    assert outcomes.looks_like_pdf(body) is False
+
+
+PARITY_INPUTS = [
+    b"%PDF-1.7\n" + b"\x00" * 2048,
+    b"\r\n%PDF-1.4\n" + b"\x00" * 2048,
+    b"\xef\xbb\xbf%PDF-1.7\n" + b"\x00" * 2048,
+    b"%PDF1.4\n" + b"\x00" * 2048,
+    b"\x00" * 1024 + b"%PDF-1.4\n" + b"\x00" * 2048,
+    b"<html>%PDF-1.4" + b"\x00" * 2048,
+    b"GIF89a" + b"\x00" * 2048,
+]
+
+
+@pytest.mark.parametrize("body", PARITY_INPUTS)
+def test_fa_corpus_005_harvesters_and_extractor_apply_one_signature_rule(body, caplog):
+    """Parity: looks_like_pdf(x) is True exactly when the extractor's validation neither refuses x
+    nor warns that it lacks the PDF signature."""
+    import logging
+
+    from scraper.parsers import pdf_extractor
+
+    with caplog.at_level(logging.WARNING, logger=pdf_extractor.logger.name):
+        try:
+            pdf_extractor._validate_pdf_bytes(body, "f28://parity")
+            extractor_accepts = not any("missing PDF magic" in r.getMessage() for r in caplog.records)
+        except pdf_extractor.PDFDownloadError:
+            extractor_accepts = False
+    assert outcomes.looks_like_pdf(body) is extractor_accepts
+
+
+INVISIBLE_ONLY = [
+    "\u200c",                      # ZWNJ
+    "\u200d\u200d",                # ZWJ
+    "\u2060",                      # WORD JOINER
+    "\u00ad  \u200e",              # SOFT HYPHEN, LRM
+    "\u200f\ufeff\u200b",          # RLM, BOM, ZWSP
+    "\u202a\u202e\u2066\u2069",    # bidi embeddings and isolates
+    " \u00a0\n\u200c\t\u2060 \r",  # mixed with whitespace and NBSP
+    "\x00\x07\u200c",              # control characters (Cc) with a ZWNJ
+    "\u3000\u2028\u2029\u200d",    # Zs / Zl / Zp separators with a ZWJ
+]
+
+
+@pytest.mark.parametrize("text", INVISIBLE_ONLY)
+def test_fa_corpus_004_invisible_characters_alone_are_no_text(text):
+    """FA-corpus-004: text made only of whitespace and format/invisible characters is an empty
+    extraction, a failed document (ERROR_EMPTY_PDF_TEXT), never progress."""
+    assert outcomes.has_text(text) is False
+
+
+@pytest.mark.parametrize("text", ["a", "7", "\u200cA\u200d", "ہو\u200cگا", "پاکستان\u200c کی عدالت"])
+def test_fa_corpus_004_real_text_still_counts_including_urdu_with_zwnj(text):
+    """Urdu legitimately carries ZWNJ/ZWJ between letters: only text with NOTHING else is rejected,
+    and has_text does not change the text it is given."""
+    before = str(text)
+    assert outcomes.has_text(text) is True
+    assert text == before
