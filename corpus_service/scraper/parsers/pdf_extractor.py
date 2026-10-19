@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from scraper.parsers.pdf_signature import has_pdf_signature, looks_like_html
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -41,7 +43,6 @@ TESSERACT_CONFIG = "--oem 3 --psm 6 -l eng"
 # Some Pakistani judgments contain Urdu citations - try combined if available
 TESSERACT_CONFIG_URDU = "--oem 3 --psm 6 -l eng+urd"
 
-PDF_MAGIC = b"%PDF"
 
 # Regex to clean extraction artifacts
 RE_MSO_JUNK = re.compile(r"mso-[a-z-]+:[^;]+;?", re.I)
@@ -332,17 +333,16 @@ def _validate_pdf_bytes(data: bytes, url: str = "") -> None:
         # Could be error page that got returned as PDF mime
         # Allow but log
         logger.warning("Very small PDF %d bytes from %s, may be error page", len(data), url)
-    if not data[:4].startswith(PDF_MAGIC):
-        # Some servers prepend BOM or whitespace; check first 1024 bytes for %PDF
-        if PDF_MAGIC not in data[:1024]:
-            # But don't hard-fail - site sometimes sends HTML error page with PDF url
-            # Examine if it looks like HTML
-            if data[:5].lower().startswith(b"<!doc") or data[:6].lower().startswith(b"<html"):
-                preview = data[:500].decode("utf-8", errors="ignore")
-                raise PDFDownloadError(
-                    f"URL did not return PDF, got HTML from {url}: {preview[:200]}"
-                )
-            logger.warning("Download from %s missing PDF magic, continuing anyway", url)
+    # FA-corpus-005: one signature rule with the harvesters (scraper.parsers.pdf_signature):
+    # %PDF- anywhere in the first 1024 bytes (servers prepend a BOM or whitespace), never HTML.
+    if not has_pdf_signature(data):
+        # Don't hard-fail - but a site sometimes sends an HTML error page with a PDF url
+        if looks_like_html(data):
+            preview = data[:500].decode("utf-8", errors="ignore")
+            raise PDFDownloadError(
+                f"URL did not return PDF, got HTML from {url}: {preview[:200]}"
+            )
+        logger.warning("Download from %s missing PDF magic, continuing anyway", url)
 
 
 # ---------------------------------------------------------------------------
