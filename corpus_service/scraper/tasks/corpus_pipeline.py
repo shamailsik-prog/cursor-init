@@ -189,25 +189,27 @@ def _claim(model, phase: Phase, seen: List[uuid.UUID]):
 
 
 async def _claim_oldest(db, phase: Phase, seen: Dict[Any, List[uuid.UUID]]):
-    """Oldest row in the phase across case and statute staging (created_at, then id)."""
-    best_model = None
-    best_key: Optional[Tuple[Any, uuid.UUID]] = None
-    for model in MODELS:
+    """Claim the oldest row in the phase across case and statute staging (created_at, then id; R4).
+
+    Each table's oldest candidate is read without a lock to order the tables; the claim itself is
+    ``_claim`` (FOR UPDATE SKIP LOCKED). If a table's claim finds nothing (its rows are locked
+    elsewhere), the next table is tried, so one stuck row cannot stall the tick (R4)."""
+    candidates: List[Tuple[Tuple[Any, uuid.UUID], int]] = []
+    for index, model in enumerate(MODELS):
         candidate = (await db.execute(
             select(model.id, model.created_at)
             .where(model.lifecycle_state == phase.state, *phase.conditions(model), model.id.not_in(seen[model]))
             .order_by(model.created_at, model.id)
             .limit(1)
         )).first()
-        if candidate is None:
-            continue
-        key = (candidate.created_at, candidate.id)
-        if best_key is None or key < best_key:
-            best_key = key
-            best_model = model
-    if best_model is None:
-        return None
-    return (await db.execute(_claim(best_model, phase, seen[best_model]))).scalars().first()
+        if candidate is not None:
+            candidates.append(((candidate.created_at, candidate.id), index))
+    for _key, index in sorted(candidates):
+        model = MODELS[index]
+        row = (await db.execute(_claim(model, phase, seen[model]))).scalars().first()
+        if row is not None:
+            return row
+    return None
 
 
 def _error_code(exc: BaseException) -> str:
