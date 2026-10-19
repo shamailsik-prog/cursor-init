@@ -38,10 +38,17 @@ const reindexJobs = async (firmId: string) => (await rows("jobs", firmId)).filte
 
 type Firm = { firmId: string; token: string; clientId: string; clearedCheckId: string }
 
-const screenConflict = (f: Firm) =>
-  runCheck({ token: f.token, data: { firmId: f.firmId, client: { clientId: f.clientId }, opposingParties: [{ name: CONFLICT }] } } as never)
-const open = (f: Firm) =>
-  openMatter({ token: f.token, data: { firmId: f.firmId, conflictCheckId: f.clearedCheckId, title: "Recovery suit", classification: "confidential" } } as never)
+// `at`: the router's clock for the call (the refusals' on-demand run is keyed per PKT minute; F37 re-audit).
+const screenConflict = (f: Firm, at?: number) =>
+  (at === undefined ? runCheck : viaApi<Check>("runConflictCheck", { now: () => at }))({
+    token: f.token,
+    data: { firmId: f.firmId, client: { clientId: f.clientId }, opposingParties: [{ name: CONFLICT }] },
+  } as never)
+const open = (f: Firm, at?: number) =>
+  (at === undefined ? openMatter : viaApi<{ matterId: string; matterNo: string }>("openMatter", { now: () => at }))({
+    token: f.token,
+    data: { firmId: f.firmId, conflictCheckId: f.clearedCheckId, title: "Recovery suit", classification: "confidential" },
+  } as never)
 
 /**
  * A firm whose current name index holds `layout[n]` in chunk n. The subject client registers through the route; the
@@ -91,8 +98,10 @@ async function runReindexJob(firmId: string): Promise<string> {
 /** The damaged index refuses both screens and writes nothing; the job rebuilds it and both calls then succeed. */
 async function expectRefusedThenHealed(f: Firm): Promise<void> {
   const checksBefore = (await rows("conflict_checks", f.firmId)).length
-  expectKind(await apiErrorOf(screenConflict(f)), "unavailable", "screening_unavailable")
-  expectKind(await apiErrorOf(open(f)), "unavailable", "screening_unavailable")
+  // Both refusals at one clock reading, so they cannot straddle a PKT minute and share the firm's one on-demand run.
+  const at = Date.now()
+  expectKind(await apiErrorOf(screenConflict(f, at)), "unavailable", "screening_unavailable")
+  expectKind(await apiErrorOf(open(f, at)), "unavailable", "screening_unavailable")
   expect(await rows("conflict_checks", f.firmId)).toHaveLength(checksBefore)
   expect(await rows("matters", f.firmId)).toHaveLength(0)
   expect((await adminDb().collection("conflict_checks").doc(f.clearedCheckId).get()).data()).toMatchObject({ boundMatterId: null, stale: false })

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest"
-import { matchingNames } from "../src/d1/conflict/candidates"
+import { concurrencyLimit, IN_LIMIT, inLists, matchingNames } from "../src/d1/conflict/candidates"
 import { NAME_THRESHOLD, nameScore, screen, type Candidate, type Subject } from "../src/d1/conflict/match"
-import { NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
+import { indexedNamesOf, isChunkIdOf, NAME_INDEX_CHUNK_BYTES, NAME_INDEX_MAX_CHUNKS, NAME_INDEX_SCHEMA, nameBytes, nameIndexProblem, placeNames } from "../src/d1/conflict/nameIndex"
+import { chunkWriteVerdict, rowWriteVerdict } from "../src/d1/conflict/registryTriggers"
 import { nameForms, usesFallback } from "../src/d1/conflict/normalise"
-import { registryStateOf, type RegistryState } from "../src/d1/registryVersion"
+import { nameIndexGenOf, nextNameIndexGen, registryStateOf, type RegistryState } from "../src/d1/registryVersion"
 
 /** Audit F37: the pure parts of the name index and the name tier (no emulator). */
 
 const state = (over: Omit<Partial<RegistryState>, "nameIndex"> & { nameIndex?: Partial<RegistryState["nameIndex"]> } = {}): RegistryState => ({
   exists: true,
   version: 7,
+  nameIndexGen: 0,
+  nameIndexEpoch: 0,
   ...over,
   nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: 10, valid: true, ...over.nameIndex },
 })
@@ -137,5 +140,138 @@ describe("the name tier asks the engine's own question", () => {
     const zarvani: Subject[] = [{ role: "opposing", name: "Zarvani", keys: {} }]
     expect(matchingNames(["زروانی"], zarvani, new Map())).toEqual([])
     expect(matchingNames(["زروانی"], zarvani, new Map([["زروانی", ["zarvani"]]]))).toEqual(["زروانی"])
+  })
+})
+
+describe("inLists and the query cap (F37 re-audit FA-D1C-006: M05, INFO)", () => {
+  it("every value lands in exactly one list of at most 30, in order, for 0 to 95 values", () => {
+    for (let n = 0; n <= 95; n++) {
+      const values = Array.from({ length: n }, (_, i) => `v${i}`)
+      const lists = inLists(values)
+      expect(lists.flat()).toEqual(values)
+      expect(lists.every((l) => l.length >= 1 && l.length <= IN_LIMIT)).toBe(true)
+      expect(lists.length).toBe(Math.ceil(n / IN_LIMIT))
+    }
+  })
+
+  it("concurrencyLimit never runs more than its maximum at once and runs every task", async () => {
+    const run = concurrencyLimit(3)
+    let active = 0
+    let peak = 0
+    const done = await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        run(async () => {
+          active += 1
+          peak = Math.max(peak, active)
+          await new Promise((r) => setTimeout(r, 2 + (i % 4)))
+          active -= 1
+          return i
+        })
+      )
+    )
+    expect(done).toEqual(Array.from({ length: 20 }, (_, i) => i))
+    expect(peak).toBe(3)
+  })
+})
+
+describe("indexedNamesOf: every chunk of the firm, none beyond the pointer (F37 re-audit FA-D1C-001)", () => {
+  const firm = "firm-x"
+  const chunk = (n: number, names: string[], over: Record<string, unknown> = {}) => ({ id: `${firm}_${n}`, data: { firmId: firm, chunk: n, names, ...over } })
+  const at = (chunkN: number, bytes: number) => state({ nameIndex: { chunk: chunkN, bytes } })
+
+  it("reads chunks 0..pointer whole", () => {
+    expect([...indexedNamesOf(firm, at(1, 14), [chunk(0, ["Tariq Zarvani"]), chunk(1, ["Haris Qalbani"])])].sort()).toEqual(["Haris Qalbani", "Tariq Zarvani"])
+  })
+
+  it("a chunk of the firm beyond the pointer (a lowered pointer, with or without a gap) is corrupt", () => {
+    expect(() => indexedNamesOf(firm, at(0, 14), [chunk(0, ["Tariq Zarvani"]), chunk(1, ["Haris Qalbani"])])).toThrow(expect.objectContaining({ reason: "corrupt" }))
+    expect(() => indexedNamesOf(firm, at(0, 14), [chunk(0, ["Tariq Zarvani"]), chunk(2, ["Haris Qalbani"])])).toThrow(expect.objectContaining({ reason: "corrupt" }))
+  })
+
+  it("another firm's documents whose ids share the prefix are not this firm's chunks", () => {
+    const other = { id: `${firm}_7_0`, data: { firmId: `${firm}_7`, chunk: 0, names: ["Omer Daryani"] } }
+    expect([...indexedNamesOf(firm, at(0, 14), [chunk(0, ["Tariq Zarvani"]), other])]).toEqual(["Tariq Zarvani"])
+  })
+})
+
+describe("the registry triggers' verdicts (F37 re-audit FA-D1C-002, FA-D1C-004)", () => {
+  const firm = "firm-x"
+  const GEN = 3
+  const stamp = (name: string, firmId = firm, gen = GEN) => ({ nameIndexed: { firmId, name, gen } })
+  const verdict = (collection: string, before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined) =>
+    rowWriteVerdict(collection, before, after, GEN)
+
+  it("a stamped new name is indexed; an unstamped, mis-stamped or other-firm-stamped one is unindexed", () => {
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Zubair Hashmi") })).toBe("unindexed")
+    expect(verdict("clients", undefined, { firmId: firm, canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", "firm-y") })).toBe("unindexed")
+    expect(verdict("matter_parties", undefined, { firmId: firm, role: "opposing", name: "Haris Qalbani", ...stamp("Haris Qalbani") })).toBe("indexed")
+  })
+
+  it("a stamp of another generation, without one, or against an unknown generation is not trusted (a rebuild may have dropped the name)", () => {
+    const row = (nameIndexed: unknown) => ({ firmId: firm, canonicalName: "Haris Qalbani", nameIndexed })
+    expect(verdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN - 1) })).toBe("unindexed")
+    expect(verdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN + 1) })).toBe("unindexed")
+    expect(verdict("clients", undefined, row({ firmId: firm, name: "Haris Qalbani" }))).toBe("unindexed")
+    expect(verdict("clients", undefined, row({ firmId: firm, name: "Haris Qalbani", gen: "3" }))).toBe("unindexed")
+    expect(rowWriteVerdict("clients", undefined, { ...row(undefined), ...stamp("Haris Qalbani") }, null)).toBe("unindexed")
+    // A rename back to the stamped name is judged like any new name: its generation decides.
+    const renamed = { ...row(undefined), ...stamp("Haris Qalbani", firm, GEN - 1), canonicalName: "Zubair Hashmi" }
+    expect(verdict("clients", renamed, { ...renamed, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+  })
+
+  it("the stored generation: absent is 0, a malformed one is unknown and makes the index state invalid", () => {
+    expect(nameIndexGenOf(undefined)).toBe(0)
+    expect(nameIndexGenOf({ version: 7 })).toBe(0)
+    expect(nameIndexGenOf({ nameIndexGen: 4 })).toBe(4)
+    for (const bad of [-1, 1.5, "4", {}]) expect(nameIndexGenOf({ nameIndexGen: bad })).toBeNull()
+    const good = { version: 7, nameIndex: { schema: NAME_INDEX_SCHEMA, version: 7, chunk: 0, bytes: 10 } }
+    expect(registryStateOf(true, { ...good, nameIndexGen: 2 })).toMatchObject({ nameIndexGen: 2, nameIndex: { valid: true } })
+    expect(registryStateOf(true, { ...good, nameIndexGen: "2" })).toMatchObject({ nameIndexGen: 0, nameIndex: { valid: false } })
+    expect(nameIndexProblem(registryStateOf(true, { ...good, nameIndexGen: "2" }))).toBe("corrupt")
+  })
+
+  it("a rename, a role flip to opposing and a move between firms set a new screened name", () => {
+    const zubair = { firmId: firm, canonicalName: "Zubair Hashmi", ...stamp("Zubair Hashmi") }
+    expect(verdict("clients", zubair, { ...zubair, canonicalName: "Haris Qalbani" })).toBe("unindexed")
+    const party = { firmId: firm, role: "client", name: "Haris Qalbani" }
+    expect(verdict("matter_parties", party, { ...party, role: "opposing" })).toBe("unindexed")
+    const elsewhere = { firmId: "firm-y", canonicalName: "Haris Qalbani", ...stamp("Haris Qalbani", "firm-y") }
+    expect(verdict("clients", elsewhere, { ...elsewhere, firmId: firm })).toBe("unindexed")
+  })
+
+  it("an edit that keeps the screened name (even on an unstamped, pre-trigger row), a deletion, and a row the screen cannot hit are unchanged", () => {
+    const legacy = { firmId: firm, role: "opposing", name: "Haris Qalbani", matterStatus: "live" }
+    expect(verdict("matter_parties", legacy, { ...legacy, matterStatus: "closed" })).toBe("unchanged")
+    expect(verdict("clients", { firmId: firm, canonicalName: "Haris Qalbani" }, undefined)).toBe("unchanged")
+    expect(verdict("matter_parties", undefined, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
+    expect(verdict("matter_parties", { firmId: firm, role: "opposing", name: "Haris Qalbani" }, { firmId: firm, role: "client", name: "Haris Qalbani" })).toBe("unchanged")
+    expect(verdict("clients", undefined, { firmId: firm })).toBe("unchanged")
+  })
+
+  it("a chunk that loses a name is names_removed; appends, creates and deletes are ok", () => {
+    const before = { firmId: firm, chunk: 0, names: ["Tariq Zarvani", "Haris Qalbani"] }
+    expect(chunkWriteVerdict(before, { ...before, names: ["Tariq Zarvani"] })).toBe("names_removed")
+    expect(chunkWriteVerdict(before, { ...before, names: [] })).toBe("names_removed")
+    expect(chunkWriteVerdict(before, { ...before, names: "broken" })).toBe("names_removed")
+    expect(chunkWriteVerdict(before, { ...before, names: [...before.names, "Omer Daryani"] })).toBe("ok")
+    expect(chunkWriteVerdict(undefined, before)).toBe("ok")
+    expect(chunkWriteVerdict(before, undefined)).toBe("ok")
+  })
+})
+
+describe("PR #89 review: chunk ids and the absolute generation", () => {
+  it("a chunk id is the firm id, an underscore and a canonical number: a longer firm id's chunk or `_01` is no chunk of the firm", () => {
+    for (const id of ["F_0", "F_1", "F_10", "F_400"]) expect([id, isChunkIdOf("F", id)]).toEqual([id, true])
+    for (const id of ["F_01", "F_00", "F_1_0", "F_", "F_x", "G_1", "F1"]) expect([id, isChunkIdOf("F", id)]).toEqual([id, false])
+  })
+
+  it("the generation a reset or a break writes is above the stored one and above the version (a malformed one reads 0)", () => {
+    expect(nextNameIndexGen(state({ version: 10, nameIndexGen: 3 }))).toBe(11)
+    expect(nextNameIndexGen(state({ version: 10, nameIndexGen: 20 }))).toBe(21)
+    expect(nextNameIndexGen(registryStateOf(true, { version: 7, nameIndexGen: "x" }))).toBe(8)
+    expect(nextNameIndexGen(registryStateOf(true, { version: 7, nameIndexGen: 2.5 }))).toBe(8)
+    expect(nextNameIndexGen(registryStateOf(false, undefined))).toBe(1)
   })
 })

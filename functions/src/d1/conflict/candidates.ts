@@ -1,10 +1,9 @@
 import type { Query, QuerySnapshot } from "firebase-admin/firestore"
 import { adminDb } from "../../admin"
 import { isFirestoreDocId } from "../../p5/common"
-import { readRegistryState } from "../registryVersion"
 import { buildRegistry, firmMapOf, readFirmForFlag, type Registry, type Row } from "./engine"
 import { NAME_THRESHOLD, nameScore, type Keys, type Subject } from "./match"
-import { firmRegistryEmpty, nameIndexProblem, NameIndexUnavailable, readIndexedNames } from "./nameIndex"
+import { indexedNamesOf, nameIndexProblem, NameIndexUnavailable, readNameIndex } from "./nameIndex"
 import { nameForms, usesFallback } from "./normalise"
 
 /**
@@ -36,22 +35,42 @@ export type ScreeningLoad = {
   registry: Registry
   /** The registry version read with the index state, before any registry row (openMatter compares it in its transaction). */
   version: number
-  /** Every name in the index at that version (openMatter adds the opposing names it lacks). */
-  indexedNames: ReadonlySet<string>
 }
 
 const rowsOf = (snap: QuerySnapshot): Row[] => snap.docs.map((d) => ({ id: d.id, data: d.data() }))
 
-function chunked<T>(values: readonly T[]): T[][] {
+/** `values` in consecutive lists of at most IN_LIMIT, every value exactly once and in order (one `in` query each). */
+export function inLists<T>(values: readonly T[]): T[][] {
   const out: T[][] = []
   for (let i = 0; i < values.length; i += IN_LIMIT) out.push(values.slice(i, i + IN_LIMIT))
   return out
 }
 
-/** The rows of `base` whose `field` is one of `values` (one query per 30 values; none when there are no values). */
-async function rowsWhereIn(base: Query, field: string, values: readonly string[]): Promise<Row[]> {
+/** Queries of one screen in flight at once at most (F37 re-audit INFO): the `in` lists fan out at one query per 30 values. */
+export const QUERY_CONCURRENCY = 8
+
+/** A limiter: `run(fn)` starts `fn` once fewer than `max` started functions are still running. */
+export function concurrencyLimit(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
+  let active = 0
+  const waiting: Array<() => void> = []
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    while (active >= max) await new Promise<void>((resolve) => waiting.push(resolve))
+    active += 1
+    try {
+      return await fn()
+    } finally {
+      active -= 1
+      waiting.shift()?.()
+    }
+  }
+}
+
+type Run = <T>(fn: () => Promise<T>) => Promise<T>
+
+/** The rows of `base` whose `field` is one of `values` (one query per 30 values through `run`; none when there are no values). */
+async function rowsWhereIn(run: Run, base: Query, field: string, values: readonly string[]): Promise<Row[]> {
   if (values.length === 0) return []
-  const snaps = await Promise.all(chunked(values).map((vs) => base.where(field, "in", vs).get()))
+  const snaps = await Promise.all(inLists(values).map((vs) => run(() => base.where(field, "in", vs).get())))
   return snaps.flatMap(rowsOf)
 }
 
@@ -91,18 +110,18 @@ export async function loadScreeningRegistry(
   now: Date
 ): Promise<ScreeningLoad> {
   const db = adminDb()
-  const state = await readRegistryState(firmId)
+  const run = concurrencyLimit(QUERY_CONCURRENCY)
+  // The counter, every chunk of the firm and (without a counter doc) the empty-registry probe, in one consistent read.
+  const index = await readNameIndex(firmId, { probeEmpty: true })
+  const state = index.state
   const problem = nameIndexProblem(state)
   // No counter doc: no registry write through functions/src yet. With no candidate row either, the empty index is
   // complete; a row there was written out of band and the index stays missing until reconciled.
-  const empty = problem === "missing" && !state.exists && (await firmRegistryEmpty(firmId))
+  const empty = problem === "missing" && !state.exists && index.registryEmpty === true
   if (problem !== null && !empty) throw new NameIndexUnavailable(problem)
+  const indexedNames = empty ? new Set<string>() : indexedNamesOf(firmId, state, index.chunks)
 
-  const [firm, mapSnap, indexedNames] = await Promise.all([
-    readFirmForFlag(firmId),
-    db.collection("transliteration_map").where("firmId", "==", firmId).get(),
-    empty ? Promise.resolve(new Set<string>()) : readIndexedNames(firmId, state),
-  ])
+  const [firm, mapSnap] = await Promise.all([readFirmForFlag(firmId), db.collection("transliteration_map").where("firmId", "==", firmId).get()])
   const maps = rowsOf(mapSnap)
   const names = matchingNames(indexedNames, subjects, firmMapOf(maps))
 
@@ -115,14 +134,14 @@ export async function loadScreeningRegistry(
 
   const [clientSets, partySets] = await Promise.all([
     Promise.all([
-      rowsWhereIn(clientsQ, "canonicalName", names),
-      rowsWhereIn(clientsQ, "entityId", entities),
-      ...KEY_NAMES.map((k) => rowsWhereIn(clientsQ, CLIENT_KEY_FIELD[k], keyValues(k))),
+      rowsWhereIn(run, clientsQ, "canonicalName", names),
+      rowsWhereIn(run, clientsQ, "entityId", entities),
+      ...KEY_NAMES.map((k) => rowsWhereIn(run, clientsQ, CLIENT_KEY_FIELD[k], keyValues(k))),
     ]),
     Promise.all([
-      rowsWhereIn(partiesQ, "name", names),
-      rowsWhereIn(partiesQ, "entityId", entities),
-      ...KEY_NAMES.map((k) => rowsWhereIn(partiesQ, `keys.${k}`, keyValues(k))),
+      rowsWhereIn(run, partiesQ, "name", names),
+      rowsWhereIn(run, partiesQ, "entityId", entities),
+      ...KEY_NAMES.map((k) => rowsWhereIn(run, partiesQ, `keys.${k}`, keyValues(k))),
     ]),
   ])
   const clients = byIdOrder(clientSets.flat())
@@ -133,10 +152,10 @@ export async function loadScreeningRegistry(
   const entityIds = distinct([...clients, ...parties].map((r) => r.data.entityId))
   const linksQ = db.collection("entity_links").where("firmId", "==", firmId)
   const [clientMatters, partyMatterSnaps, left, right] = await Promise.all([
-    rowsWhereIn(db.collection("matters").where("firmId", "==", firmId), "clientId", clients.map((c) => c.id)),
+    rowsWhereIn(run, db.collection("matters").where("firmId", "==", firmId), "clientId", clients.map((c) => c.id)),
     partyMatterIds.length > 0 ? db.getAll(...partyMatterIds.map((id) => db.collection("matters").doc(id))) : Promise.resolve([]),
-    rowsWhereIn(linksQ, "leftId", entityIds),
-    rowsWhereIn(linksQ, "rightId", entityIds),
+    rowsWhereIn(run, linksQ, "leftId", entityIds),
+    rowsWhereIn(run, linksQ, "rightId", entityIds),
   ])
   const partyMatters: Row[] = []
   for (const s of partyMatterSnaps) {
@@ -148,5 +167,5 @@ export async function loadScreeningRegistry(
     { firm, clients, matters: byIdOrder([...clientMatters, ...partyMatters]), parties, links: byIdOrder([...left, ...right]), maps },
     now
   )
-  return { registry, version: state.version, indexedNames }
+  return { registry, version: state.version }
 }
