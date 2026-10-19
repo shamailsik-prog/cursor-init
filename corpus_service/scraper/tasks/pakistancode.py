@@ -1,7 +1,7 @@
-import asyncio, hashlib, re, logging
+import asyncio, re, logging
 from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
-from scraper.parsers.statute_parser import split_into_sections, detect_statute_name
+from scraper.parsers.statute_parser import split_into_sections, detect_statute_name, _extract_number_title_from_chunk
 from scraper.parsers.text_cleaner import clean_html
 from datetime import datetime, timezone
 from scraper.database import SessionLocal
@@ -75,8 +75,11 @@ async def scrape_pakistancode(source, db):
                         rows += 1
                 else:
                     for sec in sections[:50]:
-                        section_number = hashlib.sha256(sec.encode("utf-8")).hexdigest()[:32]
-                        db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000]))
+                        section_number, section_title, _ = _extract_number_title_from_chunk(sec)
+                        if not section_number:
+                            continue
+                        db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
+                                       section_title=section_title[:500] if section_title else None))
                         rows += 1
                 await db.commit()
                 tally.item_ok(rows)
