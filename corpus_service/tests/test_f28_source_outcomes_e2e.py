@@ -181,7 +181,7 @@ def test_a_b_a_refused_index_request_fails_the_pakistancode_job_once(corpus_db, 
     assert summary["retryable"] is False and summary["will_retry"] is False, summary
     assert "blocked_address" in rows[0].error_message, rows[0].error_message
     assert rows[0].finished_at is not None and rows[0].next_retry_at is None
-    assert count("statutes_master") == 0, "a failed run wrote statutes"
+    assert count("statutes_master") == count("statutes_staging") == 0, "a failed run wrote statutes"  # F21: staged, not master
     src = source_row("PakistanCode")
     assert (src.consecutive_failures, src.last_success_at) == (1, None), src
     assert "FetchRefused" in src.last_failure_reason and src.last_scraped_at is not None, src
@@ -216,7 +216,7 @@ def test_b_e_a_network_failure_is_retried_with_backoff_and_stops_at_the_bound(co
     assert len({r.celery_task_id for r in rows}) == 1, "every attempt belongs to one Celery task"
     for row, wait in zip(rows[:3], BACKOFF):
         assert abs((row.next_retry_at - row.finished_at).total_seconds() - wait) < 5, (row.next_retry_at, row.finished_at)
-    assert count("statutes_master") == 0
+    assert count("statutes_master") == count("statutes_staging") == 0  # audit F21: statutes are staged, not written to master
     assert source_row("PakistanCode").consecutive_failures == 4
 
 
@@ -857,7 +857,7 @@ def test_p1_national_assembly_fails_a_run_of_unreadable_pdfs(corpus_db, monkeypa
     assert result.state == "FAILURE", f"an unreadable NA PDF was recorded as {result.state}"
     rows = jobs("NationalAssembly")
     assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"empty_pdf_text": 1})], rows
-    assert count("statutes_master") == 0
+    assert count("statutes_master") == count("statutes_staging") == 0  # audit F21: statutes are staged, not written to master
     assert source_row("NationalAssembly").consecutive_failures == 1
 
 
@@ -1006,7 +1006,7 @@ def test_copilot_na_checks_the_pdf_signature_before_extraction(corpus_db, monkey
     assert result.state == "FAILURE", f"an empty NA PDF body was recorded as {result.state}"
     rows = jobs("NationalAssembly")
     assert [(r.status, r.result_summary["errors"]) for r in rows] == [("failed", {"not_pdf": 1})], rows
-    assert count("statutes_master") == 0
+    assert count("statutes_master") == count("statutes_staging") == 0  # audit F21: statutes are staged, not written to master
 
 
 def test_copilot_ihc_feed_failures_with_markup_pdfs_found_are_partial_not_failed(corpus_db, monkeypatch):

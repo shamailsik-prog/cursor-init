@@ -21,29 +21,36 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
 (FINAL_2 :252-253). The vocabulary and every decision below live in `scraper/trust.py`; the
 database CHECK and default are built from it. Matching is exact, and anything else fails closed.
 
-| Source trust | `staging` routes (dispatcher) | `direct` routes: PakistanCode, NationalAssembly (dispatcher) | Staged record at promotion |
-|---|---|---|---|
-| `trusted` | run | run (they write `statutes_master` themselves) | promoted if confidence >= 0.5 (or attached, if its citation is already published), else quarantined `low_confidence` |
-| `review` | run | skipped (FINAL_2 :897: a review source's output is always quarantined, and these write no staging row) | quarantined `review_source` |
-| `blocked` | skipped | skipped | quarantined `blocked_source` |
-| any other value, or a missing, deleted or renamed source | skipped | skipped | quarantined `unknown_source` |
+| Source trust | Harvested (dispatcher) | Staged record at the review gate (case law and statutes) |
+|---|---|---|
+| `trusted` | run | approved if confidence >= 0.5 (a case: published into Annex A, or attached if its citation is already published), else quarantined `low_confidence` |
+| `review` | run | quarantined `review_source` |
+| `blocked` | skipped | quarantined `blocked_source` |
+| any other value, or a missing, deleted or renamed source | skipped | quarantined `unknown_source` |
+
+Since audit F21 every route is a `staging` route: PakistanCode and NationalAssembly stage into
+`statutes_staging` instead of writing `statutes_master`, and no source task writes a master table
+(`tests/test_f21_corpus_lifecycle_rules.py` fails on one). The `direct` route kind is kept only so a
+route declared `direct` still fails closed for a source that is not `trusted`.
 
 **Dispatcher routes.** Every entry in `scraper/tasks/dispatcher.py` `ROUTES` declares its kind:
-`staging` (writes `scraper_staging` only; promotion decides later) or `direct` (writes a master table
-itself). Every `direct` route runs only for a `trusted` source. A route with no kind, or any other
-kind, is refused and logged. `tests/test_trust_policy.py` scans all of `scraper/` with Python's AST
-(import aliases resolved) for any reference to `CaseLawMaster` / `StatutesMaster` and any write SQL
-naming `case_law_master` / `statutes_master` (schema-qualified or not); every module it finds must be
-a `direct` route module or on the reviewed allowlist in that test: promotion, the F23 quarantine
-router, embeddings and cross_reference write; main (`/health`) and `scraper/public_corpus.py` (the
-published-only reads behind search and export, audit F24) only read.
+`staging` (writes `scraper_staging` / `statutes_staging` only; the corpus lifecycle decides later) or
+`direct` (would write a master table itself; no route is `direct` since audit F21). A `direct` route
+would run only for a `trusted` source. A route with no kind, or any other kind, is refused and
+logged. `tests/test_trust_policy.py` scans all of `scraper/` with Python's AST (import aliases
+resolved) for any reference to `CaseLawMaster` / `StatutesMaster` and any write SQL naming
+`case_law_master` / `statutes_master` (schema-qualified or not); every module it finds must be on the
+reviewed allowlist in that test: the F23 quarantine router and the F21 retrieval projection
+(`scraper/publication/retrieval.py`) write, embeddings and cross_reference update existing rows;
+main (`/health`), `scraper/public_corpus.py` (the published-only reads behind search and export,
+audit F24) and migration 005 (its backfill) only read.
 
 Every staging row a harvester writes carries its source: `source_id` plus
-`parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`).
-`source_id` is `ON DELETE SET NULL`; the stamped id still names the source after a delete. The six
-court harvesters (SHC, SC, LHC, PHC, BHC, IHC) also write their rows already quarantined
-(`quarantine_reason` `review source`), so promotion never selects them; NasirLawSite rows wait for
-normalisation, which nothing schedules yet (audit F21).
+`parsing_metadata.source_id` and `parsing_metadata.source_name` (`scraper/source_identity.py`), and
+the harvest run that staged it (`job_id`, audit F21). `source_id` is `ON DELETE SET NULL`; the stamped
+id still names the source after a delete. No harvester decides quarantine any more (before F21 the six
+court harvesters labelled their rows `review source` without a review row, so no reviewer ever saw
+them); the review gate of the corpus lifecycle does (section "Corpus lifecycle" below).
 
 Promotion (`scraper/tasks/promotion.py`) decides each normalised record in this order:
 
@@ -345,6 +352,61 @@ drive the real app against Postgres (need `CORPUS_TEST_DATABASE_URL`), with quar
 the real promotion; `tests/test_f23_review_body_guard_e2e.py` starts the API with uvicorn (h11 and
 httptools) and probes the body guard over raw sockets; `tests/test_f23_quarantine_review_rules.py`
 needs no database.
+
+## Corpus lifecycle (audit F21)
+
+Every harvested record (`scraper_staging` for case law, `statutes_staging` for statutes) carries
+`lifecycle_state`, `state_changed_at`, `state_reason` and `published_id`, and every move is logged in
+`corpus_lifecycle_transitions` (from, to, reason, the consumer, the `scraper_jobs` run that made it,
+details). Spec: `docs/superpowers/specs/2026-10-18-f21-corpus-lifecycle-design.md`.
+
+```
+parsed -> normalised -> quarantined | approved -> published -> embedded
+            |                |
+            +-> failed       +-> rejected (an F23 reviewer)        any non-terminal state -> dead_letter
+            +-> duplicate
+```
+
+A harvest stages a record at `parsed` with the run's `job_id` (`discovered` and `downloaded` are in
+the vocabulary for a source that stages before it fetches; none does yet). Four beat entries move it:
+
+| Beat entry | Every | Moves |
+|---|---|---|
+| `normalise-corpus` | 5 min | `parsed` -> `normalised`; `failed` (`empty_text`, `act_name_missing`, `section_number_missing`, `section_number_too_long`, ...); `duplicate` (`duplicate_of:<id>`: same source, URL and content as a record already normalised) |
+| `promote-corpus` | 5 min | the review gate (F20 trust and confidence; for a case also F22's citation check and F19's Annex A publication): `quarantined` with a `quarantine_queue` row, or `approved` |
+| `publish-corpus` | 5 min | F23 decisions: a promoted record -> `approved` -> `published` -> `embedded` (F23 wrote the master and outbox rows), a rejected one -> `rejected`; then `approved` -> `published` (the record is written into `case_law_master` / `statutes_master`, which search and the embedder read) -> `embedded` (one pending `embedding_queue` row; the vector is F27's work) |
+| `reconcile-corpus` | 1 h | the same F23 sync; a `published` record without its outbox row is enqueued; a `quarantined` record with no review row, or one whose published row has gone, -> `dead_letter`; then the report and the stalled-row alerts |
+
+Each tick claims at most 100-200 records, one per transaction (`FOR UPDATE SKIP LOCKED`), so two
+workers never move one record, a record locked elsewhere is skipped, and a worker killed mid-move
+leaves the record where it was for the next tick. A tick that claimed work writes one `scraper_jobs`
+row (`source_site = 'corpus_lifecycle'`, `job_type` `normalise` / `promote` / `publish` /
+`reconcile`); a tick that tried records and moved none is a Celery FAILURE.
+
+**Runbook.**
+- *Where is everything?* `python -m scraper.tasks.reconcile report` prints, per source, per table and
+  per state, the count and the oldest `state_changed_at` of every non-terminal state, and for
+  `embedded` records the count by `embedding_queue` status. The hourly reconcile tick keeps the same
+  report in its `scraper_jobs.result_summary`.
+- *Stalled rows.* The reconcile tick logs `F28 source alert: <source> stalled: <n> <table> rows in
+  <state> for more than <h> h (oldest since <time>)` at ERROR (6 h in a machine state, 7 days in
+  `quarantined`). A machine state that stalls means its consumer is failing: read that tick's
+  `scraper_jobs` row (`error_message`, `result_summary.errors`) and the worker log
+  (`lifecycle.record_failed ... kind=systemic`). A `quarantined` backlog needs reviewers
+  (`GET /quarantine`).
+- *Dead letters.* `state_reason` says why: `source_not_promotable:<reason>` (the source lost its
+  trust between the gate and publication), `published_record_missing`, `quarantined_without_review_row`,
+  `review_resolved_without_evidence` (a review row resolved before F23), `<phase>_error:<SQLSTATE>`.
+  Nothing moves a dead letter on; an operator fixes the cause and stages the document again.
+- *A quarantined statute* can be rejected through `POST /quarantine/{id}/reject`; F23's promote route
+  needs a case record, so a statute cannot be published by a reviewer yet (spec residual R-1).
+- *Deploy.* Migration `migrations/005_corpus_lifecycle.py` adds the columns, CHECKs, claim indexes and
+  job types, and backfills existing records once from their flags (spec R13): a court record that a
+  harvester labelled `quarantined` without a review row goes back to `parsed`, so it is normalised,
+  deduplicated and reaches a reviewer. Expect `stalled` alerts until the legacy backlog has drained.
+
+**Tests.** `tests/test_f21_corpus_lifecycle_e2e.py` drives the real beat entries against Postgres
+(needs `CORPUS_TEST_DATABASE_URL`); `tests/test_f21_corpus_lifecycle_rules.py` needs no database.
 
 ## Embedding queue (audit F27)
 
