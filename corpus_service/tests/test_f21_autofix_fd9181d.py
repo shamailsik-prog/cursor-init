@@ -349,7 +349,7 @@ def _run_tick_while_held(corpus_db, entry, state, timeout=20):
     return out.get("r"), waited
 
 
-def test_bugbot_15216f0_dead_letter_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch):
+def test_bugbot_15216f0_dead_letter_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch, caplog):
     """corpus_pipeline._dead_letter_after_error: a row another session holds is left for the next
     tick, not waited on (R4: one stuck row cannot stall a tick)."""
     prepare(corpus_db)
@@ -366,9 +366,12 @@ def test_bugbot_15216f0_dead_letter_settlement_skips_a_row_locked_elsewhere(corp
     states = dict(admin_fetch(corpus_db, "SELECT id, lifecycle_state FROM statutes_staging"))
     assert states.pop(state["row"]) == "parsed", "a row locked elsewhere was settled"
     assert list(states.values()) == ["normalised"]
+    skipped = [r for r in caplog.records if r.name == "scraper.tasks.corpus_pipeline" and r.getMessage().startswith("lifecycle.dead_letter_skipped")]
+    assert len(skipped) == 1 and str(state["row"]) in skipped[0].getMessage() and skipped[0].levelname == "WARNING", \
+        [r.getMessage() for r in caplog.records]
 
 
-def test_bugbot_15216f0_quarantine_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch):
+def test_bugbot_15216f0_quarantine_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch, caplog):
     """promotion._quarantine_after_error (the gate's settlement): the same rule."""
     prepare(corpus_db)
     install_offline_sources(monkeypatch)
@@ -386,6 +389,9 @@ def test_bugbot_15216f0_quarantine_settlement_skips_a_row_locked_elsewhere(corpu
     rows = dict((i, (s, q)) for i, s, q in admin_fetch(corpus_db, "SELECT id, lifecycle_state, quarantined FROM statutes_staging"))
     assert rows.pop(state["row"]) == ("normalised", False), "a row locked elsewhere was settled"
     assert list(rows.values()) == [("approved", False)]
+    skipped = [r for r in caplog.records if r.name == "scraper.tasks.promotion" and r.getMessage().startswith("promotion.error_quarantine_skipped")]
+    assert len(skipped) == 1 and str(state["row"]) in skipped[0].getMessage() and skipped[0].levelname == "WARNING", \
+        [r.getMessage() for r in caplog.records]
 
 
 def _pc_sections(corpus_db, slug):
@@ -427,3 +433,96 @@ def test_bugbot_c3bee9d_pakistancode_falls_back_when_div_sections_have_no_number
         assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
     got = _pc_sections(corpus_db, "ppc1860")
     assert [n for n, _t in got] == ["Article 5", "Article 6"], got
+
+
+# ---------------------------------------------------------------------------------------------
+# Re-audit round 2 (REAUDIT_PR90_R2.md): FA-F21-006, FA-F21-007, the 15216f0 settlement skip log
+# ---------------------------------------------------------------------------------------------
+def _pc_page_fetcher(divs, act="F21 Mixed Act 2099"):
+    class _PageFetcher(F21Fetcher):
+        async def get(self, url, *args, **kwargs):
+            url = str(url)
+            if url.endswith("/english/statues/details/ppc1860"):
+                body = "".join(f"<div class='section'>{d}</div>" for d in divs)
+                return _Resp(f"<html><h1>{act}</h1>{body}</html>".encode(), url=url)
+            return await super().get(url, *args, **kwargs)
+    return _PageFetcher
+
+
+def _harvest_page(corpus_db, monkeypatch, divs, publish=True):
+    from scraper.net import fetch_policy
+
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    fetcher = _pc_page_fetcher(divs)
+    monkeypatch.setattr(fetch_policy, "fetcher_for", lambda name, *a, **kw: fetcher(name))
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
+        if publish:
+            for _ in range(3):
+                tick()
+
+
+def _pc_master(corpus_db):
+    return dict(admin_fetch(corpus_db, "SELECT section_number, section_text FROM statutes_master WHERE short_name = 'ppc1860'"))
+
+
+MIXED_DIVS = [
+    "Preamble. WHEREAS it is expedient to provide for a synthetic F21 fixture act;",
+    "1. Short title. This Act may be called the F21 Mixed Act 2099 (synthetic).",
+    "2. Definitions. In this Act words are synthetic fixture text.",
+    "Explanation. A synthetic explanation of section 2 for this fixture only.",
+    "Sched.",  # 20 characters or fewer: nothing to stage, and the skip is logged
+    "THE SCHEDULE (see section 2) synthetic offences table of the fixture",
+    "1. Item one of the schedule, a synthetic offence entry of the fixture.",
+]
+
+
+def test_fa_f21_006_numberless_divs_are_staged_under_stable_keys_and_published(corpus_db, monkeypatch, caplog):
+    """A Preamble, an Explanation and a Schedule are legal text: each is staged under a key derived from
+    its heading and position, published, and a div that is still skipped is logged with the count."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="scraper.tasks.pakistancode"):
+        _harvest_page(corpus_db, monkeypatch, MIXED_DIVS)
+    staged = sorted(n for n, _t in _pc_sections(corpus_db, "ppc1860"))
+    assert staged == sorted(["preamble-1", "1", "2", "explanation-1", "schedule-1", "schedule-1-1"]), staged
+    master = _pc_master(corpus_db)
+    assert master["preamble-1"].startswith("Preamble. WHEREAS"), master
+    assert master["explanation-1"].startswith("Explanation. A synthetic"), master
+    assert master["schedule-1"].startswith("THE SCHEDULE"), master
+    assert len(master) == 6, master
+    text = caplog.text
+    assert "pakistancode.div_skipped" in text and "slug=ppc1860" in text and "position=4" in text, text
+    assert "pakistancode.staged slug=ppc1860 numbered=3 numberless=3 skipped=1" in text, text
+
+
+def test_fa_f21_006_numberless_keys_are_stable_across_harvests(corpus_db, monkeypatch):
+    """The same page harvested again gives the same keys (so the copy is a duplicate, not new rows)."""
+    _harvest_page(corpus_db, monkeypatch, MIXED_DIVS, publish=False)
+    first = sorted(n for n, _t in _pc_sections(corpus_db, "ppc1860"))
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
+    assert sorted(n for n, _t in _pc_sections(corpus_db, "ppc1860")) == sorted(first * 2)
+
+
+def test_fa_f21_007_a_repeated_section_number_publishes_two_masters_with_their_own_text(corpus_db, monkeypatch):
+    """Two divs numbered 1 in one act (the auditor's repro: no heading between them) get distinct keys,
+    so both texts are published as separate statutes_master rows, deterministically."""
+    divs = ["1. Short title. This Act may be called the F21 Mixed Act 2099 (synthetic).",
+            "2. Definitions. In this Act words are synthetic fixture text.",
+            "1. Item one of the schedule, a synthetic offence entry of the fixture."]
+    _harvest_page(corpus_db, monkeypatch, divs)
+    master = _pc_master(corpus_db)
+    assert sorted(master) == ["1", "1-2", "2"], master
+    assert master["1"].startswith("1. Short title") and master["1-2"].startswith("1. Item one"), master
+    assert dict(admin_fetch(corpus_db, "SELECT lifecycle_state, count(*) FROM statutes_staging "
+                                       "WHERE source_url LIKE '%/ppc1860' GROUP BY 1")) == {"embedded": 3}
+
+
+def test_fa_f21_007_items_under_a_schedule_heading_do_not_merge_with_the_sections(corpus_db, monkeypatch):
+    """Under a Schedule heading, item 1 is keyed by the heading ("schedule-1-1"), not "1"."""
+    _harvest_page(corpus_db, monkeypatch, MIXED_DIVS)
+    master = _pc_master(corpus_db)
+    assert master["1"].startswith("1. Short title"), master
+    assert master["schedule-1-1"].startswith("1. Item one of the schedule"), master
