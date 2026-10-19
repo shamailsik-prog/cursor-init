@@ -379,7 +379,7 @@ describe.skipIf(!EMULATORS)("F37 recall: the candidate loader's screen equals th
       for (let n = 0; n <= state.nameIndex.chunk; n++) {
         await nameIndexChunkRef(firmId, n).set({ names: FieldValue.arrayRemove(nameHit.matchedName) }, { merge: true })
       }
-      expect((await readIndexedNames(firmId, await readRegistryState(firmId))).has(nameHit.matchedName)).toBe(false)
+      expect((await readIndexedNames(firmId)).names.has(nameHit.matchedName)).toBe(false)
       const indexed = runEngine((await loadScreeningRegistry(firmId, set.subjects, set.entityIds, NOW)).registry, set.subjects, set.entityIds)
       expect(indexed).not.toEqual(oracle)
       const lost = (oracle.hits as Hit[]).filter((h) => !(indexed.hits as Hit[]).some((x) => JSON.stringify(x) === JSON.stringify(h)))

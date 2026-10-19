@@ -18,10 +18,16 @@
  * Audit F37 adds two rules for the conflict name index (`conflict/nameIndex.ts`):
  *
  * - a write to a collection in `PROJECTION_SCOPE` (the index's chunks) is a registry write too: it needs a bump;
- * - a product transaction attempt that creates a `clients` row with a string `canonicalName`, or an opposing
- *   `matter_parties` row with a string `name`, must stage an index-aware bump for that firm (`no_name_index`):
- *   a bump whose `nameIndex` patch carries the chunk pointer, which only `stageRegistryWrite` writes. That is the
- *   writer path that adds the name to the index (or knows it is there already).
+ * - a product write that sets a screened name (F37 re-audit FA-D1C-005) must stage that exact name for that firm in
+ *   the same transaction attempt and stamp the row with it. A screened name is a client's `canonicalName` or an
+ *   opposing party's `name`, with the row's firm; a write sets one when it is a create, a set (merge or not) or an
+ *   update that touches `canonicalName` / `firmId` (clients) or `name` / `role` / `firmId` (parties) and leaves the
+ *   row with a name the screen can hit. A partial write (update, merge set) must carry every one of those fields at
+ *   the top level, or its resulting name is unknown and reported. The attempt must hold an index-aware bump for the
+ *   firm (one whose `nameIndex` patch carries the chunk pointer, which only `stageRegistryWrite` writes) and a chunk
+ *   write of that firm adding the name (`no_name_index` otherwise), and the row's `nameIndexed` must equal
+ *   `{ firmId, name, gen }` with a generation (`no_name_stamp` otherwise; the registry trigger relies on it; the
+ *   generation's value is pinned by the reaudit suite's post-reset control).
  *
  * Every violation not taken by the test (`registryRecorder.take()`) fails it in `afterEach`. Writes
  * from test files are never product writes, so seeding fixtures is unaffected.
@@ -32,9 +38,9 @@
  *   which would wipe its other fields, is therefore treated as exempt; no writer in functions/src does it.
  * - BulkWriter and `recursiveDelete` are not patched; p2.registry-recorder-attribution.emu.test.ts fails
  *   if functions/src uses either.
- * - The read log (`readsDuring`) sees `Query.get`, `DocumentReference.get` and `Firestore.getAll` (F37: the
- *   candidate loader reads the name index chunks and parties' matters with getAll), not transaction reads,
- *   `stream` or `onSnapshot`; a screen read through those would not be noticed.
+ * - The read log (`readsDuring`) sees `Query.get`, `DocumentReference.get`, `Firestore.getAll` and
+ *   `Transaction.get` (F37: the candidate loader reads the counter and the chunks in one read-only transaction,
+ *   and parties' matters with getAll), not `Transaction.getAll`, `stream` or `onSnapshot`.
  * - Violations are attributed by global state, not by test id: a product write that lands after its
  *   test's afterEach (an unawaited write, background work) is reported in whichever test is running
  *   then, or lost if none is.
@@ -47,14 +53,21 @@
 import path from "node:path"
 import { afterEach } from "vitest"
 import { DocumentReference, Firestore, Query, Transaction, WriteBatch, FieldPath } from "firebase-admin/firestore"
+// The pure screened-name helpers only: a setup file must not load the product graph before a test file's vi.mock.
+import { screenedKeyOf, stampOf, type ScreenedKey } from "../../src/d1/conflict/screenedName"
 import { PROJECTION_SCOPE, REGISTRY_SCOPE, type RegistryFieldScope } from "../../src/d1/registryVersion"
 
-export type RegistryViolation = { file: string; line: number; collection: string; reason: "no_bump" | "outside_transaction" | "no_name_index" }
+export type RegistryViolation = { file: string; line: number; collection: string; reason: "no_bump" | "outside_transaction" | "no_name_index" | "no_name_stamp" }
 
 type Site = { file: string; line: number; product: boolean }
 type PendingWrite = { site: Site; collection: string; firmId: string | null }
-/** `named`: product creates of rows whose name a screen can hit (F37); `indexBumps`: firms bumped through stageRegistryWrite. */
-type Attempt = { writes: PendingWrite[]; bumps: Set<string>; named: PendingWrite[]; indexBumps: Set<string> }
+/** A product write that sets a screened name (F37 re-audit FA-D1C-005); `key` is "unknown" when a partial write's resulting name cannot be told. */
+type NamedWrite = { site: Site; collection: string; key: ScreenedKey | "unknown"; stamped: boolean }
+/**
+ * `named`: product writes that set a name a screen can hit (F37); `indexBumps`: firms bumped through stageRegistryWrite;
+ * `staged`: the names each firm's chunk writes add in this attempt.
+ */
+type Attempt = { writes: PendingWrite[]; bumps: Set<string>; named: NamedWrite[]; indexBumps: Set<string>; staged: Map<string, Set<string>> }
 
 type RecorderState = {
   violations: RegistryViolation[]
@@ -158,12 +171,54 @@ function registryWrite(kind: WriteKind, ref: DocumentReference, args: unknown[])
   return inScope(collection, Object.keys(first).map(topSegment)) ? { firmId: firmOf(first) } : undefined
 }
 
-/** A created row whose name the conflict screen can hit (F37): a client with a string canonicalName, an opposing party with a string name. */
-function namesCandidate(ref: DocumentReference, data: unknown): boolean {
-  if (!isPlainObject(data)) return false
-  if (ref.parent.id === "clients") return typeof data.canonicalName === "string"
-  if (ref.parent.id === "matter_parties") return data.role === "opposing" && typeof data.name === "string"
-  return false
+/** The fields a client or party row's screened name depends on (F37): the name, the role, the firm. */
+const SCREENED_FIELDS: Readonly<Record<string, readonly string[]>> = { clients: ["canonicalName", "firmId"], matter_parties: ["name", "role", "firmId"] }
+
+/**
+ * A product write that sets a screened name (F37 re-audit FA-D1C-005): a create, a set (merge or not) or an update of a
+ * client or party row touching a screened field. The resulting name is read from a whole-document write; a partial
+ * write (merge set, update) must carry every screened field at the top level, or its name is "unknown". Null when the
+ * write touches no screened field, or leaves the row without a name the screen can hit.
+ */
+function screenedWrite(kind: "create" | "set" | "update" | "delete", ref: DocumentReference, args: unknown[]): { key: ScreenedKey | "unknown"; stamped: boolean } | null {
+  const fields = SCREENED_FIELDS[ref.parent.id]
+  if (!fields || kind === "delete") return null
+  const data: Record<string, unknown> = {}
+  const deep = new Set<string>()
+  let whole = false
+  if (kind === "update" && !isPlainObject(args[0])) {
+    for (let i = 0; i + 1 < args.length; i += 2) {
+      const top = topSegment(args[i])
+      if (!(args[i] instanceof FieldPath) && top === String(args[i])) data[top] = args[i + 1]
+      else deep.add(top)
+    }
+  } else {
+    const first = args[0]
+    if (!isPlainObject(first)) return null
+    for (const [k, v] of Object.entries(first)) {
+      const top = topSegment(k)
+      if (top === k) data[k] = v
+      else deep.add(top)
+    }
+    const opts = args[1]
+    whole = kind === "create" || (kind === "set" && !(isPlainObject(opts) && (opts.merge === true || Array.isArray(opts.mergeFields))))
+  }
+  if (![...Object.keys(data), ...deep].some((f) => fields.includes(f))) return null
+  if (!whole && (fields.some((f) => !(f in data)) || fields.some((f) => deep.has(f)))) return { key: "unknown", stamped: false }
+  const key = screenedKeyOf(ref.parent.id, data)
+  if (key === null) return null
+  const stamp = stampOf(data)
+  return { key, stamped: stamp !== null && stamp.firmId === key.firmId && stamp.name === key.name }
+}
+
+/** The names a chunk write adds (a plain array or an arrayUnion), with the chunk's firm. */
+function stagedNames(ref: DocumentReference, args: unknown[]): { firmId: string; names: string[] } | null {
+  if (ref.parent.id !== "conflict_name_index") return null
+  const data = args[0]
+  if (!isPlainObject(data) || typeof data.firmId !== "string") return null
+  const raw: unknown = data.names
+  const list: unknown = Array.isArray(raw) ? raw : (raw as { elements?: unknown } | undefined)?.elements
+  return Array.isArray(list) ? { firmId: data.firmId, names: list.filter((x): x is string => typeof x === "string") } : null
 }
 
 /** A registry bump staged by stageRegistryWrite: its `nameIndex` patch carries the chunk pointer. */
@@ -209,12 +264,19 @@ function patchWrites(proto: Record<string, unknown>, via: "transaction" | "batch
                 attempt.bumps.add(bumped)
                 if (isIndexBump(args[0])) attempt.indexBumps.add(bumped)
               }
+              const staged = kind === "set" ? stagedNames(ref, args) : null
+              if (staged) {
+                const set = attempt.staged.get(staged.firmId) ?? new Set<string>()
+                for (const n of staged.names) set.add(n)
+                attempt.staged.set(staged.firmId, set)
+              }
               const w = registryWrite(kind, ref, args)
               if (w) {
                 const site = siteOf()
                 if (site.product) {
                   attempt.writes.push({ site, collection: ref.parent.id, firmId: w.firmId })
-                  if (kind === "create" && namesCandidate(ref, args[0])) attempt.named.push({ site, collection: ref.parent.id, firmId: w.firmId })
+                  const named = screenedWrite(kind, ref, args)
+                  if (named) attempt.named.push({ site, collection: ref.parent.id, ...named })
                 }
               }
             }
@@ -238,8 +300,10 @@ function checkAttempt(attempt: Attempt): void {
     if (!ok) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_bump" })
   }
   for (const w of attempt.named) {
-    const ok = w.firmId === null ? attempt.indexBumps.size > 0 : attempt.indexBumps.has(w.firmId)
-    if (!ok) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_name_index" })
+    // The name must be staged for its firm in this attempt (with the index-aware bump), and the row stamped with it.
+    const indexed = w.key !== "unknown" && attempt.indexBumps.has(w.key.firmId) && (attempt.staged.get(w.key.firmId)?.has(w.key.name) ?? false)
+    if (!indexed) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_name_index" })
+    else if (!w.stamped) pushViolation({ file: w.site.file, line: w.site.line, collection: w.collection, reason: "no_name_stamp" })
   }
 }
 
@@ -260,7 +324,7 @@ function install(): void {
     if (typeof updateFunction !== "function") return runTransaction.call(this, updateFunction, ...rest)
     const wrapped = async (tx: Transaction) => {
       // A fresh record per attempt: the SDK re-runs the update function on the same Transaction.
-      const attempt: Attempt = { writes: [], bumps: new Set(), named: [], indexBumps: new Set() }
+      const attempt: Attempt = { writes: [], bumps: new Set(), named: [], indexBumps: new Set(), staged: new Map() }
       state.attempts.set(tx, attempt)
       const result = await (updateFunction as (t: Transaction) => unknown)(tx)
       checkAttempt(attempt)
@@ -281,6 +345,18 @@ function install(): void {
   refProto.get = function patchedRefGet(this: unknown, ...args: unknown[]) {
     noteRead((this as DocumentReference).parent.id)
     return refGet.apply(this, args)
+  }
+  // Transaction reads too (F37 re-audit: the screen reads the counter and the chunks in one read-only transaction).
+  const txProto = Transaction.prototype as unknown as { get: Method }
+  const txGet = txProto.get
+  txProto.get = function patchedTxGet(this: unknown, ...args: unknown[]) {
+    const target = args[0]
+    if (target instanceof DocumentReference) noteRead(target.parent.id)
+    else {
+      const id = (target as { _queryOptions?: { collectionId?: string } } | undefined)?._queryOptions?.collectionId
+      if (typeof id === "string") noteRead(id)
+    }
+    return txGet.apply(this, args)
   }
   const fsGetAll = fsProto as unknown as { getAll: Method }
   const getAll = fsGetAll.getAll
@@ -319,7 +395,11 @@ afterEach(() => {
   const left = registryRecorder.take()
   if (left.length > 0) {
     const what = (v: RegistryViolation) =>
-      v.reason === "no_name_index" ? "registry name without the conflict name index (stageRegistryWrite)" : "registry write without bumpRegistryVersion"
+      v.reason === "no_name_index"
+        ? "registry name without the conflict name index (stageRegistryWrite of that name)"
+        : v.reason === "no_name_stamp"
+          ? "registry name staged but the row not stamped (nameIndexed)"
+          : "registry write without bumpRegistryVersion"
     throw new Error(left.map((v) => `${what(v)}: ${v.file}:${v.line} (${v.collection})`).join("\n"))
   }
 })

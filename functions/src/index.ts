@@ -14,6 +14,9 @@ export { onJobCreated, onEventCreated, jobWorker, jobSweeper } from "./p2/functi
 export { d1AutoConfirmTick } from "./p2/functions"
 // Audit F37: the daily conflict name index reconciliation tick, 02:35 Asia/Karachi, one run per firm per day on the P2 engine.
 export { d1ConflictReindexTick } from "./p2/functions"
+// Audit F37 re-audit: the triggers that break the conflict name index when a client, an opposing party or a chunk is
+// written outside functions/src, so screens refuse until the index is rebuilt (d1/conflict/registryTriggers.ts).
+export { d1ConflictClientWritten, d1ConflictPartyWritten, d1ConflictIndexChunkWritten } from "./d1/conflict/registryTriggers"
 // Audit F07, F08: the P1 lease reconciler, every minute; settles or releases AI spend reservations whose lease lapsed.
 export { p1ReservationReconciler } from "./p1/reconciler"
 // Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
