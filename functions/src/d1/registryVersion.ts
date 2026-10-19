@@ -77,8 +77,13 @@ export const PROJECTION_SCOPE: Readonly<Record<string, RegistryFieldScope>> = Ob
  */
 export type NameIndexState = { schema: number | null; version: number | null; chunk: number; bytes: number; valid: boolean }
 
-/** The counter doc as one consistent read: whether it exists, the registry version and the name index state. */
-export type RegistryState = { exists: boolean; version: number; nameIndex: NameIndexState }
+/**
+ * The counter doc as one consistent read: whether it exists, the registry version, the name index state and the name
+ * index generation (`nameIndexGen`, 0 when absent; F37 re-audit). The generation moves whenever the index may have lost
+ * a name: its reset (`bumpResettingNameIndex`) and every break by a registry trigger. A row's `nameIndexed` stamp
+ * records the generation its name was staged in; a stamp of an older generation is not trusted.
+ */
+export type RegistryState = { exists: boolean; version: number; nameIndex: NameIndexState; nameIndexGen: number; nameIndexEpoch: number }
 
 const versionOf = (data: DocumentData | undefined): number => (typeof data?.version === "number" ? data.version : 0)
 
@@ -117,9 +122,47 @@ function nameIndexOf(raw: unknown): NameIndexState {
   return { schema: null, version: r.version, chunk: 0, bytes: 0, valid: true }
 }
 
-/** The counter doc's state from its data (pure; `exists` is whether the doc exists). */
+/** The name index generation of the counter's data: 0 when absent, null when malformed (then nothing is trusted). */
+export function nameIndexGenOf(data: DocumentData | undefined): number | null {
+  const gen: unknown = data?.nameIndexGen
+  if (absent(gen)) return 0
+  return isCount(gen) ? gen : null
+}
+
+/**
+ * The generation a reset or a break writes (absolute, PR #89 review, Bugbot 4307596177): above the current one and
+ * above the registry version. Every generation ever written was at most the version of its write (both move together
+ * in every reset and break), so this value exceeds every generation a stamp can carry, even when the stored one was
+ * malformed (read as 0) and had to be replaced. `state.nameIndexGen + 1` alone would write 1 over a malformed value,
+ * which can equal an older stamp's generation and so trust a name a reset dropped.
+ */
+export function nextNameIndexGen(state: RegistryState): number {
+  const version = Number.isFinite(state.version) && state.version > 0 ? Math.floor(state.version) : 0
+  return Math.max(state.nameIndexGen, version) + 1
+}
+
+/**
+ * The counter's confirmation count (`nameIndexEpoch`, PR #89 review, Codex 4307586920): every reconciliation run that
+ * confirms the index current (marking it, or finding it current) moves it, absolutely, in that transaction. The
+ * on-demand reindex run is keyed by it, so a break after a run's confirmation always gets a run of its own. Job
+ * bookkeeping only: absent or malformed reads 0 and never makes the index unusable.
+ */
+const epochOf = (data: DocumentData | undefined): number => (isCount(data?.nameIndexEpoch) ? (data?.nameIndexEpoch as number) : 0)
+
+/**
+ * The counter doc's state from its data (pure; `exists` is whether the doc exists). A malformed generation makes the
+ * index state invalid (the screen refuses it as corrupt, and the reset that rebuilds the index rewrites it).
+ */
 export function registryStateOf(exists: boolean, data: DocumentData | undefined): RegistryState {
-  return { exists, version: versionOf(data), nameIndex: nameIndexOf(data?.nameIndex) }
+  const gen = nameIndexGenOf(data)
+  const nameIndex = nameIndexOf(data?.nameIndex)
+  return {
+    exists,
+    version: versionOf(data),
+    nameIndex: gen === null ? { ...nameIndex, valid: false } : nameIndex,
+    nameIndexGen: gen ?? 0,
+    nameIndexEpoch: epochOf(data),
+  }
 }
 
 /** The current version (0 before the first registry write), read outside any transaction. */
@@ -147,15 +190,26 @@ export async function readRegistryStateTx(tx: Transaction, firmId: string): Prom
 /** Name index fields a writer sets with its bump (absolute values; `version` replaces the mirror increment). */
 export type NameIndexPatch = { schema?: number; version?: number; chunk?: number; bytes?: number }
 
+/** Counter fields outside `nameIndex` a writer sets with its bump (the reconciliation's confirmation count). */
+export type CounterPatch = { nameIndexEpoch?: number }
+
 /**
  * Stages the version bump in the caller's transaction (no read). The name index mirror (`nameIndex.version`)
  * moves with it (F37), so the index reads current exactly while every registry write goes through here;
- * `nameIndex` sets other index fields in the same write (`conflict/nameIndex.ts` stageRegistryWrite).
+ * `nameIndex` sets other index fields in the same write (`conflict/nameIndex.ts` stageRegistryWrite), and `counter`
+ * other counter fields (one write to the doc per transaction).
  */
-export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: NameIndexPatch = {}): void {
+export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: NameIndexPatch = {}, counter: CounterPatch = {}): void {
   tx.set(
     registryVersionRef(firmId),
-    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: FieldValue.increment(1), ...nameIndex } },
+    {
+      firmId,
+      kind: "registry",
+      version: FieldValue.increment(1),
+      classification: "internal",
+      ...counter,
+      nameIndex: { version: FieldValue.increment(1), ...nameIndex },
+    },
     { merge: true }
   )
 }
@@ -163,12 +217,21 @@ export function bumpRegistryVersion(tx: Transaction, firmId: string, nameIndex: 
 /**
  * The bump that resets the name index state (the reconciliation rebuilding a damaged index, F37): the whole
  * `nameIndex` map is replaced by an unplaced, schema-less one (it reads `missing` until the rebuild marks it) with
- * its mirror at the new version. `version` is the registry version read in `tx`.
+ * its mirror at the new version, and the generation moves (the reset drops every name, so no earlier stamp holds).
+ * `version` is the registry version read in `tx`; `nameIndexGen` is the absolute generation to write
+ * (`nextNameIndexGen` of the state read in `tx`), so a malformed stored value is replaced, never incremented.
  */
-export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number): void {
+export function bumpResettingNameIndex(tx: Transaction, firmId: string, version: number, nameIndexGen: number): void {
   tx.set(
     registryVersionRef(firmId),
-    { firmId, kind: "registry", version: FieldValue.increment(1), classification: "internal", nameIndex: { version: version + 1, chunk: 0, bytes: 0 } },
-    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex"] }
+    {
+      firmId,
+      kind: "registry",
+      version: FieldValue.increment(1),
+      classification: "internal",
+      nameIndex: { version: version + 1, chunk: 0, bytes: 0 },
+      nameIndexGen,
+    },
+    { mergeFields: ["firmId", "kind", "version", "classification", "nameIndex", "nameIndexGen"] }
   )
 }

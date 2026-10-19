@@ -284,6 +284,7 @@ resumes idempotently and returns the same `firmId` (audited as
   gcloud firestore fields ttls update expiresAt --collection-group=idempotency_keys --enable-ttl
   gcloud firestore fields ttls update expiresAt --collection-group=idempotency_effects --enable-ttl
   gcloud firestore fields ttls update expiresAt --collection-group=rate_limits --enable-ttl
+  gcloud firestore fields ttls update expiresAt --collection-group=conflict_index_breaks --enable-ttl
   ```
 
 - **Deploy note, proxies:** set `TRUSTED_PROXY_HOPS` when `api` is served
