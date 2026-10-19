@@ -65,21 +65,20 @@ async def scrape_pakistancode(source, db):
                     if len(txt)>20:
                         sections.append(txt)
                 rows = 0
-                if not sections:
-                    # fallback parse paragraphs starting digit
+                for sec in sections[:50]:
+                    section_number, section_title, _ = _extract_number_title_from_chunk(sec)
+                    if not section_number:
+                        continue
+                    db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
+                                   section_title=section_title[:500] if section_title else None))
+                    rows += 1
+                if not rows:
+                    # fallback when no div.section rows or none had extractable numbers (e.g. Article N)
                     full_text = clean_html(rr.text)
                     parsed = split_into_sections(full_text, act_name)
                     for p in parsed:
                         db.add(_staged(source, url, act_name, slug[:10], p["section_number"], p["section_text"][:20000],
                                        section_title=p["section_title"][:500]))
-                        rows += 1
-                else:
-                    for sec in sections[:50]:
-                        section_number, section_title, _ = _extract_number_title_from_chunk(sec)
-                        if not section_number:
-                            continue
-                        db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
-                                       section_title=section_title[:500] if section_title else None))
                         rows += 1
                 await db.commit()
                 tally.item_ok(rows)
