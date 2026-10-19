@@ -478,19 +478,29 @@ MIXED_DIVS = [
 ]
 
 
+def _sha8(text):
+    import hashlib
+
+    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:8]
+
+
 def test_fa_f21_006_numberless_divs_are_staged_under_stable_keys_and_published(corpus_db, monkeypatch, caplog):
     """A Preamble, an Explanation and a Schedule are legal text: each is staged under a key derived from
-    its heading and position, published, and a div that is still skipped is logged with the count."""
+    its heading word and its own text (FA-F21-008), published, and a div that is still skipped is logged
+    with the count."""
     import logging
 
     with caplog.at_level(logging.INFO, logger="scraper.tasks.pakistancode"):
         _harvest_page(corpus_db, monkeypatch, MIXED_DIVS)
+    preamble, one, _two, explanation, _short, schedule, item = MIXED_DIVS
+    keys = {"preamble": f"preamble-{_sha8(preamble)}", "explanation": f"explanation-{_sha8(explanation)}",
+            "schedule": f"schedule-{_sha8(schedule)}", "one": f"1-{_sha8(one)}", "item": f"1-{_sha8(item)}"}
     staged = sorted(n for n, _t in _pc_sections(corpus_db, "ppc1860"))
-    assert staged == sorted(["preamble-1", "1", "2", "explanation-1", "schedule-1", "schedule-1-1"]), staged
+    assert staged == sorted([*keys.values(), "2"]), staged
     master = _pc_master(corpus_db)
-    assert master["preamble-1"].startswith("Preamble. WHEREAS"), master
-    assert master["explanation-1"].startswith("Explanation. A synthetic"), master
-    assert master["schedule-1"].startswith("THE SCHEDULE"), master
+    assert master[keys["preamble"]].startswith("Preamble. WHEREAS"), master
+    assert master[keys["explanation"]].startswith("Explanation. A synthetic"), master
+    assert master[keys["schedule"]].startswith("THE SCHEDULE"), master
     assert len(master) == 6, master
     text = caplog.text
     assert "pakistancode.div_skipped" in text and "slug=ppc1860" in text and "position=4" in text, text
@@ -506,23 +516,117 @@ def test_fa_f21_006_numberless_keys_are_stable_across_harvests(corpus_db, monkey
     assert sorted(n for n, _t in _pc_sections(corpus_db, "ppc1860")) == sorted(first * 2)
 
 
-def test_fa_f21_007_a_repeated_section_number_publishes_two_masters_with_their_own_text(corpus_db, monkeypatch):
-    """Two divs numbered 1 in one act (the auditor's repro: no heading between them) get distinct keys,
-    so both texts are published as separate statutes_master rows, deterministically."""
-    divs = ["1. Short title. This Act may be called the F21 Mixed Act 2099 (synthetic).",
+DUP_DIVS = ["1. Short title. This Act may be called the F21 Mixed Act 2099 (synthetic).",
             "2. Definitions. In this Act words are synthetic fixture text.",
             "1. Item one of the schedule, a synthetic offence entry of the fixture."]
-    _harvest_page(corpus_db, monkeypatch, divs)
+
+
+def test_fa_f21_007_a_repeated_section_number_publishes_two_masters_with_their_own_text(corpus_db, monkeypatch):
+    """Two divs numbered 1 in one act get distinct keys, so both texts are published as separate
+    statutes_master rows. EVERY occurrence of a repeated number is keyed by its own text (FA-F21-008);
+    a number that appears once stays plain."""
+    _harvest_page(corpus_db, monkeypatch, DUP_DIVS)
     master = _pc_master(corpus_db)
-    assert sorted(master) == ["1", "1-2", "2"], master
-    assert master["1"].startswith("1. Short title") and master["1-2"].startswith("1. Item one"), master
+    first, second = f"1-{_sha8(DUP_DIVS[0])}", f"1-{_sha8(DUP_DIVS[2])}"
+    assert sorted(master) == sorted([first, second, "2"]), master
+    assert master[first].startswith("1. Short title") and master[second].startswith("1. Item one"), master
     assert dict(admin_fetch(corpus_db, "SELECT lifecycle_state, count(*) FROM statutes_staging "
                                        "WHERE source_url LIKE '%/ppc1860' GROUP BY 1")) == {"embedded": 3}
 
 
-def test_fa_f21_007_items_under_a_schedule_heading_do_not_merge_with_the_sections(corpus_db, monkeypatch):
-    """Under a Schedule heading, item 1 is keyed by the heading ("schedule-1-1"), not "1"."""
-    _harvest_page(corpus_db, monkeypatch, MIXED_DIVS)
-    master = _pc_master(corpus_db)
-    assert master["1"].startswith("1. Short title"), master
-    assert master["schedule-1-1"].startswith("1. Item one of the schedule"), master
+# FA-F21-008/009: keys are anchored on content, never on position or on a preceding heading.
+PROBE_P = "Preamble. Whereas it is expedient to provide synthetic text."
+PROBE_X1 = "Explanation. The first explanation of the synthetic fixture."
+PROBE_X2 = "Explanation. The second explanation of the synthetic fixture."
+PROBE_XN = "Explanation. A NEWLY INSERTED explanation of the fixture text."
+PROBE_SCH = "THE FIRST SCHEDULE of synthetic offences in this fixture act"
+
+
+def _probe_s(n, w):
+    return f"{n}. {w} synthetic auditor section text body here."
+
+
+PROBE_BASE = [PROBE_P, _probe_s(1, "Short"), PROBE_X1, _probe_s(2, "Defs"), PROBE_X2, PROBE_SCH,
+              _probe_s(1, "Item"), _probe_s(2, "Item")]
+PROBE_CHANGES = {
+    "inserted explanation": [PROBE_P, PROBE_XN, *PROBE_BASE[1:]],
+    "inserted schedule": [*PROBE_BASE[:5], "SCHEDULE NEW synthetic inserted schedule heading",
+                          _probe_s(1, "NewItem"), *PROBE_BASE[5:]],
+    "reordered divs": [PROBE_BASE[i] for i in (0, 3, 1, 4, 2, 5, 7, 6)],
+}
+
+
+def _key_map(divs):
+    import re
+
+    from bs4 import BeautifulSoup
+
+    from scraper.tasks.pakistancode import _keyed_sections
+
+    soup = BeautifulSoup("".join(f"<div class='section'>{d}</div>" for d in divs), "html.parser")
+    return {text: key for key, text, _title, _n in _keyed_sections("ppc1860", soup.find_all("div", class_=re.compile("section")))}
+
+
+@pytest.mark.parametrize("change", sorted(PROBE_CHANGES))
+def test_fa_f21_008_keyprobe_a_page_change_never_changes_another_divs_key(change):
+    """The auditor's keyprobe (logs/pr90r3/keyprobe.py) as assertions: every div of the base page keeps
+    its key when a div is inserted or the divs are reordered; keys are unique on each page."""
+    base, changed = _key_map(PROBE_BASE), _key_map(PROBE_CHANGES[change])
+    moved = {text[:30]: (key, changed.get(text)) for text, key in base.items() if changed.get(text) != key}
+    assert not moved, moved
+    assert len(set(changed.values())) == len(changed), changed
+
+
+def test_fa_f21_009_a_numberless_body_sentence_never_renames_later_sections():
+    """A "Table of ..." or "The form of ..." sentence, or a PART heading, does not re-key real sections."""
+    keys = _key_map([_probe_s(1, "Short"), "Table of synthetic rates referred to in section one.",
+                     _probe_s(2, "Defs"), "The form of the oath shall be as follows in this act.",
+                     "PART II synthetic other part heading", _probe_s(3, "Third")])
+    assert sorted(k for k in keys.values() if k[0].isdigit()) == ["1", "2", "3"], keys
+
+
+@pytest.mark.parametrize("change", sorted(PROBE_CHANGES))
+def test_fa_f21_008_reharvest_publishes_every_new_text_once_and_nothing_twice(corpus_db, monkeypatch, change):
+    """Publish the base page, re-harvest it changed: no text is published twice and every text on
+    the changed page is published."""
+    divs = list(PROBE_BASE)
+    _harvest_page(corpus_db, monkeypatch, divs)
+    divs[:] = PROBE_CHANGES[change]
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
+        for _ in range(3):
+            tick()
+    texts = [t for (t,) in admin_fetch(corpus_db, "SELECT section_text FROM statutes_master WHERE short_name = 'ppc1860'")]
+    twice = sorted(t[:30] for t in set(texts) if texts.count(t) > 1)
+    assert not twice, f"published twice: {twice}"
+    missing = sorted(d[:30] for d in divs if d not in texts)
+    assert not missing, f"never published: {missing}"
+
+
+def test_fa_f21_010_a_short_schedule_heading_is_staged():
+    """"THE FIRST SCHEDULE" (18 characters) is a heading: it is checked before the short-div skip."""
+    keys = _key_map([_probe_s(1, "Short"), "THE FIRST SCHEDULE", _probe_s(2, "Item")])
+    assert keys["THE FIRST SCHEDULE"] == f"schedule-{_sha8('THE FIRST SCHEDULE')}", keys
+
+
+def test_fa_f21_011_the_short_div_boundary_is_20_characters(caplog):
+    """A non-heading numberless div of exactly 20 characters is skipped (and logged); 21 is staged."""
+    import logging
+
+    twenty, twenty_one = "Lorem ipsum dolor si", "Lorem ipsum dolor sit"
+    assert (len(twenty), len(twenty_one)) == (20, 21)
+    with caplog.at_level(logging.WARNING, logger="scraper.tasks.pakistancode"):
+        keys = _key_map([_probe_s(1, "Short"), twenty, twenty_one])
+    assert twenty not in keys and keys[twenty_one] == f"lorem-{_sha8(twenty_one)}", keys
+    assert "reason=too_short chars=20" in caplog.text, caplog.text
+
+
+def test_fa_f21_011_skipped_divs_do_not_count_toward_the_50_div_cap(caplog):
+    """Short divs that are skipped leave room for 50 staged divs; the 51st staged div is over the cap."""
+    import logging
+
+    divs = ["x" * 5] * 7 + [_probe_s(i, f"Sec{i}") for i in range(1, 52)]
+    with caplog.at_level(logging.WARNING, logger="scraper.tasks.pakistancode"):
+        keys = _key_map(divs)
+    assert sorted(keys.values(), key=int) == [str(i) for i in range(1, 51)], keys
+    assert caplog.text.count("reason=over_cap") == 1 and caplog.text.count("reason=too_short") == 7, caplog.text
