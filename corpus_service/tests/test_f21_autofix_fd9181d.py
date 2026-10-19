@@ -280,3 +280,150 @@ def test_fa_f21_003_dedup_original_state_matrix(corpus_db, monkeypatch, state):
     copy = admin_fetch(corpus_db, "SELECT lifecycle_state, state_reason FROM statutes_staging WHERE id <> :d", d=orig)
     expected = [("duplicate", f"duplicate_of:{orig}")] if ORIGINAL_STATES[state] else [("normalised", None)]
     assert copy == expected, f"original in {state!r}: copy ended {copy}"
+
+
+# ---------------------------------------------------------------------------------------------
+# Bugbot Autofix commits 15216f0, 8323de9, c3bee9d (Monitor, 2026-10-19)
+# ---------------------------------------------------------------------------------------------
+class _RecordSpecificError(Exception):
+    """A database error about the record itself (SQLSTATE class 23), as promotion classifies it."""
+
+    sqlstate = "23514"
+
+
+def _fail_once_while_another_session_queues_for_the_row(monkeypatch, module_name, func_name, table):
+    """The step for the first claimed row raises a record-specific error after another session has
+    queued a FOR UPDATE on that row; when the claim's transaction rolls back that session holds the
+    row, so the error settlement finds it locked elsewhere."""
+    import importlib
+    import time
+
+    module = importlib.import_module(module_name)
+    real = getattr(module, func_name)
+    state = {"held": threading.Event(), "release": threading.Event(), "row": None, "thread": None}
+
+    async def holder(rid):
+        from sqlalchemy import text
+
+        engine = holder.db.engine_for(holder.db.url)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"SELECT 1 FROM {table} WHERE id = :i FOR UPDATE"), {"i": rid})
+                state["held"].set()
+                deadline = time.monotonic() + 90
+                while not state["release"].is_set() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
+        finally:
+            await engine.dispose()
+
+    async def failing_step(db, row, *, job_id=None):
+        if state["row"] is None:
+            state["row"] = row.id
+            state["thread"] = threading.Thread(target=lambda: asyncio.run(holder(row.id)))
+            state["thread"].start()
+            # wait until the other session's FOR UPDATE is queued behind this claim
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                waiting = await asyncio.to_thread(
+                    admin_fetch, holder.db, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+                if waiting[0][0]:
+                    break
+                await asyncio.sleep(0.05)
+            raise _RecordSpecificError("synthetic F21 record-specific fault")
+        return await real(db, row, job_id=job_id)
+
+    monkeypatch.setattr(module, func_name, failing_step)
+    return state, holder
+
+
+def _run_tick_while_held(corpus_db, entry, state, timeout=20):
+    out = {}
+    worker = threading.Thread(target=lambda: out.setdefault("r", fire(entry)))
+    worker.start()
+    worker.join(timeout)
+    waited = worker.is_alive()
+    state["release"].set()
+    worker.join(120)
+    if state["thread"] is not None:
+        state["thread"].join(30)
+    return out.get("r"), waited
+
+
+def test_bugbot_15216f0_dead_letter_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch):
+    """corpus_pipeline._dead_letter_after_error: a row another session holds is left for the next
+    tick, not waited on (R4: one stuck row cannot stall a tick)."""
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    _stage_statutes(corpus_db, 2)
+    state, holder = _fail_once_while_another_session_queues_for_the_row(
+        monkeypatch, "scraper.tasks.normalise", "normalise", "statutes_staging")
+    holder.db = corpus_db
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        result, waited = _run_tick_while_held(corpus_db, "normalise-corpus", state)
+    assert state["held"].is_set(), "the other session never held the row"
+    assert not waited, "the dead-letter settlement waited on a row locked elsewhere"
+    assert result.state == "SUCCESS" and result.result["failed"] == 1, result.result
+    states = dict(admin_fetch(corpus_db, "SELECT id, lifecycle_state FROM statutes_staging"))
+    assert states.pop(state["row"]) == "parsed", "a row locked elsewhere was settled"
+    assert list(states.values()) == ["normalised"]
+
+
+def test_bugbot_15216f0_quarantine_settlement_skips_a_row_locked_elsewhere(corpus_db, monkeypatch):
+    """promotion._quarantine_after_error (the gate's settlement): the same rule."""
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    _stage_statutes(corpus_db, 2)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        fire("normalise-corpus")
+    state, holder = _fail_once_while_another_session_queues_for_the_row(
+        monkeypatch, "scraper.tasks.promotion", "gate", "statutes_staging")
+    holder.db = corpus_db
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        result, waited = _run_tick_while_held(corpus_db, "promote-corpus", state)
+    assert state["held"].is_set(), "the other session never held the row"
+    assert not waited, "the quarantine settlement waited on a row locked elsewhere"
+    assert result.state == "SUCCESS" and result.result["failed"] == 1, result.result
+    rows = dict((i, (s, q)) for i, s, q in admin_fetch(corpus_db, "SELECT id, lifecycle_state, quarantined FROM statutes_staging"))
+    assert rows.pop(state["row"]) == ("normalised", False), "a row locked elsewhere was settled"
+    assert list(rows.values()) == [("approved", False)]
+
+
+def _pc_sections(corpus_db, slug):
+    return sorted(admin_fetch(corpus_db, "SELECT extracted_section_number, extracted_section_title FROM statutes_staging "
+                                         "WHERE source_url LIKE :u", u=f"%/{slug}"))
+
+
+def test_bugbot_8323de9_pakistancode_stages_parsed_section_numbers(corpus_db, monkeypatch):
+    """PakistanCode div sections are staged under their parsed number and title, not the first 20
+    characters of their text (which is not a section number and merges sections sharing a prefix)."""
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
+    got = _pc_sections(corpus_db, "ppc1860")
+    assert [n for n, _t in got] == ["1", "2"], got
+    assert all(t and t.startswith(("Short title", "Definitions")) for _n, t in got), got
+
+
+class ArticleActFetcher(F21Fetcher):
+    async def get(self, url, *args, **kwargs):
+        url = str(url)
+        if url.endswith("/english/statues/details/ppc1860"):
+            page = ("<html><h1>F21 Article Act 2099</h1>"
+                    "<div class='section'>Article 5 Rights. Every person has synthetic fixture rights.</div>"
+                    "<div class='section'>Article 6 Duties. Every person has synthetic fixture duties.</div></html>")
+            return _Resp(page.encode(), url=url)
+        return await super().get(url, *args, **kwargs)
+
+
+def test_bugbot_c3bee9d_pakistancode_falls_back_when_div_sections_have_no_number(corpus_db, monkeypatch):
+    """When no div section yields a number (an Article-numbered act), the full-text parser is used."""
+    from scraper.net import fetch_policy
+
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    monkeypatch.setattr(fetch_policy, "fetcher_for", lambda name, *a, **kw: ArticleActFetcher(name))
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-pakistancode") == {"scrape-pakistancode": "SUCCESS"}
+    got = _pc_sections(corpus_db, "ppc1860")
+    assert [n for n, _t in got] == ["Article 5", "Article 6"], got
