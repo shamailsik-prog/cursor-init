@@ -1,8 +1,7 @@
-import asyncio, re, logging, hashlib
-from collections import Counter
+import asyncio, re, logging
 from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
-from scraper.parsers.statute_parser import split_into_sections, detect_statute_name, _extract_number_title_from_chunk
+from scraper.parsers.statute_parser import split_into_sections, detect_statute_name
 from scraper.parsers.text_cleaner import clean_html
 from datetime import datetime, timezone
 from scraper.database import SessionLocal
@@ -37,60 +36,6 @@ def _staged(source, url, act_name, short_name, section_number, section_text, sec
         }),
     )
 
-# FA-F21-006/010: the heading words of a numberless div that is staged even when it is short.
-_HEADING_WORDS = {"preamble", "explanation", "explanations", "illustration", "illustrations", "proviso",
-                  "schedule", "appendix", "annex", "annexure", "form", "table", "part", "chapter"}
-_ORDINALS = {"the", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"}
-_MAX_DIVS = 50
-
-
-def _heading_kind(text):
-    """The slugified heading word of a numberless div ("Preamble." -> "preamble", "THE FIRST
-    SCHEDULE" -> "schedule"); "unnumbered" when it has no word."""
-    words = [w for w in re.findall(r"[a-z]+", text.lower()[:80]) if w not in _ORDINALS]
-    return words[0] if words else "unnumbered"
-
-
-def _sha8(text):
-    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:8]
-
-
-def _keyed_sections(slug, divs):
-    """(section_number, text, title, numbered) for every div.section of one act page, in page order.
-    Keys are anchored on content, never on position (FA-F21-008), so inserting or reordering divs
-    does not change any other div's key:
-    - a numberless div (Preamble, Explanation, Schedule) is "<kind>-<sha8>": its heading word and
-      the first 8 hex characters of sha256 of its whitespace-normalised text;
-    - a number that appears once on the page stays plain ("1"); a number that appears more than once
-      is "<num>-<sha8>" for EVERY occurrence. Parsed numbers never hold a hyphen, so these keys cannot
-      collide with a real section number.
-    A div of 20 characters or fewer is skipped unless it is a heading (FA-F21-010); a skipped div does
-    not count toward the per-page cap. Every skip is logged, and the page's counts are logged (no
-    silent loss, FA-F21-006)."""
-    parsed, skipped = [], 0
-    for position, div in enumerate(divs):
-        txt = div.get_text(" ", strip=True)
-        short = len(txt) <= 20 and _heading_kind(txt) not in _HEADING_WORDS
-        if short or len(parsed) >= _MAX_DIVS:
-            skipped += 1
-            logger.warning("pakistancode.div_skipped slug=%s position=%d reason=%s chars=%d", slug, position,
-                           "too_short" if short else "over_cap", len(txt))
-            continue
-        number, title, _ = _extract_number_title_from_chunk(txt)
-        parsed.append((number, txt, title or None))
-    repeated = Counter(number for number, _txt, _title in parsed if number)
-    out = []
-    for number, txt, title in parsed:
-        if not number:
-            key = f"{_heading_kind(txt)}-{_sha8(txt)}"
-        else:
-            key = f"{number}-{_sha8(txt)}" if repeated[number] > 1 else number
-        out.append((key, txt, title, bool(number)))
-    numbered = sum(repeated.values())
-    logger.info("pakistancode.staged slug=%s numbered=%d numberless=%d skipped=%d", slug, numbered,
-                len(out) - numbered, skipped)
-    return out
-
 TARGET_SLUGS = ["ppc1860","crpc1898","cpc1908","constitution1973","limitation-act1908","specific-relief-act1877","transfer-of-property-act1882","contract-act1872","evidence-act1872","companies-act2017"]
 
 async def scrape_pakistancode(source, db):
@@ -113,17 +58,25 @@ async def scrape_pakistancode(source, db):
                 soup2 = BeautifulSoup(rr.text, "html.parser")
                 title = soup2.find("h1")
                 act_name = title.get_text(strip=True) if title else slug
-                keyed = _keyed_sections(slug, soup2.find_all("div", class_=re.compile("section")))
-                rows = [(key, sec, section_title) for key, sec, section_title, _numbered in keyed]
-                if not any(numbered for *_rest, numbered in keyed):
-                    # fallback when no div.section rows or none had extractable numbers (e.g. Article N)
+                # find sections
+                sections = []
+                for div in soup2.find_all("div", class_=re.compile("section")):
+                    txt = div.get_text(" ", strip=True)
+                    if len(txt)>20:
+                        sections.append(txt)
+                rows = 0
+                if not sections:
+                    # fallback parse paragraphs starting digit
                     full_text = clean_html(rr.text)
                     parsed = split_into_sections(full_text, act_name)
-                    rows = [(p["section_number"], p["section_text"], p["section_title"]) for p in parsed]
-                for section_number, sec, section_title in rows:
-                    db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
-                                   section_title=section_title[:500] if section_title else None))
-                rows = len(rows)
+                    for p in parsed:
+                        db.add(_staged(source, url, act_name, slug[:10], p["section_number"], p["section_text"][:20000],
+                                       section_title=p["section_title"][:500]))
+                        rows += 1
+                else:
+                    for sec in sections[:50]:
+                        db.add(_staged(source, url, act_name, slug[:10], sec[:20], sec[:20000]))
+                        rows += 1
                 await db.commit()
                 tally.item_ok(rows)
                 await asyncio.sleep(1.5)
