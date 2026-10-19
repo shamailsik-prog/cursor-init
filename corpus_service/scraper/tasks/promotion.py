@@ -344,7 +344,10 @@ async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Op
     reason = reason or promotion_error_reason(exc)
     try:
         async with db.begin_nested():
-            st = await db.get(model, staging_id, populate_existing=True, with_for_update=True)
+            st = (await db.execute(
+                select(model).where(model.id == staging_id).with_for_update(skip_locked=True)
+                .execution_options(populate_existing=True)
+            )).scalars().first()
             if (st is not None and not st.promoted and not st.quarantined
                     and st.lifecycle_state in (lifecycle.PARSED, lifecycle.NORMALISED)):
                 _quarantine(db, st, None, reason, None, job_id=job_id)

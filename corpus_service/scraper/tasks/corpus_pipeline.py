@@ -221,7 +221,8 @@ async def _dead_letter_after_error(db, model, record_id, state: str, reason: str
     try:
         async with db.begin():
             row = (await db.execute(
-                select(model).where(model.id == record_id, model.lifecycle_state == state).with_for_update()
+                select(model).where(model.id == record_id, model.lifecycle_state == state)
+                .with_for_update(skip_locked=True)
                 .execution_options(populate_existing=True)
             )).scalars().first()
             if row is not None:
