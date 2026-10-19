@@ -16,6 +16,8 @@ Same harness as test_f21_corpus_lifecycle_e2e.py: real beat entries, real PG16, 
 import asyncio
 import threading
 
+import pytest
+
 from test_f21_corpus_lifecycle_e2e import (
     F21Fetcher, NA_INDEX, _Resp, _stage_statutes, _stage_trusted_cases, admin_exec, admin_fetch, count,
     fire, harvest, install_offline_sources, prepare, tick,
@@ -168,3 +170,113 @@ def test_autofix_3b_an_oldest_row_locked_elsewhere_does_not_stall_the_other_tabl
     assert admin_fetch(corpus_db, "SELECT lifecycle_state FROM statutes_staging") == [("normalised",)], \
         "the locked oldest case row stalled the statute behind it"
     assert admin_fetch(corpus_db, "SELECT lifecycle_state FROM scraper_staging") == [("parsed",)]
+
+
+# ---------------------------------------------------------------------------------------------
+# Re-audit of PR #90 (REAUDIT_PR90.md): FA-F21-001, FA-F21-002, FA-F21-003
+# ---------------------------------------------------------------------------------------------
+def _hold_row_lock(corpus_db, table, rid):
+    held, release = threading.Event(), threading.Event()
+
+    async def holder():
+        from sqlalchemy import text
+
+        engine = corpus_db.engine_for(corpus_db.url)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"SELECT 1 FROM {table} WHERE id = :i FOR UPDATE"), {"i": rid})
+                held.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.05)
+        finally:
+            await engine.dispose()
+
+    blocker = threading.Thread(target=lambda: asyncio.run(holder()))
+    blocker.start()
+    assert held.wait(30)
+    return release, blocker
+
+
+def test_fa_f21_001_a_locked_oldest_row_does_not_let_a_newer_row_jump_the_other_tables_older_one(corpus_db, monkeypatch):
+    """case1 (oldest, locked elsewhere) < statute < case2: the oldest CLAIMABLE row is the statute (R4)."""
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    case1, case2 = _stage_trusted_cases(corpus_db, 2)
+    (statute,) = _stage_statutes(corpus_db, 1)
+    for table, rid, age in (("scraper_staging", case1, 3600), ("statutes_staging", statute, 1800), ("scraper_staging", case2, 60)):
+        admin_exec(corpus_db, f"UPDATE {table} SET created_at = now() - make_interval(secs => :s) WHERE id = :i",
+                   s=float(age), i=rid)
+    _one_per_tick(monkeypatch)
+    release, blocker = _hold_row_lock(corpus_db, "scraper_staging", case1)
+    try:
+        with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+            result = fire("normalise-corpus")
+    finally:
+        release.set()
+        blocker.join(30)
+    assert result.state == "SUCCESS" and result.result["claimed"] == 1, result.result
+    cases = dict(admin_fetch(corpus_db, "SELECT id, lifecycle_state FROM scraper_staging"))
+    assert admin_fetch(corpus_db, "SELECT lifecycle_state FROM statutes_staging") == [("normalised",)], \
+        f"newer case2 was claimed ahead of the older statute: {cases}"
+    assert cases == {case1: "parsed", case2: "parsed"}
+
+
+class SpacedActFetcher(F21Fetcher):
+    async def get(self, url, *args, **kwargs):
+        url = str(url)
+        if url == NA_INDEX:
+            return _Resp(b"<html><a href='/uploads/f21-test-act-2099.pdf'>  F21  Spaced\n   Test Act\t2099 </a></html>", url=url)
+        return await super().get(url, *args, **kwargs)
+
+
+def test_fa_f21_002_the_na_act_name_is_whitespace_normalised(corpus_db, monkeypatch):
+    """The listing's internal newlines, tabs and double spaces are not part of the act's identity."""
+    from scraper.net import fetch_policy
+
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    monkeypatch.setattr(fetch_policy, "fetcher_for", lambda name, *a, **kw: SpacedActFetcher(name))
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        assert harvest("scrape-na") == {"scrape-na": "SUCCESS"}
+        for _ in range(3):
+            tick()
+    assert {a for (a,) in admin_fetch(corpus_db, "SELECT extracted_act_name FROM statutes_staging")} == {"F21 Spaced Test Act 2099"}
+    assert {a for (a,) in admin_fetch(corpus_db, "SELECT statute_name FROM statutes_master")} == {"F21 Spaced Test Act 2099"}
+
+
+# Which states make a record the original of a later copy (normalise._PAST_NORMALISATION), written
+# out from the spec: states past normalisation, including a reviewer's content decision (rejected);
+# not a refusal for a non-content reason (dead_letter), a failed or duplicate record, or one that
+# has not been normalised (discovered, downloaded). `parsed` is left out: the tick would normalise
+# that original itself first.
+ORIGINAL_STATES = {
+    "normalised": True, "quarantined": True, "approved": True, "published": True, "embedded": True, "rejected": True,
+    "discovered": False, "downloaded": False, "failed": False, "duplicate": False, "dead_letter": False,
+}
+
+
+def test_fa_f21_003_the_matrix_covers_every_lifecycle_state():
+    from scraper.tasks import lifecycle
+
+    assert set(ORIGINAL_STATES) | {"parsed"} == set(lifecycle.STATES)
+
+
+@pytest.mark.parametrize("state", sorted(ORIGINAL_STATES))
+def test_fa_f21_003_dedup_original_state_matrix(corpus_db, monkeypatch, state):
+    prepare(corpus_db)
+    install_offline_sources(monkeypatch)
+    (orig,) = _stage_statutes(corpus_db, 1)
+    with corpus_db.app_engine_as(*corpus_db.runtime_role()):
+        fire("normalise-corpus")  # the original gets its act and URL hashes
+        admin_exec(corpus_db, "UPDATE statutes_staging SET lifecycle_state = :s, state_reason = 'f21-matrix' WHERE id = :d",
+                   s=state, d=orig)
+        admin_exec(corpus_db,
+                   "INSERT INTO statutes_staging (source_id, source_site, source_url, raw_text, extracted_act_name, "
+                   "extracted_short_name, extracted_section_number, extracted_section_text, confidence_score, parsing_metadata) "
+                   "SELECT source_id, source_site, source_url, raw_text, extracted_act_name, extracted_short_name, "
+                   "extracted_section_number, extracted_section_text, confidence_score, parsing_metadata "
+                   "FROM statutes_staging WHERE id = :d", d=orig)
+        fire("normalise-corpus")
+    copy = admin_fetch(corpus_db, "SELECT lifecycle_state, state_reason FROM statutes_staging WHERE id <> :d", d=orig)
+    expected = [("duplicate", f"duplicate_of:{orig}")] if ORIGINAL_STATES[state] else [("normalised", None)]
+    assert copy == expected, f"original in {state!r}: copy ended {copy}"
