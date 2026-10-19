@@ -351,6 +351,8 @@ async def _quarantine_after_error(db, staging_id, exc: BaseException, reason: Op
             if (st is not None and not st.promoted and not st.quarantined
                     and st.lifecycle_state in (lifecycle.PARSED, lifecycle.NORMALISED)):
                 _quarantine(db, st, None, reason, None, job_id=job_id)
+            elif st is None:  # locked elsewhere (SKIP LOCKED) or gone: left for the next tick
+                logger.warning("promotion.error_quarantine_skipped staging_id=%s", staging_id)
         await db.commit()
     except INTERRUPTIONS:
         raise  # audit F28 R23: an interruption ends the run; it is never a record's failure

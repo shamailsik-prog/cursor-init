@@ -214,6 +214,9 @@ async def _dead_letter_after_error(db, model, record_id, state: str, reason: str
             )).scalars().first()
             if row is not None:
                 lifecycle.move(db, row, lifecycle.DEAD_LETTER, actor=actor, job_id=job_id, reason=reason)
+            else:  # locked elsewhere (SKIP LOCKED) or no longer in `state`: left for the next tick
+                logger.warning("lifecycle.dead_letter_skipped table=%s id=%s state=%s", model.__tablename__,
+                               record_id, state)
     except outcomes.INTERRUPTIONS:
         raise
     except Exception as second:  # noqa: BLE001 - the tick goes on; the record stays where it was

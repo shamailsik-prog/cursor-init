@@ -36,6 +36,60 @@ def _staged(source, url, act_name, short_name, section_number, section_text, sec
         }),
     )
 
+# FA-F21-006/007: the heading words that open a part of an act whose items are numbered afresh.
+_STRUCTURAL_KINDS = {"schedule", "appendix", "annex", "annexure", "form", "table"}
+_ORDINALS = {"the", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"}
+_MAX_DIVS = 50
+
+
+def _heading_kind(text):
+    """The slugified heading word of a numberless div ("Preamble." -> "preamble", "THE FIRST
+    SCHEDULE" -> "schedule"); "unnumbered" when it has no word."""
+    words = [w for w in re.findall(r"[a-z]+", text.lower()[:80]) if w not in _ORDINALS]
+    return words[0] if words else "unnumbered"
+
+
+def _keyed_sections(slug, divs):
+    """(section_number, text, title, numbered) for every div.section of one act page, in page order, with
+    a key that is unique within the page and stable across harvests of the same page:
+    - a numbered div keeps its number ("1"); under a Schedule (Appendix, Form ...) heading, its
+      items are keyed by that heading ("schedule-1-1"), since their numbering starts again;
+    - a numberless div (Preamble, Explanation, Schedule) is keyed by its heading and the heading's
+      occurrence on the page ("preamble-1", "schedule-2");
+    - a key already used on the page gets its occurrence ("1-2"). Parsed numbers never hold a
+      hyphen, so these keys cannot collide with a real section number.
+    A div that is still skipped (20 characters or fewer, or past the per-page cap) is logged, and
+    the page's counts are logged (no silent loss, FA-F21-006)."""
+    out, used, kinds, context = [], set(), {}, None
+    numbered = numberless = skipped = 0
+    for position, div in enumerate(divs):
+        txt = div.get_text(" ", strip=True)
+        if len(txt) <= 20 or len(out) >= _MAX_DIVS:
+            skipped += 1
+            logger.warning("pakistancode.div_skipped slug=%s position=%d reason=%s chars=%d", slug, position,
+                           "too_short" if len(txt) <= 20 else "over_cap", len(txt))
+            continue
+        number, title, _ = _extract_number_title_from_chunk(txt)
+        if number:
+            key = f"{context}-{number}" if context else number
+            numbered += 1
+        else:
+            kind = _heading_kind(txt)
+            kinds[kind] = kinds.get(kind, 0) + 1
+            key = f"{kind}-{kinds[kind]}"
+            if kind in _STRUCTURAL_KINDS:
+                context = key
+            numberless += 1
+        base, n = key, 1
+        while key in used:
+            n += 1
+            key = f"{base}-{n}"
+        used.add(key)
+        out.append((key, txt, title or None, bool(number)))
+    logger.info("pakistancode.staged slug=%s numbered=%d numberless=%d skipped=%d", slug, numbered, numberless, skipped)
+    return out
+
+
 TARGET_SLUGS = ["ppc1860","crpc1898","cpc1908","constitution1973","limitation-act1908","specific-relief-act1877","transfer-of-property-act1882","contract-act1872","evidence-act1872","companies-act2017"]
 
 async def scrape_pakistancode(source, db):
@@ -58,28 +112,17 @@ async def scrape_pakistancode(source, db):
                 soup2 = BeautifulSoup(rr.text, "html.parser")
                 title = soup2.find("h1")
                 act_name = title.get_text(strip=True) if title else slug
-                # find sections
-                sections = []
-                for div in soup2.find_all("div", class_=re.compile("section")):
-                    txt = div.get_text(" ", strip=True)
-                    if len(txt)>20:
-                        sections.append(txt)
-                rows = 0
-                for sec in sections[:50]:
-                    section_number, section_title, _ = _extract_number_title_from_chunk(sec)
-                    if not section_number:
-                        continue
-                    db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
-                                   section_title=section_title[:500] if section_title else None))
-                    rows += 1
-                if not rows:
+                keyed = _keyed_sections(slug, soup2.find_all("div", class_=re.compile("section")))
+                rows = [(key, sec, section_title) for key, sec, section_title, _numbered in keyed]
+                if not any(numbered for *_rest, numbered in keyed):
                     # fallback when no div.section rows or none had extractable numbers (e.g. Article N)
                     full_text = clean_html(rr.text)
                     parsed = split_into_sections(full_text, act_name)
-                    for p in parsed:
-                        db.add(_staged(source, url, act_name, slug[:10], p["section_number"], p["section_text"][:20000],
-                                       section_title=p["section_title"][:500]))
-                        rows += 1
+                    rows = [(p["section_number"], p["section_text"], p["section_title"]) for p in parsed]
+                for section_number, sec, section_title in rows:
+                    db.add(_staged(source, url, act_name, slug[:10], section_number, sec[:20000],
+                                   section_title=section_title[:500] if section_title else None))
+                rows = len(rows)
                 await db.commit()
                 tally.item_ok(rows)
                 await asyncio.sleep(1.5)
