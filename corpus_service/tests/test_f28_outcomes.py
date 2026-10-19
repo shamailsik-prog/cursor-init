@@ -315,6 +315,17 @@ def test_fa_corpus_009_the_signature_must_lie_wholly_inside_the_first_1024_bytes
     assert outcomes.looks_like_pdf(pad * offset + b"%PDF-1.4\n" + b"\x00" * 64) is accepted
 
 
+@pytest.mark.parametrize("body,accepted", [
+    (b"%PDF-1.4\n% a comment that mentions %PDF- again\n", True),       # first header valid, later one after junk
+    (b"\r\n%PDF-1.7\n" + b"A" * 200 + b"%PDF-1.4\n", True),
+    (b"Error: %PDF- missing\n%PDF-1.4\n", False),                         # first one after text: refused
+    (b"<p>%PDF-</p>\r\n%PDF-1.4\n", False),
+])
+def test_fa_corpus_011_the_first_signature_is_the_one_checked(body, accepted):
+    """FA-corpus-011: the rule is applied to the FIRST %PDF- in the window, not the last."""
+    assert outcomes.looks_like_pdf(body + b"\x00" * 64) is accepted
+
+
 PARITY_INPUTS = [
     b"%PDF-1.7\n" + b"\x00" * 2048,
     b"\r\n%PDF-1.4\n" + b"\x00" * 2048,
@@ -372,6 +383,10 @@ INVISIBLE_ONLY = [
     "\U000e0080",                  # unassigned
     "\U000e0041\U000e0042",        # tag characters
     "...!?-",                      # punctuation only
+    # FA-corpus-010: modifier letters (Lm) carry no content on their own
+    "\u0640\u0640\u0640",          # Arabic tatweel
+    "\u02c6\u02c6",                # MODIFIER LETTER CIRCUMFLEX ACCENT
+    " \u0640\n\u02b0\u3005 ",       # tatweel, modifier h, ideographic iteration mark
 ]
 
 
@@ -385,6 +400,7 @@ def test_fa_corpus_004_invisible_characters_alone_are_no_text(text):
 @pytest.mark.parametrize("text", [
     "a", "7", "\u200cA\u200d", "ہو\u200cگا", "پاکستان\u200c کی عدالت", "\u0644\u200d\u0627",
     "(cid:12) Order 7", "\u0301e", "\u0663",
+    "\u06a9\u0640\u062a\u0627\u0628", "\u0640\u0640\u0661",  # Urdu with tatweel; tatweel with an Arabic digit
 ])
 def test_fa_corpus_004_real_text_still_counts_including_urdu_with_zwnj(text):
     """Urdu legitimately carries ZWNJ/ZWJ between letters: only text with NOTHING else is rejected,
