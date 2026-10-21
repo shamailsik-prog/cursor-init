@@ -141,6 +141,10 @@ service cloud.firestore {
       // audited); they feed the citation gate's own-case exemption.
       allow update: if sameFirm() && isMember(matterId) && firmIdUnchanged() && role() in ['partner', 'associate']
         && cleared(resource.data.classification) && clearedNew() && monotonic()
+        // FA-F13-006: every member-writable field the shared matter validator (platform/d1/matterDocument.ts) checks
+        // keeps its type, so no client write leaves a row both API stacks refuse as malformed. `title` is the only
+        // such field left writable (firmId is unchanged, classification is a cleared label, the rest are locked below).
+        && request.resource.data.title is string
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['caseNumber', 'caseNumberStatus', 'courtId',
              // Phase 2a final review I1: lifecycle and identity fields move only through openMatter /
              // advanceStage / closeMatter (audited, one transaction with their events).

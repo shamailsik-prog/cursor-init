@@ -171,6 +171,7 @@ import type {
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow,
 } from "@/platform/spine/store"
 import { storedUserRecord } from "@/platform/spine/store"
+import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
   auditRowsEqual,
@@ -182,9 +183,17 @@ export { AuditAppendConflictError }
 export type MatterRepository = {
   create(row: Matter): Promise<void>
   get(id: string, firmId: string): Promise<Matter | null>
+  /** Refuses (MatterClosedError) a patch to a closed matter. */
   update(id: string, firmId: string, patch: Partial<Matter>): Promise<Matter | null>
   listByFirm(firmId: string): Promise<Matter[]>
+  /**
+   * FA-F13-005 / 009: engagement confirmation in one transaction. The closed check, the status write and the engagement
+   * intimation (its id is the idempotency key) commit together; only the confirm that moves the matter live records it.
+   */
+  confirmEngagement(id: string, firmId: string, intimation: Intimation): Promise<MatterConfirmation | null>
 }
+
+export type MatterConfirmation = { outcome: "confirmed" | "already_live" | "closed"; matter: Matter }
 
 export type UserRepository = {
   upsert(row: User): Promise<void>
@@ -1898,9 +1907,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const current = firmScoped(store.matters.get(id), firmId)
         if (!current) return null
         if (patch.firmId !== undefined && patch.firmId !== firmId) return null
+        if (current.status === "closed") throw new MatterClosedError()
         const next = { ...current, ...patch }
         store.matters.set(id, next)
         return next
+      },
+      async confirmEngagement(id, firmId, intimation) {
+        const current = firmScoped(store.matters.get(id), firmId)
+        if (!current) return null
+        if (current.status === "closed") return { outcome: "closed", matter: current }
+        if (current.status === "live") return { outcome: "already_live", matter: current }
+        const next: Matter = { ...current, status: "live" }
+        store.matters.set(id, next)
+        if (!store.intimations.some((row) => row.id === intimation.id)) store.intimations.push(intimation)
+        return { outcome: "confirmed", matter: next }
       },
       async listByFirm(firmId) {
         return [...store.matters.values()].filter((row) => row.firmId === firmId)

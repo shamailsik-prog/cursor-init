@@ -1,6 +1,7 @@
 import { AuditLog, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import { createHash, randomUUID } from "node:crypto"
 import type { Classification } from "@/platform/p1/types"
+import type { CaseNumberStatus, MatterStage, MatterStatus } from "@/platform/d1/matterDocument"
 import { classificationRank, isClassification } from "@/platform/p1/types"
 import { currentRequestIdentity } from "@/platform/p5/requestSession"
 
@@ -37,18 +38,29 @@ export type MatterMember = {
   matterId: string
   userId: string
   firmId: string
+  /** Audit F13: the user who seated the member (canonical membership row, platform/d1/matterDocument.ts). */
+  addedBy?: string | null
 }
 
+/**
+ * A matter in the canonical shape both API stacks share (audit F13, platform/d1/matterDocument.ts): `id` is the
+ * document id. A matter Cloud Functions opened may have no court (`courtId: null`) and may be `closed`; `matterNo`,
+ * `stage` and `createdBy` are always present on a row read from Firestore (the shared validator fills them) and
+ * optional only for rows built in memory.
+ */
 export type Matter = {
   id: string
   firmId: string
   clientId: string
   title: string
-  courtId: string
+  courtId: string | null
   caseNumber: string | null
-  caseNumberStatus: "pending" | "recorded"
-  status: "engagement_unconfirmed" | "live"
+  caseNumberStatus: CaseNumberStatus
+  status: MatterStatus
   classification: Classification
+  matterNo?: string | null
+  stage?: MatterStage
+  createdBy?: string | null
 }
 
 export type DocumentRecord = {

@@ -1,4 +1,9 @@
-import type { DocumentData as AdminDocumentData, Firestore as AdminFirestore } from "firebase-admin/firestore"
+import {
+  FieldValue as AdminFieldValue,
+  Firestore as AdminFirestoreClass,
+  type DocumentData as AdminDocumentData,
+  type Firestore as AdminFirestore,
+} from "firebase-admin/firestore"
 import {
   collection as clientCollection,
   doc as clientDoc,
@@ -12,6 +17,7 @@ import {
   deleteDoc as clientDeleteDoc,
   where as clientWhere,
   limit as clientLimit,
+  serverTimestamp as clientServerTimestamp,
   type Firestore as ClientFirestore,
 } from "firebase/firestore"
 import { AUDIT_OUTBOX_COLLECTION, EXTERNAL_EFFECT_PREFIX, isEffectPath } from "@/platform/persistence/auditOutboxContract"
@@ -41,6 +47,16 @@ function isAdminFirestore(db: unknown): db is AdminFirestore {
 
 function isClientFirestore(db: unknown): db is ClientFirestore {
   return typeof db === "object" && db !== null && !isAdminFirestore(db)
+}
+
+/**
+ * The server-timestamp sentinel of `db`'s SDK (audit F13: canonical `createdAt`, as Cloud Functions writes it).
+ * FA-F13-010: chosen by the SDK the instance really belongs to, not by its call shape. A client-SDK compat instance
+ * (a @firebase/rules-unit-testing context, the G-2 wiring) also has `.collection()`, but rejects the Admin sentinel;
+ * the modular client sentinel is accepted by it (compat unwraps to the modular SDK) and by a modular instance.
+ */
+export function serverTimestampFor(db: ClientFirestore | AdminFirestore): unknown {
+  return db instanceof AdminFirestoreClass ? AdminFieldValue.serverTimestamp() : clientServerTimestamp()
 }
 
 export function collection(db: ClientFirestore | AdminFirestore, path: string) {

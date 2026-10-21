@@ -1,5 +1,13 @@
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type Query, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import {
+  MATTER_STAGES,
+  canonicalMatterDocument,
+  canonicalMatterMemberDocument,
+  readMatterDocument,
+  type MatterDocument,
+  type MatterStage,
+} from "@/platform/d1/matterDocument"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
@@ -32,8 +40,9 @@ const members = () => adminDb().collection("matter_members")
 const parties = () => adminDb().collection("matter_parties")
 const checks = () => adminDb().collection("conflict_checks")
 
-export const STAGES = ["pre_filing", "filed", "hearing", "reserved", "decided", "archived"] as const
-export type Stage = (typeof STAGES)[number]
+/** Audit F13: the stages are the shared canonical schema's (platform/d1/matterDocument.ts), as the Next stack reads them. */
+export const STAGES = MATTER_STAGES
+export type Stage = MatterStage
 
 /** A check may open a matter for 30 days from its stored (server) createdAt (P2-6). */
 export const CHECK_VALIDITY_MS = 30 * 24 * 60 * 60 * 1000
@@ -67,6 +76,17 @@ const badQuery = () => new HttpError(400, "invalid_query")
 const mismatch = () => new HttpError(409, "subjects_mismatch")
 
 const iso = (value: unknown): string | null => (value instanceof Timestamp ? value.toDate().toISOString() : null)
+
+/**
+ * Audit F13: a stored matter through the shared validator (the one the Next repositories read with), so a row the
+ * Next stack wrote reads here in the same canonical shape. Absent or another firm's row: 404; malformed: 409.
+ */
+function storedMatter(data: DocumentData | undefined, firmId: string): MatterDocument {
+  if (!data || data.firmId !== firmId) throw new HttpError(404, "not_found")
+  const matter = readMatterDocument(data)
+  if (!matter) throw new HttpError(409, "matter_malformed")
+  return matter
+}
 
 /** The matter document as the routes return it. */
 function present(id: string, doc: DocumentData): Record<string, unknown> {
@@ -297,18 +317,21 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           const boundClass = maxLabel(checkClass, classification)
           const partyClass = maxLabel(boundClass, client.classification)
 
-          const matter = {
+          // Audit F13: the canonical matter shape (platform/d1/matterDocument.ts), the one the Next stack reads and writes.
+          const matter = canonicalMatterDocument({
             firmId: caller.firmId,
             matterNo,
-            stage: "pre_filing" as Stage,
+            stage: "pre_filing",
             status: "engagement_unconfirmed",
             clientId,
             conflictCheckId: checkId,
             title,
-            ...(courtId !== undefined ? { courtId } : {}),
+            courtId: courtId ?? null,
+            caseNumber: null,
+            caseNumberStatus: "pending",
             classification,
             createdBy: caller.uid,
-          }
+          })
           await audit.stage(tx, "allow", "ok")
           // The new matter and its parties change the registry: a concurrent open re-screens against them. Every opposing
           // name is staged in the name index here (F37), present already or not (the chunks deduplicate it), so each party
@@ -318,11 +341,7 @@ export const openMatterOp: FirmOperation<Record<string, unknown>> = {
           tx.create(matterRef, { ...matter, createdAt: FieldValue.serverTimestamp() })
           for (const uid of [caller.uid, ...memberIds]) {
             tx.create(members().doc(`${matterId}_${uid}`), {
-              firmId: caller.firmId,
-              matterId,
-              userId: uid,
-              addedBy: caller.uid,
-              classification,
+              ...canonicalMatterMemberDocument({ firmId: caller.firmId, matterId, userId: uid, addedBy: caller.uid, classification }),
               createdAt: FieldValue.serverTimestamp(),
             })
           }
@@ -444,8 +463,7 @@ export const getMatterOp: FirmOperation<Record<string, unknown>> = {
     const matterId = parseMatterId(data.matterId)
     audit.target = `matters/${matterId}`
     await gateMatter(caller, "matter.read", matterId)
-    const row = (await matters().doc(matterId).get()).data()
-    if (!row || row.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+    const row = storedMatter((await matters().doc(matterId).get()).data(), caller.firmId)
     await audit.allow()
     return present(matterId, row)
   },
@@ -485,7 +503,7 @@ export const listMattersOp: FirmOperation<Page<Record<string, unknown>>> = {
       }
     }
 
-    const items: Array<{ memberId: string; memberCreatedAt: Timestamp; matterId: string; row: DocumentData }> = []
+    const items: Array<{ memberId: string; memberCreatedAt: Timestamp; matterId: string; row: MatterDocument }> = []
     let more = false
     for (;;) {
       let q: Query = members()
@@ -497,7 +515,8 @@ export const listMattersOp: FirmOperation<Page<Record<string, unknown>>> = {
       const snap = await q.limit(SCAN_BATCH).get()
       const ids = snap.docs.map((d) => d.data().matterId).filter((id): id is string => isSafeDocId(id))
       const docs = ids.length > 0 ? await adminDb().getAll(...ids.map((id) => matters().doc(id))) : []
-      const byId = new Map(docs.map((d) => [d.id, d.data()]))
+      // Audit F13: each row through the shared validator; a malformed one is never listed.
+      const byId = new Map(docs.map((d) => [d.id, readMatterDocument(d.data())]))
       for (const m of snap.docs) {
         const matterId = m.data().matterId
         const row = typeof matterId === "string" ? byId.get(matterId) : undefined
@@ -546,8 +565,7 @@ export const advanceStageOp: FirmOperation<Record<string, unknown>> = {
     const db = adminDb()
     const row = await db.runTransaction(async (tx) => {
       const ref = matters().doc(matterId)
-      const matter = (await tx.get(ref)).data()
-      if (!matter || matter.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+      const matter = storedMatter((await tx.get(ref)).data(), caller.firmId)
       const from = matter.stage
       const index = STAGES.indexOf(from as Stage)
       if (matter.status === "closed" || index < 0 || STAGES[index + 1] !== to) throw new HttpError(409, "invalid_stage_transition")
@@ -595,8 +613,7 @@ export const closeMatterOp: FirmOperation<Record<string, unknown>> = {
     const db = adminDb()
     const row = await db.runTransaction(async (tx) => {
       const ref = matters().doc(matterId)
-      const matter = (await tx.get(ref)).data()
-      if (!matter || matter.firmId !== caller.firmId) throw new HttpError(404, "not_found")
+      const matter = storedMatter((await tx.get(ref)).data(), caller.firmId)
       if (matter.status === "closed") throw new HttpError(409, "invalid_stage_transition")
       if (matter.stage !== "decided" && reason.length < MIN_CLOSE_REASON) throw new HttpError(409, "invalid_stage_transition")
       const partySnap = await tx.get(parties().where("firmId", "==", caller.firmId).where("matterId", "==", matterId))

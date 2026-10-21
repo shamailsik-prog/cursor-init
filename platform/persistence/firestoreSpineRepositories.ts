@@ -4,10 +4,19 @@ import {
   doc,
   getDoc,
   runTransaction,
+  serverTimestampFor,
   setDoc,
   updateDoc,
   type Firestore,
 } from "@/platform/persistence/firestoreDbModular"
+import {
+  canonicalMatterDocument,
+  MatterClosedError,
+  canonicalMatterMemberDocument,
+  isCanonicalMatterMemberRow,
+  matterMemberDocId,
+  readMatterDocument,
+} from "@/platform/d1/matterDocument"
 import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
 import {
   asFirmScopedList,
@@ -262,6 +271,17 @@ async function listByFirm<T extends { firmId: string; id?: string }>(
   return asFirmScopedList(page)
 }
 
+type StoredRow = Record<string, unknown> & { firmId: string }
+
+/**
+ * Audit F13: a stored matter row through the shared validator (platform/d1/matterDocument.ts), the one Cloud
+ * Functions reads with, instead of a blind cast. The document id is the matter id (F14 R8). A malformed row is null.
+ */
+function matterFromRow(id: string, row: unknown): Matter | null {
+  const matter = readMatterDocument(row)
+  return matter ? ({ ...matter, id } as Matter) : null
+}
+
 export function createFirestoreRepositories(db: Firestore): SpineRepositories {
   const createDenyByDefaultWorkflowOpsRepository =
     createDenyByDefaultWorkflowOpsRepositoryBinder(db)
@@ -269,21 +289,52 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
     // Audit F14 R8: a matter row's `id` is its document id. The Cloud Functions write matters without an `id` field
     // (functions/src/d1/matter/ops.ts), and Next writes the field equal to the document id (setById), so the document id
     // is authoritative: it wins over any `id` in the data.
+    // Audit F13: every matter row is written and read through the shared canonical schema (platform/d1/matterDocument.ts),
+    // so Next writes the shape Cloud Functions writes (stage, matterNo, createdBy, a server createdAt; no stored `id`) and
+    // reads Functions rows with the fields Functions never wrote defaulted. A malformed row is never returned.
     matters: {
       async create(row) {
-        await setById(db, "matters", row)
+        const { id, ...fields } = row
+        await setDoc(doc(db, "matters", id), { ...canonicalMatterDocument(fields), createdAt: serverTimestampFor(db) })
       },
       async get(id, firmId: string) {
-        const row = await getById<Matter>(db, "matters", id, firmId)
-        return row ? { ...row, id } : null
+        return matterFromRow(id, await getById<StoredRow>(db, "matters", id, firmId))
       },
       async update(id, firmId, patch) {
-        const row = await updateById<Matter>(db, "matters", id, patch, firmId)
-        return row ? { ...row, id } : null
+        const current = matterFromRow(id, await getById<StoredRow>(db, "matters", id, firmId))
+        if (!current) return null
+        // FA-F13-007: closing is final (Cloud Functions closeMatter); Next writes nothing to a closed matter.
+        if (current.status === "closed") throw new MatterClosedError()
+        const { id: _id, ...fields } = patch
+        // A patch that would leave the matter outside the canonical shape is refused before anything is written.
+        canonicalMatterDocument({ ...current, ...fields })
+        return matterFromRow(id, await updateById<StoredRow>(db, "matters", id, fields as Partial<StoredRow>, firmId))
+      },
+      async confirmEngagement(id, firmId, intimation) {
+        const firm = requireCallerFirmId(firmId, "matters.confirmEngagement")
+        // FA-F13-005 / 009: the closed check and both writes are one transaction, so a Functions closeMatter that
+        // commits first is seen here (or retries this one) and a closed matter is never reopened. The intimation id is
+        // the idempotency key: concurrent confirms commit one transition and one intimation.
+        return runTransaction(db, async (tx) => {
+          const matterRef = doc(db, "matters", id)
+          const snap = await tx.get(matterRef)
+          if (!snap.exists()) return null
+          const row = snap.data() as StoredRow
+          if (row.firmId !== firm) return null
+          const current = matterFromRow(id, row)
+          if (!current) return null
+          if (current.status === "closed") return { outcome: "closed" as const, matter: current }
+          if (current.status === "live") return { outcome: "already_live" as const, matter: current }
+          tx.update(matterRef, { status: "live" })
+          tx.set(doc(db, "intimation_register", intimation.id), { ...intimation, firmId: firm, matterId: id })
+          return { outcome: "confirmed" as const, matter: { ...current, status: "live" as const } }
+        })
       },
       async listByFirm(firmId) {
         // F12: a firm-scoped query (the listing attaches each row's document id, F14 R8).
-        return listByFirm<Matter>(db, "matters", firmId)
+        const page = await listAllRowsByFirm<StoredRow & { id: string }>(db, "matters", firmId)
+        const items = page.items.map((row) => matterFromRow(row.id, row)).filter((row): row is Matter => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     users: {
@@ -361,9 +412,25 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
     },
     members: {
+      // Audit F13: the canonical membership row Cloud Functions writes (addedBy, the matter's classification, a server
+      // createdAt that orders Functions listMatters). A complete stored row is kept as it is, never overwritten.
       async upsert(row) {
-        const key = `${row.matterId}_${row.userId}`
-        await setDoc(doc(db, "matter_members", key), row)
+        const key = matterMemberDocId(row.matterId, row.userId)
+        await runTransaction(db, async (tx) => {
+          const memberRef = doc(db, "matter_members", key)
+          const current = await tx.get(memberRef)
+          const stored = current.exists() ? (current.data() as Record<string, unknown>) : null
+          const matterSnap = await tx.get(doc(db, "matters", row.matterId))
+          const matter = matterSnap.exists() ? readMatterDocument(matterSnap.data()) : null
+          if (!matter || matter.firmId !== row.firmId) throw new Error("matter member upsert: no canonical matter of the member's firm")
+          // FA-F13-007: no membership change on a closed matter (checked in the transaction that writes it).
+          if (matter.status === "closed") throw new MatterClosedError()
+          if (stored && isCanonicalMatterMemberRow(stored, row.matterId, row.userId, row.firmId)) return
+          tx.set(memberRef, {
+            ...canonicalMatterMemberDocument({ ...row, addedBy: row.addedBy ?? stored?.addedBy ?? null, classification: matter.classification }),
+            createdAt: stored?.createdAt ?? serverTimestampFor(db),
+          })
+        })
       },
       async get(matterId, userId, firmId) {
         const key = `${matterId}_${userId}`
