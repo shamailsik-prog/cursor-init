@@ -133,7 +133,9 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.role in ['partner', 'associate', 'clerk', 'intern'];
       allow update: if sameFirm() && isPartner() && isMember(resource.data.matterId) && firmIdUnchanged()
         && memberRowTyped(request.resource.data)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt', 'addedBy']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt', 'addedBy'])
+        // FA-F13-016: a stored classification cannot be removed (deleteField / merge); a legacy row without one may stay so.
+        && (!('classification' in resource.data) || 'classification' in request.resource.data);
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
     }
     match /clients/{id} {
