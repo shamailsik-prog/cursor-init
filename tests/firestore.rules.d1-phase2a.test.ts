@@ -271,6 +271,42 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
   })
 })
 
+describe("matter_members: addedBy is the caller and classification is typed (FA-F13-014, FA-F13-015)", () => {
+  const ADDED = { uid: "p2a-added", claims: { firmId: FIRM, role: "associate", clearanceLevel: "internal" } }
+  const ref = async () => doc(await as(PARTNER), "matter_members", `${MATTER}_${ADDED.uid}`)
+  const row = { firmId: FIRM, matterId: MATTER, userId: ADDED.uid }
+  // Each create starts from no row (a create the old rules allowed would otherwise turn the next case into an update).
+  const reset = () =>
+    testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "matter_members", `${MATTER}_${ADDED.uid}`))
+    })
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", ADDED.uid), { ...ADDED.claims, active: true })
+    })
+  })
+  it("a create without addedBy is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, classification: "internal", createdAt: serverTimestamp() }))
+  })
+  it("a create with addedBy naming someone else (a forged adder) is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, classification: "internal", addedBy: PARTNER_LOW.uid, createdAt: serverTimestamp() }))
+  })
+  it("a create without classification is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, addedBy: PARTNER.uid, createdAt: serverTimestamp() }))
+  })
+  it("a create with addedBy == the caller and a typed classification is allowed", async () => {
+    await reset()
+    await assertSucceeds(setDoc(await ref(), { ...row, classification: "internal", addedBy: PARTNER.uid, createdAt: serverTimestamp() }))
+  })
+  it("addedBy cannot be changed on update, not even to the caller", async () => {
+    await assertFails(updateDoc(await ref(), { addedBy: PARTNER_LOW.uid }))
+    await assertFails(updateDoc(await ref(), { addedBy: null }))
+  })
+})
+
 describe("clients: registerClient (Cloud Functions, Admin SDK) is the only writer (final review C1)", () => {
   beforeAll(async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
