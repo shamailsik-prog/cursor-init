@@ -103,13 +103,24 @@ service cloud.firestore {
       allow create, delete: if false; // Cloud Functions (Admin SDK) only
     }
     match /matter_members/{id} {
+      // FA-F13-013: the field types canonicalMatterMemberDocument (platform/d1/matterDocument.ts) builds, for any row a
+      // client writes: non-empty firm / matter / user ids, addedBy a user id or null, classification a known label.
+      // (addedBy and classification may still be absent on a client create; FA-F13-014.)
+      function memberRowTyped(d) {
+        return d.firmId is string && d.firmId.size() > 0
+          && d.matterId is string && d.matterId.size() > 0
+          && d.userId is string && d.userId.size() > 0
+          && (d.get('addedBy', null) == null || (d.addedBy is string && d.addedBy.size() > 0))
+          && (!('classification' in d) || d.classification in ['public', 'internal', 'confidential', 'privileged', 'privileged-restricted']);
+      }
       // R-2: no role is exempt, including the founding partner — only members see a matter's membership.
       allow read: if sameFirm() && memberReader(resource.data.matterId);
       // isMember() keys on the doc id, so the id must be bound to the (immutable) matterId/userId fields.
       // R1 #6 (R-2, no role exempt): only a partner who is already a member assigns, and never
       // themselves — a non-member partner cannot self-assign into a matter. Initial membership of
       // a new matter is written server-side (matters API create).
-      allow create: if sameFirmNew() && isPartner() && id == request.resource.data.matterId + '_' + request.resource.data.userId
+      allow create: if sameFirmNew() && isPartner() && memberRowTyped(request.resource.data)
+        && id == request.resource.data.matterId + '_' + request.resource.data.userId
         && isMember(request.resource.data.matterId) && request.resource.data.userId != request.auth.uid
         // Phase 2a: listMatters orders memberships by createdAt, so a client-SDK create must stamp it
         // with the server time (serverTimestamp()); a missing or client-chosen time is refused.
@@ -119,6 +130,7 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.firmId == request.auth.token.firmId
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.role in ['partner', 'associate', 'clerk', 'intern'];
       allow update: if sameFirm() && isPartner() && isMember(resource.data.matterId) && firmIdUnchanged()
+        && memberRowTyped(request.resource.data)
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt']);
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
     }
