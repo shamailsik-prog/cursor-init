@@ -30,7 +30,7 @@ vi.mock("@/platform/persistence/firestoreSpineRepositories", async (orig) => {
     ...mod,
     createFirestoreRepositories: (db: unknown) => {
       const repos = mod.createFirestoreRepositories(db)
-      for (const name of ["update", "confirmEngagement"]) {
+      for (const name of ["update", "confirmEngagement", "recordCaseNumber"]) {
         const fn = repos.matters[name]
         if (!fn) continue
         repos.matters[name] = (async (...args: never[]) => {

@@ -191,6 +191,15 @@ export type MatterRepository = {
    * intimation (its id is the idempotency key) commit together; only the confirm that moves the matter live records it.
    */
   confirmEngagement(id: string, firmId: string, intimation: Intimation): Promise<MatterConfirmation | null>
+  /**
+   * FA-F13-011: the case number in one transaction with its closed check (MatterClosedError on a closed matter), so a
+   * Functions closeMatter committing first is seen and never ends up carrying a newly recorded number.
+   */
+  recordCaseNumber(
+    id: string,
+    firmId: string,
+    patch: Pick<Matter, "caseNumber" | "caseNumberStatus">
+  ): Promise<Matter | null>
 }
 
 export type MatterConfirmation = { outcome: "confirmed" | "already_live" | "closed"; matter: Matter }
@@ -1921,6 +1930,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.matters.set(id, next)
         if (!store.intimations.some((row) => row.id === intimation.id)) store.intimations.push(intimation)
         return { outcome: "confirmed", matter: next }
+      },
+      async recordCaseNumber(id, firmId, patch) {
+        const current = firmScoped(store.matters.get(id), firmId)
+        if (!current) return null
+        if (current.status === "closed") throw new MatterClosedError()
+        const next: Matter = { ...current, caseNumber: patch.caseNumber, caseNumberStatus: patch.caseNumberStatus }
+        store.matters.set(id, next)
+        return next
       },
       async listByFirm(firmId) {
         return [...store.matters.values()].filter((row) => row.firmId === firmId)
