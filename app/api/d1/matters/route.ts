@@ -65,14 +65,14 @@ function ensureClientIdentityInFirm(clientId: string, firmId: string) {
 
 /**
  * FA-F13-001: the users a request names (a new matter's client and members, an added member) are resolved through the
- * firm-scoped users repository on a cache miss, not only from the process's session cache. A deactivated user or a
- * record of another firm is not cached, so the checks below refuse it as before.
+ * firm-scoped users repository on a cache miss, not only from the process's session cache. A record of another firm,
+ * or one the identity policy would refuse (not `active: true`), is not cached, so the checks below refuse it as before.
  */
 async function primeFirmUsers(store: ReturnType<typeof getRuntimeStore>, repo: SpineRepositories, firmId: string, ids: Iterable<string>) {
   for (const id of ids) {
     if (!id || store.users.has(id)) continue
     const row = await repo.users.get(id, firmId)
-    if (row && row.firmId === firmId && row.active !== false) store.users.set(id, row.id === id ? row : { ...row, id })
+    if (row && row.firmId === firmId && row.active === true) store.users.set(id, row.id === id ? row : { ...row, id })
   }
 }
 
