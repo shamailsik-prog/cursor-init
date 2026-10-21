@@ -12,6 +12,7 @@ import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import { mintIdToken, uniq } from "@/functions/test/emu"
+import { viaApi } from "@/functions/test/api"
 
 const E2E_TIMEOUT_MS = 90_000
 type Verifier = (token: string) => Promise<{ uid: string } & Record<string, unknown>>
@@ -51,7 +52,28 @@ async function nextPost(u: User, body: Record<string, unknown>): Promise<{ statu
 const create = (p: User, clientId: string, memberUserIds: string[] = []) =>
   nextPost(p, { action: "create", actorId: p.uid, firmId: p.firmId, clientId, title: "Recovery suit", courtId: "lhc", classification: "internal", memberUserIds })
 
-describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 3: the matters route resolves named users from the repository (FA-F13-001)", { timeout: E2E_TIMEOUT_MS }, () => {
+type FnMatter = Record<string, unknown> & { matterId: string }
+const registerClient = viaApi<{ clientId: string; entityId: string }>("registerClient")
+const runCheck = viaApi<{ checkId: string; result: string }>("runConflictCheck")
+const openMatter = viaApi<FnMatter>("openMatter")
+
+/** A matter opened by the Cloud Functions writer (openMatter on a CLEAR check), with no court. */
+async function openViaFunctions(partner: User): Promise<FnMatter> {
+  const client = await registerClient({
+    token: partner.token,
+    data: { firmId: partner.firmId, name: "Tariq Zarvani", type: "individual", primaryMobile: `0301${String(4000000 + Math.floor(Math.random() * 999999))}`, classification: "internal" },
+  } as never)
+  const check = await runCheck({
+    token: partner.token,
+    data: { firmId: partner.firmId, client: { clientId: client.clientId }, opposingParties: [{ name: `Haris Qalbani ${randomUUID().slice(0, 6)}` }] },
+  } as never)
+  expect(check.result).toBe("CLEAR")
+  return openMatter({ token: partner.token, data: { firmId: partner.firmId, conflictCheckId: check.checkId, title: "Recovery suit", classification: "confidential" } } as never)
+}
+
+const matterDoc = async (id: string) => (await adminDb().collection("matters").doc(id).get()).data()
+
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 3: the matters route resolves named users from the repository (FA-F13-001); record_case_number stores a missing court (FA-F13-002)", { timeout: E2E_TIMEOUT_MS }, () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production")
     vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
@@ -118,5 +140,18 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 3: the matters route res
     const ok = await create(partner, client.uid)
     expect(ok.status, JSON.stringify(ok.body)).toBe(200)
     expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(1)
+  })
+
+  it("FA-F13-002: record_case_number stores its courtId on a matter opened without a court, and never replaces a set court", async () => {
+    const firmId = await newFirm()
+    const partner = await user(firmId, "partner")
+    const m = await openViaFunctions(partner)
+    expect((await matterDoc(m.matterId))?.courtId ?? null).toBeNull()
+    const rc = await nextPost(partner, { action: "record_case_number", actorId: partner.uid, matterId: m.matterId, raw: "Suit No. 12 of 2024", courtId: "SHC" })
+    expect(rc.status, JSON.stringify(rc.body)).toBe(200)
+    expect(await matterDoc(m.matterId)).toMatchObject({ courtId: "SHC", caseNumberStatus: "recorded" })
+    const again = await nextPost(partner, { action: "record_case_number", actorId: partner.uid, matterId: m.matterId, raw: "Suit No. 13 of 2024", courtId: "LHC" })
+    expect(again.status, JSON.stringify(again.body)).toBe(200)
+    expect((await matterDoc(m.matterId))?.courtId).toBe("SHC")
   })
 })
