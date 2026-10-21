@@ -7,6 +7,7 @@ import { POST as mattersPost } from "@/app/api/d1/matters/route"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
+import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeRepositories"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
@@ -153,5 +154,15 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 3: the matters route res
     const again = await nextPost(partner, { action: "record_case_number", actorId: partner.uid, matterId: m.matterId, raw: "Suit No. 13 of 2024", courtId: "LHC" })
     expect(again.status, JSON.stringify(again.body)).toBe(200)
     expect((await matterDoc(m.matterId))?.courtId).toBe("SHC")
+  })
+
+  it("FA-F13-002: the repository write keeps a court already stored, whatever court the patch carries", async () => {
+    const firmId = await newFirm()
+    const partner = await user(firmId, "partner")
+    const m = await openViaFunctions(partner)
+    await adminDb().collection("matters").doc(m.matterId).update({ courtId: "SHC" })
+    const repo = createFirestoreRepositories(adminDb() as never)
+    await repo.matters.recordCaseNumber(m.matterId, firmId, { caseNumber: "SHC/Suit/12/2024", caseNumberStatus: "recorded", courtId: "LHC" })
+    expect(await matterDoc(m.matterId)).toMatchObject({ courtId: "SHC", caseNumber: "SHC/Suit/12/2024" })
   })
 })
