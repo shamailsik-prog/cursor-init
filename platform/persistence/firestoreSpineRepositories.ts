@@ -330,6 +330,24 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           return { outcome: "confirmed" as const, matter: { ...current, status: "live" as const } }
         })
       },
+      async recordCaseNumber(id, firmId, patch) {
+        const firm = requireCallerFirmId(firmId, "matters.recordCaseNumber")
+        // FA-F13-011: the closed check and the write are one transaction (as confirmEngagement, FA-F13-005).
+        return runTransaction(db, async (tx) => {
+          const matterRef = doc(db, "matters", id)
+          const snap = await tx.get(matterRef)
+          if (!snap.exists()) return null
+          const row = snap.data() as StoredRow
+          if (row.firmId !== firm) return null
+          const current = matterFromRow(id, row)
+          if (!current) return null
+          if (current.status === "closed") throw new MatterClosedError()
+          const fields = { caseNumber: patch.caseNumber, caseNumberStatus: patch.caseNumberStatus }
+          const next = canonicalMatterDocument({ ...current, ...fields })
+          tx.update(matterRef, fields)
+          return { ...next, id } as Matter
+        })
+      },
       async listByFirm(firmId) {
         // F12: a firm-scoped query (the listing attaches each row's document id, F14 R8).
         const page = await listAllRowsByFirm<StoredRow & { id: string }>(db, "matters", firmId)

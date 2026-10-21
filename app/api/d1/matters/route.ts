@@ -329,7 +329,7 @@ async function handlePost(request: Request) {
       await syncFirmMembers(store, repo, actor.firmId)
       await syncFirmMatters(store, repo, actor.firmId)
       const { matter } = await ensureMatterAccess(repo, parsed.actorId, parsed.matterId)
-      // FA-F13-007: a closed matter takes no case number (the repository update re-checks before writing).
+      // FA-F13-007 / 011: a closed matter takes no case number (the repository re-checks in the write's transaction).
       if (matter.status === "closed") {
         return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
       }
@@ -345,10 +345,20 @@ async function handlePost(request: Request) {
       const result = recordCaseNumber(store, parsed.matterId, parsed.raw, parsed.courtId)
       const updatedMatter = store.matters.get(parsed.matterId)
       if (updatedMatter) {
-        await repo.matters.update(parsed.matterId, actor.firmId, {
-          caseNumber: updatedMatter.caseNumber,
-          caseNumberStatus: updatedMatter.caseNumberStatus,
-        })
+        // FA-F13-011: the check above is a fast path; the repository re-checks `closed` in the write's transaction.
+        try {
+          await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
+            caseNumber: updatedMatter.caseNumber,
+            caseNumberStatus: updatedMatter.caseNumberStatus,
+          })
+        } catch (err) {
+          // The cached matter took the number before the write was refused: re-read the stored (closed) matter.
+          if (err instanceof MatterClosedError) {
+            const stored = await repo.matters.get(parsed.matterId, actor.firmId)
+            if (stored) store.matters.set(stored.id, stored)
+          }
+          throw err
+        }
         await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
       }
       const newFollowUps = store.followUps.filter((row) => !priorFollowUpIds.has(row.id))
