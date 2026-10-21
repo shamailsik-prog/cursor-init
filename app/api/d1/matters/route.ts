@@ -63,6 +63,19 @@ function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   }
 }
 
+/**
+ * FA-F13-001: the users a request names (a new matter's client and members, an added member) are resolved through the
+ * firm-scoped users repository on a cache miss, not only from the process's session cache. A deactivated user or a
+ * record of another firm is not cached, so the checks below refuse it as before.
+ */
+async function primeFirmUsers(store: ReturnType<typeof getRuntimeStore>, repo: SpineRepositories, firmId: string, ids: Iterable<string>) {
+  for (const id of ids) {
+    if (!id || store.users.has(id)) continue
+    const row = await repo.users.get(id, firmId)
+    if (row && row.firmId === firmId && row.active !== false) store.users.set(id, row.id === id ? row : { ...row, id })
+  }
+}
+
 async function ensureMatterAccess(
   repos: SpineRepositories,
   actorId: string,
@@ -181,6 +194,7 @@ async function handlePost(request: Request) {
       if (rankOf(actor.clearanceLevel) < rankOf(parsed.classification as Classification)) {
         return deny("actor clearance is below requested matter classification")
       }
+      await primeFirmUsers(store, repo, parsed.firmId, [parsed.clientId, ...(parsed.memberUserIds ?? [])])
       ensureClientIdentityInFirm(parsed.clientId, parsed.firmId)
       // Validate every member before anything is persisted, so a bad member id cannot
       // leave an orphaned matter behind. Final audit F1: the same assignee rule as
@@ -248,6 +262,7 @@ async function handlePost(request: Request) {
       if (matter?.status === "closed") {
         return NextResponse.json({ error: "matter is closed", code: "matter_closed" }, { status: 409 })
       }
+      await primeFirmUsers(store, repo, actor.firmId, [parsed.memberUserId])
       let assignment: ReturnType<typeof validateMatterAssignment>
       try {
         assignment = validateMatterAssignment(store, {
