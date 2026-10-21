@@ -9,6 +9,7 @@ import {
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -305,6 +306,27 @@ describe("matter_members: addedBy is the caller and classification is typed (FA-
   it("addedBy cannot be changed on update, not even to the caller", async () => {
     await assertFails(updateDoc(await ref(), { addedBy: PARTNER_LOW.uid }))
     await assertFails(updateDoc(await ref(), { addedBy: null }))
+  })
+  // FA-F13-016: a canonical row cannot lose its classification; a legacy row (none stored) stays updatable.
+  const seed = (data: Record<string, unknown>) =>
+    testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "matter_members", `${MATTER}_${ADDED.uid}`), { ...row, addedBy: PARTNER.uid, createdAt: Timestamp.now(), ...data })
+    })
+  it("FA-F13-016: updateDoc deleteField() cannot remove a canonical row's classification", async () => {
+    await seed({ classification: "internal" })
+    await assertFails(updateDoc(await ref(), { classification: deleteField() }))
+  })
+  it("FA-F13-016: setDoc merge deleteField() cannot remove a canonical row's classification", async () => {
+    await seed({ classification: "internal" })
+    await assertFails(setDoc(await ref(), { classification: deleteField() }, { merge: true }))
+  })
+  it("FA-F13-016: a typed change of a canonical row's classification is still allowed (control)", async () => {
+    await seed({ classification: "internal" })
+    await assertSucceeds(updateDoc(await ref(), { classification: "confidential" }))
+  })
+  it("FA-F13-016: a legacy row without classification stays updatable (control)", async () => {
+    await seed({})
+    await assertSucceeds(updateDoc(await ref(), { note: "lead" }))
   })
 })
 
