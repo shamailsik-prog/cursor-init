@@ -198,7 +198,7 @@ export type MatterRepository = {
   recordCaseNumber(
     id: string,
     firmId: string,
-    patch: Pick<Matter, "caseNumber" | "caseNumberStatus">
+    patch: Pick<Matter, "caseNumber" | "caseNumberStatus"> & { courtId?: string | null }
   ): Promise<Matter | null>
 }
 
@@ -1936,6 +1936,8 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         if (!current) return null
         if (current.status === "closed") throw new MatterClosedError()
         const next: Matter = { ...current, caseNumber: patch.caseNumber, caseNumberStatus: patch.caseNumberStatus }
+        // FA-F13-002: a court is stored only on a matter that has none; a set court is never replaced.
+        if (!current.courtId && patch.courtId) next.courtId = patch.courtId
         store.matters.set(id, next)
         return next
       },

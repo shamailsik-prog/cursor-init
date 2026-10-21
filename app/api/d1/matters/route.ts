@@ -365,6 +365,7 @@ async function handlePost(request: Request) {
           await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
             caseNumber: updatedMatter.caseNumber,
             caseNumberStatus: updatedMatter.caseNumberStatus,
+            courtId: updatedMatter.courtId,
           })
         } catch (err) {
           // The cached matter took the number before the write was refused: re-read the stored (closed) matter.

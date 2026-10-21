@@ -29,6 +29,8 @@ export function recordCaseNumber(
     return { status: "REJECT" }
   }
   matter.caseNumber = result.canonical
+  // FA-F13-002: a matter opened without a court (Cloud Functions openMatter) takes the court the number was read for.
+  if (!matter.courtId) matter.courtId = courtId
   matter.caseNumberStatus = "recorded"
   return { status: result.status, canonical: result.canonical }
 }

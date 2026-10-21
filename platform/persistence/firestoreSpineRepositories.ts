@@ -342,7 +342,9 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           const current = matterFromRow(id, row)
           if (!current) return null
           if (current.status === "closed") throw new MatterClosedError()
-          const fields = { caseNumber: patch.caseNumber, caseNumberStatus: patch.caseNumberStatus }
+          const fields: Record<string, unknown> = { caseNumber: patch.caseNumber, caseNumberStatus: patch.caseNumberStatus }
+          // FA-F13-002: a court is stored only on a matter that has none; a set court is never replaced.
+          if (!current.courtId && patch.courtId) fields.courtId = patch.courtId
           const next = canonicalMatterDocument({ ...current, ...fields })
           tx.update(matterRef, fields)
           return { ...next, id } as Matter
