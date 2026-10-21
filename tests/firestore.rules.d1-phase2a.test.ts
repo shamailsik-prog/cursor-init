@@ -250,7 +250,8 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
       await setDoc(doc(ctx.firestore(), "users", NEW.uid), { ...NEW.claims, active: true })
     })
   })
-  const member = { firmId: FIRM, matterId: MATTER, userId: NEW.uid }
+  // FA-F13-014/015: a client create names its adder (the caller) and a typed classification.
+  const member = { firmId: FIRM, matterId: MATTER, userId: NEW.uid, addedBy: PARTNER.uid, classification: "internal" }
   it("a member partner's create without createdAt is denied", async () => {
     await assertFails(setDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), member))
   })
