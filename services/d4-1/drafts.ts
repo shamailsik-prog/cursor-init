@@ -129,8 +129,13 @@ export function ownCaseReferenceMatcher(matter: {
     // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
     if (context) {
       const mentions = courtMentions(`${context.before} ${raw} ${context.after}`)
-      // A matter with no court admits no mentioned court (fail closed, audit F13).
-      if (mentions.some((ids) => matter.courtId === null || !ids.has(matter.courtId))) return false
+      // A matter with no court admits no mentioned court (fail closed, audit F13 / FA-F13-008 M10).
+      // Set.has(null) is false, so `!ids.has(courtId)` fail-closes on any mention by itself and a revert of
+      // the null clause survives every suite. A non-string court id is not excluded by set membership;
+      // the null clause is what refuses the mention.
+      if (mentions.some((ids) =>
+        matter.courtId === null || (typeof matter.courtId === "string" && !ids.has(matter.courtId))
+      )) return false
     }
     return true
   }
