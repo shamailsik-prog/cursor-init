@@ -42,7 +42,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     ["an unknown objectBytesStatus", { objectBytesStatus: "maybe" }],
   ])("a row with %s is refused by get, update and listByFirm", async (_label, patch) => {
     const firmId = uniq("f13d4firm")
-    const row = { ...good(firmId), ...patch }
+    const row: Record<string, unknown> = { ...good(firmId), ...patch }
     for (const k of Object.keys(row)) if (row[k] === undefined) delete row[k]
     const id = await stored(row)
     const okId = await stored(good(firmId))
