@@ -6,12 +6,11 @@ import { randomUUID } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
 import { describe, expect, it } from "vitest"
 import {
-  adminMatterShapeBackfillStore,
   applyMatterShapeBackfill,
   planMatterShapeBackfill,
-  readMatterShapeRows,
   type MatterShapeBackfillStore,
 } from "@/platform/persistence/matterShapeBackfill"
+import { adminMatterShapeBackfillStore, readMatterShapeRows } from "@/scripts/lib/matterShapeBackfillAdmin"
 import { adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import { mintIdToken, uniq } from "@/functions/test/emu"

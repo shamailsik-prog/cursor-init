@@ -12,12 +12,8 @@
 import { randomUUID } from "node:crypto"
 import { applicationDefault, initializeApp } from "firebase-admin/app"
 import { FieldValue, getFirestore } from "firebase-admin/firestore"
-import {
-  adminMatterShapeBackfillStore,
-  applyMatterShapeBackfill,
-  planMatterShapeBackfill,
-  readMatterShapeRows,
-} from "@/platform/persistence/matterShapeBackfill"
+import { applyMatterShapeBackfill, planMatterShapeBackfill } from "@/platform/persistence/matterShapeBackfill"
+import { adminMatterShapeBackfillStore, readMatterShapeRows } from "./lib/matterShapeBackfillAdmin"
 
 async function main(argv: string[]): Promise<void> {
   const apply = argv.includes("--apply")
