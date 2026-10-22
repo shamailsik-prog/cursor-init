@@ -25,6 +25,12 @@ function memoryStore(opts: { failAt?: number } = {}) {
       events.push(`write:${collection}/${id}`)
       return true
     },
+    async completeMember(planned) {
+      writes += 1
+      if (opts.failAt !== undefined && writes === opts.failAt) throw new Error("instance died")
+      events.push(`write:matter_members/${planned.id}`)
+      return true
+    },
     async appendAudit(row) {
       if (audit.some((r) => r.id === row.id)) throw new Error(`audit row ${row.id} exists`)
       audit.push(row as unknown as Record<string, unknown>)

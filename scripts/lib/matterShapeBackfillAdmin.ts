@@ -5,6 +5,7 @@
  */
 import {
   SERVER_TIMESTAMP,
+  resolveMemberPatch,
   stillMissing,
   type BackfillRow,
   type MatterShapeBackfillStore,
@@ -31,6 +32,23 @@ export function adminMatterShapeBackfillStore(db: AdminLike, serverTimestamp: ()
         const write: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(missing)) write[k] = v === SERVER_TIMESTAMP ? serverTimestamp() : v
         tx.update(ref, write)
+        return true
+      })
+    },
+    async completeMember(planned) {
+      const memberRef = db.collection("matter_members").doc(planned.id)
+      const matterRef = db.collection("matters").doc(planned.matterId)
+      return db.runTransaction(async (tx) => {
+        const memberSnap = await tx.get(memberRef)
+        const matterSnap = await tx.get(matterRef)
+        const member = memberSnap.exists ? ((memberSnap.data() ?? {}) as Record<string, unknown>) : null
+        const resolved = resolveMemberPatch(member, matterSnap.exists ? matterSnap.data() : null, planned)
+        if (!member || !resolved) return false
+        const missing = stillMissing(member, resolved)
+        if (!Object.keys(missing).length) return false
+        const write: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(missing)) write[k] = v === SERVER_TIMESTAMP ? serverTimestamp() : v
+        tx.update(memberRef, write)
         return true
       })
     },

@@ -20,12 +20,15 @@ export type BackfillRow = { id: string; data: Record<string, unknown> }
 
 /** A marker the store adapter turns into the writer's server timestamp. */
 export const SERVER_TIMESTAMP = "__server_timestamp__" as const
+/** FA-F13-018: a marker the apply step replaces with the member's matter's classification read in its transaction. */
+export const MATTER_CLASSIFICATION = "__matter_classification__" as const
 
 export type FieldPatch = Record<string, unknown>
 
 export type MatterShapeBackfillPlan = {
   matters: Array<{ id: string; patch: FieldPatch }>
-  members: Array<{ id: string; patch: FieldPatch }>
+  /** `matterId` / `firmId` / `userId`: what the member named at plan time; apply skips it if any has changed. */
+  members: Array<{ id: string; patch: FieldPatch; matterId: string; firmId: string; userId: string }>
   /** Rows already canonical. */
   complete: string[]
   /** Matter rows that fail the canonical validator: reported, never written. */
@@ -66,13 +69,33 @@ export function planMatterShapeBackfill(matters: readonly BackfillRow[], members
       continue
     }
     const patch: FieldPatch = {}
-    if (d.classification === undefined) patch.classification = matter.classification
+    if (d.classification === undefined) patch.classification = MATTER_CLASSIFICATION
     if (d.addedBy === undefined) patch.addedBy = null
     if (d.createdAt === undefined || d.createdAt === null) patch.createdAt = SERVER_TIMESTAMP
-    if (Object.keys(patch).length) plan.members.push({ id: row.id, patch })
+    if (Object.keys(patch).length) plan.members.push({ id: row.id, patch, matterId: d.matterId as string, firmId: matter.firmId, userId: d.userId })
     else plan.complete.push(`matter_members/${row.id}`)
   }
   return plan
+}
+
+/**
+ * FA-F13-018: the member patch to write, resolved against the rows read in the apply transaction. Null (skip) when the
+ * member no longer names the planned matter, firm or user, or its matter is gone, malformed or in another firm; the
+ * classification marker becomes the matter's CURRENT classification.
+ */
+export function resolveMemberPatch(
+  member: Record<string, unknown> | null,
+  matterRow: unknown,
+  planned: { id: string; patch: FieldPatch; matterId: string; firmId: string; userId: string }
+): FieldPatch | null {
+  if (!member) return null
+  if (member.matterId !== planned.matterId || member.firmId !== planned.firmId || member.userId !== planned.userId) return null
+  if (planned.id !== matterMemberDocId(planned.matterId, planned.userId)) return null
+  const matter = readMatterDocument(matterRow)
+  if (!matter || matter.firmId !== planned.firmId) return null
+  const out: FieldPatch = {}
+  for (const [k, v] of Object.entries(planned.patch)) out[k] = v === MATTER_CLASSIFICATION ? matter.classification : v
+  return out
 }
 
 /** The fields of `patch` the stored row still lacks (createdAt also counts as lacking when null). */
@@ -115,8 +138,13 @@ export type MatterShapeBackfillAuditRow = {
 }
 
 export type MatterShapeBackfillStore = {
-  /** In one transaction: re-reads `collection/id` and writes only `stillMissing(stored, patch)`. Returns whether it wrote. */
-  addMissingFields(collection: "matters" | "matter_members", id: string, patch: FieldPatch): Promise<boolean>
+  /** In one transaction: re-reads `matters/id` and writes only `stillMissing(stored, patch)`. Returns whether it wrote. */
+  addMissingFields(collection: "matters", id: string, patch: FieldPatch): Promise<boolean>
+  /**
+   * FA-F13-018: in one transaction, re-reads the member AND its matter, resolves the patch with `resolveMemberPatch`
+   * (skip when it moved or the matter is malformed), then writes only `stillMissing(stored, resolved)`.
+   */
+  completeMember(planned: MatterShapeBackfillPlan["members"][number]): Promise<boolean>
   /** Creates one audit row; never overwrites one. */
   appendAudit(row: MatterShapeBackfillAuditRow): Promise<void>
 }
@@ -152,7 +180,8 @@ export async function applyMatterShapeBackfill(
   })
   const applied: string[] = []
   const skipped: string[] = []
-  const work = [
+  type Work = readonly ["matters", MatterShapeBackfillPlan["matters"][number]] | readonly ["matter_members", MatterShapeBackfillPlan["members"][number]]
+  const work: Work[] = [
     ...plan.matters.map((u) => ["matters", u] as const),
     ...plan.members.map((u) => ["matter_members", u] as const),
   ]
@@ -163,8 +192,9 @@ export async function applyMatterShapeBackfill(
     await store.appendAudit(row(`${base}_b${k}_planned`, `batch ${k}: ${keys.length} planned`, { planned: keys }))
     const batchApplied: string[] = []
     const batchSkipped: string[] = []
-    for (const [i, [collection, u]] of batch.entries()) {
-      if (await store.addMissingFields(collection, u.id, u.patch)) batchApplied.push(keys[i])
+    for (const [i, item] of batch.entries()) {
+      const wrote = item[0] === "matters" ? await store.addMissingFields("matters", item[1].id, item[1].patch) : await store.completeMember(item[1])
+      if (wrote) batchApplied.push(keys[i])
       else batchSkipped.push(keys[i])
     }
     await store.appendAudit(
