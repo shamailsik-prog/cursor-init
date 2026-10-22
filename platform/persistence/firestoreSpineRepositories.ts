@@ -1,4 +1,5 @@
 import { DocumentMalformedError, readDocumentRecord } from "@/platform/d1/documentRecord"
+import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -2280,14 +2281,35 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
     },
     reportingIndex: {
+      // FA-F13-004: the stored row and the row to write are both validated, in one transaction, BEFORE the write,
+      // so a refused upsert leaves storage unchanged. A malformed stored row is not repaired by a later upsert.
       async upsert(row) {
-        await setDoc(doc(db, "matter_client_search_index", row.id), row)
+        const id = typeof row?.id === "string" ? row.id : ""
+        if (!id) throw new SearchIndexMalformedError("unknown")
+        const ref = doc(db, "matter_client_search_index", id)
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref)
+          if (snap.exists() && !readMatterClientSearchIndexRow(id, snap.data())) throw new SearchIndexMalformedError(id)
+          const next = readMatterClientSearchIndexRow(id, row)
+          if (!next) throw new SearchIndexMalformedError(id)
+          tx.set(ref, next)
+        })
       },
+      // A row that exists but is malformed throws SearchIndexMalformedError: a caller must never mistake it for an
+      // absent row and fall back to a cached copy.
       async get(id, firmId) {
-        return getById<MatterClientSearchIndexRow>(db, "matter_client_search_index", id, firmId)
+        const row = await getById<StoredRow>(db, "matter_client_search_index", id, firmId)
+        if (!row) return null
+        const parsed = readMatterClientSearchIndexRow(id, row)
+        if (!parsed) throw new SearchIndexMalformedError(id)
+        return parsed
       },
       async listByFirm(firmId) {
-        return listByFirm<MatterClientSearchIndexRow>(db, "matter_client_search_index", firmId)
+        const page = await listAllRowsByFirm<StoredRow & { id: string }>(db, "matter_client_search_index", firmId)
+        const items = page.items
+          .map((row) => readMatterClientSearchIndexRow(row.id, row))
+          .filter((row): row is MatterClientSearchIndexRow => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     draftTemplateAnalytics: {

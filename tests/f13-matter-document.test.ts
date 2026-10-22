@@ -4,6 +4,8 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
+import type { Matter } from "@/platform/spine/store"
 import {
   MATTER_STAGES,
   MatterShapeError,
@@ -171,7 +173,7 @@ describe("F13: the canonical status set includes closed", () => {
 
 // FA-F13-008: the two read-side null-court paths, each guarded by a test that fails on its revert (mutants M8, M10).
 describe("F13 re-audit: null-court read paths", () => {
-  const courtless = {
+  const base: Matter = {
     id: "m_null_court",
     firmId: "firm_a",
     clientId: "client_a",
@@ -181,13 +183,17 @@ describe("F13 re-audit: null-court read paths", () => {
     courtId: null,
     caseNumber: null,
     caseNumberStatus: "pending",
-  } as const
+  }
 
-  it("M8: the search index row of a matter with no court and no case number has an empty detail", async () => {
-    const { buildMatterSearchIndexRow } = await import("@/platform/persistence/matterClientSearchIndex")
-    const row = buildMatterSearchIndexRow(courtless as never, { updatedAt: 1 })
+  it("M8: the search index row of a matter with no court and no case number has an empty detail", () => {
+    // Revert of `?? ""` (matterClientSearchIndex.ts) leaves detail null. A case number wins over the court,
+    // the court is used only when the case number is null, and an empty case number does not fall through.
+    const row = buildMatterSearchIndexRow(base, { updatedAt: 1 })
     expect(row.detail).toBe("")
     expect(row.tags).not.toContain("null")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: "CP 12/2019", courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("CP 12/2019")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: null, courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("SHC")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: "", courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("")
   })
 
   it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", async () => {
