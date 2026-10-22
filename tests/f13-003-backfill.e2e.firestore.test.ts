@@ -151,14 +151,16 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-018: apply re-reads the
     ["the matter moved to another firm", async (m: string) => adminDb().collection("matters").doc(m).update({ firmId: uniq("otherfirm") })],
     ["the matter became malformed", async (m: string) => adminDb().collection("matters").doc(m).update({ classification: "top-secret" })],
     ["the matter was deleted", async (m: string) => adminDb().collection("matters").doc(m).delete()],
-  ])("a member is skipped and left untouched when, after planning, %s", async (_label, change) => {
+  ])("a member is rejected at apply and left untouched when, after planning, %s", async (_label, change) => {
     const firmId = await newFirm()
     const matterId = await legacyNextMatter(firmId, { stage: "pre_filing" })
     const memberId = await legacyMember(firmId, matterId, uniq("u"))
     const plan = await planFor(firmId)
     await change(matterId, memberId)
+    const path = `matter_members/${memberId}`
     const res = await applyMatterShapeBackfill(store(), plan, { runId: randomUUID(), now: Date.now() })
-    expect(res.skipped).toContain(`matter_members/${memberId}`)
+    expect(res.skipped).not.toContain(path)
+    expect(res.rejected.map((r) => r.path)).toContain(path)
     const row = await data("matter_members", memberId)
     expect(row.classification).toBeUndefined()
     expect(row.createdAt).toBeUndefined()

@@ -29,7 +29,7 @@ function memoryStore(opts: { failAt?: number } = {}) {
       writes += 1
       if (opts.failAt !== undefined && writes === opts.failAt) throw new Error("instance died")
       events.push(`write:matter_members/${planned.id}`)
-      return true
+      return { status: "written" }
     },
     async appendAudit(row) {
       if (audit.some((r) => r.id === row.id)) throw new Error(`audit row ${row.id} exists`)
@@ -41,7 +41,10 @@ function memoryStore(opts: { failAt?: number } = {}) {
 }
 
 const pathsIn = (row: Record<string, unknown>) =>
-  ["planned", "applied", "skipped", "malformed", "orphans"].reduce((n, k) => n + ((row[k] as unknown[] | undefined)?.length ?? 0), 0)
+  ["planned", "applied", "skipped", "rejected", "malformed", "orphans"].reduce(
+    (n, k) => n + ((row[k] as unknown[] | undefined)?.length ?? 0),
+    0
+  )
 
 describe("F13 FA-F13-003: bounded backfill audit rows", () => {
   it("a large run writes many bounded rows, never one row with every path", async () => {
