@@ -6,6 +6,7 @@ import {
   MATTER_BACKFILL_AUDIT_BATCH,
   applyMatterShapeBackfill,
   planMatterShapeBackfill,
+  type CompleteMatterResult,
   type MatterShapeBackfillStore,
 } from "@/platform/persistence/matterShapeBackfill"
 
@@ -14,16 +15,18 @@ const legacyMatter = (i: number) => ({
   data: { firmId: "firmA", clientId: "c1", title: "Suit", classification: "internal", status: "live" },
 })
 
-function memoryStore(opts: { failAt?: number } = {}) {
+function memoryStore(opts: { failAt?: number; matterOutcome?: (id: string) => CompleteMatterResult | undefined } = {}) {
   const audit: Array<Record<string, unknown>> = []
   const events: string[] = []
   let writes = 0
   const store: MatterShapeBackfillStore = {
-    async addMissingFields(collection, id) {
+    async completeMatter(planned) {
       writes += 1
       if (opts.failAt !== undefined && writes === opts.failAt) throw new Error("instance died")
-      events.push(`write:${collection}/${id}`)
-      return true
+      const forced = opts.matterOutcome?.(planned.id)
+      if (forced) return forced
+      events.push(`write:matters/${planned.id}`)
+      return { status: "written" }
     },
     async completeMember(planned) {
       writes += 1
@@ -80,5 +83,28 @@ describe("F13 FA-F13-003: bounded backfill audit rows", () => {
     expect(firstPlanned).toBeLessThan(firstWrite)
     // The first batch's outcome row was written before the second batch started.
     expect(audit.some((r) => Array.isArray(r.applied) && (r.applied as string[]).length === MATTER_BACKFILL_AUDIT_BATCH)).toBe(true)
+  })
+})
+
+describe("F13 FA-F13-019: a planned matter gone or malformed at apply is rejected, not skipped", () => {
+  it("rejects with the store's reason and counts it as rejected in the batch and summary rows", async () => {
+    const plan = planMatterShapeBackfill([legacyMatter(0), legacyMatter(1), legacyMatter(2)], [])
+    const reasons: Record<string, CompleteMatterResult> = {
+      m00000: { status: "rejected", reason: "matter_gone" },
+      m00001: { status: "rejected", reason: "matter_malformed" },
+    }
+    const { store, audit } = memoryStore({ matterOutcome: (id) => reasons[id] })
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r19", now: 1 })
+    expect(res.skipped).toEqual([])
+    expect(res.applied).toEqual(["matters/m00002"])
+    expect(res.rejected).toEqual([
+      { path: "matters/m00000", reason: "matter_gone" },
+      { path: "matters/m00001", reason: "matter_malformed" },
+    ])
+    const done = audit.find((r) => r.id === "aud_matter_shape_backfill_r19_b0_done")!
+    expect(done.skipped).toEqual([])
+    expect(done.rejected).toEqual(res.rejected)
+    const summary = audit.find((r) => r.id === "aud_matter_shape_backfill_r19")!
+    expect(summary).toMatchObject({ appliedCount: 1, skippedCount: 0, rejectedCount: 2 })
   })
 })
