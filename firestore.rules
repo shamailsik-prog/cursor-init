@@ -105,7 +105,7 @@ service cloud.firestore {
     match /matter_members/{id} {
       // FA-F13-013: the field types canonicalMatterMemberDocument (platform/d1/matterDocument.ts) builds, for any row a
       // client writes: non-empty firm / matter / user ids, addedBy a user id or null, classification a known label.
-      // (addedBy and classification may still be absent on a client create; FA-F13-014.)
+      // A client create must carry both, with addedBy the caller (FA-F13-014, FA-F13-015).
       function memberRowTyped(d) {
         return d.firmId is string && d.firmId.size() > 0
           && d.matterId is string && d.matterId.size() > 0
@@ -120,6 +120,8 @@ service cloud.firestore {
       // themselves — a non-member partner cannot self-assign into a matter. Initial membership of
       // a new matter is written server-side (matters API create).
       allow create: if sameFirmNew() && isPartner() && memberRowTyped(request.resource.data)
+        && request.resource.data.get('addedBy', null) == request.auth.uid
+        && 'classification' in request.resource.data
         && id == request.resource.data.matterId + '_' + request.resource.data.userId
         && isMember(request.resource.data.matterId) && request.resource.data.userId != request.auth.uid
         // Phase 2a: listMatters orders memberships by createdAt, so a client-SDK create must stamp it
@@ -131,7 +133,9 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.role in ['partner', 'associate', 'clerk', 'intern'];
       allow update: if sameFirm() && isPartner() && isMember(resource.data.matterId) && firmIdUnchanged()
         && memberRowTyped(request.resource.data)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt', 'addedBy'])
+        // FA-F13-016: a stored classification cannot be removed (deleteField / merge); a legacy row without one may stay so.
+        && (!('classification' in resource.data) || 'classification' in request.resource.data);
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
     }
     match /clients/{id} {

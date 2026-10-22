@@ -674,8 +674,8 @@ describe("Review round 1 — update/read paths, proposals, members", () => {
         await setDoc(doc(ctx.firestore(), "users", "rv-new"), { firmId: "firmA", role: "associate", clearanceLevel: "internal", active: true })
       })
       const db = await authed("partner1", PARTNER)
-      await assertFails(setDoc(doc(db, "matter_members", "r1_someoneElse"), { firmId: "firmA", matterId: "r1", userId: "rv-new", createdAt: serverTimestamp() }))
-      await assertSucceeds(setDoc(doc(db, "matter_members", "r1_rv-new"), { firmId: "firmA", matterId: "r1", userId: "rv-new", createdAt: serverTimestamp() }))
+      await assertFails(setDoc(doc(db, "matter_members", "r1_someoneElse"), { firmId: "firmA", matterId: "r1", userId: "rv-new", addedBy: "partner1", classification: "internal", createdAt: serverTimestamp() }))
+      await assertSucceeds(setDoc(doc(db, "matter_members", "r1_rv-new"), { firmId: "firmA", matterId: "r1", userId: "rv-new", addedBy: "partner1", classification: "internal", createdAt: serverTimestamp() }))
     })
     it("update cannot rebind matterId or userId", async () => {
       const db = await authed("partner1", PARTNER)
@@ -1230,17 +1230,17 @@ describe("Review R1 #6 — every matter-bound collection requires membership (R-
   describe("matter_members: no self-assignment; the adder must already be a member", () => {
     it("a non-member partner cannot add themselves, then read the matter", async () => {
       const db = await authed("p9", PARTNER_OUT)
-      await assertFails(setDoc(doc(db, "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9", createdAt: serverTimestamp() }))
+      await assertFails(setDoc(doc(db, "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9", addedBy: "p9", classification: "internal", createdAt: serverTimestamp() }))
       await assertFails(getDoc(doc(db, "matters", "sgM")))
     })
     it("a non-member partner cannot add someone else either", async () => {
-      await assertFails(setDoc(doc(await authed("p9", PARTNER_OUT), "matter_members", "sgM_p10"), { firmId: "firmA", matterId: "sgM", userId: "p10", createdAt: serverTimestamp() }))
+      await assertFails(setDoc(doc(await authed("p9", PARTNER_OUT), "matter_members", "sgM_p10"), { firmId: "firmA", matterId: "sgM", userId: "p10", addedBy: "p9", classification: "internal", createdAt: serverTimestamp() }))
     })
     it("a member partner can add another partner", async () => {
       await testEnv.withSecurityRulesDisabled(async (ctx) => {
         await setDoc(doc(ctx.firestore(), "users", "p9"), { firmId: "firmA", role: "partner", clearanceLevel: "privileged-restricted", active: true })
       })
-      await assertSucceeds(setDoc(doc(await authed("sg-partner-in", PARTNER_OUT), "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9", createdAt: serverTimestamp() }))
+      await assertSucceeds(setDoc(doc(await authed("sg-partner-in", PARTNER_OUT), "matter_members", "sgM_p9"), { firmId: "firmA", matterId: "sgM", userId: "p9", addedBy: "sg-partner-in", classification: "internal", createdAt: serverTimestamp() }))
     })
   })
 })
@@ -1318,10 +1318,10 @@ describe("Review R2 N5 — client-role users read only their own matters, never 
   })
   it("a member partner cannot assign a client or accounts user; a staff assignee is fine", async () => {
     const db = await authed("n5-pm", PARTNER)
-    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-cli2"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli2", createdAt: serverTimestamp() }))
-    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-acc"), { firmId: "firmA", matterId: "n5M", userId: "n5-acc", createdAt: serverTimestamp() }))
-    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-ghost"), { firmId: "firmA", matterId: "n5M", userId: "n5-ghost", createdAt: serverTimestamp() }))
-    await assertSucceeds(setDoc(doc(db, "matter_members", "n5M_n5-assoc"), { firmId: "firmA", matterId: "n5M", userId: "n5-assoc", createdAt: serverTimestamp() }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-cli2"), { firmId: "firmA", matterId: "n5M", userId: "n5-cli2", addedBy: "n5-pm", classification: "internal", createdAt: serverTimestamp() }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-acc"), { firmId: "firmA", matterId: "n5M", userId: "n5-acc", addedBy: "n5-pm", classification: "internal", createdAt: serverTimestamp() }))
+    await assertFails(setDoc(doc(db, "matter_members", "n5M_n5-ghost"), { firmId: "firmA", matterId: "n5M", userId: "n5-ghost", addedBy: "n5-pm", classification: "internal", createdAt: serverTimestamp() }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "n5M_n5-assoc"), { firmId: "firmA", matterId: "n5M", userId: "n5-assoc", addedBy: "n5-pm", classification: "internal", createdAt: serverTimestamp() }))
   })
 })
 
@@ -1433,7 +1433,7 @@ describe("Review R2 probes (secrev2/rules2.probe.test.ts) pinned as regressions"
       b.set(doc(db, "matter_members", "p2m1_p2-p9"), { firmId: "firmA", matterId: "p2m1", userId: "p2-p9" })
       await b.commit()
     })())
-    await assertFails(setDoc(doc(await authed("p2-pm", PARTNER), "matter_members", "p2m1_victim"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1", createdAt: serverTimestamp() }))
+    await assertFails(setDoc(doc(await authed("p2-pm", PARTNER), "matter_members", "p2m1_victim"), { firmId: "firmA", matterId: "p2m1", userId: "p2-x1", addedBy: "p2-pm", classification: "internal", createdAt: serverTimestamp() }))
   })
 })
 
@@ -1478,8 +1478,8 @@ describe("review round 3 N14 and rules3 probes", () => {
 
   it("a member partner cannot assign a foreign-firm user; a same-firm associate is fine", async () => {
     const db = await authed("r3-pm", PARTNER)
-    await assertFails(setDoc(doc(db, "matter_members", "r3m1_r3-foreign"), { firmId: "firmA", matterId: "r3m1", userId: "r3-foreign", createdAt: serverTimestamp() }))
-    await assertSucceeds(setDoc(doc(db, "matter_members", "r3m1_r3-acc1"), { firmId: "firmA", matterId: "r3m1", userId: "r3-acc1", createdAt: serverTimestamp() }))
+    await assertFails(setDoc(doc(db, "matter_members", "r3m1_r3-foreign"), { firmId: "firmA", matterId: "r3m1", userId: "r3-foreign", addedBy: "r3-pm", classification: "internal", createdAt: serverTimestamp() }))
+    await assertSucceeds(setDoc(doc(db, "matter_members", "r3m1_r3-acc1"), { firmId: "firmA", matterId: "r3m1", userId: "r3-acc1", addedBy: "r3-pm", classification: "internal", createdAt: serverTimestamp() }))
   })
 
   it("a member cannot rewrite the matter case number", async () => {
