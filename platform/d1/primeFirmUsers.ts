@@ -12,6 +12,6 @@ export async function primeFirmUsers(store: SpineStore, repo: Pick<SpineReposito
   for (const id of ids) {
     if (!id || store.users.has(id)) continue
     const row = await repo.users.get(id, firmId)
-    if (row && row.active === true) store.users.set(id, row.id === id ? row : { ...row, id })
+    if (row && row.firmId === firmId && row.active === true) store.users.set(id, row.id === id ? row : { ...row, id })
   }
 }
