@@ -569,7 +569,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
 
     for (const docId of ["f14c2missing", "f14c2empty"]) {
       const res = await documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&docId=${docId}&includeContent=true`))
-      expect(res.status).toBe(403)
+      // FA-F13-004: the repository's validator refuses a row with a missing or empty matterId, so the route sees no
+      // document (404) rather than one it then denies (403); either way nothing is served.
+      expect(res.status).toBe(404)
     }
     const list = await documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&limit=100&cursor=0`))
     expect(list.status).toBe(200)
