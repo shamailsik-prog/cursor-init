@@ -20,6 +20,10 @@ Rules for this file:
   transitive packages) are out of scope: `--omit=dev` excludes them because
   they never ship. Track them in the upgrade backlog, not here.
 
+Re-checked 2026-10-22: `next` and `eslint-config-next` 16.4.0 -> 16.4.2 fix
+GHSA-2464-fhr4-w9xw (critical, Image Optimization RCE with SVG) and
+GHSA-p3m5-59mp-jv5r (high, App Router Server Actions DoS). Fixed, not listed.
+
 Re-checked 2026-10-07 after the dependency-upgrade change. All nine rows of
 the 2026-10-06 baseline were fixed, not listed, and the table is empty:
 
