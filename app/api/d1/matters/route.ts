@@ -361,8 +361,9 @@ async function handlePost(request: Request) {
       const updatedMatter = store.matters.get(parsed.matterId)
       if (updatedMatter) {
         // FA-F13-011: the check above is a fast path; the repository re-checks `closed` in the write's transaction.
+        let persisted: Awaited<ReturnType<typeof repo.matters.recordCaseNumber>>
         try {
-          await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
+          persisted = await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
             caseNumber: updatedMatter.caseNumber,
             caseNumberStatus: updatedMatter.caseNumberStatus,
             courtId: updatedMatter.courtId,
@@ -375,7 +376,13 @@ async function handlePost(request: Request) {
           }
           throw err
         }
-        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
+        // FA-F13-017: index the matter the transaction stored, not the pre-transaction cached copy, so a court the
+        // transaction refused to write (a set court is never replaced) is never published to the search index.
+        const stored = persisted ?? (await repo.matters.get(parsed.matterId, actor.firmId))
+        if (stored) {
+          store.matters.set(stored.id, stored)
+          await repo.reportingIndex.upsert(buildMatterSearchIndexRow(stored))
+        }
       }
       const newFollowUps = store.followUps.filter((row) => !priorFollowUpIds.has(row.id))
       for (const row of newFollowUps) {
