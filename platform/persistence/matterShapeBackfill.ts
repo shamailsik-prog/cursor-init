@@ -120,6 +120,21 @@ export function resolveMemberPatch(
   return out
 }
 
+/** FA-F13-019: why a planned matter was not written at apply time (null when its stored row is still well formed). */
+export type MatterApplyRejectionReason = "matter_gone" | "matter_malformed"
+
+export function matterApplyRejectionReason(stored: unknown): MatterApplyRejectionReason | null {
+  if (stored == null) return "matter_gone"
+  return readMatterDocument(stored) ? null : "matter_malformed"
+}
+
+export type CompleteMatterResult =
+  | { status: "written" }
+  | { status: "skipped" }
+  | { status: "rejected"; reason: MatterApplyRejectionReason }
+
+export type ApplyRejection = { path: string; reason: MemberApplyRejectionReason | MatterApplyRejectionReason }
+
 export type CompleteMemberResult =
   | { status: "written" }
   | { status: "skipped" }
@@ -154,7 +169,7 @@ export type MatterShapeBackfillAuditRow = {
   planned?: string[]
   applied?: string[]
   skipped?: string[]
-  rejected?: Array<{ path: string; reason: MemberApplyRejectionReason }>
+  rejected?: ApplyRejection[]
   malformed?: string[]
   orphans?: string[]
   appliedCount?: number
@@ -168,7 +183,7 @@ export type MatterShapeBackfillAuditRow = {
 
 export type MatterShapeBackfillStore = {
   /** In one transaction: re-reads `matters/id` and writes only `stillMissing(stored, patch)`. Returns whether it wrote. */
-  addMissingFields(collection: "matters", id: string, patch: FieldPatch): Promise<boolean>
+  completeMatter(planned: MatterShapeBackfillPlan["matters"][number]): Promise<CompleteMatterResult>
   /**
    * FA-F13-018: in one transaction, re-reads the member AND its matter, resolves the patch with `resolveMemberPatch`
    * (skip when it moved or the matter is malformed), then writes only `stillMissing(stored, resolved)`.
@@ -193,7 +208,7 @@ export async function applyMatterShapeBackfill(
   store: MatterShapeBackfillStore,
   plan: MatterShapeBackfillPlan,
   meta: { runId: string; now: number }
-): Promise<{ applied: string[]; skipped: string[]; rejected: Array<{ path: string; reason: MemberApplyRejectionReason }> }> {
+): Promise<{ applied: string[]; skipped: string[]; rejected: ApplyRejection[] }> {
   const base = `aud_matter_shape_backfill_${meta.runId}`
   const row = (id: string, reason: string, extra: Partial<MatterShapeBackfillAuditRow>): MatterShapeBackfillAuditRow => ({
     id,
@@ -209,7 +224,7 @@ export async function applyMatterShapeBackfill(
   })
   const applied: string[] = []
   const skipped: string[] = []
-  const rejected: Array<{ path: string; reason: MemberApplyRejectionReason }> = []
+  const rejected: ApplyRejection[] = []
   type Work = readonly ["matters", MatterShapeBackfillPlan["matters"][number]] | readonly ["matter_members", MatterShapeBackfillPlan["members"][number]]
   const work: Work[] = [
     ...plan.matters.map((u) => ["matters", u] as const),
@@ -222,12 +237,14 @@ export async function applyMatterShapeBackfill(
     await store.appendAudit(row(`${base}_b${k}_planned`, `batch ${k}: ${keys.length} planned`, { planned: keys }))
     const batchApplied: string[] = []
     const batchSkipped: string[] = []
-    const batchRejected: Array<{ path: string; reason: MemberApplyRejectionReason }> = []
+    const batchRejected: ApplyRejection[] = []
     for (const [i, item] of batch.entries()) {
       if (item[0] === "matters") {
-        const wrote = await store.addMissingFields("matters", item[1].id, item[1].patch)
-        if (wrote) batchApplied.push(keys[i])
-        else batchSkipped.push(keys[i])
+        // FA-F13-019: a matter gone or malformed since planning is rejected with its reason, never "completed since planning".
+        const outcome = await store.completeMatter(item[1])
+        if (outcome.status === "written") batchApplied.push(keys[i])
+        else if (outcome.status === "skipped") batchSkipped.push(keys[i])
+        else batchRejected.push({ path: keys[i], reason: outcome.reason })
       } else {
         const outcome = await store.completeMember(item[1])
         if (outcome.status === "written") batchApplied.push(keys[i])

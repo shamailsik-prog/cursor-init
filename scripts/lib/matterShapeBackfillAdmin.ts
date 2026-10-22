@@ -4,6 +4,7 @@
  * static guards (F01 no full-collection scans, F10 fenced writes) cover the server's own code.
  */
 import {
+  matterApplyRejectionReason,
   memberApplyRejectionReason,
   SERVER_TIMESTAMP,
   resolveMemberPatch,
@@ -23,17 +24,19 @@ export type AdminLike = {
 /** The Admin SDK store (the script and the emulator tests). `serverTimestamp` is FieldValue.serverTimestamp. */
 export function adminMatterShapeBackfillStore(db: AdminLike, serverTimestamp: () => unknown): MatterShapeBackfillStore {
   return {
-    async addMissingFields(collection, id, patch) {
-      const ref = db.collection(collection).doc(id)
+    async completeMatter(planned) {
+      const ref = db.collection("matters").doc(planned.id)
       return db.runTransaction(async (tx) => {
         const snap = await tx.get(ref)
-        if (!snap.exists) return false
-        const missing = stillMissing((snap.data() ?? {}) as Record<string, unknown>, patch)
-        if (!Object.keys(missing).length) return false
+        const stored = snap.exists ? ((snap.data() ?? {}) as Record<string, unknown>) : null
+        const rejection = matterApplyRejectionReason(stored)
+        if (rejection) return { status: "rejected", reason: rejection }
+        const missing = stillMissing(stored!, planned.patch)
+        if (!Object.keys(missing).length) return { status: "skipped" }
         const write: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(missing)) write[k] = v === SERVER_TIMESTAMP ? serverTimestamp() : v
         tx.update(ref, write)
-        return true
+        return { status: "written" }
       })
     },
     async completeMember(planned) {
