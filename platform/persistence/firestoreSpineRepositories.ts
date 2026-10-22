@@ -1,3 +1,4 @@
+import { DocumentMalformedError, readDocumentRecord } from "@/platform/d1/documentRecord"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -475,17 +476,44 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       async create(row) {
         await setById(db, "documents", row)
       },
+      // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
+      // A row that exists but is malformed throws DocumentMalformedError (Codex P1 on #99): a caller must never mistake
+      // it for an absent row and fall back to a cached copy.
       async get(id, firmId) {
-        return getById<DocumentRecord>(db, "documents", id, firmId)
+        const row = await getById<DocumentRecord>(db, "documents", id, firmId)
+        if (!row) return null
+        const doc = readDocumentRecord(id, row)
+        if (!doc) throw new DocumentMalformedError(id)
+        return doc
       },
+      // Codex P2 on #99: the stored row and the merged result are both validated, in one transaction, BEFORE the write,
+      // so a refused update leaves storage unchanged.
       async update(id, firmId, patch) {
-        return updateById<DocumentRecord>(db, "documents", id, patch, firmId)
+        const firm = requireCallerFirmId(firmId, "documents.update")
+        const patchFirm = (patch as { firmId?: string }).firmId
+        if (patchFirm !== undefined && patchFirm !== firm) return null
+        return runTransaction(db, async (tx) => {
+          const ref = doc(db, "documents", id)
+          const snap = await tx.get(ref)
+          if (!snap.exists()) return null
+          const stored = snap.data() as Record<string, unknown>
+          if (stored.firmId !== firm) return null
+          if (!readDocumentRecord(id, stored)) throw new DocumentMalformedError(id)
+          const fields: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(patch)) if (v !== undefined && k !== "id") fields[k] = v
+          const next = readDocumentRecord(id, { ...stored, ...fields })
+          if (!next) throw new DocumentMalformedError(id)
+          tx.update(ref, fields)
+          return next
+        })
       },
       async delete(id) {
         await deleteDoc(doc(db, "documents", id))
       },
       async listByFirm(firmId) {
-        return listByFirm<DocumentRecord>(db, "documents", firmId)
+        const page = await listAllRowsByFirm<DocumentRecord & { id: string }>(db, "documents", firmId)
+        const items = page.items.map((row) => readDocumentRecord(row.id, row)).filter((row): row is DocumentRecord => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     drafts: {
