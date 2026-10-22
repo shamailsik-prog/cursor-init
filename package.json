@@ -22,7 +22,7 @@
     "functions:build": "npm --prefix functions run build",
     "functions:test": "npm --prefix functions test",
     "test:all": "npm run test:unit && npm run test:rules",
-    "test:rules": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/firestore.rules.lattice-dedicated-view-invariants.test.ts tests/firestore.rules.test.ts tests/firestore.rules.d1-phase2a.test.ts tests/firestore.rules.d1-phase2b.test.ts tests/firestore.rules.p1-phase3d.test.ts tests/firestore.rules.d4-phase4a.test.ts tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts tests/audit-f01-production-persistence.e2e.test.ts tests/f03.persistence-rollback.test.ts tests/f14-document-clearance.firestore.test.ts tests/f10-durable-idempotency.firestore.test.ts tests/f10-next-idempotency.e2e.firestore.test.ts tests/f16-next-output-size.firestore.test.ts tests/f01-production-identity.e2e.firestore.test.ts tests/f12-firm-scoped-reads.e2e.firestore.test.ts tests/f11-audit-outbox.firestore.test.ts tests/f11-atomic-request-audit.e2e.firestore.test.ts tests/f18-legacy-ai-path.e2e.firestore.test.ts tests/f13-canonical-matter-shapes.e2e.firestore.test.ts tests/f13-reaudit.e2e.firestore.test.ts tests/f13-slice2.e2e.firestore.test.ts tests/f13-slice3.e2e.firestore.test.ts tests/f13-slice5.e2e.firestore.test.ts tests/f13-004-documents.e2e.firestore.test.ts\"",
+    "test:rules": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/firestore.rules.lattice-dedicated-view-invariants.test.ts tests/firestore.rules.test.ts tests/firestore.rules.d1-phase2a.test.ts tests/firestore.rules.d1-phase2b.test.ts tests/firestore.rules.p1-phase3d.test.ts tests/firestore.rules.d4-phase4a.test.ts tests/persistence.repositories.test.ts tests/persistence.runtime-mode.test.ts tests/audit-f01-production-persistence.e2e.test.ts tests/f03.persistence-rollback.test.ts tests/f14-document-clearance.firestore.test.ts tests/f10-durable-idempotency.firestore.test.ts tests/f10-next-idempotency.e2e.firestore.test.ts tests/f16-next-output-size.firestore.test.ts tests/f01-production-identity.e2e.firestore.test.ts tests/f12-firm-scoped-reads.e2e.firestore.test.ts tests/f11-audit-outbox.firestore.test.ts tests/f11-atomic-request-audit.e2e.firestore.test.ts tests/f18-legacy-ai-path.e2e.firestore.test.ts tests/f13-canonical-matter-shapes.e2e.firestore.test.ts tests/f13-reaudit.e2e.firestore.test.ts tests/f13-slice2.e2e.firestore.test.ts tests/f13-slice3.e2e.firestore.test.ts tests/f13-slice5.e2e.firestore.test.ts tests/f13-003-backfill.e2e.firestore.test.ts tests/f13-004-documents.e2e.firestore.test.ts\"",
     "test:postgres-ddl": "vitest run --no-file-parallelism tests/postgres.ddl.integration.test.ts tests/probe-fa-data-001.regression.test.ts",
     "test:f05-authority": "npm --prefix functions run test:f05-authority",
     "test:document-object-s3": "firebase emulators:exec --only auth,firestore --project demo-sikander \"npx vitest run --no-file-parallelism tests/f03-document-object-store.s3.integration.test.ts tests/f03-r2-document-vault.e2e.firestore.test.ts\"",
@@ -47,7 +47,8 @@
     "mutation:functions": "npm --prefix functions run mutation",
     "mutation:documents": "stryker run stryker.documents.config.mjs",
     "eve:dev": "eve dev",
-    "eve:info": "eve info"
+    "eve:info": "eve info",
+    "backfill:matter-shapes": "tsx scripts/backfill-matter-shapes.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1151.0",
@@ -67,11 +68,11 @@
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
     "@playwright/test": "^1.64.0",
-    "@types/pg": "^8.15.5",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.15.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
@@ -82,6 +83,7 @@
     "pg": "^8.16.3",
     "shadcn": "^4.21.0",
     "tailwindcss": "^4",
+    "tsx": "4.23.15",
     "typescript": "^5",
     "vitest": "^3.2.7"
   },
