@@ -4,7 +4,9 @@
  * static guards (F01 no full-collection scans, F10 fenced writes) cover the server's own code.
  */
 import {
+  memberApplyRejectionReason,
   SERVER_TIMESTAMP,
+  resolveMemberPatch,
   stillMissing,
   type BackfillRow,
   type MatterShapeBackfillStore,
@@ -32,6 +34,26 @@ export function adminMatterShapeBackfillStore(db: AdminLike, serverTimestamp: ()
         for (const [k, v] of Object.entries(missing)) write[k] = v === SERVER_TIMESTAMP ? serverTimestamp() : v
         tx.update(ref, write)
         return true
+      })
+    },
+    async completeMember(planned) {
+      const memberRef = db.collection("matter_members").doc(planned.id)
+      const matterRef = db.collection("matters").doc(planned.matterId)
+      return db.runTransaction(async (tx) => {
+        const memberSnap = await tx.get(memberRef)
+        const matterSnap = await tx.get(matterRef)
+        const member = memberSnap.exists ? ((memberSnap.data() ?? {}) as Record<string, unknown>) : null
+        const matterRow = matterSnap.exists ? matterSnap.data() : null
+        const rejection = memberApplyRejectionReason(member, matterRow, planned)
+        if (rejection) return { status: "rejected", reason: rejection }
+        const resolved = resolveMemberPatch(member, matterRow, planned)
+        if (!resolved) return { status: "rejected", reason: "matter_malformed" }
+        const missing = stillMissing(member!, resolved)
+        if (!Object.keys(missing).length) return { status: "skipped" }
+        const write: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(missing)) write[k] = v === SERVER_TIMESTAMP ? serverTimestamp() : v
+        tx.update(memberRef, write)
+        return { status: "written" }
       })
     },
     async appendAudit(row) {

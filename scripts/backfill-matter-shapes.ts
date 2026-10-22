@@ -35,7 +35,9 @@ async function main(argv: string[]): Promise<void> {
     runId: randomUUID(),
     now: Date.now(),
   })
-  console.log(`[backfill-matter-shapes] applied ${result.applied.length}, skipped ${result.skipped.length}; summary row written to audit_log`)
+  console.log(
+    `[backfill-matter-shapes] applied ${result.applied.length}, skipped ${result.skipped.length}, rejected ${result.rejected.length}; summary row written to audit_log`
+  )
 }
 
 main(process.argv.slice(2)).catch((err: unknown) => {
