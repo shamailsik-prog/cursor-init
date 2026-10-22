@@ -54,3 +54,12 @@ export function readDocumentRecord(id: string, data: unknown): DocumentRecord | 
     objectBytesStatus,
   } as DocumentRecord
 }
+
+/** A stored document row that exists but is not in the canonical shape: refused, and distinguishable from absence. */
+export class DocumentMalformedError extends Error {
+  readonly code = "document_malformed"
+  constructor(readonly documentId: string) {
+    super(`document ${documentId} is malformed`)
+    this.name = "DocumentMalformedError"
+  }
+}

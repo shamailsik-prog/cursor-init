@@ -6,6 +6,7 @@ import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
+import { DocumentMalformedError } from "@/platform/d1/documentRecord"
 import {
   beginIdempotentRequest,
   IdempotencyError,
@@ -123,8 +124,19 @@ async function handleGet(request: Request) {
   await syncFirmMatters(store, repos, user.firmId)
 
   if (docId) {
-    const doc =
-      (await repos.documents.get(docId, user.firmId)) ?? store.documents.get(docId) ?? null
+    let stored: Awaited<ReturnType<typeof repos.documents.get>>
+    try {
+      stored = await repos.documents.get(docId, user.firmId)
+    } catch (err) {
+      // FA-F13-004 (Codex P1 on #99): a stored row that fails validation denies the read, and this process's cached
+      // copy (possibly at a stale, lower label) is dropped, never served in its place.
+      if (err instanceof DocumentMalformedError) {
+        store.documents.delete(docId)
+        return NextResponse.json({ error: "unknown document" }, { status: 404 })
+      }
+      throw err
+    }
+    const doc = stored ?? store.documents.get(docId) ?? null
     if (!doc || doc.firmId !== user.firmId) {
       return NextResponse.json({ error: "unknown document" }, { status: 404 })
     }
