@@ -580,4 +580,22 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     expect(text).not.toContain("f14c2empty")
     expect(text).toContain("f14c2null")
   })
+  it("a stored document row that fails validation denies the read; this process's cached copy is never the fallback (FA-F13-004, Codex P1)", async () => {
+    const id = "f13d4stale"
+    const good = {
+      firmId: "firmA", matterId: null, contentHash: `hash-${id}`, sourceChannel: "web", classification: "internal",
+      storagePath: `fs://firmA/documents/${id}/v1`, isImmutable: true, byteSize: 1, mimeType: "application/pdf",
+      objectVersion: 1, uploadedBy: "partner_a", objectBytesStatus: "available",
+    }
+    await db().collection("documents").doc(id).set(good)
+    const read = () => documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&docId=${id}`))
+    // Control: the well-formed row is found and the clerk may read it (only includeContent is missing).
+    expect((await read()).status).toBe(400)
+    getRuntimeStore().documents.set(id, { id, ...good } as never)
+    // Another writer raises the label and drops a required field: the row is now malformed.
+    await db().collection("documents").doc(id).update({ classification: "privileged-restricted", byteSize: FieldValue.delete() })
+    const res = await read()
+    expect(res.status).toBe(404)
+    expect(getRuntimeStore().documents.has(id)).toBe(false)
+  })
 })

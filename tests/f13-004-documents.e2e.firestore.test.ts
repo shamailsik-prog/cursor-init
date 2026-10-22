@@ -46,8 +46,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     for (const k of Object.keys(row)) if (row[k] === undefined) delete row[k]
     const id = await stored(row)
     const okId = await stored(good(firmId))
-    expect(await repo().documents.get(id, firmId)).toBeNull()
-    expect(await repo().documents.update(id, firmId, { mimeType: "application/pdf" })).toBeNull()
+    await expect(repo().documents.get(id, firmId)).rejects.toThrow(/malformed/)
+    await expect(repo().documents.update(id, firmId, { mimeType: "application/pdf" })).rejects.toThrow(/malformed/)
     const listed = (await repo().documents.listByFirm(firmId)).map((d) => d.id)
     expect(listed).toEqual([okId])
   })
@@ -58,5 +58,25 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     delete row.objectBytesStatus
     const id = await stored(row)
     expect((await repo().documents.get(id, firmId))?.objectBytesStatus).toBe("missing")
+  })
+  it("an update of a malformed row is refused before it writes: storage is unchanged (Codex P2)", async () => {
+    const firmId = uniq("f13d4firm")
+    const id = await stored({ ...good(firmId), byteSize: "12" })
+    await expect(repo().documents.update(id, firmId, { classification: "privileged-restricted", matterId: "m_x" })).rejects.toThrow(/malformed/)
+    expect(await adminDb().collection("documents").doc(id).get().then((d) => d.data())).toMatchObject({ classification: "internal", matterId: null })
+  })
+
+  it("an update whose result would be malformed is refused before it writes: storage is unchanged (Codex P2)", async () => {
+    const firmId = uniq("f13d4firm")
+    const id = await stored(good(firmId))
+    await expect(repo().documents.update(id, firmId, { byteSize: "big" as never, classification: "confidential" })).rejects.toThrow(/malformed/)
+    expect(await adminDb().collection("documents").doc(id).get().then((d) => d.data())).toMatchObject({ byteSize: 12, classification: "internal" })
+  })
+
+  it("a get of a malformed row throws (distinguishable from absence), and an absent row is null", async () => {
+    const firmId = uniq("f13d4firm")
+    const id = await stored({ ...good(firmId), sourceChannel: "fax" })
+    await expect(repo().documents.get(id, firmId)).rejects.toThrow(/malformed/)
+    expect(await repo().documents.get(uniq("nodoc"), firmId)).toBeNull()
   })
 })
