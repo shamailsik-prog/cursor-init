@@ -1,3 +1,4 @@
+import { readDocumentRecord } from "@/platform/d1/documentRecord"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -475,17 +476,22 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       async create(row) {
         await setById(db, "documents", row)
       },
+      // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
       async get(id, firmId) {
-        return getById<DocumentRecord>(db, "documents", id, firmId)
+        const row = await getById<DocumentRecord>(db, "documents", id, firmId)
+        return row ? readDocumentRecord(id, row) : null
       },
       async update(id, firmId, patch) {
-        return updateById<DocumentRecord>(db, "documents", id, patch, firmId)
+        const row = await updateById<DocumentRecord>(db, "documents", id, patch, firmId)
+        return row ? readDocumentRecord(id, row) : null
       },
       async delete(id) {
         await deleteDoc(doc(db, "documents", id))
       },
       async listByFirm(firmId) {
-        return listByFirm<DocumentRecord>(db, "documents", firmId)
+        const page = await listAllRowsByFirm<DocumentRecord & { id: string }>(db, "documents", firmId)
+        const items = page.items.map((row) => readDocumentRecord(row.id, row)).filter((row): row is DocumentRecord => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     drafts: {
