@@ -133,6 +133,38 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: legacy matter / me
   })
 })
 
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-018: apply re-reads the member's matter", { timeout: E2E_TIMEOUT_MS }, () => {
+  it("a member takes its matter's classification at apply time, not plan time", async () => {
+    const firmId = await newFirm()
+    const matterId = await legacyNextMatter(firmId, { stage: "pre_filing" })
+    const memberId = await legacyMember(firmId, matterId, uniq("u"))
+    const plan = await planFor(firmId)
+    await adminDb().collection("matters").doc(matterId).update({ classification: "privileged-restricted" })
+    const res = await applyMatterShapeBackfill(store(), plan, { runId: randomUUID(), now: Date.now() })
+    expect(res.applied).toContain(`matter_members/${memberId}`)
+    expect((await data("matter_members", memberId)).classification).toBe("privileged-restricted")
+  })
+
+  it.each([
+    ["the member moved to another matter", async (_m: string, id: string) => adminDb().collection("matter_members").doc(id).update({ matterId: uniq("moved") })],
+    ["the member moved to another firm", async (_m: string, id: string) => adminDb().collection("matter_members").doc(id).update({ firmId: uniq("otherfirm") })],
+    ["the matter moved to another firm", async (m: string) => adminDb().collection("matters").doc(m).update({ firmId: uniq("otherfirm") })],
+    ["the matter became malformed", async (m: string) => adminDb().collection("matters").doc(m).update({ classification: "top-secret" })],
+    ["the matter was deleted", async (m: string) => adminDb().collection("matters").doc(m).delete()],
+  ])("a member is skipped and left untouched when, after planning, %s", async (_label, change) => {
+    const firmId = await newFirm()
+    const matterId = await legacyNextMatter(firmId, { stage: "pre_filing" })
+    const memberId = await legacyMember(firmId, matterId, uniq("u"))
+    const plan = await planFor(firmId)
+    await change(matterId, memberId)
+    const res = await applyMatterShapeBackfill(store(), plan, { runId: randomUUID(), now: Date.now() })
+    expect(res.skipped).toContain(`matter_members/${memberId}`)
+    const row = await data("matter_members", memberId)
+    expect(row.classification).toBeUndefined()
+    expect(row.createdAt).toBeUndefined()
+  })
+})
+
 describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: the backfill CLI runs through the pinned runner", { timeout: E2E_TIMEOUT_MS }, () => {
   it("npm run backfill:matter-shapes (tsx, a pinned devDependency) dry-runs and writes nothing", async () => {
     const { execFileSync } = await import("node:child_process")
