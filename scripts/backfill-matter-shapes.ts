@@ -5,7 +5,7 @@
  * Dry-run by default; pass --apply to write. Idempotent. Credentials come from the environment
  * (GOOGLE_APPLICATION_CREDENTIALS or FIRESTORE_EMULATOR_HOST), never from this file.
  *
- *   npx tsx scripts/backfill-matter-shapes.ts [--apply] [--project <id>]
+ *   npm run backfill:matter-shapes -- [--apply] [--project <id>]   (tsx is a pinned devDependency)
  *
  * NOT run as part of this change.
  */
