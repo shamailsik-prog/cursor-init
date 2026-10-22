@@ -171,6 +171,7 @@ import type {
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow,
 } from "@/platform/spine/store"
 import { storedUserRecord } from "@/platform/spine/store"
+import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
@@ -3200,14 +3201,29 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
     },
     reportingIndex: {
+      // FA-F13-004: same contract as the Firestore adapter. A malformed stored row is not repaired, and a refused
+      // upsert leaves the map unchanged.
       async upsert(row) {
-        store.matterClientSearchIndex.set(row.id, row)
+        const id = typeof row?.id === "string" ? row.id : ""
+        if (!id) throw new SearchIndexMalformedError("unknown")
+        const existing = store.matterClientSearchIndex.get(id)
+        if (existing && !readMatterClientSearchIndexRow(id, existing)) throw new SearchIndexMalformedError(id)
+        const next = readMatterClientSearchIndexRow(id, row)
+        if (!next) throw new SearchIndexMalformedError(id)
+        store.matterClientSearchIndex.set(id, next)
       },
       async get(id, firmId) {
-        return firmScoped(store.matterClientSearchIndex.get(id), firmId)
+        const row = firmScoped(store.matterClientSearchIndex.get(id), firmId)
+        if (!row) return null
+        const parsed = readMatterClientSearchIndexRow(id, row)
+        if (!parsed) throw new SearchIndexMalformedError(id)
+        return parsed
       },
       async listByFirm(firmId) {
-        return [...store.matterClientSearchIndex.values()].filter((row) => row.firmId === firmId)
+        return [...store.matterClientSearchIndex.values()]
+          .filter((row) => row.firmId === firmId)
+          .map((row) => readMatterClientSearchIndexRow(row.id, row))
+          .filter((row): row is MatterClientSearchIndexRow => row !== null)
       },
     },
     draftTemplateAnalytics: {

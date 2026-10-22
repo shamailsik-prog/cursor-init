@@ -25,6 +25,7 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import {
   buildClientSearchIndexRow,
   buildMatterSearchIndexRow,
+  SearchIndexMalformedError,
 } from "@/platform/persistence/matterClientSearchIndex"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmMatters } from "@/platform/persistence/memberSync"
@@ -301,13 +302,32 @@ async function handleGet(request: Request) {
     const terms = normalizeTerms(getQuery(REPORTING_SURFACE, url, "q"))
     const clients = await repos.entities.listByFirm(refreshedActor.firmId)
     for (const matter of matters) {
-      await repos.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
+      try {
+        await repos.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
+      } catch (err) {
+        // A malformed stored row is denied. The search does not republish over it and does not fail the whole firm.
+        if (!(err instanceof SearchIndexMalformedError)) throw err
+      }
     }
     for (const entity of clients) {
-      await repos.reportingIndex.upsert(buildClientSearchIndexRow(entity))
+      try {
+        await repos.reportingIndex.upsert(buildClientSearchIndexRow(entity))
+      } catch (err) {
+        if (!(err instanceof SearchIndexMalformedError)) throw err
+      }
     }
 
-    const all = (await repos.reportingIndex.listByFirm(refreshedActor.firmId))
+    const indexed = await repos.reportingIndex.listByFirm(refreshedActor.firmId)
+    // FA-F13-004 (reporting-index slice): rows the validator omitted are not absent data. Drop this process's cached
+    // copy of each one so a later read cannot serve it in place of the refused row.
+    const liveIds = new Set(indexed.map((row) => row.id))
+    for (const id of [...store.matterClientSearchIndex.keys()]) {
+      const cached = store.matterClientSearchIndex.get(id)
+      if (cached && cached.firmId === refreshedActor.firmId && !liveIds.has(id)) {
+        store.matterClientSearchIndex.delete(id)
+      }
+    }
+    const all = indexed
       .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
