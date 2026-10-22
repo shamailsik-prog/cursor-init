@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "plugins": [],
+    "incremental": false,
+    "types": ["node"],
+    "baseUrl": "../..",
+    "paths": { "@/*": ["./*"] }
+  },
+  "include": ["./**/*.ts", "./**/*.mts"],
+  "exclude": ["node_modules", ".results"]
+}
