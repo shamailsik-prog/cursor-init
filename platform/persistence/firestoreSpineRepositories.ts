@@ -2303,7 +2303,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         const firm = requireCallerFirmId(firmId, "reportingIndex.get")
         const snap = await getDoc(doc(db, "matter_client_search_index", id))
         if (!snap.exists()) return null
-        const data = snap.data() ?? {}
+        const data = (snap.data() ?? {}) as { firmId?: unknown }
         if (typeof data.firmId !== "string" || data.firmId.trim() === "") throw new SearchIndexMalformedError(id)
         if (data.firmId !== firm) return null
         const parsed = readMatterClientSearchIndexRow(id, data)
