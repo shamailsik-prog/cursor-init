@@ -167,6 +167,42 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-018: apply re-reads the
   })
 })
 
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-019: a planned matter gone or malformed at apply is rejected", { timeout: E2E_TIMEOUT_MS }, () => {
+  it.each([
+    ["deleted", "matter_gone", async (m: string) => adminDb().collection("matters").doc(m).delete()],
+    ["made malformed", "matter_malformed", async (m: string) => adminDb().collection("matters").doc(m).update({ classification: "top-secret" })],
+  ] as const)("a matter %s after planning is rejected (%s), not reported as completed since planning", async (_label, reason, change) => {
+    const firmId = await newFirm()
+    const matterId = await legacyNextMatter(firmId)
+    const plan = await planFor(firmId)
+    expect(plan.matters.map((u) => u.id)).toContain(matterId)
+    await change(matterId)
+    const path = `matters/${matterId}`
+    const runId = randomUUID()
+    const res = await applyMatterShapeBackfill(store(), plan, { runId, now: Date.now() })
+    expect(res.skipped).not.toContain(path)
+    expect(res.applied).not.toContain(path)
+    expect(res.rejected).toContainEqual({ path, reason })
+    const row = (await adminDb().collection("matters").doc(matterId).get()).data()
+    if (reason === "matter_gone") expect(row).toBeUndefined()
+    else expect(row?.stage).toBeUndefined()
+    const done = await data("audit_log", `aud_matter_shape_backfill_${runId}_b0_done`)
+    expect(done.rejected).toContainEqual({ path, reason })
+    expect((await data("audit_log", `aud_matter_shape_backfill_${runId}`)).rejectedCount).toBeGreaterThanOrEqual(1)
+  })
+
+  it("a matter whose missing fields were filled since planning is still skipped", async () => {
+    const firmId = await newFirm()
+    const matterId = await legacyNextMatter(firmId)
+    const plan = await planFor(firmId)
+    const patch = plan.matters.find((u) => u.id === matterId)!.patch
+    await adminDb().collection("matters").doc(matterId).update(patch)
+    const res = await applyMatterShapeBackfill(store(), plan, { runId: randomUUID(), now: Date.now() })
+    expect(res.skipped).toContain(`matters/${matterId}`)
+    expect(res.rejected.map((r) => r.path)).not.toContain(`matters/${matterId}`)
+  })
+})
+
 describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: the backfill CLI runs through the pinned runner", { timeout: E2E_TIMEOUT_MS }, () => {
   it("npm run backfill:matter-shapes (tsx, a pinned devDependency) dry-runs and writes nothing", async () => {
     const { execFileSync } = await import("node:child_process")
