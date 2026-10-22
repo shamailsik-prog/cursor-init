@@ -23,6 +23,7 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
+import { primeFirmUsers } from "@/platform/d1/primeFirmUsers"
 import {
   cacheMember,
   MembershipAssignmentError,
@@ -60,19 +61,6 @@ function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   }
   if (client.role !== "client") {
     throw new PublicError("clientId must reference a client user")
-  }
-}
-
-/**
- * FA-F13-001: the users a request names (a new matter's client and members, an added member) are resolved through the
- * firm-scoped users repository on a cache miss, not only from the process's session cache. A record of another firm,
- * or one the identity policy would refuse (not `active: true`), is not cached, so the checks below refuse it as before.
- */
-async function primeFirmUsers(store: ReturnType<typeof getRuntimeStore>, repo: SpineRepositories, firmId: string, ids: Iterable<string>) {
-  for (const id of ids) {
-    if (!id || store.users.has(id)) continue
-    const row = await repo.users.get(id, firmId)
-    if (row && row.firmId === firmId && row.active === true) store.users.set(id, row.id === id ? row : { ...row, id })
   }
 }
 

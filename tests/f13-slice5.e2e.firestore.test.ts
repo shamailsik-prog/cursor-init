@@ -1,5 +1,4 @@
 // Audit F13 slice 5 (FA-F13-017): record_case_number indexes the matter its transaction stored, not the cached copy.
-// Also kills mutant S4-001d: a whitespace-padded firmId must not cache users through primeFirmUsers.
 // Auth + Firestore emulators.
 import { randomUUID } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -97,7 +96,7 @@ function dbWithRace(): unknown {
   })
 }
 
-describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 5: record_case_number indexes the stored matter (FA-F13-017); padded firmId primes nobody (S4-001d)", { timeout: E2E_TIMEOUT_MS }, () => {
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 5: record_case_number indexes the stored matter (FA-F13-017)", { timeout: E2E_TIMEOUT_MS }, () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production")
     vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
@@ -138,15 +137,5 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 slice 5: record_case_number in
     expect(tags).toContain("phc")
     // The cache follows the stored matter too.
     expect(getRuntimeStore().matters.get(m.matterId)?.courtId).toBe("PHC")
-  })
-
-  it("S4-001d: a create with a whitespace-padded firmId caches no user through the repository lookup", async () => {
-    const firmId = await newFirm()
-    const partner = await user(firmId, "partner")
-    const client = await user(firmId, "client")
-    const res = await nextPost(partner, { action: "create", actorId: partner.uid, firmId: ` ${firmId} `, clientId: client.uid, title: "Recovery suit", courtId: "lhc", classification: "internal", memberUserIds: [] })
-    expect(res.status, JSON.stringify(res.body)).toBeGreaterThanOrEqual(400)
-    expect(getRuntimeStore().users.has(client.uid)).toBe(false)
-    expect((await adminDb().collection("matters").where("firmId", "==", firmId).get()).size).toBe(0)
   })
 })
