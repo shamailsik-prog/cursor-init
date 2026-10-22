@@ -84,6 +84,13 @@ export function stillMissing(stored: Record<string, unknown>, patch: FieldPatch)
   return out
 }
 
+/**
+ * One audit row. Rows are bounded: a row lists at most MATTER_BACKFILL_AUDIT_BATCH paths (Firestore caps a document at
+ * 1 MiB, and a run-wide list of every path could pass it). A run writes, under `aud_matter_shape_backfill_{runId}`:
+ * - `_b{k}_planned` (the batch's paths) BEFORE that batch's writes, and `_b{k}_done` (applied / skipped) after them;
+ * - `_malformed_{k}` / `_orphans_{k}` chunks of the rows it left untouched;
+ * - the summary row (counts only, no paths) last.
+ */
 export type MatterShapeBackfillAuditRow = {
   id: string
   firmId: string
@@ -93,52 +100,102 @@ export type MatterShapeBackfillAuditRow = {
   classification: "internal"
   reason: string
   at: number
-  applied: string[]
-  skipped: string[]
-  malformed: string[]
-  orphans: string[]
+  runId: string
+  planned?: string[]
+  applied?: string[]
+  skipped?: string[]
+  malformed?: string[]
+  orphans?: string[]
+  appliedCount?: number
+  skippedCount?: number
+  malformedCount?: number
+  orphanCount?: number
+  completeCount?: number
+  batches?: number
 }
 
 export type MatterShapeBackfillStore = {
   /** In one transaction: re-reads `collection/id` and writes only `stillMissing(stored, patch)`. Returns whether it wrote. */
   addMissingFields(collection: "matters" | "matter_members", id: string, patch: FieldPatch): Promise<boolean>
+  /** Creates one audit row; never overwrites one. */
   appendAudit(row: MatterShapeBackfillAuditRow): Promise<void>
 }
 
 export const MATTER_BACKFILL_AUDIT_FIRM_ID = "_platform"
 export const MATTER_BACKFILL_ACTOR_ID = "system:backfill-matter-shapes"
+/** The most paths one audit row (and one batch of writes) carries: well under 1 MiB at Firestore's 1500-byte path cap. */
+export const MATTER_BACKFILL_AUDIT_BATCH = 200
+
+const chunks = <T>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
 
 export async function applyMatterShapeBackfill(
   store: MatterShapeBackfillStore,
   plan: MatterShapeBackfillPlan,
   meta: { runId: string; now: number }
 ): Promise<{ applied: string[]; skipped: string[] }> {
+  const base = `aud_matter_shape_backfill_${meta.runId}`
+  const row = (id: string, reason: string, extra: Partial<MatterShapeBackfillAuditRow>): MatterShapeBackfillAuditRow => ({
+    id,
+    firmId: MATTER_BACKFILL_AUDIT_FIRM_ID,
+    action: "matter_shape_backfill",
+    actorId: MATTER_BACKFILL_ACTOR_ID,
+    target: "matters,matter_members",
+    classification: "internal",
+    reason,
+    at: meta.now,
+    runId: meta.runId,
+    ...extra,
+  })
   const applied: string[] = []
   const skipped: string[] = []
   const work = [
     ...plan.matters.map((u) => ["matters", u] as const),
     ...plan.members.map((u) => ["matter_members", u] as const),
   ]
-  for (const [collection, u] of work) {
-    const key = `${collection}/${u.id}`
-    if (await store.addMissingFields(collection, u.id, u.patch)) applied.push(key)
-    else skipped.push(key)
+  const batches = chunks(work, MATTER_BACKFILL_AUDIT_BATCH)
+  for (const [k, batch] of batches.entries()) {
+    const keys = batch.map(([collection, u]) => `${collection}/${u.id}`)
+    // Recorded before the writes: a run that dies inside this batch still names what it was about to change.
+    await store.appendAudit(row(`${base}_b${k}_planned`, `batch ${k}: ${keys.length} planned`, { planned: keys }))
+    const batchApplied: string[] = []
+    const batchSkipped: string[] = []
+    for (const [i, [collection, u]] of batch.entries()) {
+      if (await store.addMissingFields(collection, u.id, u.patch)) batchApplied.push(keys[i])
+      else batchSkipped.push(keys[i])
+    }
+    await store.appendAudit(
+      row(`${base}_b${k}_done`, `batch ${k}: ${batchApplied.length} applied, ${batchSkipped.length} skipped`, {
+        applied: batchApplied,
+        skipped: batchSkipped,
+      })
+    )
+    applied.push(...batchApplied)
+    skipped.push(...batchSkipped)
   }
-  await store.appendAudit({
-    id: `aud_matter_shape_backfill_${meta.runId}`,
-    firmId: MATTER_BACKFILL_AUDIT_FIRM_ID,
-    action: "matter_shape_backfill",
-    actorId: MATTER_BACKFILL_ACTOR_ID,
-    target: "matters,matter_members",
-    classification: "internal",
-    reason:
+  for (const [k, part] of chunks(plan.malformed, MATTER_BACKFILL_AUDIT_BATCH).entries()) {
+    await store.appendAudit(row(`${base}_malformed_${k}`, `${part.length} malformed (not written)`, { malformed: part }))
+  }
+  for (const [k, part] of chunks(plan.orphans, MATTER_BACKFILL_AUDIT_BATCH).entries()) {
+    await store.appendAudit(row(`${base}_orphans_${k}`, `${part.length} orphaned (not written)`, { orphans: part }))
+  }
+  await store.appendAudit(
+    row(
+      base,
       `${applied.length} applied, ${skipped.length} skipped (completed since planning), ` +
-      `${plan.malformed.length} malformed, ${plan.orphans.length} orphaned, ${plan.complete.length} already complete`,
-    at: meta.now,
-    applied,
-    skipped,
-    malformed: [...plan.malformed],
-    orphans: [...plan.orphans],
-  })
+        `${plan.malformed.length} malformed, ${plan.orphans.length} orphaned, ${plan.complete.length} already complete`,
+      {
+        appliedCount: applied.length,
+        skippedCount: skipped.length,
+        malformedCount: plan.malformed.length,
+        orphanCount: plan.orphans.length,
+        completeCount: plan.complete.length,
+        batches: batches.length,
+      }
+    )
+  )
   return { applied, skipped }
 }

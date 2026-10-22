@@ -122,8 +122,30 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: legacy matter / me
     }
     expect(await data("audit_log", `aud_matter_shape_backfill_${runId}`)).toMatchObject({
       action: "matter_shape_backfill",
-      malformed: expect.arrayContaining([`matters/${bad}`]),
-      orphans: expect.arrayContaining([`matter_members/${noMatter}`]),
+      malformedCount: 1,
+      orphanCount: 3,
     })
+    expect(await data("audit_log", `aud_matter_shape_backfill_${runId}_malformed_0`)).toMatchObject({ malformed: [`matters/${bad}`] })
+    expect((await data("audit_log", `aud_matter_shape_backfill_${runId}_orphans_0`)).orphans).toEqual(
+      expect.arrayContaining([`matter_members/${noMatter}`])
+    )
+    expect((await data("audit_log", `aud_matter_shape_backfill_${runId}_b0_planned`)).planned).toEqual([`matters/${good}`])
+  })
+})
+
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: the backfill CLI runs through the pinned runner", { timeout: E2E_TIMEOUT_MS }, () => {
+  it("npm run backfill:matter-shapes (tsx, a pinned devDependency) dry-runs and writes nothing", async () => {
+    const { execFileSync } = await import("node:child_process")
+    const pkg = (await import("@/package.json", { with: { type: "json" } })).default as { devDependencies: Record<string, string>; scripts: Record<string, string> }
+    expect(pkg.devDependencies.tsx).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(pkg.scripts["backfill:matter-shapes"]).toBe("tsx scripts/backfill-matter-shapes.ts")
+    const firmId = await newFirm()
+    const matterId = await legacyNextMatter(firmId)
+    const out = execFileSync("npm", ["run", "-s", "backfill:matter-shapes", "--", "--project", process.env.GCLOUD_PROJECT ?? "demo-sikander"], {
+      env: { ...process.env },
+      encoding: "utf8",
+    })
+    expect(out).toContain("[backfill-matter-shapes] DRY-RUN")
+    expect((await data("matters", matterId)).stage).toBeUndefined()
   })
 })
