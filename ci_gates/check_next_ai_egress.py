@@ -209,6 +209,13 @@ FUNCTIONS_IMPORT_ALLOWLIST: dict[tuple[str, str], str] = {
     ("tests/helpers/functions-router-fetch.ts", "functions/test/emu"): "F02 console e2e helper: the Functions suite's mock express response (mockRes)",
     ("tests/f11-atomic-request-audit.e2e.firestore.test.ts", "functions/src/p5/auditOutbox"): "F11 e2e: runs the Functions audit-outbox reconciler (a Firestore handle in; no transport) on what Next left",
     ("tests/f11-audit-outbox.firestore.test.ts", "functions/src/p5/auditOutbox"): "F11: drives the Functions audit-outbox reconciler (a Firestore handle in; no transport) on the emulator",
+    ("tests/f13-canonical-matter-shapes.e2e.firestore.test.ts", "functions/test/api"): "F13 cross-stack e2e: calls the Functions api router in process (viaApi)",
+    ("tests/f13-canonical-matter-shapes.e2e.firestore.test.ts", "functions/test/emu"): "F13 cross-stack e2e: the Functions suite's emulator ID tokens and ids",
+    ("tests/f13-reaudit.e2e.firestore.test.ts", "functions/test/api"): "F13 re-audit e2e: calls the Functions api router in process (viaApi)",
+    ("tests/f13-reaudit.e2e.firestore.test.ts", "functions/test/emu"): "F13 re-audit e2e: the Functions suite's emulator ID tokens and ids",
+    ("tests/f13-slice2.e2e.firestore.test.ts", "functions/test/api"): "F13 slice 2 e2e: calls the Functions api router in process (viaApi)",
+    ("tests/f13-slice2.e2e.firestore.test.ts", "functions/test/emu"): "F13 slice 2 e2e: the Functions suite's emulator ID tokens and ids",
+    ("tests/f13-slice2.e2e.firestore.test.ts", "functions/src/admin"): "F13 slice 2 e2e: reads what the Functions stack wrote through its own Admin handle",
     ("tests/p5.identity-policy.parity.test.ts", "functions/src/p5/auth"): "P5 parity: the Functions identity policy must equal the Next one",
     ("tests/p5.permission-decision.parity.test.ts", "functions/src/p5/permission"): "P5 parity: the Functions permission decision must equal the Next one",
 }

@@ -9,6 +9,7 @@ import {
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -250,7 +251,8 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
       await setDoc(doc(ctx.firestore(), "users", NEW.uid), { ...NEW.claims, active: true })
     })
   })
-  const member = { firmId: FIRM, matterId: MATTER, userId: NEW.uid }
+  // FA-F13-014/015: a client create names its adder (the caller) and a typed classification.
+  const member = { firmId: FIRM, matterId: MATTER, userId: NEW.uid, addedBy: PARTNER.uid, classification: "internal" }
   it("a member partner's create without createdAt is denied", async () => {
     await assertFails(setDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), member))
   })
@@ -268,6 +270,63 @@ describe("matter_members create stamps createdAt (listMatters orders by it)", ()
   })
   it("an update leaving createdAt alone is still allowed (control)", async () => {
     await assertSucceeds(updateDoc(doc(await as(PARTNER), "matter_members", `${MATTER}_${NEW.uid}`), { note: "lead" }))
+  })
+})
+
+describe("matter_members: addedBy is the caller and classification is typed (FA-F13-014, FA-F13-015)", () => {
+  const ADDED = { uid: "p2a-added", claims: { firmId: FIRM, role: "associate", clearanceLevel: "internal" } }
+  const ref = async () => doc(await as(PARTNER), "matter_members", `${MATTER}_${ADDED.uid}`)
+  const row = { firmId: FIRM, matterId: MATTER, userId: ADDED.uid }
+  // Each create starts from no row (a create the old rules allowed would otherwise turn the next case into an update).
+  const reset = () =>
+    testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "matter_members", `${MATTER}_${ADDED.uid}`))
+    })
+  beforeAll(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", ADDED.uid), { ...ADDED.claims, active: true })
+    })
+  })
+  it("a create without addedBy is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, classification: "internal", createdAt: serverTimestamp() }))
+  })
+  it("a create with addedBy naming someone else (a forged adder) is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, classification: "internal", addedBy: PARTNER_LOW.uid, createdAt: serverTimestamp() }))
+  })
+  it("a create without classification is denied", async () => {
+    await reset()
+    await assertFails(setDoc(await ref(), { ...row, addedBy: PARTNER.uid, createdAt: serverTimestamp() }))
+  })
+  it("a create with addedBy == the caller and a typed classification is allowed", async () => {
+    await reset()
+    await assertSucceeds(setDoc(await ref(), { ...row, classification: "internal", addedBy: PARTNER.uid, createdAt: serverTimestamp() }))
+  })
+  it("addedBy cannot be changed on update, not even to the caller", async () => {
+    await assertFails(updateDoc(await ref(), { addedBy: PARTNER_LOW.uid }))
+    await assertFails(updateDoc(await ref(), { addedBy: null }))
+  })
+  // FA-F13-016: a canonical row cannot lose its classification; a legacy row (none stored) stays updatable.
+  const seed = (data: Record<string, unknown>) =>
+    testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "matter_members", `${MATTER}_${ADDED.uid}`), { ...row, addedBy: PARTNER.uid, createdAt: Timestamp.now(), ...data })
+    })
+  it("FA-F13-016: updateDoc deleteField() cannot remove a canonical row's classification", async () => {
+    await seed({ classification: "internal" })
+    await assertFails(updateDoc(await ref(), { classification: deleteField() }))
+  })
+  it("FA-F13-016: setDoc merge deleteField() cannot remove a canonical row's classification", async () => {
+    await seed({ classification: "internal" })
+    await assertFails(setDoc(await ref(), { classification: deleteField() }, { merge: true }))
+  })
+  it("FA-F13-016: a typed change of a canonical row's classification is still allowed (control)", async () => {
+    await seed({ classification: "internal" })
+    await assertSucceeds(updateDoc(await ref(), { classification: "confidential" }))
+  })
+  it("FA-F13-016: a legacy row without classification stays updatable (control)", async () => {
+    await seed({})
+    await assertSucceeds(updateDoc(await ref(), { note: "lead" }))
   })
 })
 

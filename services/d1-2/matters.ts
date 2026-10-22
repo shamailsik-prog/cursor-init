@@ -146,6 +146,8 @@ export function recordMatterMemberAdd(
 export function confirmEngagement(store: SpineStore, matterId: string, now = Date.now()) {
   const matter = store.matters.get(matterId)
   if (!matter) throw new PublicError("unknown matter")
+  // Audit F13: a matter Cloud Functions closed stays closed (the canonical status set includes `closed`).
+  if (matter.status === "closed") throw new PublicError("matter is closed", "matter_closed")
   matter.status = "live"
   notifyAccounts(store, matterId, now)
 }

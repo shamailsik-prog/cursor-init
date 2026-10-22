@@ -329,6 +329,7 @@ The entries:
 | same | `functions/src/p1/transportTestSeam` | installs the Functions fake transport; no paid code |
 | `tests/helpers/functions-router-fetch.ts` | `functions/src/http/router`, `functions/test/emu` | the F02 console e2e helper (not this lane; unchanged) |
 | `tests/f11-atomic-request-audit.e2e.firestore.test.ts`, `tests/f11-audit-outbox.firestore.test.ts` | `functions/src/p5/auditOutbox` | F11 (#86, merged into this branch): runs the Functions audit-outbox reconciler; a Firestore handle in, no transport |
+| `tests/f13-canonical-matter-shapes.e2e.firestore.test.ts`, `tests/f13-reaudit.e2e.firestore.test.ts`, `tests/f13-slice2.e2e.firestore.test.ts` | `functions/test/api`, `functions/test/emu` (and `functions/src/admin` for slice 2) | F13 (#92 to #94, merged into this branch): cross-stack e2e through the Functions router in process (`viaApi`), the suite's emulator tokens, the Functions Admin handle |
 | `tests/p5.identity-policy.parity.test.ts` | `functions/src/p5/auth` | P5 parity |
 | `tests/p5.permission-decision.parity.test.ts` | `functions/src/p5/permission` | P5 parity |
 

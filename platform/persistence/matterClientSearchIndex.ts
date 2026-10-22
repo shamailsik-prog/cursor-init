@@ -21,7 +21,7 @@ export function buildMatterSearchIndexRow(
   matter: Matter,
   opts?: { updatedAt?: number }
 ): MatterClientSearchIndexRow {
-  const detail = matter.caseNumber ?? matter.courtId
+  const detail = matter.caseNumber ?? matter.courtId ?? ""
   return {
     id: `matter:${matter.id}`,
     firmId: matter.firmId,

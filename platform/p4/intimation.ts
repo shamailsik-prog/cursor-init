@@ -38,7 +38,7 @@ export function escalateSilence(
         id: store.id("fu"),
         firmId: matter.firmId,
         matterId,
-        courtId: matter.courtId,
+        courtId: matter.courtId ?? "",
         raw: "accounts-silence-24h",
         kind: "l4_10_silence",
         status: "open",

@@ -85,7 +85,8 @@ function comparableCaseNumber(raw: string): string {
 }
 
 export function ownCaseReferenceMatcher(matter: {
-  courtId: string
+  /** Audit F13: null for a matter Cloud Functions opened without a court. */
+  courtId: string | null
   caseNumber: string | null
 }): (raw: string, context?: OwnCaseContext) => boolean {
   // SEC-1: the citation gate asks this for every word suffix of every case reference in a
@@ -107,8 +108,10 @@ export function ownCaseReferenceMatcher(matter: {
     if (known !== undefined) return known
     let same: boolean | undefined
     try {
-      const result = normaliseCaseNumber(raw, matter.courtId, courts)
-      if (result.status !== "REJECT") same = result.canonical === caseNumber
+      if (matter.courtId !== null) {
+        const result = normaliseCaseNumber(raw, matter.courtId, courts)
+        if (result.status !== "REJECT") same = result.canonical === caseNumber
+      }
     } catch {
       // fall through to the raw comparison
     }
@@ -126,7 +129,8 @@ export function ownCaseReferenceMatcher(matter: {
     // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
     if (context) {
       const mentions = courtMentions(`${context.before} ${raw} ${context.after}`)
-      if (mentions.some((ids) => !ids.has(matter.courtId))) return false
+      // A matter with no court admits no mentioned court (fail closed, audit F13).
+      if (mentions.some((ids) => matter.courtId === null || !ids.has(matter.courtId))) return false
     }
     return true
   }

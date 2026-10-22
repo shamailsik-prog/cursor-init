@@ -39,6 +39,13 @@ app.conf.update(
         "scrape-na": {"task": "scraper.tasks.dispatcher.run_source_job", "schedule": 168 * 3600, "args": ("NationalAssembly",)},
         "process-embeddings": {"task": "scraper.tasks.embeddings.process_embedding_queue", "schedule": 300},
         "cross-ref": {"task": "scraper.tasks.cross_reference.cross_reference_citations", "schedule": 86400},
+        # Audit F21 (spec R4): the corpus lifecycle's consumers, in pipeline order. Each tick claims a
+        # bounded batch, one record per transaction (FOR UPDATE SKIP LOCKED); reconcile reports per
+        # source and state and raises the stalled-row alerts on F28's corpus alert line.
+        "normalise-corpus": {"task": "scraper.tasks.corpus_pipeline.normalise_corpus", "schedule": 300},
+        "promote-corpus": {"task": "scraper.tasks.corpus_pipeline.promote_corpus", "schedule": 300},
+        "publish-corpus": {"task": "scraper.tasks.corpus_pipeline.publish_corpus", "schedule": 300},
+        "reconcile-corpus": {"task": "scraper.tasks.corpus_pipeline.reconcile_corpus", "schedule": 3600},
     },
 )
 
@@ -46,5 +53,6 @@ app.conf.update(
 import scraper.tasks.dispatcher  # noqa: E402,F401
 import scraper.tasks.embeddings  # noqa: E402,F401
 import scraper.tasks.cross_reference  # noqa: E402,F401
+import scraper.tasks.corpus_pipeline  # noqa: E402,F401
 
 logger.info("Celery app configured with beat schedule %s", list(app.conf.beat_schedule.keys()))

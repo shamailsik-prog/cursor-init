@@ -529,8 +529,13 @@ def test_r1_every_pdf_harvester_refuses_active_content_and_keeps_its_judgment(co
     checks(set(stored_objects(vault)) == {sha256(hostile) + ".pdf", digest + ".pdf"},
            f"{source}: raw store {sorted(stored_objects(vault))}")
     if entry == "scrape-na":
-        written = run(fetch("SELECT source_url, section_text FROM statutes_master"))
-        checks(written and {u for u, _ in written} == {golden_url}, f"{source}: statutes_master rows from {sorted({u for u, _ in written})}")
+        # Audit F21 (spec R12): NationalAssembly stages statutes (statutes_staging, with the PDF's raw-store
+        # key) instead of writing statutes_master; before F21 this read statutes_master.
+        written = run(fetch("SELECT source_url, raw_pdf_path FROM statutes_staging"))
+        checks(written and {u for u, _ in written} == {golden_url}, f"{source}: statutes_staging rows from {sorted({u for u, _ in written})}")
+        key = f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}/{digest}.pdf"
+        checks({k for _, k in written} == {key}, f"{source}: staged raw keys {sorted({str(k) for _, k in written})}")
+        checks(run(fetch("SELECT count(*) FROM statutes_master"))[0][0] == 0, f"{source}: the harvest wrote statutes_master")
     else:
         key = f"raw-pdf/sha256/{digest[:2]}/{digest[2:4]}/{digest}.pdf"
         got_rows = [(r.source_url, r.raw_pdf_path, r.pdf_page_count, (r.parsing_metadata or {}).get("raw_sha256")) for r in staged()]

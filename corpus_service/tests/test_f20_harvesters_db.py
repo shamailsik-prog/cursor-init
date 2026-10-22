@@ -186,20 +186,32 @@ def test_f_a_harvested_record_of_a_deleted_source_is_unknown_even_if_the_name_re
 
 
 def test_f_direct_publishers_write_master_rows_only_for_a_trusted_source(corpus_db, monkeypatch, caplog):
-    """MEDIUM-2: PakistanCode and NationalAssembly write statutes_master themselves. A review or
-    unknown source writes nothing; a trusted one does."""
+    """MEDIUM-2: statutes reach statutes_master only for a trusted source. A review or unknown source
+    publishes nothing; a trusted one does.
+
+    Changed by audit F21 (spec R12): PakistanCode and NationalAssembly no longer write statutes_master
+    themselves; they stage statutes, and the corpus lifecycle (normalise, the review gate, publish)
+    publishes them. The harvest itself must write no master row for any trust value; what reaches
+    statutes_master after the lifecycle has run is what this test pinned before, unchanged."""
     assert_migrated(corpus_db.migrate(), corpus_db)
     install_offline_harvesters(monkeypatch)
+    from scraper.tasks.corpus_pipeline import run_tick
     from scraper.tasks.dispatcher import _run_async
 
     def rows_written(name, trust):
         run(execute(
             "DELETE FROM statutes_master",
+            "DELETE FROM quarantine_queue",
+            "DELETE FROM statutes_staging",
             "UPDATE scraper_sources SET trust_level = :t WHERE source_name = :n",
             params={"t": trust, "n": name},
         ))
         with caplog.at_level(logging.INFO):
             run(_run_async(name))
+        harvested = run(fetch("SELECT count(*) FROM statutes_master"))[0][0]
+        assert harvested == 0, f"{name} ({trust}) wrote statutes_master during the harvest"
+        for consumer in ("normalise", "promote", "publish"):
+            run(run_tick(consumer))
         return run(fetch("SELECT count(*) FROM statutes_master WHERE source_site = :n", n=name))[0][0]
 
     got = {}
@@ -220,5 +232,7 @@ def test_f_direct_publishers_write_master_rows_only_for_a_trusted_source(corpus_
         ("PakistanCode", "TRUSTED"): False, ("PakistanCode", "semi_trusted"): False,
         ("NationalAssembly", "TRUSTED"): False, ("NationalAssembly", "semi_trusted"): False,
     }, got
-    skips = [r.getMessage() for r in caplog.records if "publishes to statutes_master/case_law_master directly" in r.getMessage()]
+    # Audit F21: blocked and unknown sources are not harvested at all (F20's may_harvest); a review
+    # source's statutes are harvested and held at the review gate (was: the direct route skipped them).
+    skips = [r.getMessage() for r in caplog.records if "is not harvestable, skip" in r.getMessage()]
     assert any(m.startswith("PakistanCode ") for m in skips) and any(m.startswith("NationalAssembly ") for m in skips), skips

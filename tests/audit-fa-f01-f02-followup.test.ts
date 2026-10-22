@@ -13,7 +13,8 @@ describe("FA-F01/F02 follow-up regressions", () => {
       const where = vi.fn(() => ({
         limit: vi.fn(() => ({
           get: async () => ({
-            docs: [{ id: "m1", data: () => ({ id: "m1", firmId: "firmA", title: "x" }) }],
+            // Audit F13: a canonical matter row (the shared validator never returns a partial one).
+            docs: [{ id: "m1", data: () => ({ id: "m1", firmId: "firmA", title: "x", clientId: "c", status: "live", classification: "internal" }) }],
             empty: false,
           }),
         })),
@@ -31,8 +32,9 @@ describe("FA-F01/F02 follow-up regressions", () => {
 
   describe("FA-F01-002 firm-scoped get/update", () => {
     it("refuses cross-firm matter reads and updates", async () => {
-      const store = new Map<string, { id: string; firmId: string; title: string }>([
-        ["m1", { id: "m1", firmId: "firmA", title: "A matter" }],
+      const store = new Map<string, { id: string; firmId: string; title: string } & Record<string, string>>([
+        // Audit F13: a canonical matter row (the shared validator never returns a partial one).
+        ["m1", { id: "m1", firmId: "firmA", title: "A matter", clientId: "c", status: "live", classification: "internal" }],
       ])
       const db = {
         collection: (_name: string) => ({

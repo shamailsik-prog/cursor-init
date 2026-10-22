@@ -33,6 +33,7 @@ import contextlib
 import contextvars
 import errno
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Optional
@@ -42,6 +43,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import exc as sa_exc
 
 from scraper.net import fetch_policy
+from scraper.parsers.pdf_signature import PDF_SIGNATURE, has_pdf_signature  # noqa: F401 (PDF_SIGNATURE re-exported)
 
 # ---------------------------------------------------------------------------------------------
 # Vocabulary (R1)
@@ -56,7 +58,7 @@ REASON_LISTINGS_FAILED = "every listing request failed"
 REASON_DOCUMENTS_FAILED = "every document request failed"
 
 # Per-item error codes that are not an HTTP status or an exception (R3, R16).
-ERROR_NOT_PDF = "not_pdf"  # a body assumed to be a PDF does not start with the %PDF- signature
+ERROR_NOT_PDF = "not_pdf"  # a body assumed to be a PDF has no %PDF- signature in its first 1024 bytes
 ERROR_EMPTY_PDF_TEXT = "empty_pdf_text"  # a PDF whose extraction is empty or whitespace only
 ERROR_FEED_UNPARSEABLE = "feed_unparseable"  # a discovery feed answered 200 with a payload that does not parse
 
@@ -75,17 +77,32 @@ ERROR_PDF_TEXT_LIMIT = "pdf_text_limit"
 ERROR_PDF_PARSE_CRASHED = "pdf_parse_crashed"  # the sandbox died on a signal
 ERROR_PDF_PARSE_FAILED = "pdf_parse_failed"  # the sandbox gave no usable answer
 
-PDF_SIGNATURE = b"%PDF-"
-
 
 def looks_like_pdf(content: Optional[bytes]) -> bool:
-    """R16: checked before extraction wherever a harvester assumes a body is a PDF."""
-    return bool(content) and content.startswith(PDF_SIGNATURE)
+    """R16: checked before extraction wherever a harvester assumes a body is a PDF. FA-corpus-005:
+    the same rule as the extractor (``scraper.parsers.pdf_signature``), signature in the first 1024 bytes."""
+    return has_pdf_signature(content)
+
+
+# FA-corpus-004 / FA-corpus-008: real text has at least one letter (Lu/Ll/Lt/Lo) or digit (N*) that is
+# not a default-ignorable filler (the Hangul fillers are Lo); private use, combining marks, symbols
+# such as BRAILLE BLANK, U+FFFD and pdfplumber's "(cid:N)" tokens for unmapped glyphs are not text.
+# FA-corpus-010: modifier letters (Lm: tatweel U+0640, U+02C6) carry no content on their own.
+_TEXT_LETTERS = frozenset({"Lu", "Ll", "Lt", "Lo"})
+_IGNORABLE_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
+_CID_TOKEN = re.compile(r"\(cid:\d+\)")
 
 
 def has_text(text: Optional[str]) -> bool:
-    """R16: an extraction that is empty or whitespace only is a parse failure, never progress."""
-    return bool(text) and bool(text.strip())
+    """R16: an extraction with no real letter or digit is a parse failure, never progress. Urdu text
+    with ZWNJ/ZWJ between letters still counts; the text is not changed (FA-corpus-004/008)."""
+    if not text:
+        return False
+    return any(
+        (unicodedata.category(ch) in _TEXT_LETTERS or unicodedata.category(ch)[0] == "N")
+        and ch not in _IGNORABLE_LETTERS
+        for ch in _CID_TOKEN.sub("", text)
+    )
 
 # ---------------------------------------------------------------------------------------------
 # Retry policy (R7)

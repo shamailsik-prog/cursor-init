@@ -4,7 +4,7 @@ import logging, asyncio
 from scraper.database import SessionLocal
 from sqlalchemy import select
 from scraper.models import ScraperSource
-from scraper.tasks import job_record, outcomes
+from scraper.tasks import job_record, lifecycle, outcomes
 from scraper.trust import may_harvest, may_publish_directly
 logger = logging.getLogger(__name__)
 
@@ -14,13 +14,14 @@ logger = logging.getLogger(__name__)
 # transient fault is retried (outcomes.will_retry), with backoff 300, 600, 1200 s, at most 3 times.
 
 # What a harvester does with what it fetches (audit F20, PR #48 re-audit round 2):
-#   staging - writes scraper_staging rows only; promotion makes the trust decision later.
-#   direct  - writes statutes_master / case_law_master itself, so there is no promotion decision
-#             and no quarantine. FINAL_2 :897 (review -> always quarantine): runs only for a
-#             trusted source.
+#   staging - writes scraper_staging / statutes_staging rows only; the corpus lifecycle (audit F21:
+#             normalise, the review gate, publication) decides them later.
+#   direct  - would write statutes_master / case_law_master itself, with no review gate. Audit F21
+#             (spec R12): no route is direct any more (PakistanCode and NationalAssembly stage); the
+#             kind stays only so a route declared direct still fails closed for an untrusted source
+#             (FINAL_2 :897). tests/test_f21_corpus_lifecycle_rules.py fails on any direct route or
+#             any source task that writes a master table.
 # Every route declares one; a route with no kind or any other value is refused (fail closed).
-# tests/test_trust_policy.py scans all of scraper/ for master-table writes and requires every
-# writing module to be a `direct` route here or on its reviewed allowlist.
 ROUTE_STAGING = "staging"
 ROUTE_DIRECT = "direct"
 ROUTE_KINDS = frozenset({ROUTE_STAGING, ROUTE_DIRECT})
@@ -29,7 +30,7 @@ ROUTE_KINDS = frozenset({ROUTE_STAGING, ROUTE_DIRECT})
 ROUTES = {
     "PakistanLawSite": ("scraper.tasks.pakistanlawsite", "scrape_pakistanlawsite", ROUTE_STAGING),
     "NasirLawSite": ("scraper.tasks.nasirlawsite", "scrape_nasirlawsite", ROUTE_STAGING),
-    "PakistanCode": ("scraper.tasks.pakistancode", "scrape_pakistancode", ROUTE_DIRECT),
+    "PakistanCode": ("scraper.tasks.pakistancode", "scrape_pakistancode", ROUTE_STAGING),
     "SindhHighCourt": ("scraper.tasks.shc", "scrape_shc", ROUTE_STAGING),
     "SindhHighCourtPublic": ("scraper.tasks.shc", "scrape_shc", ROUTE_STAGING),
     "SupremeCourt": ("scraper.tasks.supremecourt", "scrape_supremecourt", ROUTE_STAGING),
@@ -41,7 +42,7 @@ ROUTES = {
     "BalochistanHighCourtPublic": ("scraper.tasks.balochistanhighcourt", "scrape_balochistanhighcourt", ROUTE_STAGING),
     "IslamabadHighCourt": ("scraper.tasks.islamabadhighcourt", "scrape_islamabadhighcourt", ROUTE_STAGING),
     "IslamabadHighCourtPublic": ("scraper.tasks.islamabadhighcourt", "scrape_islamabadhighcourt", ROUTE_STAGING),
-    "NationalAssembly": ("scraper.tasks.nationalassembly", "scrape_nationalassembly", ROUTE_DIRECT),
+    "NationalAssembly": ("scraper.tasks.nationalassembly", "scrape_nationalassembly", ROUTE_STAGING),
 }
 
 @shared_task(name="scraper.tasks.dispatcher.run_source_job", bind=True, max_retries=outcomes.MAX_RETRIES)
@@ -74,7 +75,8 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
     )
     tally = outcomes.Tally()
     try:
-        with outcomes.bind_run_tally(tally):
+        # Audit F21 (spec R5): every record the harvester stages names this run (staging job_id).
+        with outcomes.bind_run_tally(tally), lifecycle.bind_run_job(job_id):
             decision = await _run_async(source_name)
         if isinstance(decision, outcomes.Refused):
             raise outcomes.SourceRefused(source_name, decision.reason)

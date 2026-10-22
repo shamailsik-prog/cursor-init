@@ -534,7 +534,7 @@ def test_h5_pakistancode_counts_a_slug_that_is_not_a_200_as_a_failed_document(co
     assert [(r.status, r.pages_scraped, r.records_failed) for r in rows] == [("failed", 10, 10)], f"404 is not retried: {rows}"
     summary = rows[0].result_summary
     assert (summary["reason"], summary["errors"]) == ("every document request failed", {"http_404": 10}), summary
-    assert count("statutes_master") == 0
+    assert count("statutes_master") == count("statutes_staging") == 0  # audit F21: statutes are staged, not written to master
 
 
 def test_x6_a_national_assembly_index_that_is_not_a_200_fails_the_run(corpus_db, monkeypatch):

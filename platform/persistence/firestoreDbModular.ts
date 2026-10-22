@@ -1,4 +1,8 @@
-import type { DocumentData as AdminDocumentData, Firestore as AdminFirestore } from "firebase-admin/firestore"
+import {
+  FieldValue as AdminFieldValue,
+  type DocumentData as AdminDocumentData,
+  type Firestore as AdminFirestore,
+} from "firebase-admin/firestore"
 import {
   collection as clientCollection,
   doc as clientDoc,
@@ -12,6 +16,7 @@ import {
   deleteDoc as clientDeleteDoc,
   where as clientWhere,
   limit as clientLimit,
+  serverTimestamp as clientServerTimestamp,
   type Firestore as ClientFirestore,
 } from "firebase/firestore"
 import { AUDIT_OUTBOX_COLLECTION, EXTERNAL_EFFECT_PREFIX, isEffectPath } from "@/platform/persistence/auditOutboxContract"
@@ -31,16 +36,60 @@ export class FirmScopedCursorError extends Error {
 
 export type Firestore = ClientFirestore | AdminFirestore
 
+/**
+ * FA-F13-012: the one Firestore SDK detector. Every helper below and serverTimestampFor() ask it, and none checks
+ * `instanceof` a class of one firebase-admin copy (Cloud Functions bundles firebase-admin 13.x, the Next server 14.x).
+ * - "admin": a firebase-admin Firestore of any copy, recognised by its class's own FieldValue (both copies attach it).
+ * - "client-compat": a client-SDK compat instance (a @firebase/rules-unit-testing context, the G-2 wiring). It has the
+ *   namespaced `.collection()` API but wraps (`_delegate`) a modular client instance.
+ * - "client": a modular client-SDK instance (`type` is "firestore" or "firestore-lite").
+ * - "namespaced": any other object with `.collection()` (unit-test doubles of the namespaced API).
+ */
+export type FirestoreSdk = "admin" | "client-compat" | "client" | "namespaced"
+
+const MODULAR_CLIENT_TYPES: ReadonlySet<unknown> = new Set(["firestore", "firestore-lite"])
+
+type AdminFieldValueClass = { serverTimestamp(): unknown }
+
+function ownAdminFieldValue(db: object): AdminFieldValueClass | null {
+  const fieldValue = (db.constructor as { FieldValue?: Partial<AdminFieldValueClass> } | undefined)?.FieldValue
+  return typeof fieldValue?.serverTimestamp === "function" ? (fieldValue as AdminFieldValueClass) : null
+}
+
+export function firestoreSdkOf(db: unknown): FirestoreSdk | null {
+  if (typeof db !== "object" || db === null) return null
+  const d = db as { collection?: unknown; type?: unknown; _delegate?: { type?: unknown } | null }
+  if (typeof d.collection === "function") {
+    if (d._delegate && MODULAR_CLIENT_TYPES.has(d._delegate.type)) return "client-compat"
+    return ownAdminFieldValue(db) ? "admin" : "namespaced"
+  }
+  return MODULAR_CLIENT_TYPES.has(d.type) ? "client" : null
+}
+
+/** The namespaced call API (`db.collection()`, `ref.set()`): firebase-admin, client compat and test doubles. */
 function isAdminFirestore(db: unknown): db is AdminFirestore {
-  return (
-    typeof db === "object" &&
-    db !== null &&
-    typeof (db as AdminFirestore).collection === "function"
-  )
+  const sdk = firestoreSdkOf(db)
+  return sdk === "admin" || sdk === "client-compat" || sdk === "namespaced"
 }
 
 function isClientFirestore(db: unknown): db is ClientFirestore {
-  return typeof db === "object" && db !== null && !isAdminFirestore(db)
+  return firestoreSdkOf(db) === "client"
+}
+
+/**
+ * The server-timestamp sentinel of `db`'s own SDK copy (audit F13: canonical `createdAt`, as Cloud Functions writes
+ * it). A firebase-admin instance only accepts the FieldValue of its own copy (FA-F13-012); a client instance, compat
+ * or modular, takes the modular sentinel (compat unwraps to the modular SDK, FA-F13-010).
+ */
+export function serverTimestampFor(db: ClientFirestore | AdminFirestore): unknown {
+  switch (firestoreSdkOf(db)) {
+    case "admin":
+      return (ownAdminFieldValue(db) as AdminFieldValueClass).serverTimestamp()
+    case "namespaced":
+      return AdminFieldValue.serverTimestamp()
+    default:
+      return clientServerTimestamp()
+  }
 }
 
 export function collection(db: ClientFirestore | AdminFirestore, path: string) {
