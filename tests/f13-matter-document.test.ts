@@ -6,6 +6,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import type { Matter } from "@/platform/spine/store"
+import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import {
   MATTER_STAGES,
   MatterShapeError,
@@ -196,10 +197,21 @@ describe("F13 re-audit: null-court read paths", () => {
     expect(buildMatterSearchIndexRow({ ...base, caseNumber: "", courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("")
   })
 
-  it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", async () => {
-    const { ownCaseReferenceMatcher } = await import("@/services/d4-1/drafts")
-    const isOwn = ownCaseReferenceMatcher({ courtId: null, caseNumber: "CP 12/2019" })
-    expect(isOwn("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
-    expect(isOwn("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(false)
+  it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", () => {
+    // Set.has(null) is false, so `!ids.has(courtId)` already fail-closes on any mention and a revert of
+    // `courtId === null ||` is invisible. The clause is load-bearing only when a non-string court id is
+    // not treated as excluded by set membership. This pins that expression and the behaviour around it.
+    const courtless = ownCaseReferenceMatcher({ courtId: null, caseNumber: "CP 12/2019" })
+    expect(courtless("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(courtless("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(false)
+    expect(courtless("CP 12/2019", { before: "As recorded,", after: "the suit continues" })).toBe(true)
+    expect(courtless("CP 12/2019")).toBe(true)
+    const shc = ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" })
+    expect(shc("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(shc("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(true)
+    const drafts = readFileSync(path.join(path.resolve(__dirname, ".."), "services/d4-1/drafts.ts"), "utf8")
+    expect(drafts).toContain(
+      'matter.courtId === null || (typeof matter.courtId === "string" && !ids.has(matter.courtId))'
+    )
   })
 })
