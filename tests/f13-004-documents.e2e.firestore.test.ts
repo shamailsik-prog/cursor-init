@@ -79,4 +79,10 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     await expect(repo().documents.get(id, firmId)).rejects.toThrow(/malformed/)
     expect(await repo().documents.get(uniq("nodoc"), firmId)).toBeNull()
   })
+  it("an update that would repair a malformed row is still refused: the stored row is checked before the merge (Codex P2)", async () => {
+    const firmId = uniq("f13d4firm")
+    const id = await stored({ ...good(firmId), byteSize: "12" })
+    await expect(repo().documents.update(id, firmId, { byteSize: 12, classification: "confidential" })).rejects.toThrow(/malformed/)
+    expect(await adminDb().collection("documents").doc(id).get().then((d) => d.data())).toMatchObject({ byteSize: "12", classification: "internal" })
+  })
 })
