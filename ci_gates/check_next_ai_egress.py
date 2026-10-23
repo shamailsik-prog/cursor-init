@@ -395,6 +395,8 @@ def _npm_tool_root() -> pathlib.Path:
 
 def agent_eve_model_ast_findings(scan_root: pathlib.Path) -> list[str]:
     """Rule (f) for JS/TS under agent/ via TypeScript AST (FA-F18-016)."""
+    if os.environ.get("G0_STATIC_ONLY") == "1":
+        return []
     agent_dir = scan_root / "agent"
     if not agent_dir.is_dir():
         return []
@@ -500,7 +502,17 @@ def main(argv: list[str]) -> int:
     if "--print-pure-modules" in argv:
         print(json.dumps(list(FUNCTIONS_PURE_MODULES)))
         return 0
+    ast_only = "--rule-f-ast-only" in argv
     scan_root = pathlib.Path(".").resolve()
+    if ast_only:
+        failures = agent_eve_model_ast_findings(scan_root)
+        if failures:
+            print("FAIL: eve defineAgent model allowlist (audit F18 rule f, FA-F18-016):")
+            for f in sorted(set(failures)):
+                print(" ", f)
+            return 1
+        print("PASS: eve defineAgent model is the P1 LanguageModel import (rule f)")
+        return 0
     failures: list[str] = [
         f"{d}: a symlinked directory; [19] does not follow links, so what is behind it would go unchecked"
         for d in symlinked_dirs(scan_root)
