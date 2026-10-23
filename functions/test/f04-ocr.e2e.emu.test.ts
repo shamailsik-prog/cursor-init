@@ -119,6 +119,28 @@ function incompleteLegacyFiller(id: string, firmId: string): Record<string, unkn
   return { id, firmId, jobType: "ocr", ocrStatus: "queued" }
 }
 
+function stampedLegacyFiller(id: string, firmId: string): Record<string, unknown> {
+  return {
+    id,
+    firmId,
+    jobType: "ocr",
+    documentId: `f04-stamp-doc-${id}`,
+    matterId: null,
+    classification: "internal",
+    idempotencyKey: `idem-${id}`,
+    ocrStatus: "done",
+    ocrResultId: `f04-stamp-text-${id}`,
+  }
+}
+
+function missingFirmLegacyFiller(id: string): Record<string, unknown> {
+  return { id, jobType: "ocr", ocrStatus: "queued" }
+}
+
+function unsafeFirmLegacyFiller(id: string): Record<string, unknown> {
+  return { id, firmId: "../../evil", jobType: "ocr", ocrStatus: "queued" }
+}
+
 async function writeCancelledLegacyStuck(id: string, firmId: string): Promise<void> {
   const { jobIdFor } = await import("../src/p2/enqueue")
   const { JOB_ENGINE } = await import("../src/p2/constants")
@@ -866,6 +888,41 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const legacy = await adminDb().collection("jobs").doc(targetId).get()
     expect(legacy.get("ocrStatus")).toBe("done")
     expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
+  }, 120_000)
+
+  it("FA-F04-016: ocrStatus backfill reaches legacy rows after five hundred stamped OCR rows", async () => {
+    const { backfillLegacyOcrStatusForSweep, legacyOcrStatusBackfillTestSeam } = await import("../src/p2/legacyOcrStatusBackfill")
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    await adminDb().collection("system").doc("ocrStatusBackfill").delete()
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    for (let start = 1; start <= 501; start += 500) {
+      const batch = adminDb().batch()
+      const end = Math.min(start + 499, 501)
+      for (let i = start; i <= end; i++) {
+        const id = `f04-bf-${String(i).padStart(4, "0")}`
+        batch.set(adminDb().collection("jobs").doc(id), stampedLegacyFiller(id, firmId))
+      }
+      await batch.commit()
+    }
+    const jobId = `zz-unstamped-${uniq("late")}`
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    delete row.ocrStatus
+    await writeLegacy(row)
+
+    for (let pass = 0; pass < 8; pass++) {
+      await backfillLegacyOcrStatusForSweep()
+      if ((await adminDb().collection("jobs").doc(jobId).get()).data()?.ocrStatus !== undefined) break
+    }
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("queued")
+    await sweepLegacyOcr(deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("done")
+
+    legacyOcrStatusBackfillTestSeam.queryPages = 0
+    await backfillLegacyOcrStatusForSweep()
+    expect(legacyOcrStatusBackfillTestSeam.queryPages).toBe(0)
   }, 120_000)
 
   it("FA-F04-013: the sweep drains a legacy row that predates ocrStatus on the upload row", async () => {
