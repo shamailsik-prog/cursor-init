@@ -8,8 +8,8 @@ import { appendAudit } from "../p5/audit"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import { aggregateClassification } from "./ocrAggregate"
 import {
-  capOcrText,
   LOCAL_OCR_PROVIDER,
+  measureOcrText,
   OcrTimeoutError,
   resolveOcrEngine,
   withOcrTimeout,
@@ -21,8 +21,10 @@ import {
  *
  * Every extraction goes through here. The call carries the aggregate classification, which must be
  * at least every source label, and it is refused by the platform or firm kill switch before the
- * engine runs. The engine is the configured provider, or the deterministic local stub when none is
- * configured. An operation id replays a stored `ok` without calling the engine again.
+ * engine runs. The engine is a provider registered for the F18 control plane, or, outside
+ * production, the deterministic local stub when none is configured. Production with no registered
+ * provider records `provider_unsupported` and does not publish text. An operation id replays a
+ * stored `ok` without calling the engine again.
  *
  * The operation row holds the text so a retry can publish it without a second extraction. It is
  * server-only (`p1_ocr_operations` in firestore.rules). The user-visible copy is `ocr_texts`.
@@ -62,6 +64,8 @@ export type OcrCallResult = {
   lowConfidence: boolean | null
   provider: string | null
   classification: Classification
+  /** True when the stored text is a prefix of the extraction because it exceeded the UTF-8 cap. */
+  truncated: boolean
   calls: number
   reused: boolean
 }
@@ -133,6 +137,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
         lowConfidence: existing.get("lowConfidence") === true,
         provider: typeof provider === "string" ? provider : null,
         classification: req.classification,
+        truncated: existing.get("truncated") === true,
         calls: callsOf(existing.get("calls")),
         reused: true,
       }
@@ -188,6 +193,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       confidence: null,
       lowConfidence: null,
       text: null,
+      truncated: false,
       calls: priorCalls,
       reused: false,
     })
@@ -200,6 +206,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       lowConfidence: null,
       provider: null,
       classification: req.classification,
+      truncated: false,
       calls: priorCalls,
       reused: false,
     }
@@ -207,7 +214,9 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
 
   try {
     const extraction = await withOcrTimeout(engine!.extract({ bytes: req.bytes, mimeType: req.mimeType }), budgetMs(req))
-    const text = capOcrText(extraction.text)
+    const measured = measureOcrText(extraction.text)
+    const text = measured.text
+    const truncated = extraction.truncated === true || measured.truncated
     const calls = priorCalls + 1
     await write({
       ...base,
@@ -218,6 +227,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       confidence: extraction.confidence,
       lowConfidence: extraction.lowConfidence,
       text,
+      truncated,
       calls,
       reused: false,
     })
@@ -231,6 +241,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       lowConfidence: extraction.lowConfidence,
       provider: extraction.provider,
       classification: req.classification,
+      truncated,
       calls,
       reused: false,
     }
@@ -246,6 +257,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       confidence: null,
       lowConfidence: null,
       text: null,
+      truncated: false,
       calls,
       reused: false,
     })
@@ -258,6 +270,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       lowConfidence: null,
       provider: null,
       classification: req.classification,
+      truncated: false,
       calls,
       reused: false,
     }

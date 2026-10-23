@@ -593,4 +593,208 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
       ocrStatus: "done",
     })
   })
+
+  it("FA-F04-007: a sweep drains an older legacy row the create trigger never saw", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-older")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBeUndefined()
+
+    await sweepLegacyOcr(deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    const result = await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()
+    expect(result.get("text")).toBe(TEXT)
+  })
+
+  it("FA-F04-007: the sweep picks up a row whose engine retries are exhausted", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const { jobIdFor } = await import("../src/p2/enqueue")
+    const { OCR_JOB_TYPE } = await import("../src/p2/ocrJob")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-exhausted")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    await onJobCreatedCore(jobId, row, deps)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    expect(engineJobId).toBe(jobIdFor(firmId, OCR_JOB_TYPE, jobId))
+    // The handler never ran. The engine row is already dead-lettered and the legacy row is still running.
+    await adminDb().collection("jobs").doc(engineJobId).update({
+      status: "dead_lettered",
+      attempts: 4,
+      manualRetries: 0,
+      nextAttemptAt: null,
+      sweepAt: null,
+      finishedAt: Timestamp.fromMillis(clock.now()),
+      lastError: { code: "ocr_failed", message: "retries exhausted" },
+    })
+    await adminDb().collection("jobs").doc(jobId).update({ ocrStatus: "running", ocrFailureCode: "ocr_failed" })
+
+    await sweepLegacyOcr(deps)
+    const revived = await readJob(engineJobId)
+    expect(revived.status).toBe("queued")
+    expect(revived.manualRetries).toBe(1)
+    expect(await deps.dispatcher.drainDue(clock.now())).toContain("done")
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("done")
+    expect((await adminDb().collection("ocr_texts").where("documentId", "==", doc.docId).get()).docs[0]?.get("text")).toBe(TEXT)
+  })
+
+  it("FA-F04-007: a dead-lettered OCR job at the manual retry cap is closed instead of requeued", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-cap")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    await onJobCreatedCore(jobId, row, deps)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    await adminDb().collection("jobs").doc(engineJobId).update({
+      status: "dead_lettered",
+      attempts: 4,
+      manualRetries: 3,
+      nextAttemptAt: null,
+      sweepAt: null,
+      finishedAt: Timestamp.fromMillis(clock.now()),
+      lastError: { code: "ocr_failed", message: "retries exhausted" },
+    })
+    await adminDb().collection("jobs").doc(jobId).update({ ocrStatus: "running", ocrFailureCode: "ocr_failed" })
+
+    await sweepLegacyOcr(deps)
+    expect((await readJob(engineJobId)).status).toBe("dead_lettered")
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("failed")
+    expect(legacy.get("ocrFailureCode")).toBe("ocr_failed")
+    expect(await deps.dispatcher.drainDue(clock.now())).not.toContain("done")
+    expect((await adminDb().collection("ocr_texts").where("documentId", "==", doc.docId).get()).empty).toBe(true)
+  })
+
+  it("FA-F04-008: over-cap text records truncated on the operation row and the result row", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const ch = "\u{FBAB}"
+    const over = ch.repeat(310_000)
+    const longDoc = await seedDoc({ firmId, matterId, classification: "internal", text: over })
+    const longId = uniq("f04-trunc")
+    const longRow = legacyRow({ id: longId, firmId, documentId: longDoc.docId, matterId, classification: "internal" })
+    await writeLegacy(longRow)
+    await onJobCreatedCore(longId, longRow, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const longLegacy = await adminDb().collection("jobs").doc(longId).get()
+    const longText = await adminDb().collection("ocr_texts").doc(longLegacy.get("ocrResultId")).get()
+    const longOp = await adminDb().collection("p1_ocr_operations").doc(deps.dispatcher.tasks[0]!.jobId).get()
+    expect(longText.get("truncated")).toBe(true)
+    expect(longOp.get("truncated")).toBe(true)
+    expect(Buffer.byteLength(longText.get("text"), "utf8")).toBeLessThanOrEqual(900 * 1024)
+    expect((longText.get("text") as string).length).toBeLessThan(over.length)
+
+    const shortDoc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const shortId = uniq("f04-whole")
+    const shortRow = legacyRow({ id: shortId, firmId, documentId: shortDoc.docId, matterId, classification: "internal" })
+    await writeLegacy(shortRow)
+    await onJobCreatedCore(shortId, shortRow, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toContain("done")
+    const shortLegacy = await adminDb().collection("jobs").doc(shortId).get()
+    const shortText = await adminDb().collection("ocr_texts").doc(shortLegacy.get("ocrResultId")).get()
+    const shortEngine = deps.dispatcher.tasks.find((task) => task.jobId !== deps.dispatcher.tasks[0]!.jobId)
+    const shortOp = await adminDb().collection("p1_ocr_operations").doc(shortEngine!.jobId).get()
+    expect(shortText.get("truncated")).toBe(false)
+    expect(shortText.get("text")).toBe(TEXT)
+    expect(shortOp.get("truncated")).toBe(false)
+  }, 60_000)
+
+  it("FA-F04-009 O4: a stricter document label applied mid-job is the label on the published text", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-o4")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    ocrTestSeam.engine = {
+      id: LOCAL_OCR_PROVIDER,
+      extract: async () => {
+        await adminDb().collection("documents").doc(doc.docId).update({ classification: "confidential" })
+        return { text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER }
+      },
+    }
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const resultId = (await adminDb().collection("jobs").doc(jobId).get()).get("ocrResultId") as string
+    expect((await adminDb().collection("ocr_texts").doc(resultId).get()).get("classification")).toBe("confidential")
+  })
+
+  it("FA-F04-009 O6: a stricter matter label applied mid-job is the label on the published text", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-o6")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    ocrTestSeam.engine = {
+      id: LOCAL_OCR_PROVIDER,
+      extract: async () => {
+        await adminDb().collection("matters").doc(matterId).update({ classification: "privileged" })
+        return { text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER }
+      },
+    }
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const resultId = (await adminDb().collection("jobs").doc(jobId).get()).get("ocrResultId") as string
+    const result = await adminDb().collection("ocr_texts").doc(resultId).get()
+    expect(result.get("classification")).toBe("privileged")
+    expect((await adminDb().collection("documents").doc(doc.docId).get()).get("classification")).toBe("internal")
+  })
+
+  it("FA-F04-009 O11: the legacy row and the completion audit use the label re-checked at publish", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-o11")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    ocrTestSeam.engine = {
+      id: LOCAL_OCR_PROVIDER,
+      extract: async () => {
+        await adminDb().collection("documents").doc(doc.docId).update({ classification: "confidential" })
+        return { text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER }
+      },
+    }
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrClassification")).toBe("confidential")
+    const resultId = legacy.get("ocrResultId") as string
+    const audits = await adminDb().collection("audit_log").where("target", "==", `ocr_texts/${resultId}`).get()
+    expect(audits.docs.some((entry) => entry.get("action") === "ocr.complete" && entry.get("classification") === "confidential")).toBe(true)
+    expect(audits.docs.some((entry) => entry.get("action") === "ocr.complete" && entry.get("classification") === "internal")).toBe(false)
+  })
+
+  it("a label lowered mid-job does not publish the text under the lower label", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "confidential")
+    const doc = await seedDoc({ firmId, matterId, classification: "confidential" })
+    const jobId = uniq("f04-lower")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "confidential" })
+    await writeLegacy(row)
+    ocrTestSeam.engine = {
+      id: LOCAL_OCR_PROVIDER,
+      extract: async () => {
+        await adminDb().collection("documents").doc(doc.docId).update({ classification: "internal" })
+        await adminDb().collection("matters").doc(matterId).update({ classification: "internal" })
+        return { text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER }
+      },
+    }
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrClassification")).toBe("confidential")
+    expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("classification")).toBe("confidential")
+  })
 })
