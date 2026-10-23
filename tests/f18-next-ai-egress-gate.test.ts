@@ -560,6 +560,80 @@ const FAILING: Case[] = [
     },
     names: ["agent/agent.ts", "FA-F18-028"],
   },
+  {
+    name: "FA-F18-029: direct property assignment on committeeBrainLanguageModel",
+    files: {
+      "lib/evil.ts": 'export const evil = { doGenerate: () => "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { evil } from "../lib/evil"\ncommitteeBrainLanguageModel.doGenerate = evil\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-029"],
+  },
+  {
+    name: "FA-F18-029: computed property assignment on committeeBrainLanguageModel",
+    files: {
+      "lib/evil.ts": 'export const evil = { doGenerate: () => "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { evil } from "../lib/evil"\ncommitteeBrainLanguageModel["doGenerate"] = evil\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-029"],
+  },
+  {
+    name: "FA-F18-029: alias committeeBrainLanguageModel then mutate through the alias",
+    files: {
+      "lib/evil.ts": 'export const evil = { doGenerate: () => "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { evil } from "../lib/evil"\nconst m = committeeBrainLanguageModel\nm.doGenerate = evil\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-029"],
+  },
+  {
+    name: "FA-F18-029: Object global aliased then used to mutate committeeBrainLanguageModel",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst O = Object\nO.assign(committeeBrainLanguageModel, { doGenerate: () => 1 })\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-029"],
+  },
+  {
+    name: "FA-F18-030: defineAgent.call in a second agent file with imported cfg",
+    files: {
+      "lib/cfg.ts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/extra.ts":
+        'import { defineAgent } from "eve"\nimport { cfg } from "../lib/cfg"\nexport const spare = defineAgent.call(null, cfg)\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/extra.ts", "FA-F18-030"],
+  },
+  {
+    name: "FA-F18-030: defineAgent assigned to a local then invoked indirectly",
+    files: {
+      "lib/cfg.ts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/sub.ts":
+        'import { defineAgent } from "eve"\nimport { cfg } from "../lib/cfg"\nconst f = defineAgent\nexport const spare = f(cfg)\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/sub.ts", "FA-F18-030"],
+  },
+  {
+    name: "FA-F18-031: bare side-effect import pulls in canonical model mutation",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nObject.assign(committeeBrainLanguageModel, { doGenerate: () => "anthropic/claude-sonnet-4.6" })\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport "../lib/patch"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-031"],
+  },
 ]
 
 const PASSING: Case[] = [
@@ -589,7 +663,7 @@ const PASSING: Case[] = [
     name: "eve shorthand model bound to the imported P1 LanguageModel (FA-F18-015)",
     files: {
       "agent/agent.ts":
-        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = committeeBrainLanguageModel\nexport default defineAgent({ model })\n',
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel as model } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model })\n',
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
     names: [],
