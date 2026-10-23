@@ -17,7 +17,7 @@ import { adminApp, adminDb } from "../src/admin"
 import { onJobCreatedCore } from "../src/p2/functions"
 import { jobsRef } from "../src/p2/enqueue"
 import { ocrDrainTestSeam } from "../src/p2/ocrDrain"
-import { jobWorkerTestSeam } from "../src/p2/worker"
+import { jobWorkerTestSeam, runJobTask } from "../src/p2/worker"
 import { LOCAL_OCR_PROVIDER } from "../src/p1/ocrEngine"
 import { ocrTestSeam, ocrTextId } from "../src/p1/ocrCall"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -873,9 +873,14 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
 
     await adminDb().collection("documents").doc(doc.docId).update({ classification: "internal" })
     await adminDb().collection("matters").doc(matterId).update({ classification: "internal" })
-    await jobsRef().doc(engineJobId).update({ lease: null, sweepAt: Timestamp.fromMillis(clock.now()) })
+    const engine = await readJob(engineJobId)
+    expect(engine.lease?.owner).toBeTruthy()
+    await jobsRef().doc(engineJobId).update({
+      lease: { owner: engine.lease!.owner, expiresAt: Timestamp.fromMillis(clock.now() - 1) },
+      sweepAt: Timestamp.fromMillis(clock.now()),
+    })
 
-    expect(await deps.dispatcher.deliver(task)).toBe("done")
+    expect(await runJobTask(task, deps)).toBe("done")
     const legacy = await adminDb().collection("jobs").doc(jobId).get()
     expect(legacy.get("ocrClassification")).toBe("confidential")
     expect((await adminDb().collection("ocr_texts").doc(resultId).get()).get("classification")).toBe("confidential")

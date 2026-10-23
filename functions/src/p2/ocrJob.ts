@@ -313,6 +313,12 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
     }
   })
 
+  const storedText = await textRef.get()
+  if (storedText.exists) {
+    const storedLabel = storedText.get("classification")
+    if (isKnownClassification(storedLabel)) published = storedLabel
+  }
+
   return {
     outputRefs: ctx.job.matterId === null ? [] : [`ocr_texts/${resultId}`],
     apply(tx) {

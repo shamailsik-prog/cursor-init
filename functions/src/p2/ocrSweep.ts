@@ -30,9 +30,16 @@ export type LegacyOcrSweepResult = {
 }
 
 const NOTE = "OCR sweep picked up a job whose retries were exhausted"
+const TERMINAL_OCR_STATUSES = ["done", "failed"]
 
+/** Legacy OCR rows the sweep can still act on (FA-F04-010). Terminal rows are excluded so the window advances. */
 function legacyQuery() {
-  return jobsRef().where("jobType", "==", "ocr").orderBy(FieldPath.documentId()).limit(SWEEP_LIMIT)
+  return jobsRef()
+    .where("jobType", "==", "ocr")
+    .where("ocrStatus", "not-in", TERMINAL_OCR_STATUSES)
+    .orderBy("ocrStatus")
+    .orderBy(FieldPath.documentId())
+    .limit(SWEEP_LIMIT)
 }
 
 async function reviveOrClose(legacyId: string, firmId: string, engineId: string, deps: JobDeps): Promise<"requeued" | "closed" | "skipped"> {
