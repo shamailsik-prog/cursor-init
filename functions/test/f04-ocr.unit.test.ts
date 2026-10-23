@@ -56,7 +56,7 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     const first = await engine.extract({ bytes, mimeType: "text/plain" })
     const second = await engine.extract({ bytes, mimeType: "text/plain" })
     expect(first).toEqual(second)
-    expect(first).toEqual({ text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER })
+    expect(first).toEqual({ text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER, truncated: false })
   })
 
   it("the local stub is deterministic on bytes that are not text and marks them low confidence", async () => {
@@ -77,6 +77,27 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     expect(resolveOcrEngine({ OCR_PROVIDER: "  local  " })).toBeInstanceOf(DeterministicLocalOcrEngine)
     expect(resolveOcrEngine({ OCR_PROVIDER: "vision" })).toBeNull()
     expect(resolveOcrEngine({ OCR_PROVIDER: "tesseract" })).toBeNull()
+  })
+
+  it("FA-F04-006: production does not fall back to the stub when OCR_PROVIDER is unset or local", () => {
+    expect(resolveOcrEngine({ NODE_ENV: "production" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local-ocr-stub" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "  Local  " })).toBeNull()
+    // A name this build has not registered through the egress gate stays closed in every environment.
+    expect(resolveOcrEngine({ NODE_ENV: "test", OCR_PROVIDER: "vision" })).toBeNull()
+  })
+
+  it("FA-F04-008: text over the UTF-8 cap is marked truncated, and shorter text is not", async () => {
+    const engine = new DeterministicLocalOcrEngine()
+    const ch = "\u{FBAB}"
+    const over = await engine.extract({ bytes: Buffer.from(ch.repeat(400_000), "utf8"), mimeType: "text/plain" })
+    expect(over.truncated).toBe(true)
+    expect(Buffer.byteLength(over.text, "utf8")).toBeLessThanOrEqual(MAX_OCR_TEXT_BYTES)
+    const under = await engine.extract({ bytes: Buffer.from(TEXT, "utf8"), mimeType: "text/plain" })
+    expect(under.truncated).toBe(false)
+    expect(under.text).toBe(TEXT)
   })
 
   it("withOcrTimeout rejects work that outlives the budget and returns work that does not", async () => {

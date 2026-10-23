@@ -110,6 +110,7 @@ async function commitNewDocumentIngest(
       matterId: input.matterId,
       classification: input.classification,
       idempotencyKey: input.idempotencyKey,
+      ocrStatus: "queued",
     })
     if (!store.docsByHash.has(input.dedupKey)) store.docsByHash.set(input.dedupKey, id)
     return id

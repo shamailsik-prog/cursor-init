@@ -1,4 +1,4 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { Timestamp, type DocumentData, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { getImmutableDocumentObject } from "@/platform/documents/documentObjectStore"
 import { DocumentObjectStoreError } from "@/platform/documents/documentObjectStoreTypes"
@@ -163,6 +163,37 @@ export async function recordLegacyOcr(jobId: string, firmId: string, patch: Lega
   })
 }
 
+/**
+ * The label the text may be stored under, re-read inside the publish transaction (FA-F04-009).
+ * A document or matter label raised after the bytes were loaded is included. A label lowered
+ * mid-job does not replace the admitted aggregate: the text is not published under the lower label.
+ */
+async function labelAtPublish(
+  tx: Transaction,
+  firmId: string,
+  matterId: string | null,
+  documentId: string,
+  admitted: Classification
+): Promise<Classification> {
+  const docSnap = await tx.get(adminDb().collection("documents").doc(documentId))
+  if (!docSnap.exists) throw permanent("document_missing")
+  const doc = docSnap.data() ?? {}
+  if (doc.firmId !== firmId) throw permanent("cross_firm")
+  const docMatter = doc.matterId === undefined ? undefined : doc.matterId
+  if (docMatter !== matterId) throw permanent("matter_mismatch")
+  if (!isKnownClassification(doc.classification)) throw permanent("invalid_document")
+  const labels: Classification[] = [admitted, doc.classification]
+  if (matterId !== null) {
+    const matterSnap = await tx.get(adminDb().collection("matters").doc(matterId))
+    if (!matterSnap.exists) throw permanent("matter_missing")
+    const matter = matterSnap.data() ?? {}
+    if (matter.firmId !== firmId) throw permanent("cross_firm")
+    if (!isKnownClassification(matter.classification)) throw permanent("invalid_document")
+    labels.push(matter.classification)
+  }
+  return aggregateClassification(labels)
+}
+
 function parse(payload: unknown): OcrPayload {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw permanent("invalid_payload")
   const raw = payload as Record<string, unknown>
@@ -173,6 +204,16 @@ function parse(payload: unknown): OcrPayload {
   if (!isSafeDocId(legacyJobId) || !isSafeDocId(documentId)) throw permanent("invalid_payload")
   if (typeof contentHash !== "string" || !CONTENT_HASH.test(contentHash)) throw permanent("invalid_payload")
   return { version: OCR_PAYLOAD_VERSION, legacyJobId, documentId, contentHash }
+}
+
+/** Legacy upload row named by a `d3.ocr` engine job, when the payload is well-formed. */
+export function legacyJobIdFromEngine(job: { jobType: string; payload: unknown }): string | undefined {
+  if (job.jobType !== OCR_JOB_TYPE) return undefined
+  try {
+    return parse(job.payload).legacyJobId
+  } catch {
+    return undefined
+  }
 }
 
 async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
@@ -222,28 +263,34 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
   }
 
   const text = admitted.text ?? ""
+  const truncated = admitted.truncated === true
   const resultId = ocrTextId(ctx.job.firmId, ctx.payload.documentId, subject.contentHash)
   const legacyRef = adminDb().collection("jobs").doc(ctx.payload.legacyJobId)
   const textRef = adminDb().collection("ocr_texts").doc(resultId)
   const at = Timestamp.fromMillis(ctx.now())
-  const done = {
-    ocrStatus: "done" as const,
-    ocrResultId: resultId,
-    ocrFailureCode: null,
-    ocrClassification: aggregate,
-  }
+  // Re-checked inside the publish transaction; if publish already wrote ocr_texts, the stored label wins on retry.
+  // Reading ocr_texts after the fence (outside a transaction) is safe: the stored label can only rise.
+  let published = aggregate
 
   await ctx.runFenced("publish", async (tx) => {
+    published = await labelAtPublish(tx, ctx.job.firmId, ctx.job.matterId, ctx.payload.documentId, aggregate)
     const existing = await tx.get(textRef)
     const legacy = await tx.get(legacyRef)
+    const stamp = {
+      ocrStatus: "done" as const,
+      ocrResultId: resultId,
+      ocrFailureCode: null,
+      ocrClassification: published,
+    }
     if (!existing.exists) {
       tx.create(textRef, {
         firmId: ctx.job.firmId,
         documentId: ctx.payload.documentId,
         matterId: ctx.job.matterId,
-        classification: aggregate,
+        classification: published,
         contentHash: subject.contentHash,
         text,
+        truncated,
         provider: admitted.provider,
         confidence: admitted.confidence,
         lowConfidence: admitted.lowConfidence === true,
@@ -255,9 +302,10 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
       })
     } else {
       const stored = existing.get("classification")
-      if (isKnownClassification(stored) && rankOf(stored) < rankOf(aggregate)) {
-        tx.update(textRef, { classification: aggregate, updatedAt: at })
-      }
+      const patch: Record<string, unknown> = {}
+      if (isKnownClassification(stored) && rankOf(stored) < rankOf(published)) patch.classification = published
+      if (existing.get("truncated") !== true && truncated) patch.truncated = true
+      if (Object.keys(patch).length > 0) tx.update(textRef, { ...patch, updatedAt: at })
     }
     stageAudit(
       {
@@ -265,21 +313,32 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
         actorId: "system",
         action: "ocr.complete",
         target: `ocr_texts/${resultId}`,
-        classification: aggregate,
+        classification: published,
         decision: "allow",
         reason: "ok",
       },
       tx
     )
     if (legacy.exists && legacy.get("firmId") === ctx.job.firmId && legacy.get("engine") !== JOB_ENGINE) {
-      tx.update(legacyRef, done)
+      tx.update(legacyRef, stamp)
     }
   })
+
+  const storedText = await textRef.get()
+  if (storedText.exists) {
+    const storedLabel = storedText.get("classification")
+    if (isKnownClassification(storedLabel)) published = storedLabel
+  }
 
   return {
     outputRefs: ctx.job.matterId === null ? [] : [`ocr_texts/${resultId}`],
     apply(tx) {
-      tx.update(legacyRef, done)
+      tx.update(legacyRef, {
+        ocrStatus: "done",
+        ocrResultId: resultId,
+        ocrFailureCode: null,
+        ocrClassification: published,
+      })
     },
   }
 }

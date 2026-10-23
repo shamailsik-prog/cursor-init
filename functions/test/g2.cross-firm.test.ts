@@ -68,6 +68,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   onEventCreated: "Firestore trigger on events, no caller",
   jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
   jobSweeper: "scheduler, no caller",
+  ocrLegacySweep: "scheduler, no caller; drains legacy OCR rows the create trigger missed, each in its own firm (audit F04)",
   d1AutoConfirmTick: "scheduler, no caller; enqueues d1.autoconfirm for every firm, which acts only on its own firm",
   d1ConflictReindexTick: "scheduler, no caller; enqueues d1.conflict.reindex for every firm, which reconciles only its own firm's name index (audit F37)",
   d1ConflictClientWritten: "Firestore trigger, no caller; on a client written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",

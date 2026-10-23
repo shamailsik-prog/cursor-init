@@ -11,6 +11,7 @@ import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
 import { acceptLegacyOcrJob } from "./ocrDrain"
 import { isCompleteLegacyOcrJob } from "./ocrJob"
+import { sweepLegacyOcr } from "./ocrSweep"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
 import { scheduledJobFunction } from "./scheduled"
@@ -121,6 +122,15 @@ if (!(SWEEP_BUDGET_MS + 10_000 <= SWEEPER_TIMEOUT_SECONDS * 1000)) {
 /** The safety net (P3-8): re-dispatches lost dispatches and expired leases every minute. */
 export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
   await sweep(runtimeDeps())
+})
+
+/**
+ * Legacy OCR safety net (FA-F04-007). The create trigger drains a row only when it is written.
+ * This sweep picks up older rows that trigger never saw, and rows whose engine retries are
+ * exhausted, so a missed handoff does not stay queued. No schedule retry: the next minute is the retry.
+ */
+export const ocrLegacySweep = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
+  await sweepLegacyOcr(runtimeDeps())
 })
 
 /** The daily auto-confirm tick (P3-43): enqueues `d1.autoconfirm` for every firm, once per PKT day. */
