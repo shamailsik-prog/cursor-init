@@ -264,6 +264,35 @@ const FAILING: Case[] = [
     names: ["agent/env.ts", "process.env"],
   },
   {
+    name: "eve model via an imported string constant (FA-F18-015)",
+    files: {
+      "agent/ids.ts": 'export const MODEL = "anthropic/claude-sonnet-4.6"\n',
+      "agent/wrap.ts": 'import { MODEL } from "./ids"\nexport const cfg = { model: MODEL }\n',
+    },
+    names: ["agent/wrap.ts"],
+  },
+  {
+    name: "eve model via a member expression (FA-F18-015)",
+    files: {
+      "agent/member.ts": 'const MODELS = { sonnet: "anthropic/claude-sonnet-4.6" }\nexport const cfg = { model: MODELS.sonnet }\n',
+    },
+    names: ["agent/member.ts"],
+  },
+  {
+    name: "eve model via destructured process.env (FA-F18-015)",
+    files: {
+      "agent/destructure.ts": 'const { EVE_MODEL } = process.env\nexport const cfg = { model: EVE_MODEL }\n',
+    },
+    names: ["agent/destructure.ts"],
+  },
+  {
+    name: "eve model via a function call (FA-F18-015)",
+    files: {
+      "agent/call.ts": 'const pickModel = () => "anthropic/claude-sonnet-4.6"\nexport const cfg = { model: pickModel() }\n',
+    },
+    names: ["agent/call.ts"],
+  },
+  {
     name: "a key on a workflow job that runs firebase deploy --only hosting (FA-F18-004 M27)",
     files: {
       ".github/workflows/host.yml":
@@ -289,7 +318,18 @@ const PASSING: Case[] = [
   },
   {
     name: "eve's model is the P1 LanguageModel identifier, not a string",
-    files: { "agent/ok.ts": "export const cfg = { model: committeeBrainLanguageModel }\n" },
+    files: {
+      "agent/ok.ts":
+        'import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport const cfg = { model: committeeBrainLanguageModel }\n',
+    },
+    names: [],
+  },
+  {
+    name: "eve shorthand model bound to the imported P1 LanguageModel (FA-F18-015)",
+    files: {
+      "agent/short-ok.ts":
+        'import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = committeeBrainLanguageModel\nexport const cfg = { model }\n',
+    },
     names: [],
   },
   {
