@@ -387,6 +387,118 @@ const FAILING: Case[] = [
     files: { "agent/eve.json": '{"model":"anthropic/claude-sonnet-4.6"}\n' },
     names: ["agent/eve.json", "anthropic"],
   },
+  {
+    name: "FA-F18-020a: block shadow on outer model binding",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = "anthropic/claude-sonnet-4.6"\nif (true) {\n  const model = committeeBrainLanguageModel\n}\nexport default defineAgent({ model })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts"],
+  },
+  {
+    name: "FA-F18-020b: defineAgent via parameter shorthand and a string argument",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nfunction make(model: unknown) {\n  return defineAgent({ model })\n}\nexport default make("anthropic/claude-sonnet-4.6")\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts"],
+  },
+  {
+    name: "FA-F18-020c: destructuring shadow on committeeBrainLanguageModel",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst [committeeBrainLanguageModel] = ["anthropic/claude-sonnet-4.6"]\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", CANONICAL_MODEL_MODULE],
+  },
+  {
+    name: "FA-F18-021a: unused defineAgent plus default export from outside agent/",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\ndefineAgent({ model: committeeBrainLanguageModel })\nexport { default } from "../lib/other"\n',
+      "lib/other.ts": 'export default { model: "anthropic/claude-sonnet-4.6" }\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts"],
+  },
+  {
+    name: "FA-F18-021b: defineAgent in another file under agent/",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/extra.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport const spare = defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["more than one defineAgent"],
+  },
+  {
+    name: "FA-F18-021c: aliased defineAgent import from eve",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent as da } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default da({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "expected exactly one defineAgent"],
+  },
+  {
+    name: "FA-F18-022a: Object.defineProperty sets model",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: Record<string, string> = {}\nObject.defineProperty(cfg, "model", { value: "anthropic/claude-sonnet-4.6" })\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "Object.defineProperty"],
+  },
+  {
+    name: "FA-F18-022b: Object.assign sets model",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: Record<string, string> = {}\nObject.assign(cfg, { model: "anthropic/claude-sonnet-4.6" })\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "outside defineAgent"],
+  },
+  {
+    name: "FA-F18-022c: Reflect.set sets model",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: Record<string, string> = {}\nReflect.set(cfg, "model", "anthropic/claude-sonnet-4.6")\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "Reflect.set"],
+  },
+  {
+    name: "FA-F18-022d: computed bracket assignment with const model key",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: Record<string, string> = {}\nconst k = "model"\ncfg[k] = "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "computed"],
+  },
+  {
+    name: "FA-F18-022e: logical assignment on cfg.model",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: { model?: string } = {}\ncfg.model ||= "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "||="],
+  },
+  {
+    name: "FA-F18-022f: nullish assignment on cfg.model",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: { model?: string } = {}\ncfg.model ??= "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "??="],
+  },
+  {
+    name: "FA-F18-023: quoted model string in agent .mts",
+    files: {
+      "agent/x.mts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n',
+    },
+    names: ["agent/x.mts", "outside defineAgent"],
+  },
 ]
 
 const PASSING: Case[] = [
