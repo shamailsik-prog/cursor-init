@@ -254,6 +254,30 @@ describe("audit F18: G-0 [19] next-ai-egress guard", () => {
     const guard = (await import("@/platform/p1/providerKeyGuard").catch(() => null)) as { PROVIDER_KEY_ENV_NAMES?: readonly string[] } | null
     expect(guard?.PROVIDER_KEY_ENV_NAMES, "the runtime guard exists").toBeDefined()
     expect([...gateNames].sort()).toEqual([...(guard!.PROVIDER_KEY_ENV_NAMES ?? [])].sort())
+    // FA-F18-004 M2: parity alone survives dropping a name from both lists. The list is pinned.
+    expect(gateNames).toEqual([
+      "AI_GATEWAY_API_KEY",
+      "VERCEL_AI_GATEWAY_API_KEY",
+      "OPENAI_API_KEY",
+      "AZURE_API_KEY",
+      "AZURE_OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_GENERATIVE_AI_API_KEY",
+      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
+      "MISTRAL_API_KEY",
+      "COHERE_API_KEY",
+      "TOGETHER_AI_API_KEY",
+      "TOGETHER_API_KEY",
+      "PERPLEXITY_API_KEY",
+      "XAI_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "FIREWORKS_API_KEY",
+      "OPENROUTER_API_KEY",
+      "REPLICATE_API_TOKEN",
+      "ELEVENLABS_API_KEY",
+      "DEEPL_AUTH_KEY",
+    ])
   })
 
   it("is G-0 check [19]", () => {

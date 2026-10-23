@@ -186,9 +186,38 @@ export function setP1TransportForTests(t: P1Transport | null): void {
   testTransport = t
 }
 
-/** The test transport if one is set, else the Gateway when `AI_GATEWAY_API_KEY` is non-empty, else null (P3-68). */
+/**
+ * Set by the Cloud Functions runtime (`FUNCTION_TARGET` on gen1, the emulator and gen2; `K_SERVICE` on gen2 / Cloud Run)
+ * or explicitly (`1` or `true`) for a Functions process that has neither. A blank or whitespace value does not count.
+ * `K_SERVICE` is also set for a Next service deployed on Cloud Run: that process is still stopped by G-0 [19], which
+ * forbids it from importing this module (audit F18, FA-F18-001).
+ */
+export const FUNCTIONS_RUNTIME_FLAG = "SIKANDER_FUNCTIONS_RUNTIME"
+
+/** True when this process is the Functions runtime, not the Next or eve process. */
+export function inFunctionsRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.FUNCTION_TARGET ?? "").trim() !== "") return true
+  if ((env.K_SERVICE ?? "").trim() !== "") return true
+  const flag = (env[FUNCTIONS_RUNTIME_FLAG] ?? "").trim().toLowerCase()
+  return flag === "1" || flag === "true"
+}
+
+/**
+ * The test transport if one is set; else the Gateway when `AI_GATEWAY_API_KEY` is non-empty and this process is the
+ * Functions runtime; else null (P3-68, audit F18 FA-F18-001). Outside that runtime a key builds nothing: `callP1`
+ * records `no_credentials`, and one alert line names the variable and never its value.
+ */
 export function activeTransport(): P1Transport | null {
   if (testTransport) return testTransport
   const key = process.env.AI_GATEWAY_API_KEY?.trim()
-  return key ? gatewayTransport(key) : null
+  if (!key) return null
+  if (!inFunctionsRuntime()) {
+    console.error("[p1] ALERT p1.provider_key_in_next_runtime", {
+      runtime: "functions-transport",
+      keys: ["AI_GATEWAY_API_KEY"],
+      refused: true,
+    })
+    return null
+  }
+  return gatewayTransport(key)
 }

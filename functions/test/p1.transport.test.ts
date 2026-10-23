@@ -322,7 +322,8 @@ describe("P1 active transport and test seam (P3-68)", () => {
     expect(activeTransport()).toBeNull()
   })
 
-  it("is the Gateway transport when AI_GATEWAY_API_KEY is set", () => {
+  it("is the Gateway transport when AI_GATEWAY_API_KEY is set inside the Functions runtime", () => {
+    vi.stubEnv("FUNCTION_TARGET", "api")
     vi.stubEnv("AI_GATEWAY_API_KEY", "key-1")
     const t = activeTransport()
     expect(t).not.toBeNull()
@@ -346,6 +347,7 @@ describe("P1 active transport and test seam (P3-68)", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 1, completion_tokens: 2 } }), { status: 200 })
     })
     const timeout = vi.spyOn(AbortSignal, "timeout")
+    vi.stubEnv("FUNCTION_TARGET", "api")
     vi.stubEnv("AI_GATEWAY_API_KEY", "  k  ")
     expect(await activeTransport()?.send(request)).toEqual({ text: "hi", inputTokens: 1, outputTokens: 2 })
     expect(calls).toHaveLength(1)

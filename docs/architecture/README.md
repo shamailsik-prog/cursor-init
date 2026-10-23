@@ -104,7 +104,9 @@ Gates:
   `functions/` (the control plane) and `corpus_service/` (the F27 lane), no JS/TS imports the `ai` SDK, an `@ai-sdk/*`
   package other than `@ai-sdk/provider` or a provider SDK, names a provider key (except `platform/p1/providerKeyGuard.ts`)
   or names a provider host, and no deploy surface (`.env*`, App Hosting, Vercel, Docker, compose, and workflow jobs that
-  build, start or deploy the Next/eve service) binds a provider key. No allowlist.
+  build, start or deploy the Next/eve service) binds a provider key. No allowlist. Any JS/TS file outside `functions/`
+  (the corpus service included; root `tests/` stays outside the walker) that imports `functions/src/p1/transport` or
+  `functions/src/p1/gateway` fails the same check (FA-F18-001).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

@@ -5,10 +5,11 @@ No paid AI call may leave the Next or eve runtime except through the Cloud Funct
 (`/api/platform/brain/committeeBrain`: kill switches, budget, cost log). Spec:
 docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md, ruling R9.
 
-Scope: every file the G-0 walker scans (g0_guard_common.iter_scan_files: tests/, ci_gates/, generated trees and the eve
-cache are skipped), except
+Scope of (a)-(d): every file the G-0 walker scans (g0_guard_common.iter_scan_files: tests/, ci_gates/, generated
+trees and the eve cache are skipped), except
   - functions/       the control plane itself (which code there may hold a provider SDK is G-0 [3]'s rule), and
   - corpus_service/  the embedding worker (the F27 lane; FA-D3C-002 is allowlisted under G-0 [3]).
+Rule (e) uses the same walker and exempts only functions/.
 
 It fails on any of:
   (a) JS/TS importing the `ai` SDK, any `@ai-sdk/*` package other than `@ai-sdk/provider` (types and error classes, no
@@ -21,7 +22,14 @@ It fails on any of:
       included); App Hosting, compose, Cloud Build, App Engine and Render YAML, vercel.json, firebase.json, fly.toml,
       netlify.toml and Dockerfiles (any non-comment line naming a key); and a GitHub workflow job that builds, starts or
       deploys the Next/eve service (SERVES_NEXT_RE), or the workflow-level env above such a job (spec R9a). Workflow jobs
-      that do not serve that runtime (the Functions suites, the coding-agent workflows) are CI tooling and out of scope.
+      that do not serve that runtime (the Functions suites, the coding-agent workflows) are CI tooling and out of scope;
+  (e) any JS/TS file outside functions/ (corpus_service/ included; the G-0 walker still skips root tests/) importing a
+      Functions P1 transport or provider module (FUNCTIONS_P1_PAID_MODULES: functions/src/p1/transport and
+      functions/src/p1/gateway). The specifier may be the `@/` alias, a relative path, a bare `functions/...` path, an
+      extension or `/index`, with a query or hash stripped. Forms: import, export-from, import(), require(),
+      require.resolve(), createRequire, and vitest/jest importActual, requireActual, importMock and requireMock.
+      functions/ itself may import these modules. A module that only shares the name as a prefix
+      (`functions/src/p1/transportation`) is not one of them.
 
 There is no allowlist. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON (tests/f18-next-ai-egress-gate.test.ts
 holds it equal to the runtime guard's list).
@@ -30,6 +38,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import posixpath
 import re
 import sys
 
@@ -41,12 +50,25 @@ from g0_guard_common import (  # noqa: E402
     file_kind,
     iter_scan_files,
     js_imported_packages,
+    js_module_specifiers,
     read_text,
     rel_posix,
 )
 
-EXEMPT_PREFIXES = ("functions/", "corpus_service/")
+# Rules (a)-(d) skip functions/ and corpus_service/. Rule (e) skips only functions/.
+FUNCTIONS_PREFIX = "functions/"
 KEY_GUARD_FILE = "platform/p1/providerKeyGuard.ts"
+
+# Paid transport and the provider caller. Importing either from outside functions/ loads a path that builds a Gateway
+# client (activeTransport / callP1). Other functions/src/p1 modules (costTable, types, the HTTP router) are not this path.
+FUNCTIONS_P1_PAID_MODULES = (
+    "functions/src/p1/transport",
+    "functions/src/p1/gateway",
+)
+_JS_EXT_RE = re.compile(r"\.(?:[cm]?[jt]sx?)$", re.I)
+_TEST_LOADER_RE = re.compile(
+    r"""\b(?:vi|jest)\s*\.\s*(?:importActual|requireActual|importMock|requireMock)\s*(?:<[^<>()]*>)?\s*\(\s*(["'`])([^"'`\r\n]+)\1"""
+)
 
 # Keep equal to PROVIDER_KEY_ENV_NAMES in platform/p1/providerKeyGuard.ts.
 PROVIDER_KEY_ENV_NAMES = (
@@ -185,6 +207,52 @@ def deploy_kind(rel: str) -> str | None:
     return None
 
 
+def _module_id(path: str) -> str:
+    """Drop a JS/TS extension and a trailing /index, so transport.ts and transport/index.js are one module."""
+    p = _JS_EXT_RE.sub("", path)
+    return p[: -len("/index")] if p.endswith("/index") else p
+
+
+def resolve_repo_module(spec: str, importer: str) -> str | None:
+    """Repository path a literal specifier names, or None for a package, URL or a path that leaves the repo."""
+    raw = spec.strip().split("?", 1)[0].split("#", 1)[0].strip()
+    if not raw:
+        return None
+    if ":" in raw.split("/", 1)[0]:
+        return None
+    if raw.startswith("@/"):
+        path = raw[2:]
+    elif raw.startswith(("./", "../")) or raw in {".", ".."}:
+        path = posixpath.normpath(posixpath.join(posixpath.dirname(importer), raw))
+    elif raw.startswith("/"):
+        return None
+    else:
+        path = raw
+    path = posixpath.normpath(_module_id(path))
+    if path == ".." or path.startswith("../"):
+        return None
+    return path
+
+
+def is_functions_paid_module(module: str) -> bool:
+    return any(module == banned or module.startswith(banned + "/") for banned in FUNCTIONS_P1_PAID_MODULES)
+
+
+def functions_paid_import_findings(rel: str, text: str) -> list[str]:
+    """Rule (e): a file outside functions/ importing the Functions P1 transport or gateway."""
+    specs = js_module_specifiers(text)
+    specs += [m.group(2) for m in _TEST_LOADER_RE.finditer(text)]
+    found: set[str] = set()
+    for spec in specs:
+        module = resolve_repo_module(spec, rel)
+        if module is not None and is_functions_paid_module(module):
+            found.add(module)
+    return [
+        f"{rel}: imports {module} (a Functions P1 transport/provider module; paid calls stay in the Functions runtime)"
+        for module in sorted(found)
+    ]
+
+
 def source_findings(rel: str, text: str) -> list[str]:
     out: list[str] = []
     for root in sorted(js_imported_packages(text)):
@@ -247,16 +315,20 @@ def deploy_findings(rel: str, kind: str, text: str) -> list[str]:
 
 def findings_for(p: pathlib.Path) -> list[str]:
     rel = rel_posix(p)
-    if rel.startswith(EXEMPT_PREFIXES):
+    if rel.startswith(FUNCTIONS_PREFIX):
         return []
+    text = read_text(p) if file_kind(p) == "js" else None
+    paid = [] if text is None else functions_paid_import_findings(rel, text)
+    # corpus_service stays exempt from (a)-(d) (the F27 lane). Rule (e) still applies: it may not import the paid modules.
+    if rel.startswith("corpus_service/"):
+        return paid
     kind = deploy_kind(rel)
     if kind is not None:
-        text = read_text(p)
-        return [] if text is None else deploy_findings(rel, kind, text)
-    if file_kind(p) != "js":
+        body = text if text is not None else read_text(p)
+        return [] if body is None else deploy_findings(rel, kind, body)
+    if text is None:
         return []
-    text = read_text(p)
-    return [] if text is None else source_findings(rel, text)
+    return paid + source_findings(rel, text)
 
 
 def main(argv: list[str]) -> int:
