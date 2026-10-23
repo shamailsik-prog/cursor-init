@@ -634,6 +634,40 @@ const FAILING: Case[] = [
     },
     names: ["agent/agent.ts", "FA-F18-031"],
   },
+  {
+    name: "FA-F18-032 q1: named import of a patch module mutates committeeBrainLanguageModel outside agent/",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel as m } from "../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/patch"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-032 q4: dynamic import of a patch module mutates committeeBrainLanguageModel outside agent/",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel as m } from "../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nawait import("../lib/patch")\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-033 p7: spare defineAgent outside agent/ re-exported into agent/",
+    files: {
+      "lib/w.ts":
+        'import { defineAgent as d } from "eve"\nexport const spare = d({ model: "anthropic/claude-sonnet-4.6" } as any)\n',
+      "agent/x.ts": 'export * from "../lib/w"\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["lib/w.ts", "FA-F18-033"],
+  },
 ]
 
 const PASSING: Case[] = [
