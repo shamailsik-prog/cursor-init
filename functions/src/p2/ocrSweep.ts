@@ -1,4 +1,4 @@
-import { FieldPath, Timestamp, type DocumentData, type QueryDocumentSnapshot } from "firebase-admin/firestore"
+import { FieldPath, Timestamp, type DocumentData, type Query, type QueryDocumentSnapshot } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
@@ -7,6 +7,7 @@ import type { JobDeps } from "./dispatch"
 import { jobIdFor, jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
 import { isSafeDocId } from "../p5/common"
 import { acceptLegacyOcrJob } from "./ocrDrain"
+import { backfillLegacyOcrStatusForSweep } from "./legacyOcrStatusBackfill"
 import { isCompleteLegacyOcrJob, OCR_JOB_TYPE, recordLegacyOcr } from "./ocrJob"
 import { appendLog } from "./worker"
 
@@ -32,15 +33,17 @@ export type LegacyOcrSweepResult = {
 
 const NOTE = "OCR sweep picked up a job whose retries were exhausted"
 const TERMINAL_OCR_STATUSES = ["done", "failed"]
-const LEGACY_INCOMPLETE_CODE = "legacy_incomplete"
-const LEGACY_CANCELLED_CODE = "job_cancelled"
+const LEGACY_INCOMPLETE_CODE = "invalid_job"
+const LEGACY_CANCELLED_CODE = "cancelled"
 
 async function closeLegacyRow(jobId: string, firmId: string, code: string): Promise<void> {
   await recordLegacyOcr(jobId, firmId, { ocrStatus: "failed", ocrFailureCode: code })
 }
 
+type LegacyOcrQuery = () => Query
+
 /** Legacy OCR rows the sweep can still act on (FA-F04-010). Terminal rows are excluded so the window advances. */
-function legacyQuery() {
+function legacyQuery(): Query {
   return jobsRef()
     .where("jobType", "==", "ocr")
     .where("ocrStatus", "not-in", TERMINAL_OCR_STATUSES)
@@ -117,19 +120,21 @@ async function pickUp(jobId: string, data: DocumentData, deps: JobDeps): Promise
   return "drained"
 }
 
-/** Drains legacy OCR rows the create trigger did not finish. Safe to run again: enqueue and requeue are capped. */
-export async function sweepLegacyOcr(deps: JobDeps): Promise<LegacyOcrSweepResult> {
-  const out: LegacyOcrSweepResult = { examined: 0, drained: 0, requeued: 0, closed: 0 }
-  const started = Date.now()
+async function sweepLegacyPages(
+  query: LegacyOcrQuery,
+  deps: JobDeps,
+  out: LegacyOcrSweepResult,
+  started: number,
+  failures: unknown[]
+): Promise<void> {
   const spent = () => Date.now() - started >= SWEEP_BUDGET_MS
   let after: QueryDocumentSnapshot | undefined
-  const failures: unknown[] = []
   for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
     if (spent()) {
       logger.warn("ocr.sweep_budget_spent", { examined: out.examined, drained: out.drained, requeued: out.requeued })
-      break
+      return
     }
-    const snap = await (after === undefined ? legacyQuery() : legacyQuery().startAfter(after)).get()
+    const snap = await (after === undefined ? query() : query().startAfter(after)).get()
     for (const doc of snap.docs) {
       if (spent()) break
       out.examined += 1
@@ -146,6 +151,15 @@ export async function sweepLegacyOcr(deps: JobDeps): Promise<LegacyOcrSweepResul
     if (snap.size < SWEEP_LIMIT) break
     after = snap.docs[snap.docs.length - 1]
   }
+}
+
+/** Drains legacy OCR rows the create trigger did not finish. Safe to run again: enqueue and requeue are capped. */
+export async function sweepLegacyOcr(deps: JobDeps): Promise<LegacyOcrSweepResult> {
+  const out: LegacyOcrSweepResult = { examined: 0, drained: 0, requeued: 0, closed: 0 }
+  const started = Date.now()
+  const failures: unknown[] = []
+  await backfillLegacyOcrStatusForSweep(SWEEP_LIMIT)
+  await sweepLegacyPages(legacyQuery, deps, out, started, failures)
   if (failures.length > 0) throw failures[0]
   return out
 }

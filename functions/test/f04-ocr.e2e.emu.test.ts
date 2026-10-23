@@ -869,16 +869,19 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
   }, 120_000)
 
   it("FA-F04-013: the sweep drains a legacy row that predates ocrStatus on the upload row", async () => {
+    const { backfillLegacyOcrStatusForSweep } = await import("../src/p2/legacyOcrStatusBackfill")
     const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
     const firmId = await firm()
     const matterId = await matter(firmId, "internal")
     const doc = await seedDoc({ firmId, matterId, classification: "internal" })
-    const jobId = uniq("f04-unstamped")
+    const jobId = `f04-0000-unstamped-${uniq("x")}`
     const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
     delete row.ocrStatus
     await writeLegacy(row)
     expect((await adminDb().collection("jobs").doc(jobId).get()).data()?.ocrStatus).toBeUndefined()
 
+    await backfillLegacyOcrStatusForSweep()
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("queued")
     await sweepLegacyOcr(deps)
     expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
     const legacy = await adminDb().collection("jobs").doc(jobId).get()

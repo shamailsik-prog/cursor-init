@@ -385,7 +385,7 @@ export const cancelJobOp: FirmOperation<JobView> = {
           legacy.engine !== JOB_ENGINE &&
           legacy.ocrStatus !== "done"
         ) {
-          tx.update(legacyRef, { ocrStatus: "failed", ocrFailureCode: "job_cancelled" })
+          tx.update(legacyRef, { ocrStatus: "failed", ocrFailureCode: "cancelled" })
         }
       }
       return jobView(jobId, { ...job, ...update }, "full", { logs: true })
