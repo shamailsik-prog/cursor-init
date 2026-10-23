@@ -256,7 +256,7 @@ const FAILING: Case[] = [
       "agent/const.ts":
         'const GATEWAY = "anthropic/claude-sonnet-4.6"\nexport const cfg = { model: GATEWAY }\n',
     },
-    names: ["agent/const.ts", "anthropic/claude-sonnet-4.6"],
+    names: ["agent/const.ts", "GATEWAY"],
   },
   {
     name: "eve model bound to process.env (FA-F18-012)",

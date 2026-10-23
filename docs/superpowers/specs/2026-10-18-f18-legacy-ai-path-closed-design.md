@@ -324,9 +324,9 @@ is the same class of hole as the gate's other text-analysis residuals.
 
 **FA-F18-010.** Rule (e) is an allowlist. Outside `functions/`, the only Functions modules that may be imported are `functions/src/p1/costTable`, `functions/src/p1/types`, and the F02 boundary `functions/src/http/f02RouterBoundary` (FA-F18-013). `p1/ops`, `p1/reconciler`, `p1/evalSet`, `cli/committeeEval`, `functions/lib` and the HTTP router are not on it, so a Next file cannot reach the paid client by importing one of them. `K_SERVICE` alone does not make `activeTransport` build a client.
 
-**FA-F18-012.** Rule (f) also fails shorthand `{ model }`, a `model` property whose value is a string binding in the same file, and a `model` property whose value is `process.env` or a binding initialised from it. `model: committeeBrainLanguageModel` stays allowed.
+**FA-F18-012.** Rule (f) also fails shorthand `{ model }`, a `model` property whose value is a string binding in the same file, and a `model` property whose value is `process.env` or a binding initialised from it. **FA-F18-015** tightens rule (f) to an allowlist: only `model: committeeBrainLanguageModel` (or shorthand bound to that identifier) imported from `platform/p1/committeeBrainModel` passes.
 
-**FA-F18-013.** F02's Next dispatcher imports `functions/src/http/f02RouterBoundary`, which builds `createRouter(ROUTES)` inside `functions/`. The router module stays off the allowlist.
+**FA-F18-013.** F02's Next dispatcher imports `functions/src/http/f02RouterBoundary`, which builds `createRouter(F02_NEXT_AUTHORITY_ROUTES)` from `routerRuntime.ts` inside `functions/`. The full `router.ts` table (including `p1/ops`) stays off the allowlist. **FA-F18-014** requires the transitive import closure of every `FUNCTIONS_PURE_MODULES` entry to exclude `p1/{ops,transport,gateway,reconciler,evalSet}` and `cli/*`.
 
 **FA-F18-011.** The loader's type argument allows one nested pair of angle brackets, so `vi.importActual<Record<string, unknown>>(...)` is read. A type argument nested twice (`Map<string, Record<...>>`) is still missed: the same class of text-scan residual.
 

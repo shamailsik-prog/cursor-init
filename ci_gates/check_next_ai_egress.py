@@ -33,9 +33,9 @@ It fails on any of:
       `vi.importActual<Record<string, unknown>>(...)` (FA-F18-011). A block or line comment may sit between those loader
       tokens, the same gap the import parser allows (FA-F18-009). functions/ itself may import these modules. The only
       modules outside functions/ may import are the pure ones on FUNCTIONS_PURE_MODULES (FA-F18-010).
-  (f) under `agent/` (eve), a quoted `model`, shorthand `{ model }`, a `model` bound to a string constant, or a
-      `model` bound to `process.env` (FA-F18-002, FA-F18-012). `model: committeeBrainLanguageModel` is the P1
-      LanguageModel and is not this rule.
+  (f) under `agent/` (eve), any `model` property or shorthand `{ model }` must be exactly the identifier
+      `committeeBrainLanguageModel` imported from `platform/p1/committeeBrainModel` (FA-F18-002, FA-F18-012,
+      FA-F18-015). Quoted model strings, member expressions, env reads, calls and every other binding fail.
   (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
 Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON
@@ -69,8 +69,8 @@ FUNCTIONS_PREFIX = "functions/"
 KEY_GUARD_FILE = "platform/p1/providerKeyGuard.ts"
 
 # Outside functions/, an import of the Functions tree is allowed only when it names one of these modules.
-# costTable and types are pure data. f02RouterBoundary is the one F02 entry (FA-F18-013): Next names it, and the
-# module, inside functions/, builds the router. The router itself is not on this list: it mounts p1/ops.
+# costTable and types are pure data. f02RouterBoundary is the one F02 entry (FA-F18-013/014): Next names it; inside
+# functions/ it builds createRouter(F02_NEXT_AUTHORITY_ROUTES) only. The full router (ROUTES, p1/ops) is not on this list.
 FUNCTIONS_PURE_MODULES = (
     "functions/src/p1/costTable",
     "functions/src/p1/types",
@@ -85,20 +85,17 @@ _TEST_LOADER_RE = re.compile(
     re.DOTALL,
 )
 # A quoted `model` value in JS/TS, and a `model:` value in eve's YAML, JSON or markdown (FA-F18-002).
-# FA-F18-012 also reads shorthand `{ model }`, a binding initialised with a string, and `process.env`.
-# An identifier that is none of those (`model: committeeBrainLanguageModel`) is the P1 LanguageModel.
+# FA-F18-015: rule (f) is an allowlist — only `committeeBrainLanguageModel` from the P1 bridge module.
+_COMMITTEE_BRAIN_MODEL = "committeeBrainLanguageModel"
+_P1_MODEL_IMPORT_RE = re.compile(
+    r"""\bimport\s+(?:type\s+)?\{[^}]*\bcommitteeBrainLanguageModel\b[^}]*\}\s+from\s+["']([^"']+)["']"""
+    r"""|\bimport\s+(?:type\s+)?\bcommitteeBrainLanguageModel\b\s+from\s+["']([^"']+)["']""",
+    re.MULTILINE,
+)
 _AGENT_MODEL_JS_RE = re.compile(r"""(?<![\w$])["']?model["']?\s*:\s*(["'`])([^"'`\r\n]*)\1""")
 _AGENT_MODEL_TEXT_RE = re.compile(r"""^\s*["']?model["']?\s*:\s*["'`]?([^\s"'`#,]+)""", re.M)
 _MODEL_SHORTHAND_RE = re.compile(r"""(?<![\w$])model(?![\w$])(?!\s*:)(?=\s*[,}])""")
-_MODEL_VALUE_RE = re.compile(
-    r"""(?<![\w$])["']?model["']?\s*:\s*(process\s*\.\s*env\b(?:\s*(?:\?\.)?\s*(?:\.\s*[A-Za-z_$][\w$]*|\[[^\]]*\]))?|([A-Za-z_$][\w$]*))"""
-)
-_STRING_BINDING_RE = re.compile(
-    r"""(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])([^"'`\r\n]*)\2"""
-)
-_ENV_BINDING_RE = re.compile(
-    r"""(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*process\s*\.\s*env\b"""
-)
+_MODEL_PROP_EXPR_RE = re.compile(r"""(?<![\w$])["']?model["']?\s*:\s*([^,}\n]+)""")
 _AGENT_TEXT_SUFFIXES = frozenset({".md", ".mdx", ".yml", ".yaml", ".json", ".toml"})
 
 # Keep equal to PROVIDER_KEY_ENV_NAMES in platform/p1/providerKeyGuard.ts.
@@ -384,26 +381,39 @@ def deploy_findings(rel: str, kind: str, text: str) -> list[str]:
     return [f"{rel}: binds provider key {name} for the Next/eve service (the key belongs to the Functions api function only)" for name in sorted(out)]
 
 
-def _js_model_values(text: str) -> set[str]:
-    """Quoted model strings, shorthand `{ model }`, string bindings, and process.env (FA-F18-012)."""
-    values = {m.group(2) for m in _AGENT_MODEL_JS_RE.finditer(text)}
+def _imports_p1_language_model(text: str) -> bool:
+    for match in _P1_MODEL_IMPORT_RE.finditer(text):
+        mod = (match.group(1) or match.group(2) or "").replace("\\", "/")
+        if mod.startswith("@/"):
+            mod = mod[2:]
+        if mod.endswith("committeeBrainModel") or "platform/p1/committeeBrainModel" in mod:
+            return True
+    return False
+
+
+def _js_agent_model_violations(text: str) -> list[str]:
+    """Rule (f) allowlist for JS/TS under agent/ (FA-F18-015)."""
+    violations: list[str] = []
+    allowed_import = _imports_p1_language_model(text)
+    for match in _AGENT_MODEL_JS_RE.finditer(text):
+        violations.append(match.group(2) or "(empty)")
+    for match in _MODEL_PROP_EXPR_RE.finditer(text):
+        expr = match.group(1).strip()
+        if expr == _COMMITTEE_BRAIN_MODEL and allowed_import:
+            continue
+        violations.append(expr[:120] if len(expr) > 120 else expr or "(empty)")
     if _MODEL_SHORTHAND_RE.search(text):
-        values.add("shorthand { model }")
-    strings = {m.group(1): m.group(3) for m in _STRING_BINDING_RE.finditer(text)}
-    env_bindings = {m.group(1) for m in _ENV_BINDING_RE.finditer(text)}
-    for match in _MODEL_VALUE_RE.finditer(text):
-        env, ident = match.group(1), match.group(2)
-        if ident is None:
-            values.add("process.env")
-        elif ident in strings:
-            values.add(strings[ident] or "(empty)")
-        elif ident in env_bindings:
-            values.add("process.env")
-    return values
+        shorthand_ok = allowed_import and re.search(
+            rf"(?:const|let|var)\s+model\s*=\s*{_COMMITTEE_BRAIN_MODEL}\b",
+            text,
+        )
+        if not shorthand_ok:
+            violations.append("shorthand { model }")
+    return violations
 
 
 def agent_model_findings(rel: str, p: pathlib.Path) -> list[str]:
-    """Rule (f): a model under agent/ that is not the P1 LanguageModel identifier (FA-F18-002, FA-F18-012)."""
+    """Rule (f): eve's model must be the imported P1 LanguageModel identifier (FA-F18-015)."""
     if not rel.startswith("agent/"):
         return []
     suffix = p.suffix.lower()
@@ -413,10 +423,17 @@ def agent_model_findings(rel: str, p: pathlib.Path) -> list[str]:
     text = read_text(p)
     if text is None:
         return []
-    values = _js_model_values(text) if kind == "js" else {m.group(1) for m in _AGENT_MODEL_TEXT_RE.finditer(text)}
+    if kind == "js":
+        values = _js_agent_model_violations(text)
+    else:
+        values = [
+            m.group(1)
+            for m in _AGENT_MODEL_TEXT_RE.finditer(text)
+            if m.group(1) != _COMMITTEE_BRAIN_MODEL
+        ]
     return [
         f"{rel}: gives eve the model string {value or '(empty)'}; eve's model is the P1 LanguageModel, never a Gateway model string"
-        for value in sorted(values)
+        for value in sorted(set(values))
     ]
 
 

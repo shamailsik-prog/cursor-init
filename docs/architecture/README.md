@@ -107,10 +107,10 @@ Gates:
   build, start or deploy the Next/eve service) binds a provider key. No allowlist. Any JS/TS file outside `functions/`
   (the corpus service included; root `tests/` stays outside the walker) that imports any `functions/` module other than
   the allowlist (`functions/src/p1/costTable`, `functions/src/p1/types`, and the F02 boundary
-  `functions/src/http/f02RouterBoundary`) fails the same check, including a
-  vitest/jest loader with comments or a nested type argument (FA-F18-001, FA-F18-009, FA-F18-010, FA-F18-011). A
-  `.envrc`, a workflow job at four-space indent, a symlinked directory, and a string `model` under `agent/` fail it too
-  (FA-F18-002).
+  `functions/src/http/f02RouterBoundary`, which mounts only `F02_NEXT_AUTHORITY_ROUTES`) fails the same check,
+  including a vitest/jest loader with comments or a nested type argument (FA-F18-001, FA-F18-009, FA-F18-010,
+  FA-F18-011, FA-F18-014). A `.envrc`, a workflow job at four-space indent, a symlinked directory, and any `model`
+  under `agent/` other than the imported `committeeBrainLanguageModel` identifier fail it too (FA-F18-002, FA-F18-015).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds
