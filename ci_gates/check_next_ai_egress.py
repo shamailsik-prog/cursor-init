@@ -380,7 +380,7 @@ def deploy_findings(rel: str, kind: str, text: str) -> list[str]:
 
 def _npm_tool_root() -> pathlib.Path:
     """Directory with node_modules/typescript for the AST helper (repo root when the gate runs in a probe tree)."""
-    for key in ("SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
+    for key in ("GITHUB_WORKSPACE", "SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
         env = os.environ.get(key)
         if env:
             root = pathlib.Path(env)
@@ -402,10 +402,12 @@ def agent_eve_model_ast_findings(scan_root: pathlib.Path) -> list[str]:
     script = tools / "ci_gates" / "check_agent_eve_model.ts"
     if not script.is_file():
         return ["agent/: missing ci_gates/check_agent_eve_model.ts (FA-F18-016)"]
+    tsx_bin = tools / "node_modules" / ".bin" / "tsx"
+    tsx_cmd = [str(tsx_bin)] if tsx_bin.is_file() else ["npx", "tsx"]
     try:
         proc = subprocess.run(
-            ["npx", "tsx", str(script), str(scan_root.resolve())],
-            cwd=str(_npm_tool_root()),
+            [*tsx_cmd, str(script), str(scan_root.resolve())],
+            cwd=str(tools),
             capture_output=True,
             text=True,
             timeout=120,
