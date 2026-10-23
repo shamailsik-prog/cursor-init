@@ -114,11 +114,15 @@ Gates:
   only `agent/agent.ts` may be the entry; it must import `defineAgent` by name from `"eve"` (no wrappers, namespace or
   member calls) and default-export `defineAgent({...})` with `model` checker-resolving to `committeeBrainLanguageModel`
   from exactly `platform/p1/committeeBrainModel`; only `agent/agent.ts` may import `defineAgent`, and only as a direct
-  call callee; no bare side-effect imports under `agent/`; the `committeeBrainLanguageModel` name may appear only on
-  `model:` in that call; no property/element/compound/logical writes, `delete`, `++`/`--`, or `Object`/`Reflect`
-  mutation (including aliased globals) on the canonical model; no spreading/`Object.assign` from outside the file
-  (FA-F18-002, FA-F18-015, FA-F18-016, FA-F18-020, FA-F18-025..031). Residual: non-`const` computed property keys on
-  arbitrary objects remain a gap. `--print-pure-modules` prints `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
+  call callee; no bare side-effect imports, dynamic `import()` or `require()` under `agent/`; no non-type import under
+  `agent/` of a module that transitively touches `platform/p1/committeeBrainModel` except the canonical model import;
+  no re-export from outside `agent/`; outside `functions/`, only `agent/agent.ts` may load `"eve"` or call
+  `defineAgent`; the `committeeBrainLanguageModel` name may appear only on `model:` in that call; under `agent/` only,
+  no property/element/compound/logical writes, `delete`, `++`/`--`, or `Object`/`Reflect` mutation (including aliased
+  globals) on the canonical model; no spreading/`Object.assign` from outside the file (FA-F18-002, FA-F18-015,
+  FA-F18-016, FA-F18-020, FA-F18-025..033). Residual: non-`const` computed property keys on arbitrary objects;
+  canonical-model mutation in files not reachable from `agent/` imports. `--print-pure-modules` prints
+  `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

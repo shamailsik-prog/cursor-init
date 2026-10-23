@@ -13,6 +13,10 @@ const DEFINE_AGENT = "defineAgent"
 const EVE_MODULE = "eve"
 
 const JS_SUFFIXES = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"])
+const ANY_DEPTH_SKIP_DIRS = new Set(["node_modules", ".git", ".next"])
+const ROOT_ONLY_SKIP_DIRS = new Set(["ci_gates", "tests", "_superseded", ".eve"])
+const FUNCTIONS_PREFIX = "functions/"
+const AGENT_PREFIX = "agent/"
 
 const ASSIGNMENT_OPERATORS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.EqualsToken,
@@ -62,6 +66,14 @@ function resolveRepoModule(spec: string, importerRel: string): string | null {
   return modulePath
 }
 
+function isSkippedRel(rel: string): boolean {
+  const parts = rel.split("/").filter(Boolean)
+  if (!parts.length) return true
+  if (parts.some((p) => ANY_DEPTH_SKIP_DIRS.has(p))) return true
+  if (parts.length > 1 && ROOT_ONLY_SKIP_DIRS.has(parts[0])) return true
+  return false
+}
+
 function listAgentSourceFiles(agentDir: string): string[] {
   const out: string[] = []
   const walk = (dir: string) => {
@@ -73,6 +85,27 @@ function listAgentSourceFiles(agentDir: string): string[] {
     }
   }
   if (fs.existsSync(agentDir)) walk(agentDir)
+  return out.sort()
+}
+
+function listRuntimeSourceFiles(root: string): string[] {
+  const out: string[] = []
+  const walk = (dir: string, relDir: string) => {
+    for (const name of fs.readdirSync(dir)) {
+      const abs = path.join(dir, name)
+      const rel = relDir ? `${relDir}/${name}` : name
+      if (isSkippedRel(rel)) continue
+      const st = fs.statSync(abs)
+      if (st.isDirectory()) {
+        if (ANY_DEPTH_SKIP_DIRS.has(name)) continue
+        if (!relDir && ROOT_ONLY_SKIP_DIRS.has(name)) continue
+        walk(abs, rel)
+      } else if (JS_SUFFIXES.has(path.extname(name).toLowerCase())) {
+        out.push(abs)
+      }
+    }
+  }
+  walk(root, "")
   return out.sort()
 }
 
@@ -445,13 +478,116 @@ function allowedSpreadOrAssignSource(expr: ts.Expression, sf: ts.SourceFile, che
   return decl.getSourceFile() === sf
 }
 
-function forbiddenEveDynamicLoads(sf: ts.SourceFile, rel: string, findings: string[]): void {
-  const tag = "FA-F18-025"
+function forbiddenAgentDynamicLoads(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  const tag = "FA-F18-032"
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
-        if (node.arguments[0].text === EVE_MODULE) {
-          findings.push(`${rel}: dynamic import of "${EVE_MODULE}" is not allowed under agent/ (${tag})`)
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        findings.push(`${rel}: dynamic import() is not allowed under agent/ (${tag})`)
+      }
+      if (ts.isIdentifier(node.expression) && node.expression.text === "require" && node.arguments[0]) {
+        const arg = node.arguments[0]
+        if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
+          findings.push(`${rel}: require() is not allowed under agent/ (${tag})`)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+}
+
+function forbiddenAgentExternalReexports(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  const tag = "FA-F18-033"
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
+    const resolved = resolveRepoModule(stmt.moduleSpecifier.text, rel)
+    if (!resolved) continue
+    if (!resolved.startsWith(`${AGENT_PREFIX}`) && resolved !== AGENT_PREFIX.slice(0, -1)) {
+      findings.push(`${rel}: re-export from outside agent/ is not allowed (${tag})`)
+    }
+  }
+}
+
+function collectModuleImports(sf: ts.SourceFile, importerRel: string): string[] {
+  const mods: string[] = []
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
+    const resolved = resolveRepoModule(stmt.moduleSpecifier.text, importerRel)
+    if (resolved) mods.push(resolved)
+  }
+  return mods
+}
+
+function buildTouchesCanonicalMap(root: string, runtimeFiles: string[]): Map<string, boolean> {
+  const importsByModule = new Map<string, string[]>()
+  for (const abs of runtimeFiles) {
+    const rel = posixRel(abs, root)
+    const modulePath = modulePathFromRel(rel)
+    const text = fs.readFileSync(abs, "utf8")
+    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true)
+    importsByModule.set(modulePath, collectModuleImports(sf, rel))
+  }
+  const touches = new Map<string, boolean>()
+  const visiting = new Set<string>()
+  const visit = (mod: string): boolean => {
+    const cached = touches.get(mod)
+    if (cached !== undefined) return cached
+    if (visiting.has(mod)) return false
+    visiting.add(mod)
+    const direct = mod === CANONICAL_MODULE
+    const deps = importsByModule.get(mod) ?? []
+    const transitive = deps.some((d) => visit(d))
+    const value = direct || transitive
+    visiting.delete(mod)
+    touches.set(mod, value)
+    return value
+  }
+  for (const mod of importsByModule.keys()) visit(mod)
+  visit(CANONICAL_MODULE)
+  return touches
+}
+
+function forbiddenImportsTouchingCanonicalModel(
+  rel: string,
+  imports: ImportInfo[],
+  touchesCanonical: Map<string, boolean>,
+  findings: string[]
+): void {
+  const tag = "FA-F18-032"
+  for (const imp of imports) {
+    if (imp.isTypeOnly) continue
+    const mod = imp.module
+    if (!touchesCanonical.get(mod)) continue
+    if (mod === CANONICAL_MODULE && imp.imported === MODEL_BINDING) continue
+    findings.push(
+      `${rel}: import of ${mod} pulls in ${CANONICAL_MODULE}; only the canonical ${MODEL_BINDING} import is allowed (${tag})`
+    )
+  }
+}
+
+function forbiddenEveOutsideAgentEntry(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  if (rel === "agent/agent.ts" || rel.startsWith(FUNCTIONS_PREFIX)) return
+  const tag = "FA-F18-033"
+  const imports = collectImports(sf, rel)
+  for (const imp of imports) {
+    if (imp.isTypeOnly) continue
+    if (imp.module === EVE_MODULE) {
+      findings.push(`${rel}: only agent/agent.ts may import from "${EVE_MODULE}" (${tag})`)
+    }
+    if (imp.imported === DEFINE_AGENT || imp.local === DEFINE_AGENT) {
+      findings.push(`${rel}: only agent/agent.ts may reference ${DEFINE_AGENT} (${tag})`)
+    }
+  }
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0]) {
+        const arg = node.arguments[0]
+        if (
+          (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) &&
+          arg.text === EVE_MODULE
+        ) {
+          findings.push(`${rel}: dynamic import of "${EVE_MODULE}" is only allowed in agent/agent.ts (${tag})`)
         }
       }
       if (
@@ -461,7 +597,10 @@ function forbiddenEveDynamicLoads(sf: ts.SourceFile, rel: string, findings: stri
         ts.isStringLiteral(node.arguments[0]) &&
         node.arguments[0].text === EVE_MODULE
       ) {
-        findings.push(`${rel}: require("${EVE_MODULE}") is not allowed under agent/ (${tag})`)
+        findings.push(`${rel}: require("${EVE_MODULE}") is only allowed in agent/agent.ts (${tag})`)
+      }
+      if (isDefineAgentIdentifierCall(node) || isMemberDefineAgentCall(node)) {
+        findings.push(`${rel}: ${DEFINE_AGENT} call outside agent/agent.ts is not allowed (${tag})`)
       }
     }
     ts.forEachChild(node, visit)
@@ -752,6 +891,7 @@ function checkFile(
   root: string,
   program: ts.Program,
   defineAgentNodes: ts.CallExpression[],
+  touchesCanonical: Map<string, boolean>,
   findings: string[]
 ): void {
   const rel = posixRel(abs, root)
@@ -770,7 +910,9 @@ function checkFile(
 
   validateEveDefineAgentImports(rel, imports, findings)
   forbiddenLocalBindings(sf, rel, findings)
-  forbiddenEveDynamicLoads(sf, rel, findings)
+  forbiddenAgentDynamicLoads(sf, rel, findings)
+  forbiddenAgentExternalReexports(sf, rel, findings)
+  forbiddenImportsTouchingCanonicalModel(rel, imports, touchesCanonical, findings)
   forbiddenSideEffectImports(sf, rel, findings)
   validateAgentEntryExport(sf, rel, checker, findings)
 
@@ -811,6 +953,8 @@ function main(): number {
   const files = listAgentSourceFiles(agentDir)
   const findings: string[] = []
   const defineAgentCalls: ts.CallExpression[] = []
+  const runtimeFiles = listRuntimeSourceFiles(root)
+  const touchesCanonical = buildTouchesCanonicalMap(root, runtimeFiles)
   const program = createProgram(root, files)
 
   if (agentDirExists) {
@@ -829,7 +973,15 @@ function main(): number {
   if (!program) {
     findings.push("agent/: could not create TypeScript checker for eve model rule (FA-F18-016)")
   } else {
-    for (const abs of files) checkFile(abs, root, program, defineAgentCalls, findings)
+    for (const abs of files) checkFile(abs, root, program, defineAgentCalls, touchesCanonical, findings)
+  }
+
+  for (const abs of runtimeFiles) {
+    const rel = posixRel(abs, root)
+    if (rel.startsWith(AGENT_PREFIX)) continue
+    if (rel.startsWith(FUNCTIONS_PREFIX)) continue
+    const sf = ts.createSourceFile(abs, fs.readFileSync(abs, "utf8"), ts.ScriptTarget.Latest, true)
+    forbiddenEveOutsideAgentEntry(sf, rel, findings)
   }
 
   const agentTs = path.join(agentDir, "agent.ts")

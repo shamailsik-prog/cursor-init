@@ -43,14 +43,21 @@ It fails on any of:
       no local `defineAgent` binding; only `agent/agent.ts` may import `{ defineAgent }` from `"eve"`; in that file every
       `defineAgent` reference must be the callee of a direct `defineAgent({...})` call (no `.call`/`.apply`/`.bind` or
       passing the import elsewhere); exactly one eve `defineAgent` call under `agent/`; object-literal argument without
-      spread; no bare side-effect `import "..."` under `agent/` (FA-F18-031); no mutation of `committeeBrainLanguageModel`
-      (property/element/compound/logical assignment, `delete`, `++`/`--`, or `Object`/`Reflect` APIs, including when
-      `Object`/`Reflect` are aliased to a local); the `committeeBrainLanguageModel` identifier may appear only as the
-      `model:` value in that single `defineAgent` argument (FA-F18-029); `Object.assign` / object spreads under `agent/`
-      only from object literals declared in the same file; no local shadowing of `committeeBrainLanguageModel` or `model`
-      parameters; no `.model` / computed model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` /
-      logical-assignment writes on other objects; no other `model` property under `agent/`. Quoted model strings in
-      JSON/YAML/markdown under `agent/` fail. Residual: non-`const` computed property keys on arbitrary objects.
+      spread; no bare side-effect `import "..."` under `agent/` (FA-F18-031); no dynamic `import()` or `require()` under
+      `agent/` (FA-F18-032); no non-type import under `agent/` of any module that transitively imports
+      `platform/p1/committeeBrainModel` except the direct `{ committeeBrainLanguageModel }` import from that module
+      (FA-F18-032, so mutation of the canonical model in other files cannot run via a pulled-in module); no re-export
+      (`export *` / `export { ... } from`) from outside `agent/` (FA-F18-033); outside `functions/`, only
+      `agent/agent.ts` may import `"eve"`, name `defineAgent`, or call `defineAgent` (FA-F18-033). Under `agent/` only,
+      no mutation of `committeeBrainLanguageModel` (property/element/compound/logical assignment, `delete`, `++`/`--`,
+      or `Object`/`Reflect` APIs, including when `Object`/`Reflect` are aliased to a local); the
+      `committeeBrainLanguageModel` identifier may appear only as the `model:` value in that single `defineAgent`
+      argument (FA-F18-029); `Object.assign` / object spreads under `agent/` only from object literals declared in the
+      same file; no local shadowing of `committeeBrainLanguageModel` or `model` parameters; no `.model` / computed
+      model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` / logical-assignment writes on other
+      objects; no other `model` property under `agent/`. Quoted model strings in JSON/YAML/markdown under `agent/` fail.
+      Residual: non-`const` computed property keys on arbitrary objects; mutation of `committeeBrainLanguageModel` in
+      files that are not imported (directly or transitively) from `agent/`.
   (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
 Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON;
