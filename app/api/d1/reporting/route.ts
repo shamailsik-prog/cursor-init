@@ -5,6 +5,8 @@ import { REPORTING_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_REPORTING } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   beginIdempotentRequest,
@@ -254,7 +256,7 @@ type RecomputeMatterReportRelevanceBody = {
 type Body = RecordMatterReportExportBody | RecomputeMatterReportRelevanceBody
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: REPORTING_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: REPORTING_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -411,9 +413,13 @@ async function handleGet(request: Request) {
   })
 }
 
+const handleGetAuthorised = withF02Authority(F02_REPORTING, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { surface: REPORTING_SURFACE })
+  return withSession(request, handlePostAuthorised, { surface: REPORTING_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_REPORTING, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

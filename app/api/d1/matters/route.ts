@@ -6,6 +6,8 @@ import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_MATTERS } from "@/platform/authority/f02Routes"
 import { allPostActionsExcept, gateByFlag } from "@/platform/flags/routeGate"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -85,7 +87,7 @@ async function ensureMatterAccess(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: MATTERS_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: MATTERS_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -126,13 +128,16 @@ async function handleGet(request: Request) {
   })
 }
 
+const handleGetAuthorised = withF02Authority(F02_MATTERS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePostGated, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
+  return withSession(request, handlePostAuthorised, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
 }
 
 // Phase 2a final review I3: the check-free `create` action is frozen behind LEGACY_D1_NEXT_WRITES
 // (default off; Erratum E-40). Every other action is unchanged.
 const handlePostGated = gateByFlag("LEGACY_D1_NEXT_WRITES", handlePost, allPostActionsExcept(["create"]))
+const handlePostAuthorised = withF02Authority(F02_MATTERS, "POST", handlePostGated)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

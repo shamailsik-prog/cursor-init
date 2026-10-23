@@ -92,7 +92,12 @@ export async function tryDispatchConsoleCallToFunctions(
   return null
 }
 
-/** Paths still served only by Next.js (no matching Functions HTTP route in functions/src/http/router.ts). */
+/**
+ * Paths the ops console still requests on Next.js. In production Firestore mode the nine
+ * domain routes (everything here except `/api/g0/normalise`) delegate to the in-process
+ * Functions router (`platform/authority`). `/api/g0/normalise` stays Next-only: it has no
+ * domain Firestore repository. Do not retarget the console at a second HTTP hop.
+ */
 export const CONSOLE_NEXT_ONLY_API_PREFIXES = [
   "/api/g0/normalise",
   "/api/d1/matters",

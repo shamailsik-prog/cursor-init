@@ -5,6 +5,8 @@ import { COURT_OPS_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_COURT_OPS } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   beginIdempotentRequest,
@@ -129,7 +131,7 @@ async function persistWorkflowEventsSince(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: COURT_OPS_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: COURT_OPS_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -159,9 +161,13 @@ async function handleGet(request: Request) {
   }
 }
 
+const handleGetAuthorised = withF02Authority(F02_COURT_OPS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { surface: COURT_OPS_SURFACE })
+  return withSession(request, handlePostAuthorised, { surface: COURT_OPS_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_COURT_OPS, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

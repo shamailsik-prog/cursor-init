@@ -26,6 +26,7 @@ import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, s
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
+import { F02_NEXT_AUTHORITY_ROUTES } from "./f02NextAuthority"
 import { HttpError } from "./errors"
 import { withIdempotency, type HttpResult, type IdempotencyMode, type IdempotentOperation } from "./idempotency"
 import { logFailure } from "../log"
@@ -67,9 +68,20 @@ export type Route = {
    * post-commit step a same-key retry is designed to heal (spec §4).
    */
   idempotency?: IdempotencyMode
+  /**
+   * POST/PUT body cap. The default is 1 MB. Document ingest and drafts match the Next route caps
+   * (audit F02); a function is read per request so SIKANDER_MAX_UPLOAD_BYTES stays live.
+   */
+  maxBodyBytes?: number | (() => number)
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024
+
+function bodyLimitBytes(route: Route): number {
+  const cap = route.maxBodyBytes
+  if (typeof cap === "function") return cap()
+  return cap ?? MAX_BODY_BYTES
+}
 
 const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
@@ -162,6 +174,8 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),
   get(`${D4_INTELLIGENCE}/getVerificationReport`, getVerificationReportOp),
+  // Audit F02: the nine Next domain routes, authorised here and served by the Next core in-process.
+  ...F02_NEXT_AUTHORITY_ROUTES,
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -344,7 +358,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       if (hasBody) {
         const declared = Number(header(headers, "content-length") ?? 0)
         const size = req.rawBody?.length ?? Buffer.byteLength(JSON.stringify(req.body ?? {}))
-        if (declared > MAX_BODY_BYTES || size > MAX_BODY_BYTES) {
+        const limit = bodyLimitBytes(route)
+        if (declared > limit || size > limit) {
           return send(res, { status: 413, body: errorBody("payload_too_large") })
         }
         if (!isJson(header(headers, "content-type"))) return send(res, { status: 415, body: errorBody("unsupported_media_type") })
