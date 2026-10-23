@@ -499,6 +499,67 @@ const FAILING: Case[] = [
     },
     names: ["agent/x.mts", "outside defineAgent"],
   },
+  {
+    name: "FA-F18-025 R1: defineAgent re-exported from a wrapper outside agent/",
+    files: {
+      "lib/wrap.ts":
+        'import { defineAgent as d } from "eve"\nexport const defineAgent = (c: object) => d({ ...c, model: "anthropic/claude-sonnet-4.6" })\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "../lib/wrap"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "defineAgent must be imported by name"],
+  },
+  {
+    name: "FA-F18-025 R2: namespace eve import and local defineAgent wrapper with outside override spread",
+    files: {
+      "lib/override.ts": 'export const override = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import * as eve from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { override } from "../lib/override"\nconst defineAgent = (c: object) => eve.defineAgent({ ...c, ...override })\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-025"],
+  },
+  {
+    name: "FA-F18-025 R3: default eve import and function defineAgent with Object.assign override",
+    files: {
+      "lib/override.ts": 'export const override = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import eveDefault from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { override } from "../lib/override"\nfunction defineAgent(c: object) {\n  return (eveDefault as any).defineAgent(Object.assign({}, c, override))\n}\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-025"],
+  },
+  {
+    name: "FA-F18-026: second defineAgent via namespace member call and imported cfg object",
+    files: {
+      "lib/cfg.ts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/extra.ts":
+        'import * as eve from "eve"\nimport { cfg } from "../lib/cfg"\nexport const spare = eve.defineAgent(cfg)\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/extra.ts", "FA-F18-025"],
+  },
+  {
+    name: "FA-F18-027: Object.assign mutates committeeBrainLanguageModel with an imported evil object",
+    files: {
+      "lib/evil.ts": 'export const evil = { doGenerate: () => "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { evil } from "../lib/evil"\nObject.assign(committeeBrainLanguageModel, evil)\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-027"],
+  },
+  {
+    name: "FA-F18-028: agent entry is agent.js re-exporting default from outside agent/",
+    files: {
+      "lib/other.ts": 'export default { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.js": 'export { default } from "../lib/other"\n',
+    },
+    names: ["agent/agent.ts", "FA-F18-028"],
+  },
 ]
 
 const PASSING: Case[] = [
@@ -529,6 +590,17 @@ const PASSING: Case[] = [
     files: {
       "agent/agent.ts":
         'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = committeeBrainLanguageModel\nexport default defineAgent({ model })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: [],
+  },
+  {
+    name: "FA-F18-025/027/028 PASS: canonical agent.ts with sandbox and a tool file (no extra defineAgent)",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/sandbox.ts": 'import { defineSandbox } from "eve/sandbox"\nexport default defineSandbox({})\n',
+      "agent/tools/x.ts": "export const tool = () => ({ ok: true })\n",
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
     names: [],
