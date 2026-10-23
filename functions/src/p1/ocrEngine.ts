@@ -2,9 +2,11 @@
  * OCR engine boundary (audit F04, erratum E-20).
  *
  * The worker does not call a provider. `callP1Ocr` is the only caller, and it asks
- * `resolveOcrEngine` which implementation to use. With `OCR_PROVIDER` unset or `local`,
- * that is the deterministic in-process stub below: same bytes, same text, no network.
- * A named provider this build does not implement resolves to null and the call fails closed.
+ * `resolveOcrEngine` which implementation to use. Outside production, `OCR_PROVIDER` unset
+ * or `local` selects the deterministic in-process stub below: same bytes, same text, no network.
+ * Production fails closed unless the name is registered in `OCR_EGRESS_PROVIDERS`, which is
+ * where a real provider implemented inside the Functions control plane (the F18 egress gate
+ * leaves that plane in place) would be wired. The map is empty in this build.
  * No remote image API and no local OCR binary are wired.
  */
 
@@ -26,12 +28,20 @@ export function capOcrText(text: string, maxBytes: number = MAX_OCR_TEXT_BYTES):
   return buf.subarray(0, end).toString("utf8")
 }
 
+/** `capOcrText` plus whether the UTF-8 byte length was reduced. A code-point cut is still valid UTF-8. */
+export function measureOcrText(text: string, maxBytes: number = MAX_OCR_TEXT_BYTES): { text: string; truncated: boolean } {
+  const capped = capOcrText(text, maxBytes)
+  return { text: capped, truncated: Buffer.byteLength(text, "utf8") > Buffer.byteLength(capped, "utf8") }
+}
+
 export type OcrExtraction = {
   text: string
   /** 0 to 1. Text the stub could read as UTF-8 is 1. Anything else is below 0.7. */
   confidence: number
   lowConfidence: boolean
   provider: typeof LOCAL_OCR_PROVIDER
+  /** True when `text` is a prefix because the UTF-8 cap was applied. Absent means not truncated. */
+  truncated?: boolean
 }
 
 export type OcrEngine = {
@@ -87,26 +97,44 @@ export class DeterministicLocalOcrEngine implements OcrEngine {
     void input.mimeType
     const text = plainText(input.bytes)
     if (text !== null) {
+      const capped = measureOcrText(text)
       return {
-        text: capOcrText(text),
+        text: capped.text,
+        truncated: capped.truncated,
         confidence: 1,
         lowConfidence: false,
         provider: LOCAL_OCR_PROVIDER,
       }
     }
-    const runs = capOcrText(printableRuns(input.bytes))
+    const runs = measureOcrText(printableRuns(input.bytes))
     return {
-      text: runs,
-      confidence: runs.length > 0 ? 0.4 : 0,
+      text: runs.text,
+      truncated: runs.truncated,
+      confidence: runs.text.length > 0 ? 0.4 : 0,
       lowConfidence: true,
       provider: LOCAL_OCR_PROVIDER,
     }
   }
 }
 
-/** `OCR_PROVIDER` unset or `local` selects the stub. Any other name is unsupported (null). */
+/**
+ * Real OCR providers implemented under `functions/src/p1` (the control plane the F18 egress gate
+ * allows). Empty: this build has no remote provider, so production never selects an engine.
+ */
+export const OCR_EGRESS_PROVIDERS: Readonly<Record<string, () => OcrEngine>> = Object.freeze({})
+
+/**
+ * Outside production, `OCR_PROVIDER` unset or `local` selects the stub. Production returns null
+ * unless `name` is registered in `OCR_EGRESS_PROVIDERS`. Any other name is unsupported (null).
+ * The deployed bundle constant-folds `process.env.NODE_ENV` to `"production"` (`functions/build.mjs`),
+ * so a host that leaves `NODE_ENV` unset still fails closed. Tests pass `NODE_ENV` on `env`.
+ */
 export function resolveOcrEngine(env: NodeJS.ProcessEnv = process.env): OcrEngine | null {
   const name = (env.OCR_PROVIDER ?? "").trim().toLowerCase()
+  const gated = OCR_EGRESS_PROVIDERS[name]
+  if (gated) return gated()
+  const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV
+  if (nodeEnv === "production") return null
   if (name === "" || name === "local" || name === "local-ocr-stub") return new DeterministicLocalOcrEngine()
   return null
 }
