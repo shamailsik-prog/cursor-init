@@ -5,6 +5,8 @@ import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_DOCUMENTS } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { DocumentMalformedError } from "@/platform/d1/documentRecord"
 import {
@@ -99,7 +101,7 @@ function canViewDocument(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: DOCUMENTS_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: DOCUMENTS_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -213,9 +215,13 @@ const uploadBodyLimits: SessionRouteOptions = {
   },
 }
 
+const handleGetAuthorised = withF02Authority(F02_DOCUMENTS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
+  return withSession(request, handlePostAuthorised, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_DOCUMENTS, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

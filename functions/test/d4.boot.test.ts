@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // d1.boot.test.ts sets.
 const LAYER_FLAGS = ["CORE_ENABLED", "LEGACY_GOVERNANCE_CHAINS", "L17_2_ENABLED"]
 
-/** The twelve D4 routes (P4-10): eight under /api/d4/drafting, four under /api/d4/intelligence, every one kind general. */
+/** D4 routes: the twelve P4-10 routes, plus the two F02 Next paths (drafts, filings), each GET and POST, kind general. */
 const D4_ROUTES = [
   "POST /api/d4/drafting/createDraft general",
   "POST /api/d4/drafting/saveDraftVersion general",
@@ -21,6 +21,10 @@ const D4_ROUTES = [
   "GET /api/d4/intelligence/getTypeProfile general",
   "POST /api/d4/intelligence/gateDraft general",
   "GET /api/d4/intelligence/getVerificationReport general",
+  "GET /api/d4/drafts general",
+  "POST /api/d4/drafts general",
+  "GET /api/d4/filings general",
+  "POST /api/d4/filings general",
 ]
 
 describe("D4 boot (P4-3, P4-10)", () => {
@@ -38,7 +42,7 @@ describe("D4 boot (P4-3, P4-10)", () => {
     }
   })
 
-  it("the entry point exports api, and the router built with every layer flag off serves exactly the twelve D4 routes, each kind general", async () => {
+  it("the entry point exports api, and the router built with every layer flag off serves exactly the D4 routes, each kind general", async () => {
     // Loaded after the flags are off, so a flag read at module load or route building would show here.
     vi.resetModules()
     const index = await import("../src/index")

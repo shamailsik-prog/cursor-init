@@ -5,6 +5,8 @@ import { TENANCY_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_TENANCY } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, errorResponse, publicErrorMessage } from "@/platform/http/errors"
 import {
   beginIdempotentRequest,
@@ -555,7 +557,7 @@ async function recomputeAndPersistLineageDigestState(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { ...TENANCY_GET_SESSION_OPTIONS, surface: TENANCY_SURFACE })
+  return withSession(request, handleGetAuthorised, { ...TENANCY_GET_SESSION_OPTIONS, surface: TENANCY_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -1275,9 +1277,13 @@ async function handleGet(request: Request) {
   }
 }
 
+const handleGetAuthorised = withF02Authority(F02_TENANCY, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { surface: TENANCY_SURFACE })
+  return withSession(request, handlePostAuthorised, { surface: TENANCY_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_TENANCY, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()
