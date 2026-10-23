@@ -9,6 +9,8 @@ import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
+import { acceptLegacyOcrJob } from "./ocrDrain"
+import { isCompleteLegacyOcrJob } from "./ocrJob"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
 import { scheduledJobFunction } from "./scheduled"
@@ -23,17 +25,30 @@ import { runJobTask } from "./worker"
  */
 
 /**
- * A new job row → dispatch `{ jobId, seq: 0 }`. Rows without `engine: "p2"` (the legacy Next.js
- * `jobs` writer) are ignored. A repeated trigger reuses task `${jobId}-0`, which Cloud Tasks
- * dedupes. A dispatch failure is logged by code and swallowed: the sweeper re-dispatches the due
- * row after `DISPATCH_GRACE_MS`.
+ * A new job row → dispatch `{ jobId, seq: 0 }` when it is an engine row. A well-formed legacy OCR row
+ * (audit F04: the upload writer, no `engine` field) is drained into a `d3.ocr` engine job. Any other
+ * legacy row is ignored, with no store read. A repeated trigger reuses task `${jobId}-0`, which Cloud
+ * Tasks dedupes. An engine-row dispatch failure is logged and swallowed: the sweeper re-dispatches a
+ * due engine row after `DISPATCH_GRACE_MS`. A legacy OCR drain failure is logged and rethrown
+ * (FA-F04-001) so the create trigger, which retries, runs the drain again. Permanent document
+ * problems are recorded inside the drain and do not throw. Enqueue is idempotent, so a redelivery
+ * reuses the same engine job.
  */
 export async function onJobCreatedCore(jobId: string, data: DocumentData | undefined, deps: JobDeps): Promise<void> {
-  if (data?.engine !== JOB_ENGINE) return
+  if (data?.engine === JOB_ENGINE) {
+    try {
+      await deps.dispatcher.dispatch({ jobId, seq: 0 })
+    } catch (err) {
+      logFailure("job dispatch failed", err)
+    }
+    return
+  }
+  if (!isCompleteLegacyOcrJob(data)) return
   try {
-    await deps.dispatcher.dispatch({ jobId, seq: 0 })
+    await acceptLegacyOcrJob(jobId, data, deps)
   } catch (err) {
-    logFailure("job dispatch failed", err)
+    logFailure("ocr drain failed", err)
+    throw err
   }
 }
 
@@ -51,7 +66,7 @@ export function parseJobTask(data: unknown): JobTask | null {
 // O-33: a Firestore trigger must run in the database's region. This assumes the default database
 // is in asia-south1; if it is not, deploy this trigger in the database's region or drop it, and
 // the sweeper's query A alone dispatches new jobs (within about 90 s).
-export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region: REGION }, (event) =>
+export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region: REGION, retry: true }, (event) =>
   onJobCreatedCore(event.params.jobId, event.data?.data(), runtimeDeps())
 )
 

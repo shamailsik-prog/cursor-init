@@ -519,6 +519,9 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     // matter_client_search_index reads membership of the row's matter (fix/sec-gaps R1 #6):
     // a matter row names it in referenceId.
     ...(name === "matter_client_search_index" ? { rowType: "matter", referenceId: MATTER_A } : {}),
+    // FA-F04-003: ocr_texts reads the named document's current label. The documents row is
+    // seeded at this same id, firm A, classification public.
+    ...(name === "ocr_texts" ? { documentId: "g2-a-doc" } : {}),
   })
 
   beforeAll(async () => {
