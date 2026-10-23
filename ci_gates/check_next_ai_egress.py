@@ -28,6 +28,7 @@ It fails on any of:
       functions/src/p1/gateway). The specifier may be the `@/` alias, a relative path, a bare `functions/...` path, an
       extension or `/index`, with a query or hash stripped. Forms: import, export-from, import(), require(),
       require.resolve(), createRequire, and vitest/jest importActual, requireActual, importMock and requireMock.
+      A block or line comment may sit between those loader tokens, the same gap the import parser allows (FA-F18-009).
       functions/ itself may import these modules. A module that only shares the name as a prefix
       (`functions/src/p1/transportation`) is not one of them.
 
@@ -49,6 +50,7 @@ from g0_guard_common import (  # noqa: E402
     DOCKERFILE_NAME_RE,
     file_kind,
     iter_scan_files,
+    JS_WS,
     js_imported_packages,
     js_module_specifiers,
     read_text,
@@ -66,8 +68,10 @@ FUNCTIONS_P1_PAID_MODULES = (
     "functions/src/p1/gateway",
 )
 _JS_EXT_RE = re.compile(r"\.(?:[cm]?[jt]sx?)$", re.I)
+# Same comment-aware gap as g0_guard_common.JS_WS (FA-F18-009). DOTALL so a block comment may contain a newline.
 _TEST_LOADER_RE = re.compile(
-    r"""\b(?:vi|jest)\s*\.\s*(?:importActual|requireActual|importMock|requireMock)\s*(?:<[^<>()]*>)?\s*\(\s*(["'`])([^"'`\r\n]+)\1"""
+    rf"""\b(?:vi|jest){JS_WS}\.{JS_WS}(?:importActual|requireActual|importMock|requireMock){JS_WS}(?:<[^<>()]*>)?{JS_WS}\({JS_WS}(["'`])([^"'`\r\n]+)\1""",
+    re.DOTALL,
 )
 
 # Keep equal to PROVIDER_KEY_ENV_NAMES in platform/p1/providerKeyGuard.ts.

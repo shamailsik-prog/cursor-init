@@ -106,7 +106,8 @@ Gates:
   or names a provider host, and no deploy surface (`.env*`, App Hosting, Vercel, Docker, compose, and workflow jobs that
   build, start or deploy the Next/eve service) binds a provider key. No allowlist. Any JS/TS file outside `functions/`
   (the corpus service included; root `tests/` stays outside the walker) that imports `functions/src/p1/transport` or
-  `functions/src/p1/gateway` fails the same check (FA-F18-001).
+  `functions/src/p1/gateway` fails the same check, including a vitest/jest loader with comments between its tokens
+  (FA-F18-001, FA-F18-009).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

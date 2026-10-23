@@ -206,6 +206,8 @@ def file_kind(p: pathlib.Path) -> str | None:
 # JS whitespace, where `/* block */` and `// line` comments count as whitespace (Codex P2 #1 on
 # PR #57): JS allows a comment anywhere whitespace may appear between tokens.
 _JS_WS = r"(?:\s|/\*.*?\*/|//[^\n]*(?:\n|$))*"
+# Public alias. Other gates (check_next_ai_egress rule (e)) use this same gap (FA-F18-009).
+JS_WS = _JS_WS
 _JS_IDENT = r"[A-Za-z_$][\w$]*"
 
 

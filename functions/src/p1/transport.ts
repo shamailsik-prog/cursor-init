@@ -187,10 +187,16 @@ export function setP1TransportForTests(t: P1Transport | null): void {
 }
 
 /**
- * Set by the Cloud Functions runtime (`FUNCTION_TARGET` on gen1, the emulator and gen2; `K_SERVICE` on gen2 / Cloud Run)
- * or explicitly (`1` or `true`) for a Functions process that has neither. A blank or whitespace value does not count.
+ * Set by the Cloud Functions runtime (`FUNCTION_TARGET` on gen1, a triggered emulator worker and gen2;
+ * `K_SERVICE` on gen2 / Cloud Run), by the Firebase debug emulator as a pair, or explicitly (`1` or `true`)
+ * for a Functions process that has neither. A blank or whitespace value does not count.
  * `K_SERVICE` is also set for a Next service deployed on Cloud Run: that process is still stopped by G-0 [19], which
  * forbids it from importing this module (audit F18, FA-F18-001).
+ *
+ * `firebase emulators:start --inspect-functions` starts one shared runtime with no trigger, so firebase-tools
+ * 14.27.0 sets `FUNCTIONS_EMULATOR=true` and `FIREBASE_CONFIG` and does not set `FUNCTION_TARGET` or `K_SERVICE`
+ * (`functionsEmulator.ts` `getSystemEnvs` / `getRuntimeEnvs`). Either variable alone is not this runtime: Next can
+ * carry `FIREBASE_CONFIG`, and a copied `FUNCTIONS_EMULATOR` must not unlock the client by itself (FA-F18-008).
  */
 export const FUNCTIONS_RUNTIME_FLAG = "SIKANDER_FUNCTIONS_RUNTIME"
 
@@ -199,7 +205,11 @@ export function inFunctionsRuntime(env: NodeJS.ProcessEnv = process.env): boolea
   if ((env.FUNCTION_TARGET ?? "").trim() !== "") return true
   if ((env.K_SERVICE ?? "").trim() !== "") return true
   const flag = (env[FUNCTIONS_RUNTIME_FLAG] ?? "").trim().toLowerCase()
-  return flag === "1" || flag === "true"
+  if (flag === "1" || flag === "true") return true
+  // Debug emulator: both markers, after trim. `FUNCTIONS_EMULATOR` must be the literal `true`.
+  const emulator = (env.FUNCTIONS_EMULATOR ?? "").trim() === "true"
+  const firebaseConfig = (env.FIREBASE_CONFIG ?? "").trim() !== ""
+  return emulator && firebaseConfig
 }
 
 /**

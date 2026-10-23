@@ -295,10 +295,15 @@ transitive load.
 wins, in any runtime. Otherwise a non-empty `AI_GATEWAY_API_KEY` builds `gatewayTransport` only when one of these is
 set to a non-blank value:
 
-- `FUNCTION_TARGET` (Functions framework and the emulator);
+- `FUNCTION_TARGET` (Functions framework, a triggered emulator worker, and gen2);
 - `K_SERVICE` (Cloud Run, which is how a 2nd-gen function runs; the same pair `functions/src/p5/identity.ts` uses for a
   hosted function);
-- `SIKANDER_FUNCTIONS_RUNTIME` equal to `1` or `true` (an explicit flag for a Functions process that has neither).
+- `SIKANDER_FUNCTIONS_RUNTIME` equal to `1` or `true` (an explicit flag for a Functions process that has neither);
+- the Firebase debug emulator as a pair (FA-F18-008): `FUNCTIONS_EMULATOR` trim-equal to `true` and `FIREBASE_CONFIG`
+  non-blank after trim. `firebase emulators:start --inspect-functions` starts one shared runtime with no trigger, so
+  firebase-tools 14.27.0 sets those two and does not set `FUNCTION_TARGET` or `K_SERVICE`. Either variable alone is not
+  the runtime. `FIREBASE_CONFIG` by itself is a Next-side marker (`platform/p5/session.ts` treats it as hosted). A
+  copied `FUNCTIONS_EMULATOR` by itself is not enough.
 
 Whitespace does not count. Any other flag value does not count. Outside that runtime the function returns null, `callP1`
 records `no_credentials`, and one line `[p1] ALERT p1.provider_key_in_next_runtime` names `AI_GATEWAY_API_KEY` and never
@@ -311,6 +316,10 @@ and because gen1, the emulator and gen2 do not share one variable. Residual, rec
 service on Cloud Run, and any variable can be copied with the key. On that host the gate is the control that stops the
 import. A computed specifier the gate cannot see, plus `K_SERVICE` or a copied flag, would still build a client. That is
 the same class of hole as the gate's other text-analysis residuals.
+
+**FA-F18-008.** The debug-emulator pair above is the local runtime the first check missed. Residual: a Next process started with both variables copied (for example a shell that exported the emulator environment) would pass this check. G-0 [19] still forbids that process from importing the module. `FUNCTION_DEBUG_MODE` is also set on that runtime and is not required here; the pair the emulator always sets, and that the finding names, is the one the check uses.
+
+**FA-F18-009.** Rule (e)'s vitest/jest loader uses the same comment-aware gap as the import parser (`JS_WS`), including a block comment that contains a newline. A computed argument to `importActual` remains the text-scan residual already recorded.
 
 **FA-F18-002, 004, 005, 006, 007, checked on this change and not taken further except the test pins in 004.**
 
