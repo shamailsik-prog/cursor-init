@@ -86,3 +86,86 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     expect(await adminDb().collection("documents").doc(id).get().then((d) => d.data())).toMatchObject({ byteSize: "12", classification: "internal" })
   })
 })
+
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-021: documents.create validates before it writes", () => {
+  it("a malformed create throws and the document is not created", async () => {
+    const firmId = uniq("f13d21firm")
+    const id = uniq("doc")
+    await expect(repo().documents.create({ ...good(firmId), id, byteSize: "12" } as never)).rejects.toMatchObject({
+      name: "DocumentMalformedError",
+      documentId: id,
+    })
+    expect((await adminDb().collection("documents").doc(id).get()).exists).toBe(false)
+  })
+
+  it("a blank id is refused and nothing is written", async () => {
+    const firmId = uniq("f13d21firm")
+    await expect(repo().documents.create({ ...good(firmId), id: "   " } as never)).rejects.toMatchObject({
+      name: "DocumentMalformedError",
+      documentId: "unknown",
+    })
+  })
+
+  it("a create with no objectBytesStatus stores the canonical missing status", async () => {
+    const firmId = uniq("f13d21firm")
+    const id = uniq("doc")
+    const row = { ...good(firmId), id }
+    delete row.objectBytesStatus
+    await repo().documents.create(row as never)
+    expect((await adminDb().collection("documents").doc(id).get()).data()).toMatchObject({
+      id,
+      objectBytesStatus: "missing",
+      byteSize: 12,
+    })
+  })
+})
+
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-022: listByFirm reports dropped rows, and the bytes backfill stamps only the missing status", () => {
+  it("listByFirm keeps the valid row and names the invalid one", async () => {
+    const firmId = uniq("f13d22firm")
+    const badId = await stored({ ...good(firmId), byteSize: "12" })
+    const okId = await stored(good(firmId))
+    const otherFirm = uniq("f13d22other")
+    await stored({ ...good(otherFirm), byteSize: "nope" })
+    const listed = await repo().documents.listByFirm(firmId)
+    expect(listed.map((row) => row.id)).toEqual([okId])
+    expect((listed as { droppedDocuments?: { id: string; reason: string }[] }).droppedDocuments).toEqual([
+      { id: badId, reason: "byteSize" },
+    ])
+  })
+
+  it("a pre-status row is stamped missing and a malformed row is reported, not rewritten", async () => {
+    const firmId = uniq("f13d22firm")
+    const legacy = good(firmId)
+    delete legacy.objectBytesStatus
+    const legacyId = await stored(legacy)
+    const badId = await stored({ ...good(firmId), byteSize: "12" })
+    const mod = await import("@/platform/persistence/documentBytesBackfill")
+    const admin = await import("@/scripts/lib/documentBytesBackfillAdmin")
+    const rows = await admin.readDocumentRows(adminDb() as never)
+    const plan = mod.planDocumentBytesBackfill(rows.filter((row) => row.data.firmId === firmId))
+    expect(plan.stamp).toContainEqual({ id: legacyId, patch: { objectBytesStatus: "missing" } })
+    expect(plan.malformed).toContainEqual({ id: badId, path: `documents/${badId}`, reason: "byteSize" })
+    expect(plan.stamp.map((row) => row.id)).not.toContain(badId)
+    const res = await mod.applyDocumentBytesBackfill(admin.adminDocumentBytesBackfillStore(adminDb() as never), plan)
+    expect(res.applied).toContain(`documents/${legacyId}`)
+    expect(res.applied).not.toContain(`documents/${badId}`)
+    expect((await adminDb().collection("documents").doc(legacyId).get()).data()).toMatchObject({ objectBytesStatus: "missing" })
+    expect((await adminDb().collection("documents").doc(badId).get()).data()).toMatchObject({ byteSize: "12", objectBytesStatus: "available" })
+  })
+
+  it("the document-bytes dry-run names the row and writes nothing", async () => {
+    const { execFileSync } = await import("node:child_process")
+    const firmId = uniq("f13d22firm")
+    const legacy = good(firmId)
+    delete legacy.objectBytesStatus
+    const id = await stored(legacy)
+    const out = execFileSync("npm", ["run", "-s", "backfill:document-bytes", "--", "--project", process.env.GCLOUD_PROJECT ?? "demo-sikander"], {
+      env: { ...process.env },
+      encoding: "utf8",
+    })
+    expect(out).toContain("[backfill-document-bytes] DRY-RUN")
+    expect(out).toContain(`[backfill-document-bytes] documents/${id} objectBytesStatus`)
+    expect((await adminDb().collection("documents").doc(id).get()).data()?.objectBytesStatus).toBeUndefined()
+  })
+})
