@@ -185,6 +185,67 @@ const FAILING: Case[] = [
     names: ["platform/p1/other.ts", "OPENAI_API_KEY"],
   },
   {
+    name: "a Next file importing functions/src/p1/ops (FA-F18-010)",
+    files: { "app/api/x/route.ts": 'import { committeeBrainOp } from "@/functions/src/p1/ops"\nexport const op = committeeBrainOp\n' },
+    names: ["app/api/x/route.ts", "functions/src/p1/ops"],
+  },
+  {
+    name: "a Next file importing functions/src/p1/reconciler (FA-F18-010)",
+    files: { "app/api/x/route.ts": 'import { reconcile } from "@/functions/src/p1/reconciler"\nexport const r = reconcile\n' },
+    names: ["app/api/x/route.ts", "functions/src/p1/reconciler"],
+  },
+  {
+    name: "a Next file importing functions/src/p1/evalSet (FA-F18-010)",
+    files: { "lib/x.ts": 'import { runLiveEvaluation } from "@/functions/src/p1/evalSet"\nexport const r = runLiveEvaluation\n' },
+    names: ["lib/x.ts", "functions/src/p1/evalSet"],
+  },
+  {
+    name: "a Next file importing functions/src/cli/committeeEval (FA-F18-010)",
+    files: { "app/api/x/route.ts": 'import { main } from "@/functions/src/cli/committeeEval"\nexport const m = main\n' },
+    names: ["app/api/x/route.ts", "functions/src/cli/committeeEval"],
+  },
+  {
+    name: "a Next file importing the compiled functions/lib tree (FA-F18-010)",
+    files: { "app/api/x/route.ts": 'import { gatewayTransport } from "@/functions/lib/p1/transport"\nexport const t = gatewayTransport\n' },
+    names: ["app/api/x/route.ts", "functions/lib/p1/transport"],
+  },
+  {
+    name: "a Next file importing the Functions HTTP router (FA-F18-010)",
+    files: { "app/ok.ts": 'import { ROUTES } from "@/functions/src/http/router"\nexport const r = ROUTES\n' },
+    names: ["app/ok.ts", "functions/src/http/router"],
+  },
+  {
+    name: "a specifier that only shares the transport prefix (FA-F18-010)",
+    files: { "app/near.ts": 'import { x } from "@/functions/src/p1/transportation"\nexport const t = x\n' },
+    names: ["app/near.ts", "functions/src/p1/transportation"],
+  },
+  {
+    name: "a nested type argument on vi.importActual (FA-F18-011)",
+    files: {
+      "app/nested.ts":
+        'export const t = vi.importActual<Record<string, unknown>>("@/functions/src/p1/transport")\n',
+    },
+    names: ["app/nested.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a .envrc that sets a provider key (FA-F18-002)",
+    files: { ".envrc": "export AI_GATEWAY_API_KEY=placeholder\n" },
+    names: [".envrc", "AI_GATEWAY_API_KEY"],
+  },
+  {
+    name: "a workflow job indented four spaces that binds a key (FA-F18-002)",
+    files: {
+      ".github/workflows/wide.yml":
+        "jobs:\n    web:\n        runs-on: ubuntu-latest\n        env:\n            AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}\n        steps:\n            - run: npm run build\n",
+    },
+    names: [".github/workflows/wide.yml", "AI_GATEWAY_API_KEY"],
+  },
+  {
+    name: "an eve model string under agent/ (FA-F18-002)",
+    files: { "agent/x.ts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n' },
+    names: ["agent/x.ts", "anthropic/claude-sonnet-4.6"],
+  },
+  {
     name: "a key on a workflow job that runs firebase deploy --only hosting (FA-F18-004 M27)",
     files: {
       ".github/workflows/host.yml":
@@ -204,16 +265,21 @@ const PASSING: Case[] = [
     names: [],
   },
   {
-    name: "a Next file importing a Functions module that is not the transport or the gateway",
-    files: {
-      "app/ok.ts":
-        'import { MAX_OUTPUT_TOKENS } from "@/functions/src/p1/costTable"\nimport { ROUTES } from "@/functions/src/http/router"\nexport const n = MAX_OUTPUT_TOKENS\nexport const r = ROUTES\n',
-    },
+    name: "a Next file importing an allowlisted pure Functions module (costTable)",
+    files: { "app/ok.ts": 'import { MAX_OUTPUT_TOKENS } from "@/functions/src/p1/costTable"\nexport const n = MAX_OUTPUT_TOKENS\n' },
     names: [],
   },
   {
-    name: "a specifier that only shares the transport prefix",
-    files: { "app/near.ts": 'import { x } from "@/functions/src/p1/transportation"\nexport const t = x\n' },
+    name: "eve's model is the P1 LanguageModel identifier, not a string",
+    files: { "agent/ok.ts": "export const cfg = { model: committeeBrainLanguageModel }\n" },
+    names: [],
+  },
+  {
+    name: "a four-space job that does not build Next, even when it names a key",
+    files: {
+      ".github/workflows/fn.yml":
+        "jobs:\n    fn:\n        env:\n            AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}\n        steps:\n            - run: npm --prefix functions test\n",
+    },
     names: [],
   },
   { name: "the corpus service (the F27 lane; FA-D3C-002 under G-0 [3])", files: { "corpus_service/app.env": "OPENAI_API_KEY=placeholder\n", "corpus_service/x.ts": 'import OpenAI from "openai"\n' }, names: [] },
@@ -231,6 +297,16 @@ const PASSING: Case[] = [
 ]
 
 describe("audit F18: G-0 [19] next-ai-egress guard", () => {
+  it("fails on a symlinked directory under app/ (FA-F18-002)", () => {
+    const dir = probe(CLEAN)
+    fs.mkdirSync(path.join(dir, "hidden"))
+    fs.symlinkSync(path.join(dir, "hidden"), path.join(dir, "app", "linked"), "dir")
+    const res = run(dir)
+    expect(res.status, res.out).toBe(1)
+    expect(res.out).toMatch(/FAIL/)
+    expect(res.out).toContain("app/linked")
+  })
+
   it("passes a clean tree", () => {
     const res = run(probe(CLEAN))
     expect(res.out).toMatch(/PASS/)
