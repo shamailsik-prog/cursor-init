@@ -206,6 +206,16 @@ function parse(payload: unknown): OcrPayload {
   return { version: OCR_PAYLOAD_VERSION, legacyJobId, documentId, contentHash }
 }
 
+/** Legacy upload row named by a `d3.ocr` engine job, when the payload is well-formed. */
+export function legacyJobIdFromEngine(job: { jobType: string; payload: unknown }): string | undefined {
+  if (job.jobType !== OCR_JOB_TYPE) return undefined
+  try {
+    return parse(job.payload).legacyJobId
+  } catch {
+    return undefined
+  }
+}
+
 async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
   const subject = await loadOcrSubject(ctx.job.firmId, ctx.job.matterId, ctx.payload.documentId, ctx.payload.contentHash)
   const labels: Classification[] = [ctx.job.classification, subject.documentClassification]

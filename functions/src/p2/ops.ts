@@ -7,9 +7,10 @@ import { logFailure } from "../log"
 import type { Caller } from "../p5/auth"
 import { isSafeDocId, type Data, type FirmOperation, type Session } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { DISPATCH_GRACE_MS, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
+import { DISPATCH_GRACE_MS, JOB_ENGINE, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
 import { runtimeDeps } from "./dispatch"
 import { jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
+import { legacyJobIdFromEngine, OCR_JOB_TYPE } from "./ocrJob"
 import { handlerFor } from "./registry"
 import { atMatterLabel, jobView, visibilityOf, type JobView, type MatterNow, type Visibility } from "./view"
 import { appendLog } from "./worker"
@@ -373,6 +374,20 @@ export const cancelJobOp: FirmOperation<JobView> = {
       }
       await audit.stage(tx, "allow", "ok")
       stageJobUpdate(tx, jobsRef().doc(jobId), update)
+      const legacyId = job.jobType === OCR_JOB_TYPE ? legacyJobIdFromEngine(job) : undefined
+      if (legacyId !== undefined) {
+        const legacyRef = jobsRef().doc(legacyId)
+        const legacySnap = await tx.get(legacyRef)
+        const legacy = legacySnap.data()
+        if (
+          legacySnap.exists &&
+          legacy?.firmId === caller.firmId &&
+          legacy.engine !== JOB_ENGINE &&
+          legacy.ocrStatus !== "done"
+        ) {
+          tx.update(legacyRef, { ocrStatus: "failed", ocrFailureCode: "job_cancelled" })
+        }
+      }
       return jobView(jobId, { ...job, ...update }, "full", { logs: true })
     })
     audit.committed()

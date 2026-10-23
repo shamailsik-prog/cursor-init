@@ -5,6 +5,7 @@ import { logFailure } from "../log"
 import { DISPATCH_GRACE_MS, JOB_ENGINE, MAX_MANUAL_RETRIES, SWEEP_BUDGET_MS, SWEEP_LIMIT, SWEEP_MAX_PAGES } from "./constants"
 import type { JobDeps } from "./dispatch"
 import { jobIdFor, jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
+import { isSafeDocId } from "../p5/common"
 import { acceptLegacyOcrJob } from "./ocrDrain"
 import { isCompleteLegacyOcrJob, OCR_JOB_TYPE, recordLegacyOcr } from "./ocrJob"
 import { appendLog } from "./worker"
@@ -31,6 +32,12 @@ export type LegacyOcrSweepResult = {
 
 const NOTE = "OCR sweep picked up a job whose retries were exhausted"
 const TERMINAL_OCR_STATUSES = ["done", "failed"]
+const LEGACY_INCOMPLETE_CODE = "legacy_incomplete"
+const LEGACY_CANCELLED_CODE = "job_cancelled"
+
+async function closeLegacyRow(jobId: string, firmId: string, code: string): Promise<void> {
+  await recordLegacyOcr(jobId, firmId, { ocrStatus: "failed", ocrFailureCode: code })
+}
 
 /** Legacy OCR rows the sweep can still act on (FA-F04-010). Terminal rows are excluded so the window advances. */
 function legacyQuery() {
@@ -83,15 +90,27 @@ async function reviveOrClose(legacyId: string, firmId: string, engineId: string,
 }
 
 async function pickUp(jobId: string, data: DocumentData, deps: JobDeps): Promise<"drained" | "requeued" | "closed" | "skipped"> {
-  if (!isCompleteLegacyOcrJob(data)) return "skipped"
+  if (!isCompleteLegacyOcrJob(data)) {
+    const firmId = data.firmId
+    if (data.jobType === "ocr" && data.engine !== JOB_ENGINE && typeof firmId === "string" && isSafeDocId(firmId)) {
+      await closeLegacyRow(jobId, firmId, LEGACY_INCOMPLETE_CODE)
+      return "closed"
+    }
+    return "skipped"
+  }
   if (data.ocrStatus === "done" || data.ocrStatus === "failed") return "skipped"
   const firmId = data.firmId as string
   const engineId = jobIdFor(firmId, OCR_JOB_TYPE, jobId)
   const engine = await jobsRef().doc(engineId).get()
   if (engine.exists && engine.get("engine") === JOB_ENGINE) {
+    const status = engine.get("status")
+    if (status === "cancelled") {
+      await closeLegacyRow(jobId, firmId, LEGACY_CANCELLED_CODE)
+      return "closed"
+    }
     // Queued, failed and running engine rows belong to the engine sweeper. Only a dead letter,
     // which that sweeper will not run again, is picked up here.
-    if (engine.get("status") !== "dead_lettered") return "skipped"
+    if (status !== "dead_lettered") return "skipped"
     return reviveOrClose(jobId, firmId, engineId, deps)
   }
   await acceptLegacyOcrJob(jobId, data, deps)
