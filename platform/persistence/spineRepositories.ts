@@ -1,4 +1,5 @@
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
+import { canonicalDocumentForCreate, partitionFirmDocuments, type DroppedDocument } from "@/platform/d1/documentRecord"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -239,7 +240,8 @@ export type DocumentRepository = {
   get(id: string, firmId: string): Promise<DocumentRecord | null>
   update(id: string, firmId: string, patch: Partial<DocumentRecord>): Promise<DocumentRecord | null>
   delete(id: string): Promise<void>
-  listByFirm(firmId: string): Promise<DocumentRecord[]>
+  /** Valid rows only. `droppedDocuments` names each same-firm row the reader refused. */
+  listByFirm(firmId: string): Promise<DocumentRecord[] & { droppedDocuments: DroppedDocument[] }>
 }
 
 export type DraftRepository = {
@@ -2014,7 +2016,8 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     },
     documents: {
       async create(row) {
-        store.documents.set(row.id, row)
+        const doc = canonicalDocumentForCreate(row)
+        store.documents.set(doc.id, doc)
       },
       async get(id, firmId) {
         return firmScoped(store.documents.get(id), firmId)
@@ -2031,7 +2034,11 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.documents.delete(id)
       },
       async listByFirm(firmId) {
-        return [...store.documents.values()].filter((row) => row.firmId === firmId)
+        const rows = [...store.documents.values()].filter((row) => row.firmId === firmId)
+        const { items, droppedDocuments } = partitionFirmDocuments(rows)
+        const listed = items as DocumentRecord[] & { droppedDocuments: DroppedDocument[] }
+        listed.droppedDocuments = droppedDocuments
+        return listed
       },
     },
     drafts: {
