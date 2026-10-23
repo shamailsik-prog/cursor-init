@@ -41,6 +41,12 @@ export type RouteSurface = {
 /** The headers every withSession route depends on. */
 export const SESSION_HEADERS = ["authorization", "x-firm-id", "idempotency-key", "content-type"] as const
 
+/** True when the request carries a Bearer token the Functions router can verify. */
+export function presentingBearer(request: Request): boolean {
+  const value = request.headers.get("authorization")
+  return typeof value === "string" && /^Bearer\s+\S+/i.test(value)
+}
+
 /** The query keys withSession binds to the caller (and injects when absent). */
 export const IDENTITY_PARAMS = ["actorId", "userId", "firmId"] as const
 

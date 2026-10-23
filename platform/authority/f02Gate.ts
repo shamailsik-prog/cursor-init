@@ -1,13 +1,8 @@
 import type { HandlerSession, RouteHandler } from "@/platform/http/withSession"
+import { presentingBearer } from "@/platform/http/surface"
 import { mustDispatchF02 } from "@/platform/authority/f02Mode"
 import { registerF02Core, type F02Session } from "@/platform/authority/f02Registry"
 import type { F02Method, F02RoutePath } from "@/platform/authority/f02Routes"
-
-/** A bearer is what the Functions router can verify. Body-actor calls stay on the Next handler. */
-function presentingBearer(request: Request): boolean {
-  const value = request.headers.get("authorization")
-  return typeof value === "string" && /^Bearer\s+\S+/i.test(value)
-}
 
 /**
  * Registers `core` for the in-process Functions operation and, on the production
