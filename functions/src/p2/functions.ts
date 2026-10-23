@@ -9,6 +9,8 @@ import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
+import { acceptLegacyOcrJob } from "./ocrDrain"
+import { isCompleteLegacyOcrJob } from "./ocrJob"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
 import { scheduledJobFunction } from "./scheduled"
@@ -23,17 +25,26 @@ import { runJobTask } from "./worker"
  */
 
 /**
- * A new job row → dispatch `{ jobId, seq: 0 }`. Rows without `engine: "p2"` (the legacy Next.js
- * `jobs` writer) are ignored. A repeated trigger reuses task `${jobId}-0`, which Cloud Tasks
- * dedupes. A dispatch failure is logged by code and swallowed: the sweeper re-dispatches the due
- * row after `DISPATCH_GRACE_MS`.
+ * A new job row → dispatch `{ jobId, seq: 0 }` when it is an engine row. A complete legacy OCR row
+ * (audit F04: the upload writer, no `engine` field) is drained into a `d3.ocr` engine job. Any other
+ * legacy row is ignored, with no store read. A repeated trigger reuses task `${jobId}-0`, which Cloud
+ * Tasks dedupes. A dispatch or drain failure is logged by code and swallowed: the sweeper
+ * re-dispatches a due engine row after `DISPATCH_GRACE_MS`.
  */
 export async function onJobCreatedCore(jobId: string, data: DocumentData | undefined, deps: JobDeps): Promise<void> {
-  if (data?.engine !== JOB_ENGINE) return
+  if (data?.engine === JOB_ENGINE) {
+    try {
+      await deps.dispatcher.dispatch({ jobId, seq: 0 })
+    } catch (err) {
+      logFailure("job dispatch failed", err)
+    }
+    return
+  }
+  if (!isCompleteLegacyOcrJob(data)) return
   try {
-    await deps.dispatcher.dispatch({ jobId, seq: 0 })
+    await acceptLegacyOcrJob(jobId, data, deps)
   } catch (err) {
-    logFailure("job dispatch failed", err)
+    logFailure("ocr drain failed", err)
   }
 }
 

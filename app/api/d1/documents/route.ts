@@ -32,6 +32,7 @@ import {
   getImmutableDocumentObject,
 } from "@/platform/documents/documentObjectStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { summarizeOcrJobs, type OcrJobLike } from "@/services/d1-6/ocrStatus"
 import { rollbackDocumentIngest, uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
@@ -170,20 +171,26 @@ async function handleGet(request: Request) {
 
   const firmDocs = await repos.documents.listByFirm(user.firmId)
   const firmJobs = await repos.jobs.listByFirm(user.firmId)
-  const ocrJobCounts = new Map<string, number>()
+  const ocrByDocument = new Map<string, OcrJobLike[]>()
   for (const job of firmJobs) {
     if (job.jobType !== "ocr") continue
-    ocrJobCounts.set(job.documentId, (ocrJobCounts.get(job.documentId) ?? 0) + 1)
+    const rows = ocrByDocument.get(job.documentId) ?? []
+    rows.push(job)
+    ocrByDocument.set(job.documentId, rows)
   }
   const visible = firmDocs
     .filter((doc) => (matterId ? doc.matterId === matterId : true))
     .filter((doc) => canViewDocument(store, userId, doc))
     .sort((a, b) => a.id.localeCompare(b.id))
 
-  const items = visible.slice(cursor, cursor + limit).map((doc) => ({
-    ...doc,
-    ocrJobs: ocrJobCounts.get(doc.id) ?? 0,
-  }))
+  const items = visible.slice(cursor, cursor + limit).map((doc) => {
+    const summary = summarizeOcrJobs(ocrByDocument.get(doc.id) ?? [])
+    return {
+      ...doc,
+      ocrJobs: summary.ocrJobs,
+      ocrStatus: summary.ocrStatus,
+    }
+  })
   const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
 
   return NextResponse.json({

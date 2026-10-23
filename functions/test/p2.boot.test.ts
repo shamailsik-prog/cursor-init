@@ -83,7 +83,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex"])
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr"])
     expect(SUBSCRIBERS).toEqual([])
   })
 
