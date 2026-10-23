@@ -2,7 +2,7 @@ import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import type { Data, FirmOperation } from "../p5/common"
 import { checkPermission } from "../p5/permission"
-import { HttpError } from "./errors"
+import { asOperationId, CommittedEffectError, EFFECT_COMMITTED_HEADER, effectCommittedOperationId, HttpError } from "./errors"
 import { invokeF02Core } from "@/platform/authority/f02Registry"
 import {
   F02_COURT_OPS,
@@ -102,6 +102,18 @@ async function readPayload(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * The Next core's committed-write signal (F10 ruling 15). The header is the
+ * protocol copy; the body field survives a client that only reads JSON. When
+ * they disagree, the header wins so the two copies on the way out still match.
+ */
+function committedOperationId(response: Response, payload: unknown): string | undefined {
+  const fromHeader = asOperationId(response.headers.get(EFFECT_COMMITTED_HEADER)?.trim())
+  const fromBody = effectCommittedOperationId(payload)
+  if (fromHeader && fromBody && fromHeader !== fromBody) return fromHeader
+  return fromHeader ?? fromBody
+}
+
 function errorCodeOf(body: unknown, status: number): string {
   if (isPlainObject(body)) {
     if (typeof body.code === "string" && CODE.test(body.code)) return body.code
@@ -147,7 +159,14 @@ function f02Op(path: string, method: "GET" | "POST"): FirmOperation {
         await audit.allow()
         return isPlainObject(body) ? body : { result: body }
       }
-      throw new HttpError(response.status, errorCodeOf(payload, response.status))
+      // A 4xx after a committed write must keep the F10 signal. A bare HttpError
+      // drops the header and effectCommitted, and this route is `rerun`, so the
+      // outer operation has no effect marker either. A client then retries with
+      // a new Idempotency-Key and duplicates the write (FA-F02-001).
+      const operationId = committedOperationId(response, payload)
+      const code = errorCodeOf(payload, response.status)
+      if (operationId) throw new CommittedEffectError(response.status, code, operationId)
+      throw new HttpError(response.status, code)
     },
   }
 }

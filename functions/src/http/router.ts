@@ -27,7 +27,7 @@ import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDr
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { F02_NEXT_AUTHORITY_ROUTES } from "./f02NextAuthority"
-import { HttpError } from "./errors"
+import { CommittedEffectError, EFFECT_COMMITTED_HEADER, HttpError } from "./errors"
 import { withIdempotency, type HttpResult, type IdempotencyMode, type IdempotentOperation } from "./idempotency"
 import { logFailure } from "../log"
 import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKind } from "./rateLimit"
@@ -48,6 +48,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * an operation whose effect committed: audit F09) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
+ * A CommittedEffectError (a Next core wrote, then returned 4xx) also sends
+ * `Idempotency-Effect-Committed` and `effectCommitted` (FA-F02-001).
  * GET data is the parsed query (string values only; 400 invalid_query otherwise); list GETs
  * paginate with d1/pagination.ts (§4.3).
  */
@@ -201,6 +203,15 @@ type Authenticated =
 
 const errorBody = (code: string) => ({ error: { code } })
 
+/** The F10 signal, on the Functions error shape. Status and code stay the core's. */
+function committedEffectResult(err: CommittedEffectError): HttpResult {
+  return {
+    status: err.status,
+    body: { error: { code: err.code }, effectCommitted: { operationId: err.operationId } },
+    headers: { [EFFECT_COMMITTED_HEADER]: err.operationId },
+  }
+}
+
 function send(res: Response, result: HttpResult, headers: Record<string, string> = {}): void {
   res.status(result.status)
   for (const [name, value] of Object.entries({ ...result.headers, ...headers })) res.set(name, value)
@@ -330,6 +341,7 @@ async function execute(
     if (err instanceof RateLimitedError) {
       return { status: err.status, body: errorBody(err.code), headers: { "Retry-After": String(err.retryAfter) } }
     }
+    if (err instanceof CommittedEffectError) return committedEffectResult(err)
     return err instanceof HttpError ? { status: err.status, body: errorBody(err.code) } : { status: 500, body: errorBody("internal") }
   }
 }
@@ -395,6 +407,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       if (err instanceof RateLimitedError) {
         return send(res, { status: 429, body: errorBody(err.code) }, { "Retry-After": String(err.retryAfter) })
       }
+      if (err instanceof CommittedEffectError) return send(res, committedEffectResult(err))
       if (err instanceof HttpError) return send(res, { status: err.status, body: errorBody(err.code) })
       logFailure("api request failed", err)
       send(res, { status: 500, body: errorBody("internal") })
