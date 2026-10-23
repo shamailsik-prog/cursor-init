@@ -10,8 +10,21 @@
 
 export const LOCAL_OCR_PROVIDER = "local-ocr-stub" as const
 
-/** Cap on characters published from one document. Keeps the result row inside one Firestore document. */
-export const MAX_OCR_TEXT_CHARS = 500_000
+/**
+ * Cap on UTF-8 bytes published from one document. Firestore refuses a document over 1 MiB.
+ * 900 KiB leaves room for the other fields on the operation row and on `ocr_texts`.
+ */
+export const MAX_OCR_TEXT_BYTES = 900 * 1024
+
+/** Longest prefix of `text` whose UTF-8 encoding is at most `maxBytes`, cut on a code-point boundary. */
+export function capOcrText(text: string, maxBytes: number = MAX_OCR_TEXT_BYTES): string {
+  if (maxBytes <= 0) return ""
+  const buf = Buffer.from(text, "utf8")
+  if (buf.length <= maxBytes) return text
+  let end = maxBytes
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1
+  return buf.subarray(0, end).toString("utf8")
+}
 
 export type OcrExtraction = {
   text: string
@@ -75,13 +88,13 @@ export class DeterministicLocalOcrEngine implements OcrEngine {
     const text = plainText(input.bytes)
     if (text !== null) {
       return {
-        text: text.slice(0, MAX_OCR_TEXT_CHARS),
+        text: capOcrText(text),
         confidence: 1,
         lowConfidence: false,
         provider: LOCAL_OCR_PROVIDER,
       }
     }
-    const runs = printableRuns(input.bytes).slice(0, MAX_OCR_TEXT_CHARS)
+    const runs = capOcrText(printableRuns(input.bytes))
     return {
       text: runs,
       confidence: runs.length > 0 ? 0.4 : 0,

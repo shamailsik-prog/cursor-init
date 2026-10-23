@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest"
 import { handlerFor } from "../src/p2/registry"
 import { aggregateClassification, isCompleteLegacyOcrJob, OCR_JOB_TYPE } from "../src/p2/ocrJob"
 import {
+  capOcrText,
   DeterministicLocalOcrEngine,
   LOCAL_OCR_PROVIDER,
+  MAX_OCR_TEXT_BYTES,
   OcrTimeoutError,
   resolveOcrEngine,
   withOcrTimeout,
@@ -24,6 +26,30 @@ const legacy = {
 }
 
 describe("F04 OCR engine and admission (no emulator)", () => {
+  it("FA-F04-004: the local stub caps text by UTF-8 bytes so a Urdu document stays under 1 MiB", async () => {
+    const engine = new DeterministicLocalOcrEngine()
+    // U+FBAB is one BMP code point and three UTF-8 bytes. 400k of them are 1.2 MB.
+    // A character cap of 500k leaves that whole string, which is over Firestore's 1 MiB document limit.
+    const ch = "\u{FBAB}"
+    const bytes = Buffer.from(ch.repeat(400_000), "utf8")
+    const out = await engine.extract({ bytes, mimeType: "text/plain" })
+    expect(MAX_OCR_TEXT_BYTES).toBe(900 * 1024)
+    expect(Buffer.byteLength(out.text, "utf8")).toBeLessThanOrEqual(MAX_OCR_TEXT_BYTES)
+    expect(Buffer.from(out.text, "utf8").toString("utf8")).toBe(out.text)
+    expect(out.text.endsWith(ch)).toBe(true)
+    expect(out.lowConfidence).toBe(false)
+  })
+
+  it("FA-F04-004: a byte cap cuts on a code-point boundary", () => {
+    const ch = "\u{FBAB}"
+    expect(capOcrText(ch + ch, 4)).toBe(ch)
+    expect(capOcrText(ch, 2)).toBe("")
+    expect(capOcrText("abcd", 4)).toBe("abcd")
+    const cut = capOcrText(ch.repeat(10), 7)
+    expect(Buffer.byteLength(cut, "utf8")).toBe(6)
+    expect(Buffer.from(cut, "utf8").toString("utf8")).toBe(cut)
+  })
+
   it("the local stub returns the UTF-8 text of a text document, and the same bytes twice", async () => {
     const engine = new DeterministicLocalOcrEngine()
     const bytes = Buffer.from(TEXT, "utf8")

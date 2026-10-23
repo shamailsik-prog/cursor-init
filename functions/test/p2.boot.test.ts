@@ -39,6 +39,8 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
       eventFilterPathPatterns: { document: "jobs/{jobId}" },
+      // FA-F04-001: a thrown drain is redelivered. Permanent causes never throw.
+      retry: true,
     })
     expect(index.onEventCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",

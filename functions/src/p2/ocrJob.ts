@@ -1,6 +1,7 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { getImmutableDocumentObject } from "@/platform/documents/documentObjectStore"
+import { DocumentObjectStoreError } from "@/platform/documents/documentObjectStoreTypes"
 import { newStore } from "@/platform/spine/store"
 import { adminDb } from "../admin"
 import { callP1Ocr, OcrAdmissionError, ocrTextId } from "../p1/ocrCall"
@@ -64,10 +65,22 @@ function permanent(code: string): JobError {
   return new JobError(code, { permanent: true })
 }
 
+/** A read that proves the object is not there. Timeouts, throttling and 5xx are not absence. */
+function objectIsAbsent(err: unknown): boolean {
+  if (err instanceof DocumentObjectStoreError) {
+    if (err.httpStatus === 404) return true
+    const code = (err.s3Code ?? "").toLowerCase()
+    return code === "nosuchkey" || code === "notfound"
+  }
+  const message = err instanceof Error ? err.message : ""
+  return message.includes("not found")
+}
+
 /**
  * Loads the document the legacy row names, then its bytes.
  * The firm is checked before the matter and before any byte read. A hash that does not match the
- * stored object is `object_tampered`; a missing or unreadable object is `object_unavailable`.
+ * stored object is `object_tampered`. An object that is genuinely absent is permanent
+ * `object_unavailable`. A transient read (timeout, throttling, 5xx) is the same code and is retried.
  */
 export async function loadOcrSubject(
   firmId: string,
@@ -108,7 +121,9 @@ export async function loadOcrSubject(
   } catch (err) {
     const message = err instanceof Error ? err.message : ""
     if (message.includes("integrity") || message.includes("hash mismatch")) throw permanent("object_tampered")
-    throw permanent("object_unavailable")
+    if (err instanceof DocumentObjectStoreError && err.failure === "integrity") throw permanent("object_tampered")
+    if (objectIsAbsent(err)) throw permanent("object_unavailable")
+    throw new JobError("object_unavailable")
   }
   if (bytes.length === 0) throw permanent("empty_object")
 

@@ -4,10 +4,18 @@ import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestE
 import { doc as firestoreDoc, getDoc } from "firebase/firestore"
 import { Timestamp } from "firebase-admin/firestore"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { putImmutableDocumentObject, resetDocumentObjectStoreForTests } from "@/platform/documents/documentObjectStore"
+import {
+  __testHookFailNextDocumentObjectRead,
+  putImmutableDocumentObject,
+  resetDocumentObjectStoreForTests,
+} from "@/platform/documents/documentObjectStore"
+import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { newStore } from "@/platform/spine/store"
+import { summarizeOcrJobs } from "@/services/d1-6/ocrStatus"
+import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { adminApp, adminDb } from "../src/admin"
 import { onJobCreatedCore } from "../src/p2/functions"
+import { ocrDrainTestSeam } from "../src/p2/ocrDrain"
 import { LOCAL_OCR_PROVIDER } from "../src/p1/ocrEngine"
 import { ocrTestSeam } from "../src/p1/ocrCall"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -123,12 +131,14 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     deps = testDeps(clock)
     delete ocrTestSeam.engine
     delete ocrTestSeam.timeoutMs
+    ocrDrainTestSeam.failEnqueueOnce = false
     resetDocumentObjectStoreForTests()
   })
 
   afterEach(() => {
     delete ocrTestSeam.engine
     delete ocrTestSeam.timeoutMs
+    ocrDrainTestSeam.failEnqueueOnce = false
     resetDocumentObjectStoreForTests()
   })
 
@@ -427,5 +437,160 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     await assertFails(getDoc(firestoreDoc(client(below.uid, firmId, "clerk", "confidential"), "ocr_texts", resultId)))
     await assertFails(getDoc(firestoreDoc(client(outsider.uid, otherFirm, "partner", "privileged-restricted"), "ocr_texts", resultId)))
     await assertFails(getDoc(firestoreDoc(client(cleared.uid, firmId, "partner", "privileged"), "p1_ocr_operations", engineJobId)))
+  })
+
+  it("FA-F04-001: a failed enqueue is not acknowledged, and the retry then completes", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-handoff")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    ocrDrainTestSeam.failEnqueueOnce = true
+
+    await expect(onJobCreatedCore(jobId, row, deps)).rejects.toThrow(/ocr_drain_unavailable/)
+    expect(deps.dispatcher.tasks).toEqual([])
+    const stuck = await adminDb().collection("jobs").doc(jobId).get()
+    expect(stuck.get("ocrStatus")).not.toBe("done")
+    expect(stuck.get("ocrStatus")).not.toBe("failed")
+
+    await onJobCreatedCore(jobId, stuck.data(), deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const done = await adminDb().collection("jobs").doc(jobId).get()
+    expect(done.get("ocrStatus")).toBe("done")
+    const result = await adminDb().collection("ocr_texts").doc(done.get("ocrResultId")).get()
+    expect(result.get("text")).toBe(TEXT)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    expect((await adminDb().collection("p1_ocr_operations").doc(engineJobId).get()).get("calls")).toBe(1)
+  })
+
+  it("FA-F04-002: a transient object-store error is retried, and a missing object stays permanent", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-transient")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    __testHookFailNextDocumentObjectRead()
+
+    await expect(onJobCreatedCore(jobId, row, deps)).rejects.toThrow(/object_unavailable/)
+    expect(deps.dispatcher.tasks).toEqual([])
+    const mid = await adminDb().collection("jobs").doc(jobId).get()
+    expect(mid.get("ocrStatus")).not.toBe("failed")
+    expect(mid.get("ocrFailureCode")).not.toBe("object_unavailable")
+
+    await onJobCreatedCore(jobId, mid.data(), deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("done")
+
+    const absentId = uniq("f04-notfound")
+    const absent = await seedDoc({ firmId, matterId, classification: "internal" })
+    await adminDb().collection("documents").doc(absent.docId).update({ storagePath: `memory://${firmId}/missing-object` })
+    const absentRow = legacyRow({ id: absentId, firmId, documentId: absent.docId, matterId, classification: "internal" })
+    await writeLegacy(absentRow)
+    await expect(onJobCreatedCore(absentId, absentRow, deps)).resolves.toBeUndefined()
+    expect((await adminDb().collection("jobs").doc(absentId).get()).get("ocrFailureCode")).toBe("object_unavailable")
+    expect((await adminDb().collection("jobs").doc(absentId).get()).get("ocrStatus")).toBe("failed")
+    expect(deps.dispatcher.tasks).toHaveLength(1)
+  })
+
+  it("FA-F04-003: raising the document label denies a reader cleared only for the stored OCR label", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-relabel")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const resultId = (await adminDb().collection("jobs").doc(jobId).get()).get("ocrResultId") as string
+    expect((await adminDb().collection("ocr_texts").doc(resultId).get()).get("classification")).toBe("internal")
+
+    await adminDb().collection("documents").doc(doc.docId).update({ classification: "confidential" })
+
+    const internalClerk = await mintIdToken({ firmId, role: "clerk", clearanceLevel: "internal" })
+    const confidentialClerk = await mintIdToken({ firmId, role: "clerk", clearanceLevel: "confidential" })
+    await adminDb().collection("matter_members").doc(`${matterId}_${internalClerk.uid}`).set({ firmId, matterId, userId: internalClerk.uid })
+    await adminDb().collection("matter_members").doc(`${matterId}_${confidentialClerk.uid}`).set({ firmId, matterId, userId: confidentialClerk.uid })
+
+    const client = (uid: string, clearanceLevel: string) =>
+      rules.authenticatedContext(uid, { firmId, role: "clerk", clearanceLevel }).firestore()
+
+    await assertFails(getDoc(firestoreDoc(client(internalClerk.uid, "internal"), "ocr_texts", resultId)))
+    const seen = await getDoc(firestoreDoc(client(confidentialClerk.uid, "confidential"), "ocr_texts", resultId))
+    expect(seen.get("text")).toBe(TEXT)
+  })
+
+  it("FA-F04-004: a long Urdu document is drained and the stored text stays inside a UTF-8 byte cap", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const ch = "\u{FBAB}"
+    const urdu = ch.repeat(600_000)
+    const doc = await seedDoc({ firmId, matterId, classification: "internal", text: urdu })
+    const jobId = uniq("f04-urdu")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    const text = (await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text") as string
+    const cap = 900 * 1024
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(cap)
+    expect(Buffer.from(text, "utf8").toString("utf8")).toBe(text)
+    expect(text.endsWith(ch)).toBe(true)
+    expect(text.length).toBeLessThan(urdu.length)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    const operationText = (await adminDb().collection("p1_ocr_operations").doc(engineJobId).get()).get("text") as string
+    expect(Buffer.byteLength(operationText, "utf8")).toBeLessThanOrEqual(cap)
+  }, 60_000)
+
+  it("FA-F04-005: the worker drains the job row a real upload persisted", async () => {
+    const firmId = await firm()
+    const store = newStore()
+    const text = "IN THE HIGH COURT OF SINDH\nUpload writer 2099."
+    const uploaded = await uploadDocument(store, {
+      firmId,
+      matterId: null,
+      bytes: Buffer.from(text, "utf8"),
+      sourceChannel: "web",
+      classification: "confidential",
+      idempotencyKey: "7c2a9e14-6b0d-4f38-9a71-2d5e8c0b4a16",
+      uploadedBy: "partner-f04",
+    })
+    expect(uploaded.reused).toBe(false)
+    const memDoc = store.documents.get(uploaded.docId)
+    const memJob = store.jobs.find((job) => job.documentId === uploaded.docId && job.jobType === "ocr")
+    expect(memDoc).toBeTruthy()
+    expect(memJob).toBeTruthy()
+    const repos = createFirestoreRepositories(adminDb() as never)
+    await repos.documents.create(memDoc!)
+    await repos.jobs.create(memJob!)
+
+    const snap = await adminDb().collection("jobs").doc(memJob!.id).get()
+    expect(snap.exists).toBe(true)
+    const persisted = snap.data()
+    expect(persisted?.idempotencyKey).toBe("7c2a9e14-6b0d-4f38-9a71-2d5e8c0b4a16")
+    expect(Object.hasOwn(persisted ?? {}, "engine")).toBe(false)
+
+    await onJobCreatedCore(memJob!.id, persisted, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(memJob!.id).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    const result = await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()
+    expect(result.get("text")).toBe(text)
+
+    const firmDocs = await repos.documents.listByFirm(firmId)
+    const firmJobs = await repos.jobs.listByFirm(firmId)
+    const items = firmDocs.map((document) => {
+      const summary = summarizeOcrJobs(firmJobs.filter((job) => job.jobType === "ocr" && job.documentId === document.id))
+      return { id: document.id, ocrJobs: summary.ocrJobs, ocrStatus: summary.ocrStatus }
+    })
+    expect(items.find((item) => item.id === uploaded.docId)).toEqual({
+      id: uploaded.docId,
+      ocrJobs: 1,
+      ocrStatus: "done",
+    })
   })
 })

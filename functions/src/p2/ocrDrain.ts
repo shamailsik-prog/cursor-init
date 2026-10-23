@@ -9,6 +9,16 @@ import { JobError } from "./errors"
 import { isCompleteLegacyOcrJob, loadOcrSubject, OCR_JOB_TYPE, OCR_PAYLOAD_VERSION, recordLegacyOcr } from "./ocrJob"
 
 /**
+ * Test-only. The next enqueue throws once, then the flag clears. Ignored when NODE_ENV is production.
+ * FA-F04-001 uses it to prove a failed handoff is not acknowledged.
+ */
+export const ocrDrainTestSeam: { failEnqueueOnce?: boolean } = {}
+
+function drainSeamAllows(): boolean {
+  return process.env.NODE_ENV !== "production"
+}
+
+/**
  * Turns one legacy queued OCR row into a P2 `d3.ocr` job and dispatches it (audit F04).
  * A row the upload writer did not finish is ignored. A row already marked done is not drained again.
  * A permanent problem with the document is recorded on the legacy row and is not enqueued.
@@ -26,7 +36,9 @@ export async function acceptLegacyOcrJob(jobId: string, data: DocumentData | und
   try {
     subject = await loadOcrSubject(firmId, matterId, documentId)
   } catch (err) {
-    if (err instanceof JobError) {
+    // FA-F04-002: only a permanent JobError is recorded and acknowledged. A retryable one
+    // (a transient object-store read) is rethrown so the create trigger runs the drain again.
+    if (err instanceof JobError && err.permanent) {
       await recordLegacyOcr(jobId, firmId, { ocrStatus: "failed", ocrFailureCode: err.code })
       return
     }
@@ -50,6 +62,11 @@ export async function acceptLegacyOcrJob(jobId: string, data: DocumentData | und
     inputRefs: matterId === null ? [] : [`documents/${documentId}`],
     idempotencyKey: jobId,
     createdBy: "system" as const,
+  }
+
+  if (drainSeamAllows() && ocrDrainTestSeam.failEnqueueOnce) {
+    ocrDrainTestSeam.failEnqueueOnce = false
+    throw new Error("ocr_drain_unavailable")
   }
 
   let engineJobId: string

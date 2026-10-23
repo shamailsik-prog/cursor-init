@@ -8,6 +8,7 @@ import { appendAudit } from "../p5/audit"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import { aggregateClassification } from "./ocrAggregate"
 import {
+  capOcrText,
   LOCAL_OCR_PROVIDER,
   OcrTimeoutError,
   resolveOcrEngine,
@@ -206,6 +207,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
 
   try {
     const extraction = await withOcrTimeout(engine!.extract({ bytes: req.bytes, mimeType: req.mimeType }), budgetMs(req))
+    const text = capOcrText(extraction.text)
     const calls = priorCalls + 1
     await write({
       ...base,
@@ -215,7 +217,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       provider: extraction.provider,
       confidence: extraction.confidence,
       lowConfidence: extraction.lowConfidence,
-      text: extraction.text,
+      text,
       calls,
       reused: false,
     })
@@ -224,7 +226,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       outcome: "ok",
       blockReason: null,
       failureCode: null,
-      text: extraction.text,
+      text,
       confidence: extraction.confidence,
       lowConfidence: extraction.lowConfidence,
       provider: extraction.provider,

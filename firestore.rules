@@ -87,6 +87,13 @@ service cloud.firestore {
         || (get(/databases/$(database)/documents/matters/$(matterId)).data.firmId == firmId
           && cleared(get(/databases/$(database)/documents/matters/$(matterId)).data.classification));
     }
+    // FA-F04-003: OCR text keeps the label it was published with. A later re-ingest can raise the
+    // document without rewriting ocr_texts, so a read also needs the document's current label and
+    // the same firm. A missing document denies (get() of an absent document fails the rule).
+    function clearedForDocumentNow(documentId, firmId) {
+      let doc = get(/databases/$(database)/documents/documents/$(documentId)).data;
+      return doc.firmId == firmId && cleared(doc.classification);
+    }
 
     match /firms/{firmId} {
       allow read: if signedIn() && tok().firmId == firmId;
@@ -343,14 +350,16 @@ service cloud.firestore {
       && cleared(resource.data.classification)
       && canAccessScope(resource.data.matterId)
       && clearedForMatterNow(resource.data.matterId, resource.data.firmId); allow write: if false; }
-    // F04: the OCR text. The label is the aggregate (job, document, matter). The operation row that
-    // holds the same text for a replay is server-only.
+    // F04: the OCR text. The stored label is the aggregate at publish time. The read also requires
+    // the document's current label (FA-F04-003), because a re-ingest can raise the document without
+    // rewriting this row. The operation row that holds the same text for a replay is server-only.
     match /ocr_texts/{id} {
       allow read: if sameFirm()
         && role() in ['partner', 'associate', 'clerk']
         && cleared(resource.data.classification)
         && canAccessScope(resource.data.matterId)
-        && clearedForMatterNow(resource.data.matterId, resource.data.firmId);
+        && clearedForMatterNow(resource.data.matterId, resource.data.firmId)
+        && clearedForDocumentNow(resource.data.documentId, resource.data.firmId);
       allow write: if false;
     }
     match /p1_ocr_operations/{id} { allow read, write: if false; }
