@@ -216,6 +216,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-003: the backfill CLI r
       encoding: "utf8",
     })
     expect(out).toContain("[backfill-matter-shapes] DRY-RUN")
+    expect(out).toContain(`[backfill-matter-shapes] matters/${matterId} stage,matterNo,conflictCheckId,createdBy`)
     expect((await data("matters", matterId)).stage).toBeUndefined()
   })
 })

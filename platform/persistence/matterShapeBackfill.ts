@@ -78,6 +78,20 @@ export function planMatterShapeBackfill(matters: readonly BackfillRow[], members
   return plan
 }
 
+/** FA-F13-034: dry-run text. The counts line stays, and every row is named with the fields a write would add. */
+export function formatMatterShapeBackfillDryRun(plan: MatterShapeBackfillPlan): string {
+  const lines = [
+    `[backfill-matter-shapes] DRY-RUN: ${plan.matters.length} matters and ${plan.members.length} members to complete, ` +
+      `${plan.complete.length} already complete, ${plan.malformed.length} malformed, ${plan.orphans.length} orphaned (left as they are)`,
+  ]
+  for (const row of plan.matters) lines.push(`[backfill-matter-shapes] matters/${row.id} ${Object.keys(row.patch).join(",")}`)
+  for (const row of plan.members) lines.push(`[backfill-matter-shapes] matter_members/${row.id} ${Object.keys(row.patch).join(",")}`)
+  for (const path of plan.complete) lines.push(`[backfill-matter-shapes] complete ${path}`)
+  for (const path of plan.malformed) lines.push(`[backfill-matter-shapes] malformed ${path}`)
+  for (const path of plan.orphans) lines.push(`[backfill-matter-shapes] orphan ${path}`)
+  return lines.join("\n")
+}
+
 /**
  * FA-F13-018: the member patch to write, resolved against the rows read in the apply transaction. Null (skip) when the
  * member no longer names the planned matter, firm or user, or its matter is gone, malformed or in another firm; the
@@ -152,9 +166,11 @@ export function stillMissing(stored: Record<string, unknown>, patch: FieldPatch)
 /**
  * One audit row. Rows are bounded: a row lists at most MATTER_BACKFILL_AUDIT_BATCH paths (Firestore caps a document at
  * 1 MiB, and a run-wide list of every path could pass it). A run writes, under `aud_matter_shape_backfill_{runId}`:
- * - `_b{k}_planned` (the batch's paths) BEFORE that batch's writes, and `_b{k}_done` (applied / skipped) after them;
+ * - `_b{k}_planned` (the batch's paths) BEFORE that batch's writes, and `_b{k}_done` (applied / skipped / failed) after them;
  * - `_malformed_{k}` / `_orphans_{k}` chunks of the rows it left untouched;
  * - the summary row (counts only, no paths) last.
+ * FA-F13-033: a thrown write is recorded on that batch's done row and the run continues, so later rows and the summary
+ * are not lost. A thrown audit write still rejects: there is nothing to record it on.
  */
 export type MatterShapeBackfillAuditRow = {
   id: string
@@ -170,11 +186,14 @@ export type MatterShapeBackfillAuditRow = {
   applied?: string[]
   skipped?: string[]
   rejected?: ApplyRejection[]
+  /** Writes that threw. On a batch done row only; the summary carries `failedCount` and no paths. */
+  failed?: { path: string; message: string }[]
   malformed?: string[]
   orphans?: string[]
   appliedCount?: number
   skippedCount?: number
   rejectedCount?: number
+  failedCount?: number
   malformedCount?: number
   orphanCount?: number
   completeCount?: number
@@ -204,11 +223,13 @@ const chunks = <T>(items: readonly T[], size: number): T[][] => {
   return out
 }
 
+export type MatterShapeWriteFailure = { path: string; message: string }
+
 export async function applyMatterShapeBackfill(
   store: MatterShapeBackfillStore,
   plan: MatterShapeBackfillPlan,
   meta: { runId: string; now: number }
-): Promise<{ applied: string[]; skipped: string[]; rejected: ApplyRejection[] }> {
+): Promise<{ applied: string[]; skipped: string[]; rejected: ApplyRejection[]; failed: MatterShapeWriteFailure[] }> {
   const base = `aud_matter_shape_backfill_${meta.runId}`
   const row = (id: string, reason: string, extra: Partial<MatterShapeBackfillAuditRow>): MatterShapeBackfillAuditRow => ({
     id,
@@ -225,6 +246,7 @@ export async function applyMatterShapeBackfill(
   const applied: string[] = []
   const skipped: string[] = []
   const rejected: ApplyRejection[] = []
+  const failed: MatterShapeWriteFailure[] = []
   type Work = readonly ["matters", MatterShapeBackfillPlan["matters"][number]] | readonly ["matter_members", MatterShapeBackfillPlan["members"][number]]
   const work: Work[] = [
     ...plan.matters.map((u) => ["matters", u] as const),
@@ -238,34 +260,36 @@ export async function applyMatterShapeBackfill(
     const batchApplied: string[] = []
     const batchSkipped: string[] = []
     const batchRejected: ApplyRejection[] = []
+    const batchFailed: MatterShapeWriteFailure[] = []
     for (const [i, item] of batch.entries()) {
-      if (item[0] === "matters") {
+      try {
         // FA-F13-019: a matter gone or malformed since planning is rejected with its reason, never "completed since planning".
-        const outcome = await store.completeMatter(item[1])
+        const outcome = item[0] === "matters" ? await store.completeMatter(item[1]) : await store.completeMember(item[1])
         if (outcome.status === "written") batchApplied.push(keys[i])
         else if (outcome.status === "skipped") batchSkipped.push(keys[i])
         else batchRejected.push({ path: keys[i], reason: outcome.reason })
-      } else {
-        const outcome = await store.completeMember(item[1])
-        if (outcome.status === "written") batchApplied.push(keys[i])
-        else if (outcome.status === "skipped") batchSkipped.push(keys[i])
-        else batchRejected.push({ path: keys[i], reason: outcome.reason })
+      } catch (err) {
+        // FA-F13-033: one thrown write must not skip the rest of this batch, later batches, or the summary.
+        const message = err instanceof Error ? err.message : String(err)
+        batchFailed.push({ path: keys[i], message })
       }
     }
     await store.appendAudit(
       row(
         `${base}_b${k}_done`,
-        `batch ${k}: ${batchApplied.length} applied, ${batchSkipped.length} skipped, ${batchRejected.length} rejected at apply`,
+        `batch ${k}: ${batchApplied.length} applied, ${batchSkipped.length} skipped, ${batchRejected.length} rejected at apply, ${batchFailed.length} failed`,
         {
           applied: batchApplied,
           skipped: batchSkipped,
           ...(batchRejected.length ? { rejected: batchRejected } : {}),
+          ...(batchFailed.length ? { failed: batchFailed } : {}),
         }
       )
     )
     applied.push(...batchApplied)
     skipped.push(...batchSkipped)
     rejected.push(...batchRejected)
+    failed.push(...batchFailed)
   }
   for (const [k, part] of chunks(plan.malformed, MATTER_BACKFILL_AUDIT_BATCH).entries()) {
     await store.appendAudit(row(`${base}_malformed_${k}`, `${part.length} malformed (not written)`, { malformed: part }))
@@ -277,11 +301,13 @@ export async function applyMatterShapeBackfill(
     row(
       base,
       `${applied.length} applied, ${skipped.length} skipped (completed since planning), ${rejected.length} rejected at apply, ` +
+        `${failed.length} failed, ` +
         `${plan.malformed.length} malformed (at plan), ${plan.orphans.length} orphaned (at plan), ${plan.complete.length} already complete at plan`,
       {
         appliedCount: applied.length,
         skippedCount: skipped.length,
         rejectedCount: rejected.length,
+        failedCount: failed.length,
         malformedCount: plan.malformed.length,
         orphanCount: plan.orphans.length,
         completeCount: plan.complete.length,
@@ -289,5 +315,5 @@ export async function applyMatterShapeBackfill(
       }
     )
   )
-  return { applied, skipped, rejected }
+  return { applied, skipped, rejected, failed }
 }

@@ -1,4 +1,10 @@
-import { DocumentMalformedError, readDocumentRecord } from "@/platform/d1/documentRecord"
+import {
+  DocumentMalformedError,
+  canonicalDocumentForCreate,
+  partitionFirmDocuments,
+  readDocumentRecord,
+  type DroppedDocument,
+} from "@/platform/d1/documentRecord"
 import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
@@ -475,7 +481,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
     },
     documents: {
       async create(row) {
-        await setById(db, "documents", row)
+        await setById(db, "documents", canonicalDocumentForCreate(row))
       },
       // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
       // A row that exists but is malformed throws DocumentMalformedError (Codex P1 on #99): a caller must never mistake
@@ -513,8 +519,13 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       async listByFirm(firmId) {
         const page = await listAllRowsByFirm<DocumentRecord & { id: string }>(db, "documents", firmId)
-        const items = page.items.map((row) => readDocumentRecord(row.id, row)).filter((row): row is DocumentRecord => row !== null)
-        return asFirmScopedList({ ...page, items })
+        const { items, droppedDocuments } = partitionFirmDocuments(page.items)
+        const listed = asFirmScopedList({ ...page, items }) as DocumentRecord[] & {
+          droppedDocuments: DroppedDocument[]
+          firmScopedMeta: { truncated: boolean; nextCursor: string | null }
+        }
+        listed.droppedDocuments = droppedDocuments
+        return listed
       },
     },
     drafts: {
