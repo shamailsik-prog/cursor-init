@@ -35,12 +35,17 @@ It fails on any of:
       modules outside functions/ may import are the pure ones on FUNCTIONS_PURE_MODULES (FA-F18-010).
   (f) under `agent/` (eve), the model passed to `defineAgent` must resolve (TypeScript checker) to the
       `committeeBrainLanguageModel` export from the module that resolves exactly to `platform/p1/committeeBrainModel`
-      (exact path equality; FA-F18-002, FA-F18-012, FA-F18-015, FA-F18-016, FA-F18-020). JS/TS (including `.mts` /
-      `.cts`) is checked with a TypeScript AST pass: `agent/agent.ts` must `export default defineAgent({...})` with a
-      named `defineAgent` import from `"eve"`; exactly one `defineAgent` call under `agent/`; object-literal argument
-      without spread; no local shadowing of `committeeBrainLanguageModel` or `model` parameters; no `.model` / computed
-      model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` / logical-assignment writes; no other
-      `model` property under `agent/`. Quoted model strings in JSON/YAML/markdown under `agent/` fail.
+      (exact path equality; FA-F18-002, FA-F18-012, FA-F18-015, FA-F18-016, FA-F18-020). When `agent/` exists,
+      `agent/agent.ts` is the only permitted entry (`agent/agent.{js,jsx,mjs,cjs,mts,cts,tsx}` forbidden). JS/TS
+      (including `.mts`/`.cts`) is checked with a TypeScript AST pass: `agent/agent.ts` must have exactly one non-type
+      `import { defineAgent } from "eve"` and `export default defineAgent({...})` where the callee is that import (not a
+      local wrapper); no namespace/default `eve` import, no `x.defineAgent` / dynamic `import("eve")` / `require("eve")`,
+      no local `defineAgent` binding; exactly one eve `defineAgent` call under `agent/`; object-literal argument without
+      spread; no mutation of `committeeBrainLanguageModel`; `Object.assign` / object spreads under `agent/` only from
+      object literals declared in the same file; no local shadowing of `committeeBrainLanguageModel` or `model`
+      parameters; no `.model` / computed model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` /
+      logical-assignment writes on other objects; no other `model` property under `agent/`. Quoted model strings in
+      JSON/YAML/markdown under `agent/` fail. Residual: non-`const` computed property keys on arbitrary objects.
   (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
 Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON;
