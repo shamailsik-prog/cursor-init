@@ -66,7 +66,6 @@ function collectImports(sf: ts.SourceFile, importerRel: string): ImportInfo[] {
     if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
       for (const el of clause.namedBindings.elements) {
         const local = el.name.text
-        const imported = el.propertyName?.text ?? el.name.text
         imports.push({ local, module: resolvedModule, isTypeOnly: typeOnly || el.isTypeOnly })
       }
     }
