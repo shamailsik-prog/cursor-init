@@ -246,6 +246,24 @@ const FAILING: Case[] = [
     names: ["agent/x.ts", "anthropic/claude-sonnet-4.6"],
   },
   {
+    name: "eve shorthand { model } (FA-F18-012)",
+    files: { "agent/short.ts": "const model = committeeBrainLanguageModel\nexport const cfg = { model }\n" },
+    names: ["agent/short.ts", "shorthand"],
+  },
+  {
+    name: "eve model bound to a string constant (FA-F18-012)",
+    files: {
+      "agent/const.ts":
+        'const GATEWAY = "anthropic/claude-sonnet-4.6"\nexport const cfg = { model: GATEWAY }\n',
+    },
+    names: ["agent/const.ts", "anthropic/claude-sonnet-4.6"],
+  },
+  {
+    name: "eve model bound to process.env (FA-F18-012)",
+    files: { "agent/env.ts": "export const cfg = { model: process.env.EVE_MODEL }\n" },
+    names: ["agent/env.ts", "process.env"],
+  },
+  {
     name: "a key on a workflow job that runs firebase deploy --only hosting (FA-F18-004 M27)",
     files: {
       ".github/workflows/host.yml":
@@ -275,6 +293,14 @@ const PASSING: Case[] = [
     names: [],
   },
   {
+    name: "a Next file importing the F02 router boundary (FA-F18-013)",
+    files: {
+      "platform/authority/x.ts":
+        'import { createF02Router } from "@/functions/src/http/f02RouterBoundary"\nexport const r = createF02Router\n',
+    },
+    names: [],
+  },
+  {
     name: "a four-space job that does not build Next, even when it names a key",
     files: {
       ".github/workflows/fn.yml":
@@ -297,6 +323,12 @@ const PASSING: Case[] = [
 ]
 
 describe("audit F18: G-0 [19] next-ai-egress guard", () => {
+  it("F02 names the router boundary, not the Functions router (FA-F18-013)", () => {
+    const src = fs.readFileSync(path.join(repoRoot, "platform/authority/dispatchF02.ts"), "utf8")
+    expect(src).not.toContain("functions/src/http/router")
+    expect(src).toContain("functions/src/http/f02RouterBoundary")
+  })
+
   it("fails on a symlinked directory under app/ (FA-F18-002)", () => {
     const dir = probe(CLEAN)
     fs.mkdirSync(path.join(dir, "hidden"))
