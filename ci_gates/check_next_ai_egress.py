@@ -18,26 +18,32 @@ It fails on any of:
   (b) JS/TS naming a provider key variable (PROVIDER_KEY_ENV_NAMES), except platform/p1/providerKeyGuard.ts, the runtime
       guard that refuses them;
   (c) JS/TS naming a provider API host (PROVIDER_HOSTS);
-  (d) a deploy surface binding a provider key: `.env`, `.env.*` and `*.env` files (an assignment, commented templates
-      included); App Hosting, compose, Cloud Build, App Engine and Render YAML, vercel.json, firebase.json, fly.toml,
-      netlify.toml and Dockerfiles (any non-comment line naming a key); and a GitHub workflow job that builds, starts or
-      deploys the Next/eve service (SERVES_NEXT_RE), or the workflow-level env above such a job (spec R9a). Workflow jobs
-      that do not serve that runtime (the Functions suites, the coding-agent workflows) are CI tooling and out of scope;
+  (d) a deploy surface binding a provider key: `.env`, `.env.*`, `*.env`, `.envrc` and `.envrc.*` files (an assignment,
+      commented templates included; FA-F18-002); App Hosting, compose, Cloud Build, App Engine and Render YAML,
+      vercel.json, firebase.json, fly.toml, netlify.toml and Dockerfiles (any non-comment line naming a key); and a
+      GitHub workflow job that builds, starts or deploys the Next/eve service (SERVES_NEXT_RE), at the indentation of
+      the first job under `jobs:` (two spaces or four; FA-F18-002), or the workflow-level env above such a job (spec
+      R9a). Workflow jobs that do not serve that runtime (the Functions suites, the coding-agent workflows) are CI
+      tooling and out of scope;
   (e) any JS/TS file outside functions/ (corpus_service/ included; the G-0 walker still skips root tests/) importing a
-      Functions P1 transport or provider module (FUNCTIONS_P1_PAID_MODULES: functions/src/p1/transport and
-      functions/src/p1/gateway). The specifier may be the `@/` alias, a relative path, a bare `functions/...` path, an
-      extension or `/index`, with a query or hash stripped. Forms: import, export-from, import(), require(),
-      require.resolve(), createRequire, and vitest/jest importActual, requireActual, importMock and requireMock.
-      A block or line comment may sit between those loader tokens, the same gap the import parser allows (FA-F18-009).
-      functions/ itself may import these modules. A module that only shares the name as a prefix
-      (`functions/src/p1/transportation`) is not one of them.
+      Functions module that is not on FUNCTIONS_PURE_MODULES (costTable and types). The specifier
+      may be the `@/` alias, a relative path, a bare `functions/...` path, an extension or `/index`, with a query or hash
+      stripped. Forms: import, export-from, import(), require(), require.resolve(), createRequire, and vitest/jest
+      importActual, requireActual, importMock and requireMock, including a nested type argument such as
+      `vi.importActual<Record<string, unknown>>(...)` (FA-F18-011). A block or line comment may sit between those loader
+      tokens, the same gap the import parser allows (FA-F18-009). functions/ itself may import these modules. The only
+      modules outside functions/ may import are the pure ones on FUNCTIONS_PURE_MODULES (FA-F18-010).
+  (f) a string assigned to `model` under `agent/` (eve). eve's model is the P1 LanguageModel identifier, never a
+      Gateway model string (FA-F18-002).
+  (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
-There is no allowlist. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON (tests/f18-next-ai-egress-gate.test.ts
-holds it equal to the runtime guard's list).
+Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON
+(tests/f18-next-ai-egress-gate.test.ts holds it equal to the runtime guard's list).
 """
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import posixpath
 import re
@@ -61,18 +67,26 @@ from g0_guard_common import (  # noqa: E402
 FUNCTIONS_PREFIX = "functions/"
 KEY_GUARD_FILE = "platform/p1/providerKeyGuard.ts"
 
-# Paid transport and the provider caller. Importing either from outside functions/ loads a path that builds a Gateway
-# client (activeTransport / callP1). Other functions/src/p1 modules (costTable, types, the HTTP router) are not this path.
-FUNCTIONS_P1_PAID_MODULES = (
-    "functions/src/p1/transport",
-    "functions/src/p1/gateway",
+# Outside functions/, an import of the Functions tree is allowed only when it names one of these modules. Each is pure
+# data or types: no provider call, and no import of the transport, the gateway, the ops that call them, the reconciler,
+# the eval set, the live CLI, or the compiled lib (FA-F18-010). The HTTP router is not on this list: it mounts p1/ops.
+FUNCTIONS_PURE_MODULES = (
+    "functions/src/p1/costTable",
+    "functions/src/p1/types",
 )
 _JS_EXT_RE = re.compile(r"\.(?:[cm]?[jt]sx?)$", re.I)
-# Same comment-aware gap as g0_guard_common.JS_WS (FA-F18-009). DOTALL so a block comment may contain a newline.
+# Same comment-aware gap as g0_guard_common.JS_WS (FA-F18-009). The type argument allows one nested `<>`
+# (`Record<string, unknown>`); `[^<>()]*` alone misses it (FA-F18-011). DOTALL so a block comment may contain a newline.
+_NESTED_TYPE_ARG = r"(?:<(?:[^<>()]|<[^<>()]*>)*>)?"
 _TEST_LOADER_RE = re.compile(
-    rf"""\b(?:vi|jest){JS_WS}\.{JS_WS}(?:importActual|requireActual|importMock|requireMock){JS_WS}(?:<[^<>()]*>)?{JS_WS}\({JS_WS}(["'`])([^"'`\r\n]+)\1""",
+    rf"""\b(?:vi|jest){JS_WS}\.{JS_WS}(?:importActual|requireActual|importMock|requireMock){JS_WS}{_NESTED_TYPE_ARG}{JS_WS}\({JS_WS}(["'`])([^"'`\r\n]+)\1""",
     re.DOTALL,
 )
+# A quoted `model` value in JS/TS, and a `model:` value in eve's YAML, JSON or markdown (FA-F18-002). An identifier
+# (`model: committeeBrainLanguageModel`) is the P1 LanguageModel and is not this rule.
+_AGENT_MODEL_JS_RE = re.compile(r"""(?<![\w$])["']?model["']?\s*:\s*(["'`])([^"'`\r\n]*)\1""")
+_AGENT_MODEL_TEXT_RE = re.compile(r"""^\s*["']?model["']?\s*:\s*["'`]?([^\s"'`#,]+)""", re.M)
+_AGENT_TEXT_SUFFIXES = frozenset({".md", ".mdx", ".yml", ".yaml", ".json", ".toml"})
 
 # Keep equal to PROVIDER_KEY_ENV_NAMES in platform/p1/providerKeyGuard.ts.
 PROVIDER_KEY_ENV_NAMES = (
@@ -178,7 +192,7 @@ SERVES_NEXT_RE = re.compile(
     r"|uses:\s*\S*(?:hosting-deploy|vercel|apphosting|deploy-cloudrun|deploy-appengine)",
     re.I,
 )
-JOB_HEADER_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+JOBS_LINE_RE = re.compile(r"^jobs\s*:\s*(?:#.*)?$")
 
 
 def banned_package(root: str) -> bool:
@@ -191,6 +205,9 @@ def banned_package(root: str) -> bool:
 
 
 def is_env_file(name: str) -> bool:
+    # direnv's .envrc is an env file (FA-F18-002). `.envrc.local` is the same family.
+    if name == ".envrc" or name.startswith(".envrc."):
+        return True
     return name == ".env" or name.startswith(".env.") or (name.endswith(".env") and len(name) > 4)
 
 
@@ -238,21 +255,26 @@ def resolve_repo_module(spec: str, importer: str) -> str | None:
     return path
 
 
-def is_functions_paid_module(module: str) -> bool:
-    return any(module == banned or module.startswith(banned + "/") for banned in FUNCTIONS_P1_PAID_MODULES)
+def is_functions_module(module: str) -> bool:
+    return module == "functions" or module.startswith("functions/")
 
 
-def functions_paid_import_findings(rel: str, text: str) -> list[str]:
-    """Rule (e): a file outside functions/ importing the Functions P1 transport or gateway."""
+def is_functions_pure_module(module: str) -> bool:
+    return module in FUNCTIONS_PURE_MODULES
+
+
+def functions_import_findings(rel: str, text: str) -> list[str]:
+    """Rule (e): outside functions/, only FUNCTIONS_PURE_MODULES may be imported from the Functions tree (FA-F18-010)."""
     specs = js_module_specifiers(text)
     specs += [m.group(2) for m in _TEST_LOADER_RE.finditer(text)]
     found: set[str] = set()
     for spec in specs:
         module = resolve_repo_module(spec, rel)
-        if module is not None and is_functions_paid_module(module):
-            found.add(module)
+        if module is None or not is_functions_module(module) or is_functions_pure_module(module):
+            continue
+        found.add(module)
     return [
-        f"{rel}: imports {module} (a Functions P1 transport/provider module; paid calls stay in the Functions runtime)"
+        f"{rel}: imports {module} (only a pure Functions module may be imported outside functions/; paid calls stay in the Functions runtime)"
         for module in sorted(found)
     ]
 
@@ -274,23 +296,55 @@ def _keys_in(lines: list[str]) -> set[str]:
     return {m.group(1) for line in lines if not line.lstrip().startswith("#") for m in KEY_RE.finditer(line)}
 
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _is_content(line: str) -> bool:
+    stripped = line.strip()
+    return stripped != "" and not stripped.startswith("#")
+
+
+def workflow_sections(text: str) -> tuple[list[str], list[list[str]]]:
+    """Top level (everything outside `jobs:`) and the jobs, at whatever indentation the first job uses (FA-F18-002).
+
+    A job starts at the indentation of the first content line under `jobs:`. A deeper line stays in that job, so a
+    four-space `web:` is one job and its eight-space `runs-on` is not a second job.
+    """
+    top: list[str] = []
+    jobs: list[list[str]] = []
+    in_jobs = False
+    job_indent: int | None = None
+    for line in text.splitlines():
+        if _is_content(line) and _indent(line) == 0:
+            in_jobs = bool(JOBS_LINE_RE.match(line))
+            if not in_jobs:
+                top.append(line)
+            continue
+        if not in_jobs:
+            top.append(line)
+            continue
+        if not _is_content(line):
+            if jobs:
+                jobs[-1].append(line)
+            continue
+        indent = _indent(line)
+        if job_indent is None:
+            job_indent = indent
+        if indent <= job_indent or not jobs:
+            jobs.append([line])
+        else:
+            jobs[-1].append(line)
+    return top, jobs
+
+
 def workflow_keys(text: str) -> set[str]:
     """Provider keys a workflow hands to a job that builds, starts or deploys the Next/eve service (spec R9a).
 
-    The top level before `jobs:` (workflow `env:`) reaches every job; each job is the block under a two-space key in `jobs:`.
+    The top level outside `jobs:` (workflow `env:`) reaches every job. A job is the block at the indentation of the
+    first content line under `jobs:`, whether that is two spaces or four (FA-F18-002).
     """
-    lines = text.splitlines()
-    try:
-        start = next(i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(?:#.*)?$", line))
-    except StopIteration:
-        return set()
-    top = lines[:start]
-    jobs: list[list[str]] = []
-    for line in lines[start + 1 :]:
-        if JOB_HEADER_RE.match(line):
-            jobs.append([])
-        elif jobs:
-            jobs[-1].append(line)
+    top, jobs = workflow_sections(text)
     serving = [job for job in jobs if any(SERVES_NEXT_RE.search(line) for line in job if not line.lstrip().startswith("#"))]
     if not serving:
         return set()
@@ -317,29 +371,77 @@ def deploy_findings(rel: str, kind: str, text: str) -> list[str]:
     return [f"{rel}: binds provider key {name} for the Next/eve service (the key belongs to the Functions api function only)" for name in sorted(out)]
 
 
+def agent_model_findings(rel: str, p: pathlib.Path) -> list[str]:
+    """Rule (f): a string `model` under agent/ is a Gateway model id handed to eve (FA-F18-002)."""
+    if not rel.startswith("agent/"):
+        return []
+    suffix = p.suffix.lower()
+    kind = file_kind(p)
+    if kind != "js" and suffix not in _AGENT_TEXT_SUFFIXES:
+        return []
+    text = read_text(p)
+    if text is None:
+        return []
+    if kind == "js":
+        values = [m.group(2) for m in _AGENT_MODEL_JS_RE.finditer(text)]
+    else:
+        values = [m.group(1) for m in _AGENT_MODEL_TEXT_RE.finditer(text)]
+    return [
+        f"{rel}: gives eve the model string {value or '(empty)'}; eve's model is the P1 LanguageModel, never a Gateway model string"
+        for value in sorted(set(values))
+    ]
+
+
+def symlinked_dirs(root: pathlib.Path) -> list[str]:
+    """Rule (g): every symlinked directory outside node_modules, .git and .next (FA-F18-002).
+
+    The walk does not follow the link, so a directory planted under app/ would otherwise hide its files.
+    """
+    skip = frozenset({"node_modules", ".git", ".next"})
+    out: list[str] = []
+    for dirpath, dirnames, _filenames in os.walk(root):
+        rel_dir = pathlib.Path(dirpath).relative_to(root)
+        keep: list[str] = []
+        for name in dirnames:
+            if name in skip:
+                continue
+            if (pathlib.Path(dirpath) / name).is_symlink():
+                rel = (rel_dir / name).as_posix()
+                out.append(name if rel in {".", name} else rel[2:] if rel.startswith("./") else rel)
+            else:
+                keep.append(name)
+        dirnames[:] = sorted(keep)
+    return sorted(out)
+
+
 def findings_for(p: pathlib.Path) -> list[str]:
     rel = rel_posix(p)
     if rel.startswith(FUNCTIONS_PREFIX):
         return []
+    model = agent_model_findings(rel, p)
     text = read_text(p) if file_kind(p) == "js" else None
-    paid = [] if text is None else functions_paid_import_findings(rel, text)
-    # corpus_service stays exempt from (a)-(d) (the F27 lane). Rule (e) still applies: it may not import the paid modules.
+    paid = [] if text is None else functions_import_findings(rel, text)
+    # corpus_service stays exempt from (a)-(d) (the F27 lane). Rule (e) still applies.
     if rel.startswith("corpus_service/"):
-        return paid
+        return model + paid
     kind = deploy_kind(rel)
     if kind is not None:
         body = text if text is not None else read_text(p)
-        return [] if body is None else deploy_findings(rel, kind, body)
+        deployed = [] if body is None else deploy_findings(rel, kind, body)
+        return model + deployed
     if text is None:
-        return []
-    return paid + source_findings(rel, text)
+        return model
+    return model + paid + source_findings(rel, text)
 
 
 def main(argv: list[str]) -> int:
     if "--print-key-names" in argv:
         print(json.dumps(list(PROVIDER_KEY_ENV_NAMES)))
         return 0
-    failures: list[str] = []
+    failures: list[str] = [
+        f"{d}: a symlinked directory; [19] does not follow links, so what is behind it would go unchecked"
+        for d in symlinked_dirs(pathlib.Path("."))
+    ]
     for p in iter_scan_files():
         failures.extend(findings_for(p))
     if failures:

@@ -296,8 +296,8 @@ wins, in any runtime. Otherwise a non-empty `AI_GATEWAY_API_KEY` builds `gateway
 set to a non-blank value:
 
 - `FUNCTION_TARGET` (Functions framework, a triggered emulator worker, and gen2);
-- `K_SERVICE` (Cloud Run, which is how a 2nd-gen function runs; the same pair `functions/src/p5/identity.ts` uses for a
-  hosted function);
+- `K_SERVICE` is not a signal by itself (FA-F18-010). Next on Cloud Run sets it. A gen2 function also sets
+  `FUNCTION_TARGET`, which is the marker above;
 - `SIKANDER_FUNCTIONS_RUNTIME` equal to `1` or `true` (an explicit flag for a Functions process that has neither);
 - the Firebase debug emulator as a pair (FA-F18-008): `FUNCTIONS_EMULATOR` trim-equal to `true` and `FIREBASE_CONFIG`
   non-blank after trim. `firebase emulators:start --inspect-functions` starts one shared runtime with no trigger, so
@@ -312,21 +312,26 @@ explicit key. The gate stops Next from importing the module those functions live
 
 **Why an environment marker, and the residual.** A compile-time constant defined only in the Functions bundle cannot be
 copied onto Next with the key. This slice uses the runtime markers above because that is the check the finding asks for,
-and because gen1, the emulator and gen2 do not share one variable. Residual, recorded: `K_SERVICE` is also set for a Next
-service on Cloud Run, and any variable can be copied with the key. On that host the gate is the control that stops the
-import. A computed specifier the gate cannot see, plus `K_SERVICE` or a copied flag, would still build a client. That is
-the same class of hole as the gate's other text-analysis residuals.
+and because gen1, the emulator and gen2 do not share one variable. `K_SERVICE` alone does not build a client (FA-F18-010):
+Next on Cloud Run sets it, and a gen2 function also sets `FUNCTION_TARGET`. Residual, recorded: any of the markers that
+do count can still be copied with the key. On that host the gate is the control that stops the import. A computed
+specifier the gate cannot see, plus a copied `FUNCTION_TARGET`, flag, or emulator pair, would still build a client. That
+is the same class of hole as the gate's other text-analysis residuals.
 
 **FA-F18-008.** The debug-emulator pair above is the local runtime the first check missed. Residual: a Next process started with both variables copied (for example a shell that exported the emulator environment) would pass this check. G-0 [19] still forbids that process from importing the module. `FUNCTION_DEBUG_MODE` is also set on that runtime and is not required here; the pair the emulator always sets, and that the finding names, is the one the check uses.
 
 **FA-F18-009.** Rule (e)'s vitest/jest loader uses the same comment-aware gap as the import parser (`JS_WS`), including a block comment that contains a newline. A computed argument to `importActual` remains the text-scan residual already recorded.
 
+**FA-F18-010.** Rule (e) is an allowlist. Outside `functions/`, the only Functions modules that may be imported are `functions/src/p1/costTable` and `functions/src/p1/types`. `p1/ops`, `p1/reconciler`, `p1/evalSet`, `cli/committeeEval`, `functions/lib` and the HTTP router are not on it, so a Next file cannot reach the paid client by importing one of them. `K_SERVICE` alone does not make `activeTransport` build a client.
+
+**FA-F18-011.** The loader's type argument allows one nested pair of angle brackets, so `vi.importActual<Record<string, unknown>>(...)` is read. A type argument nested twice (`Map<string, Record<...>>`) is still missed: the same class of text-scan residual.
+
 **FA-F18-002, 004, 005, 006, 007, checked on this change and not taken further except the test pins in 004.**
 
-- **FA-F18-002** stays open. [19] still reads a workflow job as a two-space key under `jobs:` (`JOB_HEADER_RE`), does not
-  treat `.envrc` as an env file, does not fail a symlinked directory, and does not read eve model strings. The residuals
-  named with it (computed specifiers, alias maps, unlisted SDKs, shell deploys) stay residuals. Closing them is a
-  rewrite of the deploy-surface scan, not a leftover of this hole.
+- **FA-F18-002** the four named holes are closed on the follow-up: `.envrc` is an env file, a job is the block at the
+  indentation of the first content line under `jobs:` (so four spaces is a job), a symlinked directory fails because the
+  walk does not follow it, and a string `model` under `agent/` fails. Computed specifiers, alias maps, unlisted SDKs and
+  shell deploys stay residuals.
 - **FA-F18-003** is closed on current main. The e2e imports modules that exist (`functionsCommitteeBrain`, the Functions
   router, the transport seam's setter). The 2026-10-23 re-audit of `ff5899e` says the same. The optional dynamic import
   was so the file could load on pre-F18 main; that main is no longer the tree under test.
