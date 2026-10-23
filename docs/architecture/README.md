@@ -106,7 +106,8 @@ Gates:
   or names a provider host, and no deploy surface (`.env*`, App Hosting, Vercel, Docker, compose, and workflow jobs that
   build, start or deploy the Next/eve service) binds a provider key. No allowlist. Any JS/TS file outside `functions/`
   (the corpus service included; root `tests/` stays outside the walker) that imports any `functions/` module other than
-  the pure allowlist (`functions/src/p1/costTable`, `functions/src/p1/types`) fails the same check, including a
+  the allowlist (`functions/src/p1/costTable`, `functions/src/p1/types`, and the F02 boundary
+  `functions/src/http/f02RouterBoundary`) fails the same check, including a
   vitest/jest loader with comments or a nested type argument (FA-F18-001, FA-F18-009, FA-F18-010, FA-F18-011). A
   `.envrc`, a workflow job at four-space indent, a symlinked directory, and a string `model` under `agent/` fail it too
   (FA-F18-002).

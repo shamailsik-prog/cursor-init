@@ -33,8 +33,8 @@ let routerPromise: Promise<RouterFn> | null = null
 
 function functionsRouter(): Promise<RouterFn> {
   if (!routerPromise) {
-    routerPromise = import("../../functions/src/http/router").then(
-      (mod) => mod.createRouter(mod.ROUTES) as unknown as RouterFn
+    routerPromise = import("../../functions/src/http/f02RouterBoundary").then(
+      (mod) => mod.createF02Router() as unknown as RouterFn
     )
   }
   return routerPromise
