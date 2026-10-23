@@ -60,11 +60,16 @@ const D1_CLIENT = "/api/d1/client"
 const D1_CONFLICT = "/api/d1/conflict"
 const D1_MATTER = "/api/d1/matter"
 const D1_ENTITY = "/api/d1/entity"
+/** P2 job engine (P3-10): CORE, no layer flag. */
 const PLATFORM_JOBS = "/api/platform/jobs"
+/** P1 AI gateway (P3-60): CORE, no layer flag. */
 const PLATFORM_BRAIN = "/api/platform/brain"
+/** D4-1 drafting (P4-10): the draft store, the partner override and the approval stand-in. */
 const D4_DRAFTING = "/api/d4/drafting"
+/** D4-2 intelligence (P4-10): the document-type catalogue, the citation gate and its verification report. */
 const D4_INTELLIGENCE = "/api/d4/intelligence"
 
+/** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay" | "idempotency"> = {}): Route => ({
   method: "POST",
   path,
@@ -73,8 +78,17 @@ const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay
   ...extra,
 })
 
+/** A GET route; its data is the query string. */
 const get = (path: string, handler: Operation): Route => ({ method: "GET", path, handler, kind: handler.kind })
 
+/**
+ * Audit F09 (spec §4): the identity operations whose post-commit Auth step a same-key retry is designed to heal, each
+ * idempotent by construction: onboardFirm resumes its firm (FN-1), createFirmUser is deduplicated by the Auth email,
+ * setUserClaims re-applies the same role and clearance (or reverts), deactivateUser sets `active: false` again, and
+ * disableMfa resumes from its approval. The nine F02 Next-authority POSTs are also
+ * `rerun` (http/f02NextAuthority.ts): their domain write is fenced by the Next
+ * core, not by a Functions effect marker. Every other POST route is `once` (or `resume`).
+ */
 const RERUN = { idempotency: "rerun" } as const
 
 export const ROUTES: readonly Route[] = [
@@ -87,6 +101,7 @@ export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/disableMfa`, disableMfaOp, RERUN),
   post(`${IDENTITY}/generateRecoveryCodes`, generateRecoveryCodesOp, { redactReplay: true }),
   post(`${IDENTITY}/syncMfaStatus`, syncMfaStatusOp),
+  // firmless (platformAdmin): R-5 gate passes; no X-Firm-Id, like onboardFirm (E-26 exception)
   post(`${GATES}/recordGatePass`, recordGatePassOp),
   post(`${D1_CLIENT}/setFirmNumbering`, setFirmNumberingOp),
   post(`${D1_CLIENT}/registerClient`, registerClientOp),
@@ -113,10 +128,12 @@ export const ROUTES: readonly Route[] = [
   get(`${PLATFORM_JOBS}/getJob`, getJobOp),
   post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
   post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
+  // Audit F09: a same-key retry after the provider call resumes publication from the operation's receipt.
   post(`${PLATFORM_BRAIN}/committeeBrain`, committeeBrainOp, { idempotency: "resume" }),
   get(`${PLATFORM_BRAIN}/getAiUsage`, getAiUsageOp),
   post(`${PLATFORM_BRAIN}/setBudgetAlerts`, setBudgetAlertsOp),
   post(`${PLATFORM_BRAIN}/setAiKillSwitch`, setAiKillSwitchOp),
+  // firmless (platformAdmin): the operator's kill switch across firms; no X-Firm-Id, like recordGatePass
   post(`${PLATFORM_BRAIN}/setPlatformAiKillSwitch`, setPlatformAiKillSwitchOp),
   post(`${D4_DRAFTING}/createDraft`, createDraftOp),
   post(`${D4_DRAFTING}/saveDraftVersion`, saveDraftVersionOp),
@@ -130,6 +147,7 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),
   get(`${D4_INTELLIGENCE}/getVerificationReport`, getVerificationReportOp),
+  // Audit F02: the nine Next domain routes, authorised here and served by the Next core in-process.
   ...F02_NEXT_AUTHORITY_ROUTES,
 ]
 

@@ -26,7 +26,13 @@ function probe(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f18-gate-"))
   tmpDirs.push(dir)
   fs.mkdirSync(path.join(dir, "ci_gates"), { recursive: true })
-  for (const name of ["check_next_ai_egress.py", "check_provider_imports.py", "g0_guard_common.py", "g0_guard_allowlist.json"]) {
+  for (const name of [
+    "check_next_ai_egress.py",
+    "check_agent_eve_model.ts",
+    "check_provider_imports.py",
+    "g0_guard_common.py",
+    "g0_guard_allowlist.json",
+  ]) {
     const src = path.join(repoRoot, "ci_gates", name)
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, "ci_gates", name))
   }
@@ -39,7 +45,12 @@ function probe(files: Record<string, string>): string {
 }
 
 function run(cwd: string, ...args: string[]): { status: number | null; out: string } {
-  const res = spawnSync("python3", [GATE, ...args], { cwd, encoding: "utf8", timeout: 60_000 })
+  const res = spawnSync("python3", [GATE, ...args], {
+    cwd,
+    encoding: "utf8",
+    timeout: 60_000,
+    env: { ...process.env, WORKSPACE_ROOT: repoRoot },
+  })
   return { status: res.status, out: `${res.stdout ?? ""}${res.stderr ?? ""}` }
 }
 
@@ -245,12 +256,12 @@ const FAILING: Case[] = [
   {
     name: "an eve model string under agent/ (FA-F18-002)",
     files: { "agent/x.ts": 'export const cfg = { model: "anthropic/claude-sonnet-4.6" }\n' },
-    names: ["agent/x.ts", "anthropic/claude-sonnet-4.6"],
+    names: ["agent/x.ts", "outside defineAgent"],
   },
   {
     name: "eve shorthand { model } (FA-F18-012)",
     files: { "agent/short.ts": "const model = committeeBrainLanguageModel\nexport const cfg = { model }\n" },
-    names: ["agent/short.ts", "shorthand"],
+    names: ["agent/short.ts", "outside defineAgent"],
   },
   {
     name: "eve model bound to a string constant (FA-F18-012)",
@@ -258,12 +269,12 @@ const FAILING: Case[] = [
       "agent/const.ts":
         'const GATEWAY = "anthropic/claude-sonnet-4.6"\nexport const cfg = { model: GATEWAY }\n',
     },
-    names: ["agent/const.ts", "GATEWAY"],
+    names: ["agent/const.ts", "outside defineAgent"],
   },
   {
     name: "eve model bound to process.env (FA-F18-012)",
     files: { "agent/env.ts": "export const cfg = { model: process.env.EVE_MODEL }\n" },
-    names: ["agent/env.ts", "process.env"],
+    names: ["agent/env.ts", "outside defineAgent"],
   },
   {
     name: "eve model via an imported string constant (FA-F18-015)",
@@ -395,16 +406,18 @@ const PASSING: Case[] = [
   {
     name: "eve's model is the P1 LanguageModel identifier, not a string",
     files: {
-      "agent/ok.ts":
-        'import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport const cfg = { model: committeeBrainLanguageModel }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
     names: [],
   },
   {
     name: "eve shorthand model bound to the imported P1 LanguageModel (FA-F18-015)",
     files: {
-      "agent/short-ok.ts":
-        'import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = committeeBrainLanguageModel\nexport const cfg = { model }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst model = committeeBrainLanguageModel\nexport default defineAgent({ model })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
     names: [],
   },

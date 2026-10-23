@@ -33,13 +33,16 @@ It fails on any of:
       `vi.importActual<Record<string, unknown>>(...)` (FA-F18-011). A block or line comment may sit between those loader
       tokens, the same gap the import parser allows (FA-F18-009). functions/ itself may import these modules. The only
       modules outside functions/ may import are the pure ones on FUNCTIONS_PURE_MODULES (FA-F18-010).
-  (f) under `agent/` (eve), any `model` property or shorthand `{ model }` must be exactly the identifier
-      `committeeBrainLanguageModel` imported from `platform/p1/committeeBrainModel` (FA-F18-002, FA-F18-012,
-      FA-F18-015). Quoted model strings, member expressions, env reads, calls and every other binding fail.
+  (f) under `agent/` (eve), the model passed to `defineAgent` must be provably the `committeeBrainLanguageModel`
+      named import from the module that resolves exactly to `platform/p1/committeeBrainModel` (exact path equality;
+      FA-F18-002, FA-F18-012, FA-F18-015, FA-F18-016). JS/TS is checked with a TypeScript AST pass (exactly one
+      `defineAgent` call when `agent/agent.ts` exists, object-literal argument without spread, no `.model` /
+      `["model"]` assignment, no other `model` property under `agent/`). Quoted model strings in JSON/YAML/markdown
+      under `agent/` fail.
   (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
-Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON
-(tests/f18-next-ai-egress-gate.test.ts holds it equal to the runtime guard's list).
+Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON;
+`--print-pure-modules` prints FUNCTIONS_PURE_MODULES (tests/f18-functions-pure-closure.test.ts holds it equal to the gate).
 """
 from __future__ import annotations
 
@@ -48,6 +51,7 @@ import os
 import pathlib
 import posixpath
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -85,17 +89,10 @@ _TEST_LOADER_RE = re.compile(
     re.DOTALL,
 )
 # A quoted `model` value in JS/TS, and a `model:` value in eve's YAML, JSON or markdown (FA-F18-002).
-# FA-F18-015: rule (f) is an allowlist — only `committeeBrainLanguageModel` from the P1 bridge module.
+# FA-F18-015/016: rule (f) allowlist — AST check for JS/TS (ci_gates/check_agent_eve_model.ts); quoted models in text formats.
 _COMMITTEE_BRAIN_MODEL = "committeeBrainLanguageModel"
-_P1_MODEL_IMPORT_RE = re.compile(
-    r"""\bimport\s+(?:type\s+)?\{[^}]*\bcommitteeBrainLanguageModel\b[^}]*\}\s+from\s+["']([^"']+)["']"""
-    r"""|\bimport\s+(?:type\s+)?\bcommitteeBrainLanguageModel\b\s+from\s+["']([^"']+)["']""",
-    re.MULTILINE,
-)
-_AGENT_MODEL_JS_RE = re.compile(r"""(?<![\w$])["']?model["']?\s*:\s*(["'`])([^"'`\r\n]*)\1""")
+_AGENT_QUOTED_MODEL_RE = re.compile(r"""["']model["']\s*:\s*["']([^"']+)["']""")
 _AGENT_MODEL_TEXT_RE = re.compile(r"""^\s*["']?model["']?\s*:\s*["'`]?([^\s"'`#,]+)""", re.M)
-_MODEL_SHORTHAND_RE = re.compile(r"""(?<![\w$])model(?![\w$])(?!\s*:)(?=\s*[,}])""")
-_MODEL_PROP_EXPR_RE = re.compile(r"""(?<![\w$])["']?model["']?\s*:\s*([^,}\n]+)""")
 _AGENT_TEXT_SUFFIXES = frozenset({".md", ".mdx", ".yml", ".yaml", ".json", ".toml"})
 
 # Keep equal to PROVIDER_KEY_ENV_NAMES in platform/p1/providerKeyGuard.ts.
@@ -381,60 +378,75 @@ def deploy_findings(rel: str, kind: str, text: str) -> list[str]:
     return [f"{rel}: binds provider key {name} for the Next/eve service (the key belongs to the Functions api function only)" for name in sorted(out)]
 
 
-def _imports_p1_language_model(text: str) -> bool:
-    for match in _P1_MODEL_IMPORT_RE.finditer(text):
-        mod = (match.group(1) or match.group(2) or "").replace("\\", "/")
-        if mod.startswith("@/"):
-            mod = mod[2:]
-        if mod.endswith("committeeBrainModel") or "platform/p1/committeeBrainModel" in mod:
-            return True
-    return False
+def _npm_tool_root() -> pathlib.Path:
+    """Directory with node_modules/typescript for the AST helper (repo root when the gate runs in a probe tree)."""
+    for key in ("SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
+        env = os.environ.get(key)
+        if env:
+            root = pathlib.Path(env)
+            if (root / "node_modules" / "typescript").is_dir():
+                return root
+    for root in (pathlib.Path.cwd(), *pathlib.Path.cwd().parents):
+        if (root / "node_modules" / "typescript").is_dir():
+            return root
+    here = pathlib.Path(__file__).resolve().parent.parent
+    return here
 
 
-def _js_agent_model_violations(text: str) -> list[str]:
-    """Rule (f) allowlist for JS/TS under agent/ (FA-F18-015)."""
-    violations: list[str] = []
-    allowed_import = _imports_p1_language_model(text)
-    for match in _AGENT_MODEL_JS_RE.finditer(text):
-        violations.append(match.group(2) or "(empty)")
-    for match in _MODEL_PROP_EXPR_RE.finditer(text):
-        expr = match.group(1).strip()
-        if expr == _COMMITTEE_BRAIN_MODEL and allowed_import:
-            continue
-        violations.append(expr[:120] if len(expr) > 120 else expr or "(empty)")
-    if _MODEL_SHORTHAND_RE.search(text):
-        shorthand_ok = allowed_import and re.search(
-            rf"(?:const|let|var)\s+model\s*=\s*{_COMMITTEE_BRAIN_MODEL}\b",
-            text,
+def agent_eve_model_ast_findings(scan_root: pathlib.Path) -> list[str]:
+    """Rule (f) for JS/TS under agent/ via TypeScript AST (FA-F18-016)."""
+    agent_dir = scan_root / "agent"
+    if not agent_dir.is_dir():
+        return []
+    tools = _npm_tool_root()
+    script = tools / "ci_gates" / "check_agent_eve_model.ts"
+    if not script.is_file():
+        return ["agent/: missing ci_gates/check_agent_eve_model.ts (FA-F18-016)"]
+    try:
+        proc = subprocess.run(
+            ["npx", "tsx", str(script), str(scan_root.resolve())],
+            cwd=str(_npm_tool_root()),
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-        if not shorthand_ok:
-            violations.append("shorthand { model }")
-    return violations
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return [f"agent/: could not run eve model AST check ({err})"]
+    if proc.returncode == 0:
+        return []
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        detail = (proc.stderr or proc.stdout or "unknown error").strip().replace("\n", " ")
+        return [f"agent/: eve model AST check failed ({detail[:240]})"]
+    return lines
+
+
+def agent_text_model_findings(rel: str, text: str) -> list[str]:
+    """Quoted or YAML-style model keys under agent/ (FA-F18-002, FA-F18-016 bypass 7)."""
+    values: set[str] = set()
+    for match in _AGENT_QUOTED_MODEL_RE.finditer(text):
+        values.add(match.group(1))
+    for match in _AGENT_MODEL_TEXT_RE.finditer(text):
+        if match.group(1) != _COMMITTEE_BRAIN_MODEL:
+            values.add(match.group(1))
+    return [
+        f"{rel}: gives eve the model string {value or '(empty)'}; eve's model is the P1 LanguageModel, never a Gateway model string"
+        for value in sorted(values)
+    ]
 
 
 def agent_model_findings(rel: str, p: pathlib.Path) -> list[str]:
-    """Rule (f): eve's model must be the imported P1 LanguageModel identifier (FA-F18-015)."""
+    """Rule (f): eve text config under agent/ (JS/TS handled by agent_eve_model_ast_findings)."""
     if not rel.startswith("agent/"):
         return []
     suffix = p.suffix.lower()
     kind = file_kind(p)
-    if kind != "js" and suffix not in _AGENT_TEXT_SUFFIXES:
+    if kind == "js" or suffix not in _AGENT_TEXT_SUFFIXES:
         return []
     text = read_text(p)
     if text is None:
         return []
-    if kind == "js":
-        values = _js_agent_model_violations(text)
-    else:
-        values = [
-            m.group(1)
-            for m in _AGENT_MODEL_TEXT_RE.finditer(text)
-            if m.group(1) != _COMMITTEE_BRAIN_MODEL
-        ]
-    return [
-        f"{rel}: gives eve the model string {value or '(empty)'}; eve's model is the P1 LanguageModel, never a Gateway model string"
-        for value in sorted(set(values))
-    ]
+    return agent_text_model_findings(rel, text)
 
 
 def symlinked_dirs(root: pathlib.Path) -> list[str]:
@@ -483,10 +495,15 @@ def main(argv: list[str]) -> int:
     if "--print-key-names" in argv:
         print(json.dumps(list(PROVIDER_KEY_ENV_NAMES)))
         return 0
+    if "--print-pure-modules" in argv:
+        print(json.dumps(list(FUNCTIONS_PURE_MODULES)))
+        return 0
+    scan_root = pathlib.Path(".").resolve()
     failures: list[str] = [
         f"{d}: a symlinked directory; [19] does not follow links, so what is behind it would go unchecked"
-        for d in symlinked_dirs(pathlib.Path("."))
+        for d in symlinked_dirs(scan_root)
     ]
+    failures.extend(agent_eve_model_ast_findings(scan_root))
     for p in iter_scan_files():
         failures.extend(findings_for(p))
     if failures:

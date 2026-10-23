@@ -46,10 +46,13 @@ export function resetF02RouterForTests(): void {
 }
 
 /**
- * Runs the canonical Functions `api` router in this process. The caller is
- * re-authenticated from Authorization and X-Firm-Id; the core then runs only
- * after that router's permission checks. A direct call on the deployed function,
- * where no Next core is registered, is 503 authority_core_unconfigured.
+ * Dispatches one F02 authority route through the bounded Functions router
+ * (`functions/src/http/f02RouterBoundary`, not the deployed `api` ROUTES table).
+ * The boundary mounts only `F02_NEXT_AUTHORITY_ROUTES` so this process never loads
+ * `p1/ops` or the paid transport (FA-F18-013/014). The caller is re-authenticated
+ * from Authorization and X-Firm-Id; the core runs only after that router's
+ * permission checks. A direct call on the deployed function, where no Next core
+ * is registered, is 503 authority_core_unconfigured.
  */
 export async function dispatchF02(
   request: Request,

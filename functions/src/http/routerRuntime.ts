@@ -15,8 +15,19 @@ export type Route = {
   path: string
   handler: Operation
   kind: RateKind
+  /** Replays of a 2xx response return `{ redacted: true }`: the body carries secrets that are never stored. */
   redactReplay?: boolean
+  /**
+   * What a same-key request gets once the operation's effect committed without a stored answer (audit F09, spec §2.2):
+   * `once` (the default) 409 idempotency_effect_committed; `resume` a takeover that resumes the operation from its
+   * marker (committeeBrain); `rerun` no effect marker and a re-run, for an operation idempotent by construction whose
+   * post-commit step a same-key retry is designed to heal (spec §4).
+   */
   idempotency?: IdempotencyMode
+  /**
+   * POST/PUT body cap. The default is 1 MB. Document ingest and drafts match the Next route caps
+   * (audit F02); a function is read per request so SIKANDER_MAX_UPLOAD_BYTES stays live.
+   */
   maxBodyBytes?: number | (() => number)
 }
 
@@ -132,6 +143,11 @@ async function auditRefusal(op: Operation, uid: string, firmId: string, err: unk
   throw err
 }
 
+/**
+ * Runs one operation after auth and rate limits. `startedAtMs` (the real clock when the router received the request) is
+ * passed on as `session.startedAtMs`. `operation` (POST/PUT) is the request's idempotent operation record when
+ * idempotency applies.
+ */
 async function execute(
   op: Operation,
   auth: Authenticated,
@@ -175,6 +191,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
   const clock = opts.now ?? Date.now
 
   return async function router(req: ApiRequest, res: Response): Promise<void> {
+    // The real clock, never the injectable one: an operation bounds its pre-work against it (re-audit R3-D2).
     const startedAtMs = Date.now()
     try {
       const path = normalisePath(req.path)

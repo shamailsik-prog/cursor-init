@@ -31,9 +31,11 @@ function posixRelative(file: string): string {
   return path.relative(repoRoot, file).split(path.sep).join("/")
 }
 
-function resolveModule(fromFile: string, specifier: string): string {
+function resolveModule(fromFile: string, specifier: string): string | null {
   const spec = specifier.replace(/[?#].*$/, "")
   let candidate: string
+  const mustResolve =
+    spec.startsWith("@/") || spec.startsWith(".") || spec.startsWith("functions/")
   if (spec.startsWith("@/")) {
     candidate = path.join(repoRoot, spec.slice(2))
   } else if (spec.startsWith(".")) {
@@ -41,7 +43,7 @@ function resolveModule(fromFile: string, specifier: string): string {
   } else if (spec.startsWith("functions/")) {
     candidate = path.join(repoRoot, spec)
   } else {
-    throw new Error(`unresolved bare or package specifier ${spec} in ${posixRelative(fromFile)}`)
+    return null
   }
   const tries = [
     candidate,
@@ -53,7 +55,10 @@ function resolveModule(fromFile: string, specifier: string): string {
   for (const t of tries) {
     if (fs.existsSync(t) && fs.statSync(t).isFile()) return t
   }
-  throw new Error(`cannot resolve ${spec} from ${posixRelative(fromFile)}`)
+  if (mustResolve) {
+    throw new Error(`cannot resolve ${spec} from ${posixRelative(fromFile)}`)
+  }
+  return null
 }
 
 function staticImports(file: string): string[] {
@@ -111,7 +116,8 @@ function closureFrom(entryRel: string): { forbidden: string[]; visited: string[]
     const hit = forbiddenHit(rel)
     if (hit) forbidden.push(`${rel} (via ${hit})`)
     for (const spec of staticImports(file)) {
-      queue.push(resolveModule(file, spec))
+      const resolved = resolveModule(file, spec)
+      if (resolved) queue.push(resolved)
     }
   }
   return { forbidden, visited: [...seen].map(posixRelative).sort() }

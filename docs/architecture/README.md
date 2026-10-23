@@ -110,7 +110,9 @@ Gates:
   `functions/src/http/f02RouterBoundary`, which mounts only `F02_NEXT_AUTHORITY_ROUTES`) fails the same check,
   including a vitest/jest loader with comments or a nested type argument (FA-F18-001, FA-F18-009, FA-F18-010,
   FA-F18-011, FA-F18-014). A `.envrc`, a workflow job at four-space indent, a symlinked directory, and any `model`
-  under `agent/` other than the imported `committeeBrainLanguageModel` identifier fail it too (FA-F18-002, FA-F18-015).
+  under `agent/` fail it too: rule (f) uses a TypeScript AST pass so `defineAgent`'s `model` must be the
+  `committeeBrainLanguageModel` import from exactly `platform/p1/committeeBrainModel` (FA-F18-002, FA-F18-015,
+  FA-F18-016). `--print-pure-modules` prints `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds
