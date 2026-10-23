@@ -269,6 +269,7 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
   const textRef = adminDb().collection("ocr_texts").doc(resultId)
   const at = Timestamp.fromMillis(ctx.now())
   // Re-checked inside the publish transaction; if publish already wrote ocr_texts, the stored label wins on retry.
+  // Reading ocr_texts after the fence (outside a transaction) is safe: the stored label can only rise.
   let published = aggregate
 
   await ctx.runFenced("publish", async (tx) => {

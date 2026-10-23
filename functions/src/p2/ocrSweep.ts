@@ -171,7 +171,11 @@ export async function sweepLegacyOcr(deps: JobDeps): Promise<LegacyOcrSweepResul
   const out: LegacyOcrSweepResult = { examined: 0, drained: 0, requeued: 0, closed: 0 }
   const started = Date.now()
   const failures: unknown[] = []
-  await backfillLegacyOcrStatusForSweep(SWEEP_LIMIT)
+  try {
+    await backfillLegacyOcrStatusForSweep(SWEEP_LIMIT)
+  } catch (err) {
+    logFailure("ocr legacy ocrStatus backfill failed", err)
+  }
   await sweepLegacyPages(legacyQuery, deps, out, started, failures)
   if (failures.length > 0) throw failures[0]
   return out
