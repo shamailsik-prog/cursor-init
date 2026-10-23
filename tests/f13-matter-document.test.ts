@@ -210,8 +210,19 @@ describe("F13 re-audit: null-court read paths", () => {
     expect(shc("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
     expect(shc("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(true)
     const drafts = readFileSync(path.join(path.resolve(__dirname, ".."), "services/d4-1/drafts.ts"), "utf8")
-    expect(drafts).toContain(
-      'matter.courtId === null || (typeof matter.courtId === "string" && !ids.has(matter.courtId))'
-    )
+    // FA-F13-025: the null/non-string branch must be explicit. `!ids.has` alone is equivalent for these
+    // values because Set.has returns false, and `typeof === "string" &&` fails open for every non-string
+    // other than null.
+    expect(drafts).toContain('typeof matter.courtId !== "string" || !ids.has(matter.courtId)')
+  })
+
+  it.each([
+    ["a number", 12],
+    ["undefined", undefined],
+    ["an object", { id: "SHC" }],
+  ])("FA-F13-025: courtId as %s never matches a mentioned court", (_label, courtId) => {
+    const isOwn = ownCaseReferenceMatcher({ courtId: courtId as never, caseNumber: "CP 12/2019" })
+    expect(isOwn("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(isOwn("CP 12/2019", { before: "As recorded,", after: "the suit continues" })).toBe(true)
   })
 })
