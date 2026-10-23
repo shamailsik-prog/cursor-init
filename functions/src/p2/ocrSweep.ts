@@ -5,7 +5,6 @@ import { logFailure } from "../log"
 import { DISPATCH_GRACE_MS, JOB_ENGINE, MAX_MANUAL_RETRIES, SWEEP_BUDGET_MS, SWEEP_LIMIT, SWEEP_MAX_PAGES } from "./constants"
 import type { JobDeps } from "./dispatch"
 import { jobIdFor, jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
-import { isSafeDocId } from "../p5/common"
 import { acceptLegacyOcrJob } from "./ocrDrain"
 import { backfillLegacyOcrStatusForSweep } from "./legacyOcrStatusBackfill"
 import { isCompleteLegacyOcrJob, OCR_JOB_TYPE, recordLegacyOcr } from "./ocrJob"
@@ -38,6 +37,21 @@ const LEGACY_CANCELLED_CODE = "cancelled"
 
 async function closeLegacyRow(jobId: string, firmId: string, code: string): Promise<void> {
   await recordLegacyOcr(jobId, firmId, { ocrStatus: "failed", ocrFailureCode: code })
+}
+
+async function closeInvalidLegacyRow(jobId: string): Promise<void> {
+  const ref = jobsRef().doc(jobId)
+  const closed = await adminDb().runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) return false
+    const data = snap.data() ?? {}
+    if (data.jobType !== "ocr" || data.engine === JOB_ENGINE) return false
+    const status = data.ocrStatus
+    if (status === "done" || status === "failed") return false
+    tx.update(ref, { ocrStatus: "failed", ocrFailureCode: LEGACY_INCOMPLETE_CODE })
+    return true
+  })
+  if (closed) logger.info("ocr.sweep_invalid_legacy_row", { jobId })
 }
 
 type LegacyOcrQuery = () => Query
@@ -94,9 +108,8 @@ async function reviveOrClose(legacyId: string, firmId: string, engineId: string,
 
 async function pickUp(jobId: string, data: DocumentData, deps: JobDeps): Promise<"drained" | "requeued" | "closed" | "skipped"> {
   if (!isCompleteLegacyOcrJob(data)) {
-    const firmId = data.firmId
-    if (data.jobType === "ocr" && data.engine !== JOB_ENGINE && typeof firmId === "string" && isSafeDocId(firmId)) {
-      await closeLegacyRow(jobId, firmId, LEGACY_INCOMPLETE_CODE)
+    if (data.jobType === "ocr" && data.engine !== JOB_ENGINE) {
+      await closeInvalidLegacyRow(jobId)
       return "closed"
     }
     return "skipped"
