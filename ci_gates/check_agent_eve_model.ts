@@ -58,16 +58,16 @@ function collectImports(sf: ts.SourceFile, importerRel: string): ImportInfo[] {
   const imports: ImportInfo[] = []
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
-    const module = resolveRepoModule(stmt.moduleSpecifier.text, importerRel) ?? stmt.moduleSpecifier.text
+    const resolvedModule = resolveRepoModule(stmt.moduleSpecifier.text, importerRel) ?? stmt.moduleSpecifier.text
     const typeOnly = stmt.importClause?.isTypeOnly === true
     const clause = stmt.importClause
     if (!clause) continue
-    if (clause.name) imports.push({ local: clause.name.text, module, isTypeOnly: typeOnly })
+    if (clause.name) imports.push({ local: clause.name.text, module: resolvedModule, isTypeOnly: typeOnly })
     if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
       for (const el of clause.namedBindings.elements) {
         const local = el.name.text
         const imported = el.propertyName?.text ?? el.name.text
-        imports.push({ local, module, isTypeOnly: typeOnly || el.isTypeOnly })
+        imports.push({ local, module: resolvedModule, isTypeOnly: typeOnly || el.isTypeOnly })
       }
     }
   }
