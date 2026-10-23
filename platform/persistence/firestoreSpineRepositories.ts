@@ -2297,10 +2297,16 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
       // A row that exists but is malformed throws SearchIndexMalformedError: a caller must never mistake it for an
       // absent row and fall back to a cached copy.
+      // FA-F13-020: firmId's type is checked before the firm gate. getById compares `firmId !== firm` first, so a
+      // number, null, boolean, or blank firmId comes back as null (absence) and the reader never runs.
       async get(id, firmId) {
-        const row = await getById<StoredRow>(db, "matter_client_search_index", id, firmId)
-        if (!row) return null
-        const parsed = readMatterClientSearchIndexRow(id, row)
+        const firm = requireCallerFirmId(firmId, "reportingIndex.get")
+        const snap = await getDoc(doc(db, "matter_client_search_index", id))
+        if (!snap.exists()) return null
+        const data = (snap.data() ?? {}) as { firmId?: unknown }
+        if (typeof data.firmId !== "string" || data.firmId.trim() === "") throw new SearchIndexMalformedError(id)
+        if (data.firmId !== firm) return null
+        const parsed = readMatterClientSearchIndexRow(id, data)
         if (!parsed) throw new SearchIndexMalformedError(id)
         return parsed
       },

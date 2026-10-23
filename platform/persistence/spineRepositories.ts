@@ -3212,10 +3212,14 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         if (!next) throw new SearchIndexMalformedError(id)
         store.matterClientSearchIndex.set(id, next)
       },
+      // FA-F13-020: same order as the Firestore adapter. firmScoped compares firmId with === first, so a non-string
+      // or blank firmId is null (absence) and the reader never runs.
       async get(id, firmId) {
-        const row = firmScoped(store.matterClientSearchIndex.get(id), firmId)
-        if (!row) return null
-        const parsed = readMatterClientSearchIndexRow(id, row)
+        const stored = store.matterClientSearchIndex.get(id) as { firmId?: unknown } | undefined
+        if (!stored) return null
+        if (typeof stored.firmId !== "string" || stored.firmId.trim() === "") throw new SearchIndexMalformedError(id)
+        if (stored.firmId !== firmId) return null
+        const parsed = readMatterClientSearchIndexRow(id, stored)
         if (!parsed) throw new SearchIndexMalformedError(id)
         return parsed
       },

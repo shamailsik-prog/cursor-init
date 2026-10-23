@@ -88,6 +88,27 @@ describe("F13 FA-F13-004: search-index reader and repository contract", () => {
     expect(await repos.reportingIndex.get("missing", "firm_mem")).toBeNull()
   })
 
+  it("a memory get validates firmId before the firm gate: a non-string firmId throws, another firm stays null", async () => {
+    const store = newStore()
+    const repos = createMemoryRepositories(store)
+    const caller = "firm_mem"
+    for (const firmId of [12, null, true, "", "   "] as const) {
+      const id = `idx_${String(firmId)}`
+      store.matterClientSearchIndex.set(id, { ...good(caller, id), firmId } as never)
+      await expect(repos.reportingIndex.get(id, caller)).rejects.toMatchObject({
+        name: "SearchIndexMalformedError",
+        indexId: id,
+      })
+    }
+    const other = { ...good("firm_other", "idx_other"), detail: null }
+    store.matterClientSearchIndex.set(other.id, other as never)
+    expect(await repos.reportingIndex.get(other.id, caller)).toBeNull()
+    const foreign = good("firm_other", "idx_foreign")
+    store.matterClientSearchIndex.set(foreign.id, foreign)
+    expect(await repos.reportingIndex.get(foreign.id, caller)).toBeNull()
+    expect(await repos.reportingIndex.get("missing", caller)).toBeNull()
+  })
+
   it("a memory upsert of a malformed row does not write, and a valid upsert does not repair a malformed one", async () => {
     const store = newStore()
     const repos = createMemoryRepositories(store)

@@ -78,6 +78,12 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: the search index i
     ["linkedClientId as a number", { linkedClientId: 4 }],
     ["status as a number", { status: 1 }],
     ["updatedAt as a string", { updatedAt: "1" }],
+    // FA-F13-020: these fail the firm equality check inside getById, which returns null before the reader runs.
+    ["firmId as a number", { firmId: 12 }],
+    ["firmId null", { firmId: null }],
+    ["firmId as a boolean", { firmId: true }],
+    ["an empty firmId", { firmId: "" }],
+    ["a whitespace firmId", { firmId: "   " }],
   ])("a row with %s is refused by get and upsert, and left out of listByFirm", async (_label, patch) => {
     const firmId = uniq("f13ri")
     const row: Record<string, unknown> = { ...good(firmId, "pending"), ...patch }
@@ -115,6 +121,19 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: the search index i
     expect(await adminDb().collection("matter_client_search_index").doc(id).get().then((doc) => doc.data())).toMatchObject({
       detail: null,
       label: "Indexed",
+    })
+  })
+
+  it("a row owned by another firm is null, including when the rest of that row is malformed", async () => {
+    const firmId = uniq("f13ri")
+    const other = uniq("f13ri")
+    const foreignId = await stored(good(other, "foreign"))
+    const foreignBadId = await stored({ ...good(other, "foreign-bad"), detail: null })
+    expect(await repo().reportingIndex.get(foreignId, firmId)).toBeNull()
+    expect(await repo().reportingIndex.get(foreignBadId, firmId)).toBeNull()
+    expect(await adminDb().collection("matter_client_search_index").doc(foreignBadId).get().then((doc) => doc.data())).toMatchObject({
+      firmId: other,
+      detail: null,
     })
   })
 
