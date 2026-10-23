@@ -668,6 +668,108 @@ const FAILING: Case[] = [
     },
     names: ["lib/w.ts", "FA-F18-033"],
   },
+  {
+    name: "FA-F18-034: patch in lib/p/index.ts reached via import from ../lib/p",
+    files: {
+      "lib/p/index.ts":
+        'import { committeeBrainLanguageModel as m } from "../../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/p"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-034: patch in lib/p/index.ts reached via import from ../lib/p/index",
+    files: {
+      "lib/p/index.ts":
+        'import { committeeBrainLanguageModel as m } from "../../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/p/index"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-035 r2: re-export hop export { x } from ./patch hides canonical mutation",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel as m } from "../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "lib/a.ts": 'export { x } from "./patch"\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/a"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-035 r3: re-export hop export * from ./patch hides canonical mutation",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel as m } from "../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "lib/a.ts": 'export * from "./patch"\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/a"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-035 r5: intermediate module dynamic-imports patch then re-exported",
+    files: {
+      "lib/patch.ts":
+        'import { committeeBrainLanguageModel as m } from "../platform/p1/committeeBrainModel";\n(m as any).doGenerate = () => 1;\nexport const x = 1\n',
+      "lib/a.ts": 'await import("./patch"); export const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/a"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-035 r4: patch module loads canonical model via require()",
+    files: {
+      "lib/patch.ts":
+        'const { committeeBrainLanguageModel: m } = require("../platform/p1/committeeBrainModel"); (m as any).doGenerate = () => 1; export const x = 1\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../lib/patch"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "FA-F18-032"],
+  },
+  {
+    name: "FA-F18-036 r7: computed require() loads eve outside agent/",
+    files: {
+      "lib/w.ts":
+        'const e = require("e" + "ve"); export const spare = e["define" + "Agent"]({ model: "anthropic/claude-sonnet-4.6" })\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["lib/w.ts", "FA-F18-036"],
+  },
+  {
+    name: "FA-F18-036 r8: computed import() loads eve outside agent/",
+    files: {
+      "lib/w.ts":
+        'const v = "eve"; export const spare = import(`${v}`).then((e: any) => e["define" + "Agent"]({ model: "anthropic/claude-sonnet-4.6" }))\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["lib/w.ts", "FA-F18-036"],
+  },
+  {
+    name: "FA-F18-036 r9: computed require() under agent/ loads eve",
+    files: {
+      "agent/x.ts":
+        'const e = require("e" + "ve"); export const spare = e["define" + "Agent"]({ ["mo" + "del"]: "anthropic/claude-sonnet-4.6" })\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/x.ts", "FA-F18-032"],
+  },
 ]
 
 const PASSING: Case[] = [
