@@ -63,6 +63,11 @@ export function attachParsedBody(request: Request, data: unknown, bytes: number)
   preparsedBodies.set(request, { data, bytes })
 }
 
+/** The object `withSession` already parsed, for a second hop that cannot re-read the stream. */
+export function parsedBodyForRequest(request: Request): unknown {
+  return preparsedBodies.get(request)?.data
+}
+
 /**
  * Read a request body as UTF-8 text without ever buffering more than `limitBytes`.
  * Rejects early on a declared Content-Length above the limit, and counts streamed bytes

@@ -14,6 +14,11 @@ export function setFirestorePersistenceForTests(db: unknown | null): void {
   firestoreDbForTests = db
 }
 
+/** True when a test has replaced the production Firestore handle. F02 then keeps the repository path. */
+export function isFirestoreInjectedForTests(): boolean {
+  return firestoreDbForTests !== null
+}
+
 function isTestRunner(): boolean {
   return process.env.VITEST === "true" && process.env.NODE_ENV !== "production"
 }

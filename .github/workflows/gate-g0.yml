@@ -189,6 +189,8 @@ jobs:
         run: npm --prefix functions ci && npm --prefix functions run build
       - name: F02 console Functions client (Auth + Firestore emulators)
         run: npm run test:f02-console-auth
+      - name: F02 Next authority (Auth + Firestore emulators)
+        run: npm run test:f02-authority
       - name: F02 Functions HTTP emulator
         run: npm run test:f02-functions-http
       - name: Install Playwright Chromium

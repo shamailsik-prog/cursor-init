@@ -26,7 +26,8 @@ import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, s
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
-import { HttpError } from "./errors"
+import { F02_NEXT_AUTHORITY_ROUTES } from "./f02NextAuthority"
+import { CommittedEffectError, EFFECT_COMMITTED_HEADER, HttpError } from "./errors"
 import { withIdempotency, type HttpResult, type IdempotencyMode, type IdempotentOperation } from "./idempotency"
 import { logFailure } from "../log"
 import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKind } from "./rateLimit"
@@ -47,6 +48,8 @@ import { RateLimitedError, clientIp, rateLimit, rateLimitAnonymous, type RateKin
  * an operation whose effect committed: audit F09) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
+ * A CommittedEffectError (a Next core wrote, then returned 4xx) also sends
+ * `Idempotency-Effect-Committed` and `effectCommitted` (FA-F02-001).
  * GET data is the parsed query (string values only; 400 invalid_query otherwise); list GETs
  * paginate with d1/pagination.ts (§4.3).
  */
@@ -67,9 +70,20 @@ export type Route = {
    * post-commit step a same-key retry is designed to heal (spec §4).
    */
   idempotency?: IdempotencyMode
+  /**
+   * POST/PUT body cap. The default is 1 MB. Document ingest and drafts match the Next route caps
+   * (audit F02); a function is read per request so SIKANDER_MAX_UPLOAD_BYTES stays live.
+   */
+  maxBodyBytes?: number | (() => number)
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024
+
+function bodyLimitBytes(route: Route): number {
+  const cap = route.maxBodyBytes
+  if (typeof cap === "function") return cap()
+  return cap ?? MAX_BODY_BYTES
+}
 
 const IDENTITY = "/api/platform/identity"
 const GATES = "/api/platform/gates"
@@ -102,7 +116,9 @@ const get = (path: string, handler: Operation): Route => ({ method: "GET", path,
  * Audit F09 (spec §4): the identity operations whose post-commit Auth step a same-key retry is designed to heal, each
  * idempotent by construction: onboardFirm resumes its firm (FN-1), createFirmUser is deduplicated by the Auth email,
  * setUserClaims re-applies the same role and clearance (or reverts), deactivateUser sets `active: false` again, and
- * disableMfa resumes from its approval. Every other POST route is `once` (or `resume`).
+ * disableMfa resumes from its approval. The nine F02 Next-authority POSTs are also
+ * `rerun` (http/f02NextAuthority.ts): their domain write is fenced by the Next
+ * core, not by a Functions effect marker. Every other POST route is `once` (or `resume`).
  */
 const RERUN = { idempotency: "rerun" } as const
 
@@ -162,6 +178,8 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),
   get(`${D4_INTELLIGENCE}/getVerificationReport`, getVerificationReportOp),
+  // Audit F02: the nine Next domain routes, authorised here and served by the Next core in-process.
+  ...F02_NEXT_AUTHORITY_ROUTES,
 ]
 
 type RouteTable = Map<string, Map<Method, Route>>
@@ -184,6 +202,15 @@ type Authenticated =
   | { kind: "firmless"; who: FirmlessIdentity }
 
 const errorBody = (code: string) => ({ error: { code } })
+
+/** The F10 signal, on the Functions error shape. Status and code stay the core's. */
+function committedEffectResult(err: CommittedEffectError): HttpResult {
+  return {
+    status: err.status,
+    body: { error: { code: err.code }, effectCommitted: { operationId: err.operationId } },
+    headers: { [EFFECT_COMMITTED_HEADER]: err.operationId },
+  }
+}
 
 function send(res: Response, result: HttpResult, headers: Record<string, string> = {}): void {
   res.status(result.status)
@@ -314,6 +341,7 @@ async function execute(
     if (err instanceof RateLimitedError) {
       return { status: err.status, body: errorBody(err.code), headers: { "Retry-After": String(err.retryAfter) } }
     }
+    if (err instanceof CommittedEffectError) return committedEffectResult(err)
     return err instanceof HttpError ? { status: err.status, body: errorBody(err.code) } : { status: 500, body: errorBody("internal") }
   }
 }
@@ -344,7 +372,8 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       if (hasBody) {
         const declared = Number(header(headers, "content-length") ?? 0)
         const size = req.rawBody?.length ?? Buffer.byteLength(JSON.stringify(req.body ?? {}))
-        if (declared > MAX_BODY_BYTES || size > MAX_BODY_BYTES) {
+        const limit = bodyLimitBytes(route)
+        if (declared > limit || size > limit) {
           return send(res, { status: 413, body: errorBody("payload_too_large") })
         }
         if (!isJson(header(headers, "content-type"))) return send(res, { status: 415, body: errorBody("unsupported_media_type") })
@@ -378,6 +407,7 @@ export function createRouter(routes: readonly Route[], opts: { now?: () => numbe
       if (err instanceof RateLimitedError) {
         return send(res, { status: 429, body: errorBody(err.code) }, { "Retry-After": String(err.retryAfter) })
       }
+      if (err instanceof CommittedEffectError) return send(res, committedEffectResult(err))
       if (err instanceof HttpError) return send(res, { status: err.status, body: errorBody(err.code) })
       logFailure("api request failed", err)
       send(res, { status: 500, body: errorBody("internal") })

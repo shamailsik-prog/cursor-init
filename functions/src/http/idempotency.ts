@@ -3,7 +3,7 @@ import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type 
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { logFailure } from "../log"
-import { HttpError } from "./errors"
+import { EFFECT_COMMITTED_HEADER, effectCommittedOperationId, HttpError } from "./errors"
 
 /**
  * Idempotency-Key handling for POST/PUT (L18 §4.2), made atomic with the effects it guards (audit F09; spec
@@ -394,7 +394,16 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
   }
   if (claim.kind === "reused") throw new HttpError(422, "idempotency_key_reused")
   if (claim.kind === "in_progress") throw new HttpError(409, "idempotency_in_progress")
-  if (claim.kind === "replay") return { status: claim.response.status, body: { ...claim.response.body, reused: true } }
+  if (claim.kind === "replay") {
+    const body = { ...claim.response.body, reused: true }
+    // Stored results keep no headers (storedForm). A committed-write refusal
+    // still has effectCommitted in the body; put the header back so a same-key
+    // retry carries both F10 signals (FA-F02-001).
+    const operationId = effectCommittedOperationId(body)
+    return operationId
+      ? { status: claim.response.status, body, headers: { [EFFECT_COMMITTED_HEADER]: operationId } }
+      : { status: claim.response.status, body }
+  }
 
   const op = new IdempotentOperation(
     docId,
@@ -412,7 +421,15 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
     throw err
   }
   // A handler's own 409 idempotency_effect_committed names the operation too (re-audit LOW-1), stored and answered alike.
-  if (isEffectCommitted(result)) result = effectCommittedResult(op.operationId)
+  // A body that already carries effectCommitted keeps that id and both signals.
+  // A Functions-native 409 has neither, and stays the exact effectCommittedResult body.
+  if (isEffectCommitted(result)) {
+    const named = effectCommittedOperationId(result.body)
+    const rewritten = effectCommittedResult(named ?? op.operationId)
+    result = named
+      ? { ...rewritten, body: { ...rewritten.body, effectCommitted: { operationId: named } }, headers: { [EFFECT_COMMITTED_HEADER]: named } }
+      : rewritten
+  }
   if (!isStorableResult(result)) {
     if ((await settle(op, undefined)) === "terminal") return effectCommittedResult(op.operationId)
   } else {

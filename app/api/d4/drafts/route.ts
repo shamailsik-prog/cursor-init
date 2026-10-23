@@ -3,6 +3,8 @@ import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_DRAFTS } from "@/platform/authority/f02Routes"
 import { errorResponse } from "@/platform/http/errors"
 import { resolvePartnerOverride } from "@/services/d4-2/partnerOverride"
 import { DraftCharsetError } from "@/services/d4-2/draftCharset"
@@ -115,7 +117,7 @@ function buildPreflightInput(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet)
+  return withSession(request, handleGetAuthorised)
 }
 
 async function handleGet(request: Request) {
@@ -267,9 +269,13 @@ async function handleGet(request: Request) {
  */
 const DRAFTS_MAX_BODY_BYTES = 2 * 1024 * 1024
 
+const handleGetAuthorised = withF02Authority(F02_DRAFTS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { maxBodyBytes: DRAFTS_MAX_BODY_BYTES })
+  return withSession(request, handlePostAuthorised, { maxBodyBytes: DRAFTS_MAX_BODY_BYTES })
 }
+
+const handlePostAuthorised = withF02Authority(F02_DRAFTS, "POST", handlePost)
 
 async function handlePost(request: Request, session: HandlerSession | null) {
   const store = getRuntimeStore()

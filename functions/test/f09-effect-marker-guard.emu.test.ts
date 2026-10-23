@@ -369,6 +369,28 @@ describe("re-audit LOW-3: every `once` POST route stages its allow row in its ef
     expect(checkOperation(real.src, mutant, real.file).nonTransactionalWrites).toContain("run: ref.set")
   })
 
+  it("the only rerun POSTs are the identity heal routes and the nine F02 Next-authority routes", () => {
+    const rerun = ROUTES.filter((r) => r.method !== "GET" && r.idempotency === "rerun").map((r) => `${r.method} ${r.path}`)
+    expect(rerun.sort()).toEqual(
+      [
+        "POST /api/platform/identity/onboardFirm",
+        "POST /api/platform/identity/createFirmUser",
+        "POST /api/platform/identity/setUserClaims",
+        "POST /api/platform/identity/deactivateUser",
+        "POST /api/platform/identity/disableMfa",
+        "POST /api/d1/matters",
+        "POST /api/d1/documents",
+        "POST /api/d1/document-workflow",
+        "POST /api/d1/reporting",
+        "POST /api/d2/court-ops",
+        "POST /api/d2/ops-reporting",
+        "POST /api/d4/drafts",
+        "POST /api/d4/filings",
+        "POST /api/p5/tenancy",
+      ].sort(),
+    )
+  })
+
   it("covers every `once` POST route: each stages its allow row in a transaction, never calls audit.allow(), and writes nothing outside it unless allowlisted", () => {
     expect(ONCE_ROUTES.length).toBeGreaterThanOrEqual(25)
     const failures: string[] = []
