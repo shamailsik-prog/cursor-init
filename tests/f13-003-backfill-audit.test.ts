@@ -6,6 +6,7 @@ import {
   MATTER_BACKFILL_AUDIT_BATCH,
   applyMatterShapeBackfill,
   planMatterShapeBackfill,
+  type ApplyRejection,
   type CompleteMatterResult,
   type MatterShapeBackfillStore,
 } from "@/platform/persistence/matterShapeBackfill"
@@ -44,7 +45,7 @@ function memoryStore(opts: { failAt?: number; matterOutcome?: (id: string) => Co
 }
 
 const pathsIn = (row: Record<string, unknown>) =>
-  ["planned", "applied", "skipped", "rejected", "malformed", "orphans"].reduce(
+  ["planned", "applied", "skipped", "rejected", "failed", "malformed", "orphans"].reduce(
     (n, k) => n + ((row[k] as unknown[] | undefined)?.length ?? 0),
     0
   )
@@ -72,7 +73,10 @@ describe("F13 FA-F13-003: bounded backfill audit rows", () => {
   it("each batch's planned paths are audited before its writes, so a run that dies mid-batch left a record", async () => {
     const plan = planMatterShapeBackfill(Array.from({ length: MATTER_BACKFILL_AUDIT_BATCH + 2 }, (_, i) => legacyMatter(i)), [])
     const { store, audit, events } = memoryStore({ failAt: MATTER_BACKFILL_AUDIT_BATCH + 1 })
-    await expect(applyMatterShapeBackfill(store, plan, { runId: "r2", now: 1 })).rejects.toThrow("instance died")
+    // FA-F13-033: the thrown write is recorded and the run finishes. The planned row is still written first.
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r2", now: 1 })
+    expect(res.failed).toEqual([{ path: "matters/m00200", message: "instance died" }])
+    expect(res.applied).toContain("matters/m00201")
     const planned = audit.filter((r) => Array.isArray(r.planned))
     expect(planned).toHaveLength(2)
     expect(planned[1].planned).toEqual(plan.matters.slice(MATTER_BACKFILL_AUDIT_BATCH).map((u) => `matters/${u.id}`))
@@ -106,5 +110,78 @@ describe("F13 FA-F13-019: a planned matter gone or malformed at apply is rejecte
     expect(done.rejected).toEqual(res.rejected)
     const summary = audit.find((r) => r.id === "aud_matter_shape_backfill_r19")!
     expect(summary).toMatchObject({ appliedCount: 1, skippedCount: 0, rejectedCount: 2 })
+  })
+})
+
+describe("F13 FA-F13-033: one failed write does not abort the backfill audit", () => {
+  const failedOf = (res: { applied: string[]; skipped: string[]; rejected: ApplyRejection[] }) =>
+    (res as { failed?: { path: string; message: string }[] }).failed
+
+  it("records the failed matter, writes the later row in the batch, and still writes the summary", async () => {
+    const malformed = [{ id: "bad0", data: { firmId: "firmA" } }]
+    const plan = planMatterShapeBackfill([legacyMatter(0), legacyMatter(1), ...malformed], [])
+    const { store, audit } = memoryStore({ failAt: 1 })
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r23", now: 1 })
+    expect(failedOf(res)).toEqual([{ path: "matters/m00000", message: "instance died" }])
+    expect(res.applied).toEqual(["matters/m00001"])
+    expect(res.skipped).toEqual([])
+    expect(res.rejected).toEqual([])
+    const done = audit.find((r) => r.id === "aud_matter_shape_backfill_r23_b0_done")!
+    expect(done.failed).toEqual([{ path: "matters/m00000", message: "instance died" }])
+    expect(done.applied).toEqual(["matters/m00001"])
+    expect(done.skipped).toEqual([])
+    expect(String(done.reason)).toContain("1 failed")
+    const summary = audit.find((r) => r.id === "aud_matter_shape_backfill_r23")!
+    expect(summary).toMatchObject({ appliedCount: 1, skippedCount: 0, rejectedCount: 0, failedCount: 1, malformedCount: 1 })
+    expect(summary.failed).toBeUndefined()
+    expect(pathsIn(summary)).toBe(0)
+    expect(String(summary.reason)).toContain("1 failed")
+    expect(audit.some((r) => r.id === "aud_matter_shape_backfill_r23_malformed_0")).toBe(true)
+  })
+
+  it("records a failed member write and still completes the next member", async () => {
+    const matter = {
+      id: "mcomplete",
+      data: {
+        firmId: "firmA", clientId: "c1", title: "Suit", classification: "internal", status: "live",
+        stage: "pre_filing", caseNumberStatus: "pending", matterNo: null, courtId: null, caseNumber: null,
+        conflictCheckId: null, createdBy: null,
+      },
+    }
+    const member = (userId: string) => ({ id: `mcomplete_${userId}`, data: { firmId: "firmA", matterId: "mcomplete", userId } })
+    const plan = planMatterShapeBackfill([matter], [member("u0"), member("u1")])
+    expect(plan.matters).toEqual([])
+    expect(plan.members.map((row) => row.id)).toEqual(["mcomplete_u0", "mcomplete_u1"])
+    const { store, audit } = memoryStore({ failAt: 1 })
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r23m", now: 1 })
+    expect(failedOf(res)).toEqual([{ path: "matter_members/mcomplete_u0", message: "instance died" }])
+    expect(res.applied).toEqual(["matter_members/mcomplete_u1"])
+    expect(res.skipped).toEqual([])
+    expect(res.rejected).toEqual([])
+    const summary = audit.find((r) => r.id === "aud_matter_shape_backfill_r23m")!
+    expect(summary).toMatchObject({ appliedCount: 1, failedCount: 1 })
+    expect(pathsIn(summary)).toBe(0)
+  })
+
+  it("records a non-Error throw by its string, not by rethrowing", async () => {
+    const plan = planMatterShapeBackfill([legacyMatter(0), legacyMatter(1)], [])
+    const { store } = memoryStore()
+    store.completeMatter = async (planned) => {
+      if (planned.id === "m00000") throw "disk full"
+      return { status: "written" }
+    }
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r23s", now: 1 })
+    expect(failedOf(res)).toEqual([{ path: "matters/m00000", message: "disk full" }])
+    expect(res.applied).toEqual(["matters/m00001"])
+  })
+
+  it("an audit write that throws still rejects, and no matter write runs after it", async () => {
+    const plan = planMatterShapeBackfill([legacyMatter(0), legacyMatter(1)], [])
+    const { store, events } = memoryStore()
+    store.appendAudit = async () => {
+      throw new Error("audit down")
+    }
+    await expect(applyMatterShapeBackfill(store, plan, { runId: "raud", now: 1 })).rejects.toThrow("audit down")
+    expect(events.some((event) => event.startsWith("write:"))).toBe(false)
   })
 })
