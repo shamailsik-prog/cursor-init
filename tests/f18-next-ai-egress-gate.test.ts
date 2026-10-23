@@ -352,7 +352,7 @@ const FAILING: Case[] = [
     files: {
       "agent/cfg2.ts": 'const cfg: Record<string, string> = {}\ncfg["model"] = "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
     },
-    names: ["agent/cfg2.ts", '["model"]'],
+    names: ["agent/cfg2.ts", "computed assignment"],
   },
   {
     name: "FA-F18-016 bypass 5: defineAgent spreads a base built outside agent/",
@@ -371,7 +371,7 @@ const FAILING: Case[] = [
         'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nlet model = committeeBrainLanguageModel\nmodel = "anthropic/claude-sonnet-4.6"\nexport default defineAgent({ model })\n',
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
-    names: ["agent/agent.ts", "shorthand"],
+    names: ["agent/agent.ts", "let/var model"],
   },
   {
     name: "FA-F18-016 bypass 6b: shorthand model bound in an inner scope",
@@ -442,7 +442,7 @@ const FAILING: Case[] = [
         'import { defineAgent as da } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nexport default da({ model: committeeBrainLanguageModel })\n',
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
-    names: ["agent/agent.ts", "expected exactly one defineAgent"],
+    names: ["agent/agent.ts", "defineAgent must be imported by name"],
   },
   {
     name: "FA-F18-022a: Object.defineProperty sets model",
@@ -458,7 +458,7 @@ const FAILING: Case[] = [
       "agent/cfg.ts":
         'const cfg: Record<string, string> = {}\nObject.assign(cfg, { model: "anthropic/claude-sonnet-4.6" })\nexport const x = cfg\n',
     },
-    names: ["agent/cfg.ts", "outside defineAgent"],
+    names: ["agent/cfg.ts", "Object.assign"],
   },
   {
     name: "FA-F18-022c: Reflect.set sets model",
@@ -482,7 +482,7 @@ const FAILING: Case[] = [
       "agent/cfg.ts":
         'const cfg: { model?: string } = {}\ncfg.model ||= "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
     },
-    names: ["agent/cfg.ts", "||="],
+    names: ["agent/cfg.ts", "FA-F18-022"],
   },
   {
     name: "FA-F18-022f: nullish assignment on cfg.model",
@@ -490,7 +490,7 @@ const FAILING: Case[] = [
       "agent/cfg.ts":
         'const cfg: { model?: string } = {}\ncfg.model ??= "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
     },
-    names: ["agent/cfg.ts", "??="],
+    names: ["agent/cfg.ts", "FA-F18-022"],
   },
   {
     name: "FA-F18-023: quoted model string in agent .mts",
