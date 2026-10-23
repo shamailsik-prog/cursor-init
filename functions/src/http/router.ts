@@ -1,4 +1,4 @@
-import { onRequest, type Request } from "firebase-functions/v2/https"
+import { onRequest } from "firebase-functions/v2/https"
 import { INGRESS_SETTINGS } from "../deployConfig"
 import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
 import type { Operation } from "../p5/common"
@@ -24,7 +24,7 @@ import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDr
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
 import { F02_NEXT_AUTHORITY_ROUTES } from "./f02NextAuthority"
-import { buildRouteTable, createRouter, MAX_BODY_BYTES, type Method, type Route } from "./routerRuntime"
+import { createRouter, type Route } from "./routerRuntime"
 
 /**
  * The HTTP entry `api` (L18 §4.1): GET/POST/PUT under /api/{domain}/{service}/{function},
