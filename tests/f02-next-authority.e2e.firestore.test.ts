@@ -18,6 +18,8 @@ import { GET as opsReportingGet } from "@/app/api/d2/ops-reporting/route"
 import { GET as draftsGet } from "@/app/api/d4/drafts/route"
 import { GET as filingsGet } from "@/app/api/d4/filings/route"
 import { GET as tenancyGet } from "@/app/api/p5/tenancy/route"
+import { registerF02Core, snapshotF02CoresForTests } from "@/platform/authority/f02Registry"
+import { F02_MATTERS } from "@/platform/authority/f02Routes"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
@@ -155,6 +157,43 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F02: Next domain routes use the Fu
     expect(ids).toContain(internalMatterId)
     expect(ids).not.toContain(privilegedMatterId)
     expect(res.headers.get(AUTHORITY_HEADER)).toBe("functions")
+  }, E2E_TIMEOUT_MS)
+
+  it("keeps the effect-committed signal when the core writes and then returns 422", async () => {
+    const operationId = randomUUID()
+    const restore = snapshotF02CoresForTests()
+    registerF02Core(F02_MATTERS, "POST", async () => {
+      await adminDb().collection("f02_effect_probe").doc(operationId).set({ wrote: true })
+      return new Response(
+        JSON.stringify({
+          error: "closure follow-up queue is already resolved",
+          code: "already_resolved",
+          effectCommitted: { operationId },
+        }),
+        { status: 422, headers: { "Idempotency-Effect-Committed": operationId, "content-type": "application/json" } }
+      )
+    })
+    try {
+      const res = await mattersPost(
+        new Request("http://127.0.0.1/api/d1/matters", {
+          method: "POST",
+          headers: authHeaders(actor, {
+            "content-type": "application/json",
+            "idempotency-key": randomUUID(),
+          }),
+          body: "{}",
+        })
+      )
+      const body = (await res.json()) as { effectCommitted?: { operationId?: string } }
+      const wrote = await adminDb().collection("f02_effect_probe").doc(operationId).get()
+      expect(wrote.exists).toBe(true)
+      expect(res.status).toBe(422)
+      expect(res.headers.get("Idempotency-Effect-Committed")).toBe(operationId)
+      expect(body.effectCommitted).toEqual({ operationId })
+      expect(res.headers.get(AUTHORITY_HEADER)).toBe("functions")
+    } finally {
+      restore()
+    }
   }, E2E_TIMEOUT_MS)
 
   it("refuses add_member below the matter classification before writing a membership", async () => {

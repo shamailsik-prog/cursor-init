@@ -28,6 +28,15 @@ export function registerF02Core(path: string, method: string, core: F02Core): vo
   cores.set(key(method, path), core)
 }
 
+/** Puts the core map back. A test that installs a stand-in core must restore the real one. */
+export function snapshotF02CoresForTests(): () => void {
+  const saved = new Map(cores)
+  return () => {
+    cores.clear()
+    for (const [k, v] of saved) cores.set(k, v)
+  }
+}
+
 export function inAuthorityFrame(): boolean {
   return frame.getStore() === true
 }
