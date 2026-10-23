@@ -1,4 +1,4 @@
-import { FieldPath, Timestamp, type DocumentData, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../d1/pagination"
@@ -372,9 +372,8 @@ export const cancelJobOp: FirmOperation<JobView> = {
         updatedAt: at,
         logs: appendLog(job, "cancelled", typeof job.attempts === "number" ? job.attempts : 0, now),
       }
-      await audit.stage(tx, "allow", "ok")
-      stageJobUpdate(tx, jobsRef().doc(jobId), update)
       const legacyId = job.jobType === OCR_JOB_TYPE ? legacyJobIdFromEngine(job) : undefined
+      let legacyClose: { ref: DocumentReference; patch: { ocrStatus: "failed"; ocrFailureCode: "cancelled" } } | undefined
       if (legacyId !== undefined) {
         const legacyRef = jobsRef().doc(legacyId)
         const legacySnap = await tx.get(legacyRef)
@@ -385,9 +384,12 @@ export const cancelJobOp: FirmOperation<JobView> = {
           legacy.engine !== JOB_ENGINE &&
           legacy.ocrStatus !== "done"
         ) {
-          tx.update(legacyRef, { ocrStatus: "failed", ocrFailureCode: "cancelled" })
+          legacyClose = { ref: legacyRef, patch: { ocrStatus: "failed", ocrFailureCode: "cancelled" } }
         }
       }
+      await audit.stage(tx, "allow", "ok")
+      stageJobUpdate(tx, jobsRef().doc(jobId), update)
+      if (legacyClose !== undefined) tx.update(legacyClose.ref, legacyClose.patch)
       return jobView(jobId, { ...job, ...update }, "full", { logs: true })
     })
     audit.committed()
