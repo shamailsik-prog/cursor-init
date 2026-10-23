@@ -78,7 +78,7 @@ export function planMatterShapeBackfill(matters: readonly BackfillRow[], members
   return plan
 }
 
-/** FA-F13-024: dry-run text. The counts line stays, and every row is named with the fields a write would add. */
+/** FA-F13-034: dry-run text. The counts line stays, and every row is named with the fields a write would add. */
 export function formatMatterShapeBackfillDryRun(plan: MatterShapeBackfillPlan): string {
   const lines = [
     `[backfill-matter-shapes] DRY-RUN: ${plan.matters.length} matters and ${plan.members.length} members to complete, ` +
@@ -169,7 +169,7 @@ export function stillMissing(stored: Record<string, unknown>, patch: FieldPatch)
  * - `_b{k}_planned` (the batch's paths) BEFORE that batch's writes, and `_b{k}_done` (applied / skipped / failed) after them;
  * - `_malformed_{k}` / `_orphans_{k}` chunks of the rows it left untouched;
  * - the summary row (counts only, no paths) last.
- * FA-F13-023: a thrown write is recorded on that batch's done row and the run continues, so later rows and the summary
+ * FA-F13-033: a thrown write is recorded on that batch's done row and the run continues, so later rows and the summary
  * are not lost. A thrown audit write still rejects: there is nothing to record it on.
  */
 export type MatterShapeBackfillAuditRow = {
@@ -269,7 +269,7 @@ export async function applyMatterShapeBackfill(
         else if (outcome.status === "skipped") batchSkipped.push(keys[i])
         else batchRejected.push({ path: keys[i], reason: outcome.reason })
       } catch (err) {
-        // FA-F13-023: one thrown write must not skip the rest of this batch, later batches, or the summary.
+        // FA-F13-033: one thrown write must not skip the rest of this batch, later batches, or the summary.
         const message = err instanceof Error ? err.message : String(err)
         batchFailed.push({ path: keys[i], message })
       }

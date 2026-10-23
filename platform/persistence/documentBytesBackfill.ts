@@ -1,7 +1,7 @@
 import { documentRecordRefusal } from "@/platform/d1/documentRecord"
 
 /**
- * FA-F13-022: one-off backfill for document rows stored before `objectBytesStatus` was written.
+ * FA-F13-029: one-off backfill for document rows stored before `objectBytesStatus` was written.
  * The reader already treats an absent status as "missing". This stamps that default onto the row and does not
  * invent any other field. A row the reader refuses is reported and left untouched.
  */

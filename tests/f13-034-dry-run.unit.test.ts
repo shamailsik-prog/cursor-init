@@ -1,7 +1,7 @@
-// FA-F13-024: the matter-shape dry-run must name each row and the fields it would add, not only the counts.
+// FA-F13-034: the matter-shape dry-run must name each row and the fields it would add, not only the counts.
 import { describe, expect, it } from "vitest"
 
-describe("F13 FA-F13-024: matter-shape dry-run names rows", () => {
+describe("F13 FA-F13-034: matter-shape dry-run names rows", () => {
   it("prints the counts line and one line per planned, complete, malformed and orphan row", async () => {
     const mod = await import("@/platform/persistence/matterShapeBackfill")
     const plan = {

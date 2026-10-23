@@ -1,4 +1,4 @@
-// FA-F13-021 / FA-F13-022: documents.create must refuse a malformed row before it writes, and listByFirm must
+// FA-F13-028 / FA-F13-029: documents.create must refuse a malformed row before it writes, and listByFirm must
 // report the rows it omits (the returned array stays valid-only). These fail until both memory paths do that.
 import { describe, expect, it } from "vitest"
 import { DocumentMalformedError } from "@/platform/d1/documentRecord"
@@ -24,7 +24,7 @@ const good = (id: string, firmId = "firmA"): DocumentRecord => ({
   objectBytesStatus: "available",
 })
 
-describe("F13 FA-F13-021: memory documents.create validates before it writes", () => {
+describe("F13 FA-F13-028: memory documents.create validates before it writes", () => {
   it("a canonical create is stored and readable", async () => {
     const store = newStore()
     const repos = createMemoryRepositories(store)
@@ -67,7 +67,7 @@ describe("F13 FA-F13-021: memory documents.create validates before it writes", (
   })
 })
 
-describe("F13 FA-F13-022: memory listByFirm reports the invalid rows it omits", () => {
+describe("F13 FA-F13-029: memory listByFirm reports the invalid rows it omits", () => {
   it("returns only the valid row and names the dropped row with its reason", async () => {
     const store = newStore()
     const repos = createMemoryRepositories(store)

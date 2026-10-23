@@ -91,7 +91,7 @@ export function partitionFirmDocuments(rows: readonly { id: string }[]): {
 }
 
 /**
- * FA-F13-021: the document to write on create. A row the reader refuses throws, and the caller must not write.
+ * FA-F13-028: the document to write on create. A row the reader refuses throws, and the caller must not write.
  * The returned record is canonical: the id argument wins, and an absent `objectBytesStatus` is `missing`.
  */
 export function canonicalDocumentForCreate(row: unknown): DocumentRecord {

@@ -87,7 +87,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
   })
 })
 
-describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-021: documents.create validates before it writes", () => {
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-028: documents.create validates before it writes", () => {
   it("a malformed create throws and the document is not created", async () => {
     const firmId = uniq("f13d21firm")
     const id = uniq("doc")
@@ -120,7 +120,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-021: documents.create v
   })
 })
 
-describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-022: listByFirm reports dropped rows, and the bytes backfill stamps only the missing status", () => {
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-029: listByFirm reports dropped rows, and the bytes backfill stamps only the missing status", () => {
   it("listByFirm keeps the valid row and names the invalid one", async () => {
     const firmId = uniq("f13d22firm")
     const badId = await stored({ ...good(firmId), byteSize: "12" })

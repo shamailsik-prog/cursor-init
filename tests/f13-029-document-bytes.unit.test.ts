@@ -1,4 +1,4 @@
-// FA-F13-022: pre-10-13 document rows (no stored objectBytesStatus) need a backfill that stamps only that default,
+// FA-F13-029: pre-10-13 document rows (no stored objectBytesStatus) need a backfill that stamps only that default,
 // and a report of rows the reader refuses. Nothing else is invented. Fails until the planner and apply exist.
 import { describe, expect, it } from "vitest"
 
@@ -18,7 +18,7 @@ const good = (id: string): Record<string, unknown> => ({
   id,
 })
 
-describe("F13 FA-F13-022: document bytes backfill", () => {
+describe("F13 FA-F13-029: document bytes backfill", () => {
   it("stamps only a missing objectBytesStatus and reports a row it cannot read", async () => {
     const mod = await import("@/platform/persistence/documentBytesBackfill")
     const legacy = good("doc_legacy")

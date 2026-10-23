@@ -73,7 +73,7 @@ describe("F13 FA-F13-003: bounded backfill audit rows", () => {
   it("each batch's planned paths are audited before its writes, so a run that dies mid-batch left a record", async () => {
     const plan = planMatterShapeBackfill(Array.from({ length: MATTER_BACKFILL_AUDIT_BATCH + 2 }, (_, i) => legacyMatter(i)), [])
     const { store, audit, events } = memoryStore({ failAt: MATTER_BACKFILL_AUDIT_BATCH + 1 })
-    // FA-F13-023: the thrown write is recorded and the run finishes. The planned row is still written first.
+    // FA-F13-033: the thrown write is recorded and the run finishes. The planned row is still written first.
     const res = await applyMatterShapeBackfill(store, plan, { runId: "r2", now: 1 })
     expect(res.failed).toEqual([{ path: "matters/m00200", message: "instance died" }])
     expect(res.applied).toContain("matters/m00201")
@@ -113,7 +113,7 @@ describe("F13 FA-F13-019: a planned matter gone or malformed at apply is rejecte
   })
 })
 
-describe("F13 FA-F13-023: one failed write does not abort the backfill audit", () => {
+describe("F13 FA-F13-033: one failed write does not abort the backfill audit", () => {
   const failedOf = (res: { applied: string[]; skipped: string[]; rejected: ApplyRejection[] }) =>
     (res as { failed?: { path: string; message: string }[] }).failed
 
