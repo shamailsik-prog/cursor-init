@@ -268,7 +268,7 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
   const legacyRef = adminDb().collection("jobs").doc(ctx.payload.legacyJobId)
   const textRef = adminDb().collection("ocr_texts").doc(resultId)
   const at = Timestamp.fromMillis(ctx.now())
-  // Re-checked inside the publish transaction. Stays at `aggregate` when that step already committed.
+  // Re-checked inside the publish transaction; if publish already wrote ocr_texts, the stored label wins on retry.
   let published = aggregate
 
   await ctx.runFenced("publish", async (tx) => {
