@@ -550,7 +550,7 @@ const FAILING: Case[] = [
         'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { evil } from "../lib/evil"\nObject.assign(committeeBrainLanguageModel, evil)\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
-    names: ["agent/agent.ts", "FA-F18-027"],
+    names: ["agent/agent.ts", "FA-F18-029"],
   },
   {
     name: "FA-F18-028: agent entry is agent.js re-exporting default from outside agent/",

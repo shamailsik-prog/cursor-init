@@ -40,9 +40,14 @@ It fails on any of:
       (including `.mts`/`.cts`) is checked with a TypeScript AST pass: `agent/agent.ts` must have exactly one non-type
       `import { defineAgent } from "eve"` and `export default defineAgent({...})` where the callee is that import (not a
       local wrapper); no namespace/default `eve` import, no `x.defineAgent` / dynamic `import("eve")` / `require("eve")`,
-      no local `defineAgent` binding; exactly one eve `defineAgent` call under `agent/`; object-literal argument without
-      spread; no mutation of `committeeBrainLanguageModel`; `Object.assign` / object spreads under `agent/` only from
-      object literals declared in the same file; no local shadowing of `committeeBrainLanguageModel` or `model`
+      no local `defineAgent` binding; only `agent/agent.ts` may import `{ defineAgent }` from `"eve"`; in that file every
+      `defineAgent` reference must be the callee of a direct `defineAgent({...})` call (no `.call`/`.apply`/`.bind` or
+      passing the import elsewhere); exactly one eve `defineAgent` call under `agent/`; object-literal argument without
+      spread; no bare side-effect `import "..."` under `agent/` (FA-F18-031); no mutation of `committeeBrainLanguageModel`
+      (property/element/compound/logical assignment, `delete`, `++`/`--`, or `Object`/`Reflect` APIs, including when
+      `Object`/`Reflect` are aliased to a local); the `committeeBrainLanguageModel` identifier may appear only as the
+      `model:` value in that single `defineAgent` argument (FA-F18-029); `Object.assign` / object spreads under `agent/`
+      only from object literals declared in the same file; no local shadowing of `committeeBrainLanguageModel` or `model`
       parameters; no `.model` / computed model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` /
       logical-assignment writes on other objects; no other `model` property under `agent/`. Quoted model strings in
       JSON/YAML/markdown under `agent/` fail. Residual: non-`const` computed property keys on arbitrary objects.

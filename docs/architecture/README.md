@@ -113,9 +113,12 @@ Gates:
   under `agent/` fail it too: rule (f) uses a TypeScript AST pass (including `.mts`/`.cts`) so, when `agent/` exists,
   only `agent/agent.ts` may be the entry; it must import `defineAgent` by name from `"eve"` (no wrappers, namespace or
   member calls) and default-export `defineAgent({...})` with `model` checker-resolving to `committeeBrainLanguageModel`
-  from exactly `platform/p1/committeeBrainModel`, without mutating that import or spreading/`Object.assign` from
-  outside the file (FA-F18-002, FA-F18-015, FA-F18-016, FA-F18-020, FA-F18-025..027). Residual: non-`const` computed
-  property keys on arbitrary objects remain a gap. `--print-pure-modules` prints `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
+  from exactly `platform/p1/committeeBrainModel`; only `agent/agent.ts` may import `defineAgent`, and only as a direct
+  call callee; no bare side-effect imports under `agent/`; the `committeeBrainLanguageModel` name may appear only on
+  `model:` in that call; no property/element/compound/logical writes, `delete`, `++`/`--`, or `Object`/`Reflect`
+  mutation (including aliased globals) on the canonical model; no spreading/`Object.assign` from outside the file
+  (FA-F18-002, FA-F18-015, FA-F18-016, FA-F18-020, FA-F18-025..031). Residual: non-`const` computed property keys on
+  arbitrary objects remain a gap. `--print-pure-modules` prints `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

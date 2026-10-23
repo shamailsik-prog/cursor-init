@@ -106,9 +106,7 @@ function collectImports(sf: ts.SourceFile, importerRel: string): ImportInfo[] {
 }
 
 function hasCanonicalModelImport(imports: ImportInfo[]): boolean {
-  return imports.some(
-    (i) => !i.isTypeOnly && i.local === MODEL_BINDING && i.imported === MODEL_BINDING && i.module === CANONICAL_MODULE
-  )
+  return imports.some((i) => !i.isTypeOnly && i.imported === MODEL_BINDING && i.module === CANONICAL_MODULE)
 }
 
 function isDefineAgentIdentifier(node: ts.Node): boolean {
@@ -246,6 +244,16 @@ function forbiddenLocalBindings(sf: ts.SourceFile, rel: string, findings: string
         `${rel}: local binding of ${MODEL_BINDING} is not allowed; use the import from ${CANONICAL_MODULE} (FA-F18-020)`
       )
     }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer &&
+      ts.isIdentifier(node.initializer) &&
+      (node.initializer.text === "Object" || node.initializer.text === "Reflect")
+    ) {
+      findings.push(
+        `${rel}: aliasing global ${node.initializer.text} is not allowed under agent/ (FA-F18-029)`
+      )
+    }
     if (ts.isVariableDeclaration(node) && bindingDeclaresName(node.name, "model")) {
       const list = node.parent && ts.isVariableDeclarationList(node.parent) ? node.parent : undefined
       const isLet = Boolean(list && list.flags & ts.NodeFlags.Let)
@@ -291,6 +299,15 @@ function validateEveDefineAgentImports(rel: string, imports: ImportInfo[], findi
   const tag = "FA-F18-025"
   for (const imp of imports) {
     if (imp.isTypeOnly) continue
+    if (
+      rel !== "agent/agent.ts" &&
+      !imp.isTypeOnly &&
+      imp.module === EVE_MODULE &&
+      imp.local === DEFINE_AGENT &&
+      imp.imported === DEFINE_AGENT
+    ) {
+      findings.push(`${rel}: only agent/agent.ts may import { ${DEFINE_AGENT} } from "${EVE_MODULE}" (FA-F18-030)`)
+    }
     if (imp.local === DEFINE_AGENT || imp.imported === DEFINE_AGENT) {
       if (imp.module !== EVE_MODULE || imp.imported !== DEFINE_AGENT || imp.local !== DEFINE_AGENT) {
         findings.push(`${rel}: defineAgent must be imported by name from "${EVE_MODULE}" (FA-F18-021, ${tag})`)
@@ -374,19 +391,47 @@ function isModelElementAccess(left: ts.Expression, checker: ts.TypeChecker): boo
   return stringConstValue(arg, checker) === "model"
 }
 
-function callIsGlobalMethod(node: ts.CallExpression, objectName: string, method: string): boolean {
-  const ex = node.expression
-  return ts.isPropertyAccessExpression(ex) && ts.isIdentifier(ex.expression) && ex.expression.text === objectName && ex.name.text === method
+function exprResolvesToGlobal(expr: ts.Expression, checker: ts.TypeChecker, globalName: string): boolean {
+  if (!ts.isIdentifier(expr)) return false
+  if (expr.text === globalName) return true
+  const sym = checker.getSymbolAtLocation(expr)
+  const decl = sym?.valueDeclaration
+  if (decl && ts.isVariableDeclaration(decl) && decl.initializer && ts.isIdentifier(decl.initializer)) {
+    return decl.initializer.text === globalName
+  }
+  return false
 }
 
-function callIsReflectMethod(node: ts.CallExpression, method: string): boolean {
+function callIsGlobalMethod(
+  node: ts.CallExpression,
+  checker: ts.TypeChecker,
+  objectName: string,
+  method: string
+): boolean {
   const ex = node.expression
-  return ts.isPropertyAccessExpression(ex) && ts.isIdentifier(ex.expression) && ex.expression.text === "Reflect" && ex.name.text === method
+  return (
+    ts.isPropertyAccessExpression(ex) &&
+    ex.name.text === method &&
+    exprResolvesToGlobal(ex.expression, checker, objectName)
+  )
+}
+
+function callIsReflectMethod(node: ts.CallExpression, checker: ts.TypeChecker, method: string): boolean {
+  return callIsGlobalMethod(node, checker, "Reflect", method)
+}
+
+function accessChainRoot(expr: ts.Expression): ts.Expression {
+  let cur = expr
+  while (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
+    cur = cur.expression
+  }
+  return cur
 }
 
 function exprIsCanonicalModelTarget(expr: ts.Expression, checker: ts.TypeChecker, root: string): boolean {
-  if (ts.isIdentifier(expr) && expr.text === MODEL_BINDING) return true
-  return resolvesToCanonicalModel(expr, checker, root)
+  const rootExpr = accessChainRoot(expr)
+  if (ts.isIdentifier(rootExpr) && rootExpr.text === MODEL_BINDING) return true
+  return resolvesToCanonicalModel(rootExpr, checker, root)
 }
 
 function allowedSpreadOrAssignSource(expr: ts.Expression, sf: ts.SourceFile, checker: ts.TypeChecker): boolean {
@@ -432,16 +477,31 @@ function forbiddenCanonicalModelMutation(
   findings: string[]
 ): void {
   const tag = "FA-F18-027"
+  const tag029 = "FA-F18-029"
   const visit = (node: ts.Node) => {
     if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.kind)) {
       if (exprIsCanonicalModelTarget(node.left, checker, root)) {
-        findings.push(`${rel}: mutating ${MODEL_BINDING} is not allowed under agent/ (${tag})`)
+        findings.push(`${rel}: mutating ${MODEL_BINDING} is not allowed under agent/ (${tag029})`)
+      }
+    }
+    if (ts.isDeleteExpression(node)) {
+      if (exprIsCanonicalModelTarget(node.expression, checker, root)) {
+        findings.push(`${rel}: delete on ${MODEL_BINDING} is not allowed under agent/ (${tag029})`)
+      }
+    }
+    if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) {
+      const op = node.operator
+      if (op === ts.SyntaxKind.PlusPlusToken || op === ts.SyntaxKind.MinusMinusToken) {
+        const operand = ts.isPrefixUnaryExpression(node) ? node.operand : node.operand
+        if (exprIsCanonicalModelTarget(operand, checker, root)) {
+          findings.push(`${rel}: mutating ${MODEL_BINDING} is not allowed under agent/ (${tag029})`)
+        }
       }
     }
     if (ts.isCallExpression(node)) {
-      if (callIsGlobalMethod(node, "Object", "assign") && node.arguments[0]) {
+      if (callIsGlobalMethod(node, checker, "Object", "assign") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Object.assign on ${MODEL_BINDING} is not allowed under agent/ (${tag})`)
+          findings.push(`${rel}: Object.assign on ${MODEL_BINDING} is not allowed under agent/ (${tag029})`)
         }
         for (const arg of node.arguments.slice(1)) {
           if (!allowedSpreadOrAssignSource(arg, sf, checker)) {
@@ -449,34 +509,34 @@ function forbiddenCanonicalModelMutation(
           }
         }
       }
-      if (callIsGlobalMethod(node, "Object", "defineProperty") && node.arguments[0]) {
+      if (callIsGlobalMethod(node, checker, "Object", "defineProperty") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Object.defineProperty on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Object.defineProperty on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
-      if (callIsGlobalMethod(node, "Object", "defineProperties") && node.arguments[0]) {
+      if (callIsGlobalMethod(node, checker, "Object", "defineProperties") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Object.defineProperties on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Object.defineProperties on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
-      if (callIsGlobalMethod(node, "Object", "setPrototypeOf") && node.arguments[0]) {
+      if (callIsGlobalMethod(node, checker, "Object", "setPrototypeOf") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Object.setPrototypeOf on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Object.setPrototypeOf on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
-      if (callIsReflectMethod(node, "set") && node.arguments[0]) {
+      if (callIsReflectMethod(node, checker, "set") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Reflect.set on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Reflect.set on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
-      if (callIsReflectMethod(node, "defineProperty") && node.arguments[0]) {
+      if (callIsReflectMethod(node, checker, "defineProperty") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Reflect.defineProperty on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Reflect.defineProperty on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
-      if (callIsReflectMethod(node, "setPrototypeOf") && node.arguments[0]) {
+      if (callIsReflectMethod(node, checker, "setPrototypeOf") && node.arguments[0]) {
         if (exprIsCanonicalModelTarget(node.arguments[0], checker, root)) {
-          findings.push(`${rel}: Reflect.setPrototypeOf on ${MODEL_BINDING} is not allowed (${tag})`)
+          findings.push(`${rel}: Reflect.setPrototypeOf on ${MODEL_BINDING} is not allowed (${tag029})`)
         }
       }
     }
@@ -484,6 +544,69 @@ function forbiddenCanonicalModelMutation(
       for (const p of node.properties) {
         if (ts.isSpreadAssignment(p) && !allowedSpreadOrAssignSource(p.expression, sf, checker)) {
           findings.push(`${rel}: object spread from outside agent/ is not allowed (${tag})`)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+}
+
+function forbiddenSideEffectImports(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  for (const stmt of sf.statements) {
+    if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier) && !stmt.importClause) {
+      findings.push(`${rel}: side-effect import is not allowed under agent/ (FA-F18-031)`)
+    }
+  }
+}
+
+function forbiddenCanonicalModelReferences(
+  sf: ts.SourceFile,
+  rel: string,
+  defineAgentArg: ts.ObjectLiteralExpression | undefined,
+  findings: string[]
+): void {
+  const tag = "FA-F18-029"
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node) && node.text === MODEL_BINDING) {
+      if (node.parent && ts.isImportSpecifier(node.parent)) return
+      if (
+        node.parent &&
+        ts.isPropertyAssignment(node.parent) &&
+        node.parent.initializer === node &&
+        defineAgentArg &&
+        node.parent.parent === defineAgentArg
+      ) {
+        const propName = node.parent.name
+        if (ts.isIdentifier(propName) && propName.text === "model") return
+        if (ts.isStringLiteral(propName) && propName.text === "model") return
+      }
+      findings.push(
+        `${rel}: reference to ${MODEL_BINDING} outside defineAgent model is not allowed under agent/ (${tag})`
+      )
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+}
+
+function forbiddenDefineAgentReferences(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  if (rel !== "agent/agent.ts") return
+  const tag = "FA-F18-030"
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node) && node.text === DEFINE_AGENT) {
+      if (node.parent && ts.isImportSpecifier(node.parent)) return
+      if (node.parent && ts.isCallExpression(node.parent) && node.parent.expression === node) return
+      findings.push(`${rel}: ${DEFINE_AGENT} reference must be a direct call callee only (${tag})`)
+    }
+    if (ts.isCallExpression(node)) {
+      const ex = node.expression
+      if (ts.isPropertyAccessExpression(ex) && isDefineAgentIdentifier(ex.expression)) {
+        const method = ex.name.text
+        if (method === "call" || method === "apply" || method === "bind") {
+          findings.push(`${rel}: ${DEFINE_AGENT}.${method} is not allowed under agent/ (${tag})`)
+        } else {
+          findings.push(`${rel}: ${DEFINE_AGENT} member access is not allowed under agent/ (${tag})`)
         }
       }
     }
@@ -529,10 +652,30 @@ function validateModelInDefineAgent(
     return
   }
   if (ts.isShorthandPropertyAssignment(prop)) {
+    if (ts.isIdentifier(prop.name)) {
+      const importBinding = imports.find(
+        (i) =>
+          !i.isTypeOnly &&
+          i.local === prop.name.text &&
+          i.imported === MODEL_BINDING &&
+          i.module === CANONICAL_MODULE
+      )
+      if (importBinding) return
+    }
     const sym = checker.getShorthandAssignmentValueSymbol(prop)
-    const expr = sym?.valueDeclaration && ts.isVariableDeclaration(sym.valueDeclaration) && sym.valueDeclaration.initializer
-      ? sym.valueDeclaration.initializer
-      : prop.name
+    const decl = sym?.valueDeclaration
+    if (decl && ts.isImportSpecifier(decl)) {
+      const importerRel = posixRel(decl.getSourceFile().fileName, root)
+      const importDecl = decl.parent?.parent
+      const mod =
+        importDecl && ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)
+          ? resolveRepoModule(importDecl.moduleSpecifier.text, importerRel)
+          : null
+      const imported = decl.propertyName?.text ?? decl.name.text
+      if (imported === MODEL_BINDING && mod === CANONICAL_MODULE) return
+    }
+    const expr =
+      decl && ts.isVariableDeclaration(decl) && decl.initializer ? decl.initializer : prop.name
     if (!exprIsCanonicalModel(expr as ts.Expression, checker, root, imports)) {
       findings.push(`${rel}: shorthand { model } must bind to imported ${MODEL_BINDING} (FA-F18-016)`)
     }
@@ -570,7 +713,7 @@ function forbiddenModelUsage(
       }
     }
     if (ts.isCallExpression(node)) {
-      if (callIsGlobalMethod(node, "Object", "defineProperty") && node.arguments.length >= 2) {
+      if (callIsGlobalMethod(node, checker, "Object", "defineProperty") && node.arguments.length >= 2) {
         const key = node.arguments[1]
         if (
           (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
@@ -579,14 +722,14 @@ function forbiddenModelUsage(
           findings.push(`${rel}: Object.defineProperty on model is not allowed (FA-F18-022)`)
         }
       }
-      if (callIsGlobalMethod(node, "Object", "assign")) {
+      if (callIsGlobalMethod(node, checker, "Object", "assign")) {
         for (const arg of node.arguments.slice(1)) {
           if (objectLiteralHasModelKey(arg)) {
             findings.push(`${rel}: Object.assign setting model is not allowed (FA-F18-022)`)
           }
         }
       }
-      if (callIsGlobalMethod(node, "Reflect", "set") && node.arguments.length >= 2) {
+      if (callIsGlobalMethod(node, checker, "Reflect", "set") && node.arguments.length >= 2) {
         const key = node.arguments[1]
         if (
           (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
@@ -625,6 +768,7 @@ function checkFile(
   validateEveDefineAgentImports(rel, imports, findings)
   forbiddenLocalBindings(sf, rel, findings)
   forbiddenEveDynamicLoads(sf, rel, findings)
+  forbiddenSideEffectImports(sf, rel, findings)
   validateAgentEntryExport(sf, rel, checker, findings)
 
   let defineAgentArg: ts.ObjectLiteralExpression | undefined
@@ -651,6 +795,8 @@ function checkFile(
   visitDefine(sf)
   forbiddenModelUsage(sf, rel, defineAgentArg, checker, findings)
   forbiddenCanonicalModelMutation(sf, rel, checker, root, findings)
+  forbiddenCanonicalModelReferences(sf, rel, defineAgentArg, findings)
+  forbiddenDefineAgentReferences(sf, rel, findings)
 }
 
 const FORBIDDEN_AGENT_ENTRY_SUFFIXES = [".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]
