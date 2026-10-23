@@ -959,4 +959,55 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const audits = await adminDb().collection("audit_log").where("target", "==", `ocr_texts/${resultId}`).get()
     expect(audits.docs.some((entry) => entry.get("action") === "ocr.complete" && entry.get("classification") === "confidential")).toBe(true)
   })
+
+  const CANCEL_NOTE = "Cancelled: superseded by a newer request."
+
+  it("FA-F04-015: cancelJob on a queued d3.ocr job closes the legacy upload row and writes allow audit", async () => {
+    const { viaApi } = await import("./api")
+    const { jobAuditRows } = await import("./jobs")
+    const cancelApi = viaApi("cancelJob", { now: () => clock.now() })
+    const firmId = await firm()
+    const doc = await seedDoc({ firmId, matterId: null, classification: "internal" })
+    const jobId = uniq("f04-cancel")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId: null, classification: "internal" })
+    await writeLegacy(row)
+    await onJobCreatedCore(jobId, row, deps)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    const partner = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
+    const view = await cancelApi({ token: partner.token, data: { firmId, jobId: engineJobId, note: CANCEL_NOTE } } as never)
+    expect(view).toMatchObject({ jobId: engineJobId, status: "cancelled" })
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("failed")
+    expect(legacy.get("ocrFailureCode")).toBe("cancelled")
+    expect((await jobAuditRows(engineJobId)).some((row) => row.decision === "allow" && row.action === "job.cancel")).toBe(true)
+  })
+
+  it("FA-F04-015: cancelJob leaves a legacy upload row that is already done unchanged", async () => {
+    const { viaApi } = await import("./api")
+    const cancelApi = viaApi("cancelJob", { now: () => clock.now() })
+    const firmId = await firm()
+    const doc = await seedDoc({ firmId, matterId: null, classification: "internal" })
+    const jobId = uniq("f04-cancel-done")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId: null, classification: "internal" })
+    await writeLegacy(row)
+    await onJobCreatedCore(jobId, row, deps)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const doneLegacy = await adminDb().collection("jobs").doc(jobId).get()
+    const resultId = doneLegacy.get("ocrResultId")
+    await jobsRef().doc(engineJobId).update({
+      status: "queued",
+      lease: null,
+      nextAttemptAt: Timestamp.fromMillis(clock.now()),
+      sweepAt: Timestamp.fromMillis(clock.now()),
+      finishedAt: null,
+      cancellation: null,
+    })
+    const partner = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
+    expect((await cancelApi({ token: partner.token, data: { firmId, jobId: engineJobId, note: CANCEL_NOTE } } as never)).status).toBe("cancelled")
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    expect(legacy.get("ocrResultId")).toBe(resultId)
+    expect(legacy.get("ocrFailureCode")).toBeNull()
+  })
 })
