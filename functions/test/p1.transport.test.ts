@@ -398,9 +398,24 @@ describe("activeTransport outside the Functions runtime (FA-F18-001)", () => {
     expect(alerts[0]).not.toContain(FAKE_KEY)
   })
 
+  it("refuses when only K_SERVICE is set, because Next on Cloud Run sets it too (FA-F18-010)", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("K_SERVICE", "next-web")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    expect(activeTransport()).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+    const lines = spy.mock.calls.map((args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+    const alerts = lines.filter((l) => l.includes("p1.provider_key_in_next_runtime"))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain("AI_GATEWAY_API_KEY")
+    expect(alerts[0]).not.toContain(FAKE_KEY)
+  })
+
   it.each([
     ["FUNCTION_TARGET", "api"],
-    ["K_SERVICE", "api"],
     ["SIKANDER_FUNCTIONS_RUNTIME", "1"],
     ["SIKANDER_FUNCTIONS_RUNTIME", "true"],
     ["SIKANDER_FUNCTIONS_RUNTIME", " TRUE "],

@@ -105,9 +105,29 @@ Gates:
   package other than `@ai-sdk/provider` or a provider SDK, names a provider key (except `platform/p1/providerKeyGuard.ts`)
   or names a provider host, and no deploy surface (`.env*`, App Hosting, Vercel, Docker, compose, and workflow jobs that
   build, start or deploy the Next/eve service) binds a provider key. No allowlist. Any JS/TS file outside `functions/`
-  (the corpus service included; root `tests/` stays outside the walker) that imports `functions/src/p1/transport` or
-  `functions/src/p1/gateway` fails the same check, including a vitest/jest loader with comments between its tokens
-  (FA-F18-001, FA-F18-009).
+  (the corpus service included; root `tests/` stays outside the walker) that imports any `functions/` module other than
+  the allowlist (`functions/src/p1/costTable`, `functions/src/p1/types`, and the F02 boundary
+  `functions/src/http/f02RouterBoundary`, which mounts only `F02_NEXT_AUTHORITY_ROUTES`) fails the same check,
+  including a vitest/jest loader with comments or a nested type argument (FA-F18-001, FA-F18-009, FA-F18-010,
+  FA-F18-011, FA-F18-014). A `.envrc`, a workflow job at four-space indent, a symlinked directory, and any `model`
+  under `agent/` fail it too: rule (f) uses a TypeScript AST pass (including `.mts`/`.cts`) so, when `agent/` exists,
+  only `agent/agent.ts` may be the entry; it must import `defineAgent` by name from `"eve"` (no wrappers, namespace or
+  member calls) and default-export `defineAgent({...})` with `model` checker-resolving to `committeeBrainLanguageModel`
+  from exactly `platform/p1/committeeBrainModel`; only `agent/agent.ts` may import `defineAgent`, and only as a direct
+  call callee; no bare side-effect imports, dynamic `import()` or `require()` (including `module.require` /
+  `createRequire`) under `agent/`; no non-type import under `agent/` of a module that transitively reaches
+  `platform/p1/committeeBrainModel` (static imports, `export … from`, string-literal dynamic loads, `index.ts` paths
+  normalized like the resolver) except the canonical model import; modules with computed dynamic loads count as
+  touching the canonical model; no re-export from outside `agent/`; outside `functions/`, only `agent/agent.ts` may
+  load `"eve"` or call `defineAgent`; outside `functions/`, no computed `import()` / `require()` / `createRequire`
+  specifiers; the `committeeBrainLanguageModel` name may appear only on `model:` in that call; under `agent/` only,
+  no property/element/compound/logical writes, `delete`, `++`/`--`, or `Object`/`Reflect` mutation (including aliased
+  globals) on the canonical model; no spreading/`Object.assign` from outside the file (FA-F18-002, FA-F18-015,
+  FA-F18-016, FA-F18-020, FA-F18-025..043). Residual: non-`const` computed property keys on arbitrary objects;
+  canonical-model mutation in files not reachable from `agent/` imports; obfuscated loaders (`require` alias,
+  `module["require"]`, `eval`, `new Function` / `Function(`, `process.mainModule.require`) (FA-F18-043).
+  `--print-pure-modules` prints
+  `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned
   (`packageManager` + `devEngines.packageManager`, `onFail: warn`, one pin for every manifest), no directory holds

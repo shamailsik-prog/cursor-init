@@ -296,8 +296,8 @@ wins, in any runtime. Otherwise a non-empty `AI_GATEWAY_API_KEY` builds `gateway
 set to a non-blank value:
 
 - `FUNCTION_TARGET` (Functions framework, a triggered emulator worker, and gen2);
-- `K_SERVICE` (Cloud Run, which is how a 2nd-gen function runs; the same pair `functions/src/p5/identity.ts` uses for a
-  hosted function);
+- `K_SERVICE` is not a signal by itself (FA-F18-010). Next on Cloud Run sets it. A gen2 function also sets
+  `FUNCTION_TARGET`, which is the marker above;
 - `SIKANDER_FUNCTIONS_RUNTIME` equal to `1` or `true` (an explicit flag for a Functions process that has neither);
 - the Firebase debug emulator as a pair (FA-F18-008): `FUNCTIONS_EMULATOR` trim-equal to `true` and `FIREBASE_CONFIG`
   non-blank after trim. `firebase emulators:start --inspect-functions` starts one shared runtime with no trigger, so
@@ -312,21 +312,30 @@ explicit key. The gate stops Next from importing the module those functions live
 
 **Why an environment marker, and the residual.** A compile-time constant defined only in the Functions bundle cannot be
 copied onto Next with the key. This slice uses the runtime markers above because that is the check the finding asks for,
-and because gen1, the emulator and gen2 do not share one variable. Residual, recorded: `K_SERVICE` is also set for a Next
-service on Cloud Run, and any variable can be copied with the key. On that host the gate is the control that stops the
-import. A computed specifier the gate cannot see, plus `K_SERVICE` or a copied flag, would still build a client. That is
-the same class of hole as the gate's other text-analysis residuals.
+and because gen1, the emulator and gen2 do not share one variable. `K_SERVICE` alone does not build a client (FA-F18-010):
+Next on Cloud Run sets it, and a gen2 function also sets `FUNCTION_TARGET`. Residual, recorded: any of the markers that
+do count can still be copied with the key. On that host the gate is the control that stops the import. A computed
+specifier the gate cannot see, plus a copied `FUNCTION_TARGET`, flag, or emulator pair, would still build a client. That
+is the same class of hole as the gate's other text-analysis residuals.
 
 **FA-F18-008.** The debug-emulator pair above is the local runtime the first check missed. Residual: a Next process started with both variables copied (for example a shell that exported the emulator environment) would pass this check. G-0 [19] still forbids that process from importing the module. `FUNCTION_DEBUG_MODE` is also set on that runtime and is not required here; the pair the emulator always sets, and that the finding names, is the one the check uses.
 
 **FA-F18-009.** Rule (e)'s vitest/jest loader uses the same comment-aware gap as the import parser (`JS_WS`), including a block comment that contains a newline. A computed argument to `importActual` remains the text-scan residual already recorded.
 
+**FA-F18-010.** Rule (e) is an allowlist. Outside `functions/`, the only Functions modules that may be imported are `functions/src/p1/costTable`, `functions/src/p1/types`, and the F02 boundary `functions/src/http/f02RouterBoundary` (FA-F18-013). `p1/ops`, `p1/reconciler`, `p1/evalSet`, `cli/committeeEval`, `functions/lib` and the HTTP router are not on it, so a Next file cannot reach the paid client by importing one of them. `K_SERVICE` alone does not make `activeTransport` build a client.
+
+**FA-F18-012.** Rule (f) also fails shorthand `{ model }`, a `model` property whose value is a string binding in the same file, and a `model` property whose value is `process.env` or a binding initialised from it. **FA-F18-015** tightens rule (f) to an allowlist. **FA-F18-016** enforces it with a TypeScript AST check: exactly one `defineAgent` call when `agent/agent.ts` exists; object-literal argument without spread; `model` must checker-resolve to the `committeeBrainLanguageModel` export from the module that resolves exactly to `platform/p1/committeeBrainModel` (no `endsWith`, comments ignored); no other `model` property, `.model` / `["model"]` assignment, or quoted `model` in JSON/YAML under `agent/`. **FA-F18-020** bans local shadowing of `committeeBrainLanguageModel` (including destructuring) and `model` parameters; **FA-F18-021** requires `agent/agent.ts` to `export default defineAgent({...})` with a named `"eve"` import; **FA-F18-022** catches `Object.defineProperty`, `Object.assign`, `Reflect.set`, computed model-key assignment, and logical-assignment operators; **FA-F18-023** scans `.mts`/`.cts`. **FA-F18-025** ties the default-export callee to that eve import (no wrapper re-exports, namespace/member `defineAgent`, dynamic `require`/`import` of `eve`, or local `defineAgent` bindings). **FA-F18-027** forbids non-literal `Object.assign`/spread sources under `agent/`. **FA-F18-028** requires `agent/agent.ts` as the sole entry when `agent/` exists. **FA-F18-029** walks property/element access chains to the root for canonical-model mutation (assignment, `delete`, `++`/`--`, and `Object`/`Reflect` APIs, including aliased globals); the `committeeBrainLanguageModel` identifier may appear only as the `model:` value in the single eve `defineAgent` argument. **FA-F18-030** allows `{ defineAgent }` from `"eve"` only in `agent/agent.ts`, and only as the callee of a direct `defineAgent({...})` call. **FA-F18-031** forbids bare side-effect imports under `agent/`. **FA-F18-032** forbids every dynamic `import()` and `require()` (including `module.require` and `createRequire`) under `agent/`, and forbids a non-type import under `agent/` of any module that transitively reaches `platform/p1/committeeBrainModel` except the direct `{ committeeBrainLanguageModel }` import from that module (so patch modules cannot mutate the shared model at load time). **FA-F18-034** normalizes directory `index` modules in the closure the same way as `resolveRepoModule`. **FA-F18-035** extends the closure across `export … from` and string-literal `import()` / `require()` edges; a module with a computed dynamic load is treated as touching the canonical model. Canonical-model mutation is enforced only in `agent/` files and via that import closure, not in arbitrary runtime files that `agent/` never imports. **FA-F18-033** forbids `export *` / `export { ... } from` of modules outside `agent/`, and forbids importing `"eve"`, naming `defineAgent`, or calling `defineAgent` anywhere in the scanned Next/eve runtime outside `agent/agent.ts` (`functions/` exempt). **FA-F18-036** forbids computed `import()` / `require()` / `createRequire` module specifiers outside `functions/` (literal `"eve"` loads remain covered by FA-F18-033). **FA-F18-037** computes the import closure to a fixed point so cycles cannot cache a false “does not touch” before a patch edge is seen. **FA-F18-038** strips trailing `/` on directory specifiers before `index` normalization. **FA-F18-039** follows stored `createRequire` bindings and literal `module.require("eve")` in the closure and FA-F18-033. **FA-F18-040** flags `export * from "eve"` (and other re-exports of `"eve"`) outside `agent/agent.ts`. **FA-F18-041** forbids `agent/` imports that resolve into root `tests/`, `_superseded/`, `.eve/` or `ci_gates/`. **FA-F18-042** treats TypeScript `import x = require("…")` like `require()` for every rule (f) edge. Residual: non-`const` computed property keys on arbitrary objects remain gaps; canonical-model mutation in files not imported (directly or transitively) from `agent/`; obfuscated loaders (`require` alias, `module["require"]`, `eval`, `new Function` / `Function(`, `process.mainModule.require`) (FA-F18-043).
+
+**FA-F18-013.** F02's Next dispatcher imports `functions/src/http/f02RouterBoundary`, which builds `createRouter(F02_NEXT_AUTHORITY_ROUTES)` from `routerRuntime.ts` inside `functions/`. The full `router.ts` table (including `p1/ops`) stays off the allowlist. **FA-F18-014** requires the transitive import closure of every `FUNCTIONS_PURE_MODULES` entry to exclude `p1/{ops,transport,gateway,reconciler,evalSet}` and `cli/*`.
+
+**FA-F18-011.** The loader's type argument allows one nested pair of angle brackets, so `vi.importActual<Record<string, unknown>>(...)` is read. A type argument nested twice (`Map<string, Record<...>>`) is still missed: the same class of text-scan residual.
+
 **FA-F18-002, 004, 005, 006, 007, checked on this change and not taken further except the test pins in 004.**
 
-- **FA-F18-002** stays open. [19] still reads a workflow job as a two-space key under `jobs:` (`JOB_HEADER_RE`), does not
-  treat `.envrc` as an env file, does not fail a symlinked directory, and does not read eve model strings. The residuals
-  named with it (computed specifiers, alias maps, unlisted SDKs, shell deploys) stay residuals. Closing them is a
-  rewrite of the deploy-surface scan, not a leftover of this hole.
+- **FA-F18-002** the four named holes are closed on the follow-up: `.envrc` is an env file, a job is the block at the
+  indentation of the first content line under `jobs:` (so four spaces is a job), a symlinked directory fails because the
+  walk does not follow it, and a string `model` under `agent/` fails. Computed specifiers, alias maps, unlisted SDKs and
+  shell deploys stay residuals.
 - **FA-F18-003** is closed on current main. The e2e imports modules that exist (`functionsCommitteeBrain`, the Functions
   router, the transport seam's setter). The 2026-10-23 re-audit of `ff5899e` says the same. The optional dynamic import
   was so the file could load on pre-F18 main; that main is no longer the tree under test.
