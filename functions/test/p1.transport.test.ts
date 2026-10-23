@@ -363,6 +363,91 @@ describe("P1 active transport and test seam (P3-68)", () => {
   })
 })
 
+describe("activeTransport outside the Functions runtime (FA-F18-001)", () => {
+  const FAKE_KEY = "placeholder-not-a-key"
+  const fake: P1Transport = { send: async () => ({ text: "t", inputTokens: 1, outputTokens: 1 }) }
+  const clearRuntime = () => {
+    vi.stubEnv("FUNCTION_TARGET", "")
+    vi.stubEnv("K_SERVICE", "")
+    vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", "")
+  }
+
+  it("with a key and no Functions runtime marker, builds nothing and does not call fetch", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    expect(activeTransport()).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("logs the provider-key alert naming the variable and never the value", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    expect(activeTransport()).toBeNull()
+    const lines = spy.mock.calls.map((args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+    const alerts = lines.filter((l) => l.includes("p1.provider_key_in_next_runtime"))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain("AI_GATEWAY_API_KEY")
+    expect(alerts[0]).not.toContain(FAKE_KEY)
+  })
+
+  it.each([
+    ["FUNCTION_TARGET", "api"],
+    ["K_SERVICE", "api"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", "1"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", "true"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", " TRUE "],
+  ] as const)("is the Gateway transport when %s is %j and the key is set, and does not alert", (name, value) => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv(name, value)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    const t = activeTransport()
+    expect(t).not.toBeNull()
+    expect(typeof t?.send).toBe("function")
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("does not treat a blank or whitespace marker, or a flag other than 1 or true, as the Functions runtime", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    for (const env of [
+      { FUNCTION_TARGET: "   ", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "" },
+      { FUNCTION_TARGET: "", K_SERVICE: " \t ", SIKANDER_FUNCTIONS_RUNTIME: "" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "yes" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "0" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "false" },
+    ]) {
+      vi.stubEnv("FUNCTION_TARGET", env.FUNCTION_TARGET)
+      vi.stubEnv("K_SERVICE", env.K_SERVICE)
+      vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", env.SIKANDER_FUNCTIONS_RUNTIME)
+      expect(activeTransport(), JSON.stringify(env)).toBeNull()
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("still returns the test transport outside the Functions runtime, and does not alert", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    setP1TransportForTests(fake)
+    expect(activeTransport()).toBe(fake)
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("does not alert when the key is absent", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    expect(activeTransport()).toBeNull()
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
 describe("P1 Opik exporter (P3-67)", () => {
   const T0 = Date.parse("2026-10-11T10:00:00.000Z")
   const record: TraceRecord = {
