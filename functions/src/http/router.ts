@@ -114,7 +114,9 @@ const get = (path: string, handler: Operation): Route => ({ method: "GET", path,
  * Audit F09 (spec §4): the identity operations whose post-commit Auth step a same-key retry is designed to heal, each
  * idempotent by construction: onboardFirm resumes its firm (FN-1), createFirmUser is deduplicated by the Auth email,
  * setUserClaims re-applies the same role and clearance (or reverts), deactivateUser sets `active: false` again, and
- * disableMfa resumes from its approval. Every other POST route is `once` (or `resume`).
+ * disableMfa resumes from its approval. The nine F02 Next-authority POSTs are also
+ * `rerun` (http/f02NextAuthority.ts): their domain write is fenced by the Next
+ * core, not by a Functions effect marker. Every other POST route is `once` (or `resume`).
  */
 const RERUN = { idempotency: "rerun" } as const
 

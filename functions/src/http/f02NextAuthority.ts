@@ -157,6 +157,12 @@ type AuthorityRoute = {
   path: string
   handler: FirmOperation
   kind: "general"
+  /**
+   * `rerun`: the domain write is the Next core's, fenced by beginIdempotentRequest.
+   * A Functions `once` marker cannot wrap that write, and audit.allow() does not
+   * stage one. The key is still required, and a stored 2xx is replayed.
+   */
+  idempotency?: "rerun"
   maxBodyBytes?: number | (() => number)
 }
 
@@ -166,6 +172,7 @@ const post = (path: string, maxBodyBytes?: number | (() => number)): AuthorityRo
   path,
   handler: f02Op(path, "POST"),
   kind: "general",
+  idempotency: "rerun",
   ...(maxBodyBytes === undefined ? {} : { maxBodyBytes }),
 })
 
