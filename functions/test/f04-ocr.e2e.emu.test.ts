@@ -114,6 +114,30 @@ function terminalLegacyFiller(id: string, firmId: string): Record<string, unknow
   }
 }
 
+/** Legacy row the sweep must close: still `queued` while its engine job is already cancelled. */
+function incompleteLegacyFiller(id: string, firmId: string): Record<string, unknown> {
+  return { id, firmId, jobType: "ocr", ocrStatus: "queued" }
+}
+
+async function writeCancelledLegacyStuck(id: string, firmId: string): Promise<void> {
+  const { jobIdFor } = await import("../src/p2/enqueue")
+  const { JOB_ENGINE } = await import("../src/p2/constants")
+  const { OCR_JOB_TYPE } = await import("../src/p2/ocrJob")
+  const documentId = `f04-filler-doc-${id}`
+  const row = legacyRow({ id, firmId, documentId, matterId: null, classification: "internal", ocrStatus: "queued" })
+  const engineJobId = jobIdFor(firmId, OCR_JOB_TYPE, id)
+  const batch = adminDb().batch()
+  batch.set(adminDb().collection("jobs").doc(id), row)
+  batch.set(adminDb().collection("jobs").doc(engineJobId), {
+    engine: JOB_ENGINE,
+    firmId,
+    jobType: OCR_JOB_TYPE,
+    status: "cancelled",
+    payload: { version: 1, legacyJobId: id, documentId, contentHash: KEY },
+  })
+  await batch.commit()
+}
+
 async function writeLegacy(row: Record<string, unknown>): Promise<void> {
   await adminDb().collection("jobs").doc(String(row.id)).set(row)
 }
@@ -815,6 +839,48 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const legacy = await adminDb().collection("jobs").doc(jobId).get()
     expect(legacy.get("ocrClassification")).toBe("confidential")
     expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("classification")).toBe("confidential")
+  })
+
+  it("FA-F04-012: the sweep drains a missed row after five hundred one cancelled or incomplete OCR rows sort earlier", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const targetId = "f04-stuck-0502"
+    const target = legacyRow({ id: targetId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    for (let start = 1; start <= 501; start += 500) {
+      const end = Math.min(start + 499, 501)
+      for (let i = start; i <= end; i++) {
+        const id = `f04-stuck-${String(i).padStart(4, "0")}`
+        if (i % 2 === 0) await writeCancelledLegacyStuck(id, firmId)
+        else await writeLegacy(incompleteLegacyFiller(id, firmId))
+      }
+    }
+    await writeLegacy(target)
+
+    await sweepLegacyOcr(deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(targetId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
+  }, 120_000)
+
+  it("FA-F04-013: the sweep drains a legacy row that predates ocrStatus on the upload row", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-unstamped")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    delete row.ocrStatus
+    await writeLegacy(row)
+    expect((await adminDb().collection("jobs").doc(jobId).get()).data()?.ocrStatus).toBeUndefined()
+
+    await sweepLegacyOcr(deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
   })
 
   it("FA-F04-010: the sweep drains a missed row after five hundred one terminal OCR rows sort earlier", async () => {
