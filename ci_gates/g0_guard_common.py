@@ -206,6 +206,8 @@ def file_kind(p: pathlib.Path) -> str | None:
 # JS whitespace, where `/* block */` and `// line` comments count as whitespace (Codex P2 #1 on
 # PR #57): JS allows a comment anywhere whitespace may appear between tokens.
 _JS_WS = r"(?:\s|/\*.*?\*/|//[^\n]*(?:\n|$))*"
+# Public alias. Other gates (check_next_ai_egress rule (e)) use this same gap (FA-F18-009).
+JS_WS = _JS_WS
 _JS_IDENT = r"[A-Za-z_$][\w$]*"
 
 
@@ -277,11 +279,17 @@ def js_package_root(spec: str) -> str | None:
     return root.lower() or None
 
 
-def js_imported_packages(text: str) -> set[str]:
+def js_module_specifiers(text: str) -> list[str]:
+    """Literal module specifiers a JS/TS file loads: import, export-from, import(), require(),
+    require.resolve() and createRequire loaders. Comments may sit between the tokens."""
     specs = [m.group("s1") or m.group("s2") or "" for m in _JS_SPECIFIER_RE.finditer(text)]
     specs += _create_require_specifiers(text)
+    return [s.strip() for s in specs if s.strip()]
+
+
+def js_imported_packages(text: str) -> set[str]:
     roots: set[str] = set()
-    for spec in specs:
+    for spec in js_module_specifiers(text):
         root = js_package_root(spec)
         if root:
             roots.add(root)

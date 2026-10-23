@@ -75,12 +75,147 @@ const FAILING: Case[] = [
   },
   { name: "a key in a Dockerfile", files: { Dockerfile: "FROM node:22\nARG ANTHROPIC_API_KEY\n" }, names: ["Dockerfile", "ANTHROPIC_API_KEY"] },
   { name: "a key in vercel.json", files: { "vercel.json": '{ "env": { "AI_GATEWAY_API_KEY": "@placeholder" } }\n' }, names: ["vercel.json", "AI_GATEWAY_API_KEY"] },
+  {
+    name: "a Next route importing the Functions P1 transport through the @/ alias",
+    files: { "app/api/x/route.ts": 'import { activeTransport } from "@/functions/src/p1/transport"\nexport const t = activeTransport\n' },
+    names: ["app/api/x/route.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a type-only import of the Functions P1 transport (the module is the paid client)",
+    files: { "lib/x.ts": 'import type { P1Transport } from "@/functions/src/p1/transport"\nexport type T = P1Transport\n' },
+    names: ["lib/x.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "an export-from of the Functions P1 transport, extension included",
+    files: { "lib/re.ts": 'export { gatewayTransport } from "@/functions/src/p1/transport.ts"\n' },
+    names: ["lib/re.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a dynamic import of the Functions P1 transport",
+    files: { "app/api/x/route.ts": 'export const load = () => import("@/functions/src/p1/transport")\n' },
+    names: ["app/api/x/route.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a dynamic import of the Functions P1 gateway with a query",
+    files: { "services/x.ts": 'export const load = () => import("@/functions/src/p1/gateway?paid")\n' },
+    names: ["services/x.ts", "functions/src/p1/gateway"],
+  },
+  {
+    name: "require of the Functions P1 gateway",
+    files: { "scripts/x.cjs": 'const { callP1 } = require("@/functions/src/p1/gateway")\nmodule.exports = callP1\n' },
+    names: ["scripts/x.cjs", "functions/src/p1/gateway"],
+  },
+  {
+    name: "require.resolve of the Functions P1 transport",
+    files: { "scripts/y.cjs": 'module.exports = require.resolve("@/functions/src/p1/transport")\n' },
+    names: ["scripts/y.cjs", "functions/src/p1/transport"],
+  },
+  {
+    name: "a relative import of the Functions P1 transport from a Next route",
+    files: { "app/api/x/route.ts": 'import { activeTransport } from "../../../functions/src/p1/transport"\nexport const t = activeTransport\n' },
+    names: ["app/api/x/route.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a relative dynamic import of the Functions P1 gateway",
+    files: { "lib/a/b.ts": 'export const load = () => import("../../functions/src/p1/gateway.js")\n' },
+    names: ["lib/a/b.ts", "functions/src/p1/gateway"],
+  },
+  {
+    name: "a comment between the import tokens of the Functions P1 transport",
+    files: { "components/c.tsx": 'import { activeTransport } from /* paid */ "@/functions/src/p1/transport"\nexport const t = activeTransport\n' },
+    names: ["components/c.tsx", "functions/src/p1/transport"],
+  },
+  {
+    name: "a multiline import of the Functions P1 gateway",
+    files: { "platform/x.ts": 'import {\n  callP1,\n} from "@/functions/src/p1/gateway"\nexport const c = callP1\n' },
+    names: ["platform/x.ts", "functions/src/p1/gateway"],
+  },
+  {
+    name: "a bare functions/src/p1/transport specifier",
+    files: { "app/y.ts": 'import { activeTransport } from "functions/src/p1/transport"\nexport const t = activeTransport\n' },
+    names: ["app/y.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "an index path of the Functions P1 transport",
+    files: { "app/z.ts": 'import { activeTransport } from "@/functions/src/p1/transport/index.ts"\nexport const t = activeTransport\n' },
+    names: ["app/z.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "createRequire loading the Functions P1 transport",
+    files: {
+      "lib/cr.ts":
+        'import { createRequire } from "node:module"\nconst req = createRequire(import.meta.url)\nexport const t = req("@/functions/src/p1/transport")\n',
+    },
+    names: ["lib/cr.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "createRequire called at once for the Functions P1 gateway",
+    files: {
+      "lib/cr2.ts":
+        'import { createRequire } from "node:module"\nexport const t = createRequire(import.meta.url)("@/functions/src/p1/gateway")\n',
+    },
+    names: ["lib/cr2.ts", "functions/src/p1/gateway"],
+  },
+  {
+    name: "vi.importActual of the Functions P1 transport",
+    files: { "app/v.ts": 'export const t = vi.importActual("@/functions/src/p1/transport")\n' },
+    names: ["app/v.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "block and line comments between each vi.importActual token (FA-F18-009)",
+    files: {
+      "app/commented-loader.ts":
+        'export const t = vi /* block\ncomment */ . // line\nimportActual /* between method and generic */\n<unknown> // before the call\n( /* before the specifier */\n"@/functions/src/p1/transport")\n',
+    },
+    names: ["app/commented-loader.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "jest.requireActual of the Functions P1 gateway",
+    files: { "app/j.ts": 'export const t = jest.requireActual<unknown>("@/functions/src/p1/gateway")\n' },
+    names: ["app/j.ts", "functions/src/p1/gateway"],
+  },
+  {
+    name: "the corpus service importing the Functions P1 transport",
+    files: { "corpus_service/x.ts": 'import { activeTransport } from "@/functions/src/p1/transport"\nexport const t = activeTransport\n' },
+    names: ["corpus_service/x.ts", "functions/src/p1/transport"],
+  },
+  {
+    name: "a platform/p1 file other than the key guard naming a provider key (FA-F18-004 M31)",
+    files: { "platform/p1/other.ts": "export const k = process.env.OPENAI_API_KEY\n" },
+    names: ["platform/p1/other.ts", "OPENAI_API_KEY"],
+  },
+  {
+    name: "a key on a workflow job that runs firebase deploy --only hosting (FA-F18-004 M27)",
+    files: {
+      ".github/workflows/host.yml":
+        "jobs:\n  web:\n    runs-on: ubuntu-latest\n    env:\n      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}\n    steps:\n      - run: npx firebase deploy --only hosting\n",
+    },
+    names: [".github/workflows/host.yml", "AI_GATEWAY_API_KEY"],
+  },
 ]
 
 const PASSING: Case[] = [
   { name: "type-only imports from @ai-sdk/provider (types and error classes, no network code)", files: { "platform/p1/m.ts": 'import type { LanguageModelV3 } from "@ai-sdk/provider"\nexport type M = LanguageModelV3\n' }, names: [] },
   { name: "the runtime key guard, the one file that names the keys", files: { "platform/p1/providerKeyGuard.ts": 'export const NAMES = ["AI_GATEWAY_API_KEY", "OPENAI_API_KEY"]\n' }, names: [] },
   { name: "the Functions control plane (governed by G-0 [3])", files: { "functions/src/p1/transport.ts": 'export const URL = "https://ai-gateway.vercel.sh/v1/chat/completions"\nexport const k = process.env.AI_GATEWAY_API_KEY\n', "functions/.env": "AI_GATEWAY_API_KEY=\n" }, names: [] },
+  {
+    name: "a Functions file importing its own transport",
+    files: { "functions/src/p1/gateway.ts": 'import { activeTransport } from "./transport"\nexport const t = activeTransport\n' },
+    names: [],
+  },
+  {
+    name: "a Next file importing a Functions module that is not the transport or the gateway",
+    files: {
+      "app/ok.ts":
+        'import { MAX_OUTPUT_TOKENS } from "@/functions/src/p1/costTable"\nimport { ROUTES } from "@/functions/src/http/router"\nexport const n = MAX_OUTPUT_TOKENS\nexport const r = ROUTES\n',
+    },
+    names: [],
+  },
+  {
+    name: "a specifier that only shares the transport prefix",
+    files: { "app/near.ts": 'import { x } from "@/functions/src/p1/transportation"\nexport const t = x\n' },
+    names: [],
+  },
   { name: "the corpus service (the F27 lane; FA-D3C-002 under G-0 [3])", files: { "corpus_service/app.env": "OPENAI_API_KEY=placeholder\n", "corpus_service/x.ts": 'import OpenAI from "openai"\n' }, names: [] },
   { name: "the root test suite", files: { "tests/x.test.ts": 'import { generateText } from "ai"\nexport const g = generateText\n' }, names: [] },
   { name: "prose in an env example that names a key without setting it", files: { ".env.example": "# Never set AI_GATEWAY_API_KEY in the Next or eve runtime.\n" }, names: [] },
@@ -127,6 +262,30 @@ describe("audit F18: G-0 [19] next-ai-egress guard", () => {
     const guard = (await import("@/platform/p1/providerKeyGuard").catch(() => null)) as { PROVIDER_KEY_ENV_NAMES?: readonly string[] } | null
     expect(guard?.PROVIDER_KEY_ENV_NAMES, "the runtime guard exists").toBeDefined()
     expect([...gateNames].sort()).toEqual([...(guard!.PROVIDER_KEY_ENV_NAMES ?? [])].sort())
+    // FA-F18-004 M2: parity alone survives dropping a name from both lists. The list is pinned.
+    expect(gateNames).toEqual([
+      "AI_GATEWAY_API_KEY",
+      "VERCEL_AI_GATEWAY_API_KEY",
+      "OPENAI_API_KEY",
+      "AZURE_API_KEY",
+      "AZURE_OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_GENERATIVE_AI_API_KEY",
+      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
+      "MISTRAL_API_KEY",
+      "COHERE_API_KEY",
+      "TOGETHER_AI_API_KEY",
+      "TOGETHER_API_KEY",
+      "PERPLEXITY_API_KEY",
+      "XAI_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "FIREWORKS_API_KEY",
+      "OPENROUTER_API_KEY",
+      "REPLICATE_API_TOKEN",
+      "ELEVENLABS_API_KEY",
+      "DEEPL_AUTH_KEY",
+    ])
   })
 
   it("is G-0 check [19]", () => {

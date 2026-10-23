@@ -271,3 +271,73 @@ client: URL rules, redirect refusal, timeout and answer mapping.
 - Narrow G-0 [3]'s `ALLOWED_PREFIXES` to `functions/src/p1/` now that [19] forbids provider code in `platform/p1`.
 - Update `agent/instructions.md` ("Public may leave once a Gateway key exists") with its F16 digest re-pin.
 - FA-D3C-002 (`corpus_service` embeddings): F27's lane.
+
+## FA-F18-001 follow-up (2026-10-23)
+
+The independent re-audit of #88 left FA-F18-001 open, and the 2026-10-23 check of main `ff5899e` confirmed it: [19]
+exempts `functions/` and never looks at a Next file importing it, and `activeTransport()` builds `gatewayTransport(key)`
+whenever `AI_GATEWAY_API_KEY` is set. A planted `app/api/x/route.ts` importing `@/functions/src/p1/transport` passed the
+gate. This section is the ruling for that hole. It does not close FA-F18-002 or FA-F18-005 to FA-F18-007.
+
+**R14. [19] fails when a file outside `functions/` imports the Functions P1 transport or gateway (FA-F18-001).** The
+modules are `functions/src/p1/transport` and `functions/src/p1/gateway` (the paid client and `callP1`, which calls
+`activeTransport`). The check reads the same literal forms as the package scan, plus vitest/jest
+`importActual` / `requireActual` / `importMock` / `requireMock`: static import, export-from, `import()`, `require()`,
+`require.resolve()` and createRequire. A specifier is resolved from the importing file: the `@/` alias, a relative path,
+or a bare `functions/...` path, with a JS/TS extension, a trailing `/index`, and a query or hash stripped. A name that
+only shares the prefix (`functions/src/p1/transportation`) is not a hit. `functions/` may import its own modules.
+`corpus_service/` stays exempt from rules (a)-(d) and is not exempt from this one. Root `tests/` stays outside the G-0
+walker, so the in-process e2e may still import the transport. Other `functions/src/p1` modules (`costTable`, the HTTP
+router) are not this rule: importing them does not name the paid modules. The runtime check below is what stops a
+transitive load.
+
+**R15. `activeTransport()` builds a Gateway client only in the Functions runtime (FA-F18-001).** The test seam still
+wins, in any runtime. Otherwise a non-empty `AI_GATEWAY_API_KEY` builds `gatewayTransport` only when one of these is
+set to a non-blank value:
+
+- `FUNCTION_TARGET` (Functions framework, a triggered emulator worker, and gen2);
+- `K_SERVICE` (Cloud Run, which is how a 2nd-gen function runs; the same pair `functions/src/p5/identity.ts` uses for a
+  hosted function);
+- `SIKANDER_FUNCTIONS_RUNTIME` equal to `1` or `true` (an explicit flag for a Functions process that has neither);
+- the Firebase debug emulator as a pair (FA-F18-008): `FUNCTIONS_EMULATOR` trim-equal to `true` and `FIREBASE_CONFIG`
+  non-blank after trim. `firebase emulators:start --inspect-functions` starts one shared runtime with no trigger, so
+  firebase-tools 14.27.0 sets those two and does not set `FUNCTION_TARGET` or `K_SERVICE`. Either variable alone is not
+  the runtime. `FIREBASE_CONFIG` by itself is a Next-side marker (`platform/p5/session.ts` treats it as hosted). A
+  copied `FUNCTIONS_EMULATOR` by itself is not enough.
+
+Whitespace does not count. Any other flag value does not count. Outside that runtime the function returns null, `callP1`
+records `no_credentials`, and one line `[p1] ALERT p1.provider_key_in_next_runtime` names `AI_GATEWAY_API_KEY` and never
+the value. `gatewayTransport(key)` itself is unchanged: the live evaluation CLI and the loopback tests call it with an
+explicit key. The gate stops Next from importing the module those functions live in.
+
+**Why an environment marker, and the residual.** A compile-time constant defined only in the Functions bundle cannot be
+copied onto Next with the key. This slice uses the runtime markers above because that is the check the finding asks for,
+and because gen1, the emulator and gen2 do not share one variable. Residual, recorded: `K_SERVICE` is also set for a Next
+service on Cloud Run, and any variable can be copied with the key. On that host the gate is the control that stops the
+import. A computed specifier the gate cannot see, plus `K_SERVICE` or a copied flag, would still build a client. That is
+the same class of hole as the gate's other text-analysis residuals.
+
+**FA-F18-008.** The debug-emulator pair above is the local runtime the first check missed. Residual: a Next process started with both variables copied (for example a shell that exported the emulator environment) would pass this check. G-0 [19] still forbids that process from importing the module. `FUNCTION_DEBUG_MODE` is also set on that runtime and is not required here; the pair the emulator always sets, and that the finding names, is the one the check uses.
+
+**FA-F18-009.** Rule (e)'s vitest/jest loader uses the same comment-aware gap as the import parser (`JS_WS`), including a block comment that contains a newline. A computed argument to `importActual` remains the text-scan residual already recorded.
+
+**FA-F18-002, 004, 005, 006, 007, checked on this change and not taken further except the test pins in 004.**
+
+- **FA-F18-002** stays open. [19] still reads a workflow job as a two-space key under `jobs:` (`JOB_HEADER_RE`), does not
+  treat `.envrc` as an env file, does not fail a symlinked directory, and does not read eve model strings. The residuals
+  named with it (computed specifiers, alias maps, unlisted SDKs, shell deploys) stay residuals. Closing them is a
+  rewrite of the deploy-surface scan, not a leftover of this hole.
+- **FA-F18-003** is closed on current main. The e2e imports modules that exist (`functionsCommitteeBrain`, the Functions
+  router, the transport seam's setter). The 2026-10-23 re-audit of `ff5899e` says the same. The optional dynamic import
+  was so the file could load on pre-F18 main; that main is no longer the tree under test.
+- **FA-F18-004** the five survivors were test gaps, and the code already did the right thing. This change pins them:
+  M2, the 21 key names are listed in the gate test, not only held equal to the guard; M15, an unsafe refusal code
+  becomes `p1_functions_error` and a 64-character identifier is kept; M18, `setForwardTimeoutForTests` throws in
+  production; M27, a `firebase deploy --only hosting` job that binds a key fails [19]; M31, `platform/p1/other.ts`
+  naming a key fails [19] (the exemption is the one guard file).
+- **FA-F18-005** stays open. `checkProviderKeys` still refuses only when `NODE_ENV === "production"`. Refusing every
+  other value, unset included, changes eve start-up and every P1 call. It is a separate behaviour change, not a leftover
+  of the import hole.
+- **FA-F18-006** stays open and is the F02 lane: the consoles post committee requests without `matterId`. Not touched.
+- **FA-F18-007** stays **[REQUIRES VERIFICATION]**. `maxDuration = 130` is still the route's literal. No deploy target is
+  declared (F32), so the number cannot be checked against a real limit.

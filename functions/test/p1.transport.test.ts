@@ -322,7 +322,8 @@ describe("P1 active transport and test seam (P3-68)", () => {
     expect(activeTransport()).toBeNull()
   })
 
-  it("is the Gateway transport when AI_GATEWAY_API_KEY is set", () => {
+  it("is the Gateway transport when AI_GATEWAY_API_KEY is set inside the Functions runtime", () => {
+    vi.stubEnv("FUNCTION_TARGET", "api")
     vi.stubEnv("AI_GATEWAY_API_KEY", "key-1")
     const t = activeTransport()
     expect(t).not.toBeNull()
@@ -346,6 +347,7 @@ describe("P1 active transport and test seam (P3-68)", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 1, completion_tokens: 2 } }), { status: 200 })
     })
     const timeout = vi.spyOn(AbortSignal, "timeout")
+    vi.stubEnv("FUNCTION_TARGET", "api")
     vi.stubEnv("AI_GATEWAY_API_KEY", "  k  ")
     expect(await activeTransport()?.send(request)).toEqual({ text: "hi", inputTokens: 1, outputTokens: 2 })
     expect(calls).toHaveLength(1)
@@ -360,6 +362,138 @@ describe("P1 active transport and test seam (P3-68)", () => {
     vi.stubEnv("NODE_ENV", "production")
     expect(() => setP1TransportForTests(fake)).toThrow(/test-only/)
     expect(() => setP1TransportForTests(null)).toThrow(/test-only/)
+  })
+})
+
+describe("activeTransport outside the Functions runtime (FA-F18-001)", () => {
+  const FAKE_KEY = "placeholder-not-a-key"
+  const fake: P1Transport = { send: async () => ({ text: "t", inputTokens: 1, outputTokens: 1 }) }
+  const clearRuntime = () => {
+    vi.stubEnv("FUNCTION_TARGET", "")
+    vi.stubEnv("K_SERVICE", "")
+    vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", "")
+    vi.stubEnv("FUNCTIONS_EMULATOR", "")
+    vi.stubEnv("FIREBASE_CONFIG", "")
+  }
+
+  it("with a key and no Functions runtime marker, builds nothing and does not call fetch", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    expect(activeTransport()).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("logs the provider-key alert naming the variable and never the value", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    expect(activeTransport()).toBeNull()
+    const lines = spy.mock.calls.map((args) => args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+    const alerts = lines.filter((l) => l.includes("p1.provider_key_in_next_runtime"))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain("AI_GATEWAY_API_KEY")
+    expect(alerts[0]).not.toContain(FAKE_KEY)
+  })
+
+  it.each([
+    ["FUNCTION_TARGET", "api"],
+    ["K_SERVICE", "api"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", "1"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", "true"],
+    ["SIKANDER_FUNCTIONS_RUNTIME", " TRUE "],
+  ] as const)("is the Gateway transport when %s is %j and the key is set, and does not alert", (name, value) => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv(name, value)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    const t = activeTransport()
+    expect(t).not.toBeNull()
+    expect(typeof t?.send).toBe("function")
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("does not treat a blank or whitespace marker, or a flag other than 1 or true, as the Functions runtime", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    for (const env of [
+      { FUNCTION_TARGET: "   ", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "" },
+      { FUNCTION_TARGET: "", K_SERVICE: " \t ", SIKANDER_FUNCTIONS_RUNTIME: "" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "yes" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "0" },
+      { FUNCTION_TARGET: "", K_SERVICE: "", SIKANDER_FUNCTIONS_RUNTIME: "false" },
+    ]) {
+      vi.stubEnv("FUNCTION_TARGET", env.FUNCTION_TARGET)
+      vi.stubEnv("K_SERVICE", env.K_SERVICE)
+      vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", env.SIKANDER_FUNCTIONS_RUNTIME)
+      expect(activeTransport(), JSON.stringify(env)).toBeNull()
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("still returns the test transport outside the Functions runtime, and does not alert", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    setP1TransportForTests(fake)
+    expect(activeTransport()).toBe(fake)
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("does not alert when the key is absent", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    clearRuntime()
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    expect(activeTransport()).toBeNull()
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe("activeTransport in the Firebase debug emulator (FA-F18-008)", () => {
+  const FAKE_KEY = "placeholder-not-a-key"
+  const FIREBASE_CONFIG = '{"projectId":"demo-sikander"}'
+  const blankMarkers = () => {
+    vi.stubEnv("FUNCTION_TARGET", "")
+    vi.stubEnv("K_SERVICE", "")
+    vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", "")
+    vi.stubEnv("FUNCTIONS_EMULATOR", "")
+    vi.stubEnv("FIREBASE_CONFIG", "")
+    vi.stubEnv("VERCEL", "")
+  }
+
+  it("builds the Gateway when the debug emulator sets FUNCTIONS_EMULATOR and FIREBASE_CONFIG, with no trigger marker", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    blankMarkers()
+    vi.stubEnv("FUNCTIONS_EMULATOR", " true ")
+    vi.stubEnv("FIREBASE_CONFIG", `  ${FIREBASE_CONFIG}  `)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    const t = activeTransport()
+    expect(t).not.toBeNull()
+    expect(typeof t?.send).toBe("function")
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("refuses FUNCTIONS_EMULATOR alone, and refuses a Next-side FIREBASE_CONFIG or VERCEL without the emulator pair", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    for (const env of [
+      { FUNCTIONS_EMULATOR: "true", FIREBASE_CONFIG: "", VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "", FIREBASE_CONFIG: FIREBASE_CONFIG, VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "true", FIREBASE_CONFIG: "", VERCEL: "1" },
+      { FUNCTIONS_EMULATOR: " true ", FIREBASE_CONFIG: "   ", VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "yes", FIREBASE_CONFIG: FIREBASE_CONFIG, VERCEL: "" },
+    ]) {
+      blankMarkers()
+      vi.stubEnv("FUNCTIONS_EMULATOR", env.FUNCTIONS_EMULATOR)
+      vi.stubEnv("FIREBASE_CONFIG", env.FIREBASE_CONFIG)
+      vi.stubEnv("VERCEL", env.VERCEL)
+      expect(activeTransport(), JSON.stringify(env)).toBeNull()
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 
