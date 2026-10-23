@@ -190,9 +190,10 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     await rules?.cleanup()
   })
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clock.set(Date.parse("2026-10-23T00:00:00Z"))
     deps = testDeps(clock)
+    await adminDb().collection("system").doc("ocrStatusBackfill").delete()
     delete ocrTestSeam.engine
     delete ocrTestSeam.timeoutMs
     ocrDrainTestSeam.failEnqueueOnce = false
