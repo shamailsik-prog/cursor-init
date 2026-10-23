@@ -15,9 +15,11 @@ import { summarizeOcrJobs } from "@/services/d1-6/ocrStatus"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { adminApp, adminDb } from "../src/admin"
 import { onJobCreatedCore } from "../src/p2/functions"
+import { jobsRef } from "../src/p2/enqueue"
 import { ocrDrainTestSeam } from "../src/p2/ocrDrain"
+import { jobWorkerTestSeam } from "../src/p2/worker"
 import { LOCAL_OCR_PROVIDER } from "../src/p1/ocrEngine"
-import { ocrTestSeam } from "../src/p1/ocrCall"
+import { ocrTestSeam, ocrTextId } from "../src/p1/ocrCall"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { FakeClock, readJob, testDeps } from "./jobs"
 
@@ -84,6 +86,7 @@ function legacyRow(opts: {
   documentId: string
   matterId: string | null
   classification: string
+  ocrStatus?: string
 }): Record<string, unknown> {
   return {
     id: opts.id,
@@ -93,6 +96,21 @@ function legacyRow(opts: {
     matterId: opts.matterId,
     classification: opts.classification,
     idempotencyKey: `idem-${opts.id}`,
+    ocrStatus: opts.ocrStatus ?? "queued",
+  }
+}
+
+function terminalLegacyFiller(id: string, firmId: string): Record<string, unknown> {
+  return {
+    id,
+    firmId,
+    jobType: "ocr",
+    documentId: `f04-filler-doc-${id}`,
+    matterId: null,
+    classification: "internal",
+    idempotencyKey: `idem-${id}`,
+    ocrStatus: "done",
+    ocrResultId: `f04-filler-text-${id}`,
   }
 }
 
@@ -139,6 +157,7 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     delete ocrTestSeam.engine
     delete ocrTestSeam.timeoutMs
     ocrDrainTestSeam.failEnqueueOnce = false
+    delete jobWorkerTestSeam.beforeCommit
     resetDocumentObjectStoreForTests()
   })
 
@@ -602,7 +621,7 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const jobId = uniq("f04-older")
     const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
     await writeLegacy(row)
-    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBeUndefined()
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("queued")
 
     await sweepLegacyOcr(deps)
     expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
@@ -796,5 +815,71 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const legacy = await adminDb().collection("jobs").doc(jobId).get()
     expect(legacy.get("ocrClassification")).toBe("confidential")
     expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("classification")).toBe("confidential")
+  })
+
+  it("FA-F04-010: the sweep drains a missed row after five hundred one terminal OCR rows sort earlier", async () => {
+    const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const targetId = "f04-pad-0502"
+    const target = legacyRow({ id: targetId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    for (let start = 1; start <= 501; start += 500) {
+      const batch = adminDb().batch()
+      const end = Math.min(start + 499, 501)
+      for (let i = start; i <= end; i++) {
+        const id = `f04-pad-${String(i).padStart(4, "0")}`
+        batch.set(adminDb().collection("jobs").doc(id), terminalLegacyFiller(id, firmId))
+      }
+      await batch.commit()
+    }
+    await writeLegacy(target)
+
+    await sweepLegacyOcr(deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(targetId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
+  }, 120_000)
+
+  it("FA-F04-011: a retry after publish commits keeps the label stored on ocr_texts", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-011")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+    ocrTestSeam.engine = {
+      id: LOCAL_OCR_PROVIDER,
+      extract: async () => {
+        await adminDb().collection("documents").doc(doc.docId).update({ classification: "confidential" })
+        return { text: TEXT, confidence: 1, lowConfidence: false, provider: LOCAL_OCR_PROVIDER }
+      },
+    }
+    let finishCommits = 0
+    jobWorkerTestSeam.beforeCommit = async ({ fallback }) => {
+      if (!fallback && finishCommits++ === 0) {
+        throw Object.assign(new Error("seam: finish commit aborted after publish"), { code: 10 })
+      }
+    }
+
+    await onJobCreatedCore(jobId, row, deps)
+    const engineJobId = deps.dispatcher.tasks[0]!.jobId
+    const task = { jobId: engineJobId, seq: 0 }
+    await expect(deps.dispatcher.deliver(task)).rejects.toMatchObject({ code: 10 })
+
+    const resultId = ocrTextId(firmId, doc.docId, doc.contentHash)
+    expect((await adminDb().collection("ocr_texts").doc(resultId).get()).get("classification")).toBe("confidential")
+
+    await adminDb().collection("documents").doc(doc.docId).update({ classification: "internal" })
+    await adminDb().collection("matters").doc(matterId).update({ classification: "internal" })
+    await jobsRef().doc(engineJobId).update({ lease: null, sweepAt: Timestamp.fromMillis(clock.now()) })
+
+    expect(await deps.dispatcher.deliver(task)).toBe("done")
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrClassification")).toBe("confidential")
+    expect((await adminDb().collection("ocr_texts").doc(resultId).get()).get("classification")).toBe("confidential")
+    const audits = await adminDb().collection("audit_log").where("target", "==", `ocr_texts/${resultId}`).get()
+    expect(audits.docs.some((entry) => entry.get("action") === "ocr.complete" && entry.get("classification") === "confidential")).toBe(true)
   })
 })
