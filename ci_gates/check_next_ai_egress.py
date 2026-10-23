@@ -61,7 +61,9 @@ It fails on any of:
       model-key / `Object.defineProperty` / `Object.assign` / `Reflect.set` / logical-assignment writes on other
       objects; no other `model` property under `agent/`. Quoted model strings in JSON/YAML/markdown under `agent/` fail.
       Residual: non-`const` computed property keys on arbitrary objects; mutation of `committeeBrainLanguageModel` in
-      files that are not imported (directly or transitively) from `agent/`.
+      files that are not imported (directly or transitively) from `agent/`; obfuscated loaders the static AST does not
+      parse (`require` aliased to another binding, `module["require"]`, `eval`, `new Function` / `Function(`, and
+      `process.mainModule.require`) (FA-F18-043).
   (g) a symlinked directory. The walk does not follow links, so the directory itself fails the gate (FA-F18-002).
 
 Rules (a)-(d) have no allowlist beyond the one key-guard file. `--print-key-names` prints PROVIDER_KEY_ENV_NAMES as JSON;

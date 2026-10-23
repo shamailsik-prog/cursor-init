@@ -42,9 +42,15 @@ function posixRel(abs: string, root: string): string {
 }
 
 function normalizeRepoModulePath(modulePath: string): string {
-  let p = modulePath.replace(/\.(?:[cm]?[jt]sx?)$/i, "")
+  let p = modulePath.replace(/\/+$/, "")
+  p = p.replace(/\.(?:[cm]?[jt]sx?)$/i, "")
   if (p.endsWith("/index")) p = p.slice(0, -"/index".length)
   return path.posix.normalize(p)
+}
+
+function isRootSkippedModule(modulePath: string): boolean {
+  const first = modulePath.split("/").filter(Boolean)[0]
+  return first !== undefined && ROOT_ONLY_SKIP_DIRS.has(first)
 }
 
 function modulePathFromRel(rel: string): string {
@@ -142,9 +148,29 @@ function listRuntimeSourceFiles(root: string): string[] {
 
 type ImportInfo = { local: string; imported: string; module: string; isTypeOnly: boolean }
 
+function importEqualsModuleSpecifier(stmt: ts.ImportEqualsDeclaration): string | null {
+  const ref = stmt.moduleReference
+  if (!ref || !ts.isExternalModuleReference(ref)) return null
+  const expr = ref.expression
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text
+  return null
+}
+
 function collectImports(sf: ts.SourceFile, importerRel: string): ImportInfo[] {
   const imports: ImportInfo[] = []
   for (const stmt of sf.statements) {
+    if (ts.isImportEqualsDeclaration(stmt)) {
+      const spec = importEqualsModuleSpecifier(stmt)
+      if (!spec) continue
+      const resolvedModule = resolveRepoModule(spec, importerRel) ?? spec
+      imports.push({
+        local: stmt.name.text,
+        imported: "default",
+        module: resolvedModule,
+        isTypeOnly: false,
+      })
+      continue
+    }
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
     const resolvedModule = resolveRepoModule(stmt.moduleSpecifier.text, importerRel) ?? stmt.moduleSpecifier.text
     const typeOnly = stmt.importClause?.isTypeOnly === true
@@ -512,6 +538,9 @@ function allowedSpreadOrAssignSource(expr: ts.Expression, sf: ts.SourceFile, che
 function forbiddenAgentDynamicLoads(sf: ts.SourceFile, rel: string, findings: string[]): void {
   const tag = "FA-F18-032"
   const visit = (node: ts.Node) => {
+    if (ts.isImportEqualsDeclaration(node) && importEqualsModuleSpecifier(node)) {
+      findings.push(`${rel}: import = require() is not allowed under agent/ (${tag})`)
+    }
     if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         findings.push(`${rel}: dynamic import() is not allowed under agent/ (${tag})`)
@@ -545,23 +574,46 @@ type ModuleEdges = { deps: string[]; opaqueDynamic: boolean }
 function collectModuleEdges(sf: ts.SourceFile, importerRel: string): ModuleEdges {
   const deps: string[] = []
   let opaqueDynamic = false
+  const createRequireBindings = new Set<string>()
 
   const addSpec = (spec: string) => {
     const resolved = resolveRepoModule(spec, importerRel)
     if (resolved) deps.push(resolved)
   }
 
+  const noteCreateRequireBinding = (node: ts.CallExpression) => {
+    if (!isCreateRequireCall(node)) return
+    opaqueDynamic = true
+    const parent = node.parent
+    if (parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+      createRequireBindings.add(parent.name.text)
+    }
+  }
+
   for (const stmt of sf.statements) {
     if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
+      if (stmt.moduleSpecifier.text === "node:module" || stmt.moduleSpecifier.text === "module") {
+        const clause = stmt.importClause
+        if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+          for (const el of clause.namedBindings.elements) {
+            if ((el.propertyName?.text ?? el.name.text) === "createRequire") opaqueDynamic = true
+          }
+        }
+      }
       addSpec(stmt.moduleSpecifier.text)
     }
     if (ts.isExportDeclaration(stmt) && stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier)) {
       addSpec(stmt.moduleSpecifier.text)
     }
+    if (ts.isImportEqualsDeclaration(stmt)) {
+      const spec = importEqualsModuleSpecifier(stmt)
+      if (spec) addSpec(spec)
+    }
   }
 
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
+      noteCreateRequireBinding(node)
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const lit = literalModuleSpecifier(node.arguments[0])
         if (lit !== null) addSpec(lit)
@@ -578,6 +630,10 @@ function collectModuleEdges(sf: ts.SourceFile, importerRel: string): ModuleEdges
         const lit = literalModuleSpecifier(node.arguments[0])
         if (lit !== null) addSpec(lit)
         else opaqueDynamic = true
+      } else if (ts.isIdentifier(node.expression) && createRequireBindings.has(node.expression.text)) {
+        const lit = literalModuleSpecifier(node.arguments[0])
+        if (lit !== null) addSpec(lit)
+        else if (node.arguments[0]) opaqueDynamic = true
       }
     }
     ts.forEachChild(node, visit)
@@ -597,28 +653,28 @@ function buildTouchesCanonicalMap(root: string, runtimeFiles: string[]): Map<str
     edgesByModule.set(modulePath, collectModuleEdges(sf, rel))
   }
   const touches = new Map<string, boolean>()
-  const visiting = new Set<string>()
-  const visit = (mod: string): boolean => {
-    const cached = touches.get(mod)
-    if (cached !== undefined) return cached
-    if (visiting.has(mod)) return false
-    visiting.add(mod)
-    const edges = edgesByModule.get(mod)
-    if (edges?.opaqueDynamic) {
-      visiting.delete(mod)
-      touches.set(mod, true)
-      return true
-    }
-    const direct = mod === CANONICAL_MODULE
-    const deps = edges?.deps ?? []
-    const transitive = deps.some((d) => visit(d))
-    const value = direct || transitive
-    visiting.delete(mod)
-    touches.set(mod, value)
-    return value
+  for (const mod of edgesByModule.keys()) {
+    touches.set(mod, mod === CANONICAL_MODULE)
   }
-  for (const mod of edgesByModule.keys()) visit(mod)
-  visit(CANONICAL_MODULE)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [mod, edges] of edgesByModule) {
+      if (edges.opaqueDynamic) {
+        if (!touches.get(mod)) {
+          touches.set(mod, true)
+          changed = true
+        }
+        continue
+      }
+      const next =
+        mod === CANONICAL_MODULE || edges.deps.some((dep) => touches.get(dep) === true)
+      if (touches.get(mod) !== next) {
+        touches.set(mod, next)
+        changed = true
+      }
+    }
+  }
   return touches
 }
 
@@ -632,6 +688,13 @@ function forbiddenImportsTouchingCanonicalModel(
   for (const imp of imports) {
     if (imp.isTypeOnly) continue
     const mod = imp.module
+    if (isRootSkippedModule(mod)) {
+      findings.push(
+        `${rel}: import of ${mod} is not allowed under agent/ (skipped runtime tree) (FA-F18-041)`
+      )
+      continue
+    }
+    if (!touchesCanonical.has(mod)) continue
     if (!touchesCanonical.get(mod)) continue
     if (mod === CANONICAL_MODULE && imp.imported === MODEL_BINDING) continue
     findings.push(
@@ -678,8 +741,29 @@ function forbiddenEveOutsideAgentEntry(sf: ts.SourceFile, rel: string, findings:
       findings.push(`${rel}: only agent/agent.ts may reference ${DEFINE_AGENT} (${tag})`)
     }
   }
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) {
+      continue
+    }
+    if (stmt.moduleSpecifier.text === EVE_MODULE) {
+      findings.push(`${rel}: re-export from "${EVE_MODULE}" is only allowed in agent/agent.ts (${tag})`)
+    }
+  }
+  const createRequireBindings = new Set<string>()
   const visit = (node: ts.Node) => {
+    if (ts.isImportEqualsDeclaration(node)) {
+      const spec = importEqualsModuleSpecifier(node)
+      if (spec === EVE_MODULE) {
+        findings.push(`${rel}: only agent/agent.ts may import from "${EVE_MODULE}" (${tag})`)
+      }
+    }
     if (ts.isCallExpression(node)) {
+      if (isCreateRequireCall(node)) {
+        const parent = node.parent
+        if (parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+          createRequireBindings.add(parent.name.text)
+        }
+      }
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0]) {
         const arg = node.arguments[0]
         if (
@@ -689,14 +773,24 @@ function forbiddenEveOutsideAgentEntry(sf: ts.SourceFile, rel: string, findings:
           findings.push(`${rel}: dynamic import of "${EVE_MODULE}" is only allowed in agent/agent.ts (${tag})`)
         }
       }
-      if (
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === "require" &&
-        node.arguments[0] &&
-        ts.isStringLiteral(node.arguments[0]) &&
-        node.arguments[0].text === EVE_MODULE
-      ) {
-        findings.push(`${rel}: require("${EVE_MODULE}") is only allowed in agent/agent.ts (${tag})`)
+      if (isRequireLikeCall(node) && node.arguments[0]) {
+        const arg = node.arguments[0]
+        if (
+          (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) &&
+          arg.text === EVE_MODULE
+        ) {
+          findings.push(`${rel}: require("${EVE_MODULE}") is only allowed in agent/agent.ts (${tag})`)
+        }
+      }
+      if (ts.isIdentifier(node.expression) && createRequireBindings.has(node.expression.text)) {
+        const arg = node.arguments[0]
+        if (
+          arg &&
+          (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) &&
+          arg.text === EVE_MODULE
+        ) {
+          findings.push(`${rel}: require("${EVE_MODULE}") is only allowed in agent/agent.ts (${tag})`)
+        }
       }
       if (isDefineAgentIdentifierCall(node) || isMemberDefineAgentCall(node)) {
         findings.push(`${rel}: ${DEFINE_AGENT} call outside agent/agent.ts is not allowed (${tag})`)

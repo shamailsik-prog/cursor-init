@@ -123,8 +123,10 @@ Gates:
   specifiers; the `committeeBrainLanguageModel` name may appear only on `model:` in that call; under `agent/` only,
   no property/element/compound/logical writes, `delete`, `++`/`--`, or `Object`/`Reflect` mutation (including aliased
   globals) on the canonical model; no spreading/`Object.assign` from outside the file (FA-F18-002, FA-F18-015,
-  FA-F18-016, FA-F18-020, FA-F18-025..036). Residual: non-`const` computed property keys on arbitrary objects;
-  canonical-model mutation in files not reachable from `agent/` imports. `--print-pure-modules` prints
+  FA-F18-016, FA-F18-020, FA-F18-025..043). Residual: non-`const` computed property keys on arbitrary objects;
+  canonical-model mutation in files not reachable from `agent/` imports; obfuscated loaders (`require` alias,
+  `module["require"]`, `eval`, `new Function` / `Function(`, `process.mainModule.require`) (FA-F18-043).
+  `--print-pure-modules` prints
   `FUNCTIONS_PURE_MODULES` for the pure-import closure test (FA-F18-017).
 - **Frozen-install guard (audit F39):** `python3 ci_gates/check_lockfiles.py` is G-0 check [18]: every lockfile
   matches its `package.json` (the root entry npm writes from it, every direct dependency present), npm is pinned

@@ -850,7 +850,7 @@ const FAILING: Case[] = [
         'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { x } from "../tests/patch"; void x\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
       "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
     },
-    names: ["agent/agent.ts", "FA-F18-032"],
+    names: ["agent/agent.ts", "FA-F18-041"],
   },
   {
     name: "FA-F18-042: TS import equals require in agent/agent.ts loads patch",
