@@ -109,7 +109,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-021: documents.create v
   it("a create with no objectBytesStatus stores the canonical missing status", async () => {
     const firmId = uniq("f13d21firm")
     const id = uniq("doc")
-    const row = { ...good(firmId), id }
+    const row: Record<string, unknown> = { ...good(firmId), id }
     delete row.objectBytesStatus
     await repo().documents.create(row as never)
     expect((await adminDb().collection("documents").doc(id).get()).data()).toMatchObject({

@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto"
 import { applicationDefault, initializeApp } from "firebase-admin/app"
 import { FieldValue, getFirestore } from "firebase-admin/firestore"
-import { applyMatterShapeBackfill, planMatterShapeBackfill } from "@/platform/persistence/matterShapeBackfill"
+import { applyMatterShapeBackfill, formatMatterShapeBackfillDryRun, planMatterShapeBackfill } from "@/platform/persistence/matterShapeBackfill"
 import { adminMatterShapeBackfillStore, readMatterShapeRows } from "./lib/matterShapeBackfillAdmin"
 
 async function main(argv: string[]): Promise<void> {
@@ -26,17 +26,20 @@ async function main(argv: string[]): Promise<void> {
   const db = getFirestore(app)
   const { matters, members } = await readMatterShapeRows(db as never)
   const plan = planMatterShapeBackfill(matters, members)
+  if (!apply) {
+    console.log(formatMatterShapeBackfillDryRun(plan))
+    return
+  }
   console.log(
-    `[backfill-matter-shapes] ${apply ? "APPLY" : "DRY-RUN"}: ${plan.matters.length} matters and ${plan.members.length} members to complete, ` +
+    `[backfill-matter-shapes] APPLY: ${plan.matters.length} matters and ${plan.members.length} members to complete, ` +
       `${plan.complete.length} already complete, ${plan.malformed.length} malformed, ${plan.orphans.length} orphaned (left as they are)`
   )
-  if (!apply) return
   const result = await applyMatterShapeBackfill(adminMatterShapeBackfillStore(db as never, () => FieldValue.serverTimestamp()), plan, {
     runId: randomUUID(),
     now: Date.now(),
   })
   console.log(
-    `[backfill-matter-shapes] applied ${result.applied.length}, skipped ${result.skipped.length}, rejected ${result.rejected.length}; summary row written to audit_log`
+    `[backfill-matter-shapes] applied ${result.applied.length}, skipped ${result.skipped.length}, rejected ${result.rejected.length}, failed ${result.failed.length}; summary row written to audit_log`
   )
 }
 

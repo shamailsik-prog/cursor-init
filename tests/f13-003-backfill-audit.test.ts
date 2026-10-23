@@ -6,6 +6,7 @@ import {
   MATTER_BACKFILL_AUDIT_BATCH,
   applyMatterShapeBackfill,
   planMatterShapeBackfill,
+  type ApplyRejection,
   type CompleteMatterResult,
   type MatterShapeBackfillStore,
 } from "@/platform/persistence/matterShapeBackfill"
@@ -72,7 +73,10 @@ describe("F13 FA-F13-003: bounded backfill audit rows", () => {
   it("each batch's planned paths are audited before its writes, so a run that dies mid-batch left a record", async () => {
     const plan = planMatterShapeBackfill(Array.from({ length: MATTER_BACKFILL_AUDIT_BATCH + 2 }, (_, i) => legacyMatter(i)), [])
     const { store, audit, events } = memoryStore({ failAt: MATTER_BACKFILL_AUDIT_BATCH + 1 })
-    await expect(applyMatterShapeBackfill(store, plan, { runId: "r2", now: 1 })).rejects.toThrow("instance died")
+    // FA-F13-023: the thrown write is recorded and the run finishes. The planned row is still written first.
+    const res = await applyMatterShapeBackfill(store, plan, { runId: "r2", now: 1 })
+    expect(res.failed).toEqual([{ path: "matters/m00200", message: "instance died" }])
+    expect(res.applied).toContain("matters/m00201")
     const planned = audit.filter((r) => Array.isArray(r.planned))
     expect(planned).toHaveLength(2)
     expect(planned[1].planned).toEqual(plan.matters.slice(MATTER_BACKFILL_AUDIT_BATCH).map((u) => `matters/${u.id}`))
