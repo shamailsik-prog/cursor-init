@@ -47,6 +47,8 @@ const CLEAN = { "app/page.tsx": "export default function Page() { return null }\
 
 type Case = { name: string; files: Record<string, string>; names: string[] }
 
+const CANONICAL_MODEL_MODULE = "platform/p1/committeeBrainModel"
+
 const FAILING: Case[] = [
   { name: "the ai SDK's generateText in a Next route", files: { "app/api/x/route.ts": 'import { generateText } from "ai"\nexport const f = generateText\n' }, names: ["app/api/x/route.ts", "ai"] },
   { name: "a type-only import from ai (the package is the paid client)", files: { "lib/x.ts": 'import type { LanguageModel } from "ai"\nexport type M = LanguageModel\n' }, names: ["lib/x.ts", "ai"] },
@@ -299,6 +301,80 @@ const FAILING: Case[] = [
         "jobs:\n  web:\n    runs-on: ubuntu-latest\n    env:\n      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}\n    steps:\n      - run: npx firebase deploy --only hosting\n",
     },
     names: [".github/workflows/host.yml", "AI_GATEWAY_API_KEY"],
+  },
+  {
+    name: "FA-F18-016 bypass 1: look-alike agent/committeeBrainModel module",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "./committeeBrainModel"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "agent/committeeBrainModel.ts": 'export const committeeBrainLanguageModel = "anthropic/claude-sonnet-4.6"\n',
+    },
+    names: ["agent/agent.ts", CANONICAL_MODEL_MODULE],
+  },
+  {
+    name: "FA-F18-016 bypass 2: real import aliased then local committeeBrainLanguageModel string",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel as brain } from "../platform/p1/committeeBrainModel"\nconst committeeBrainLanguageModel = "anthropic/claude-sonnet-4.6"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", CANONICAL_MODEL_MODULE],
+  },
+  {
+    name: "FA-F18-016 bypass 3: import only in comment plus local committeeBrainLanguageModel string",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\n// import { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nconst committeeBrainLanguageModel = "anthropic/claude-sonnet-4.6"\nexport default defineAgent({ model: committeeBrainLanguageModel })\n',
+    },
+    names: ["agent/agent.ts", CANONICAL_MODEL_MODULE],
+  },
+  {
+    name: "FA-F18-016 bypass 4: cfg.model assignment with a quoted Gateway id",
+    files: {
+      "agent/cfg.ts":
+        'const cfg: { model?: string } = {}\ncfg.model = "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg.ts", "assigning to .model"],
+  },
+  {
+    name: "FA-F18-016 bypass 4b: cfg bracket model assignment",
+    files: {
+      "agent/cfg2.ts": 'const cfg: Record<string, string> = {}\ncfg["model"] = "anthropic/claude-sonnet-4.6"\nexport const x = cfg\n',
+    },
+    names: ["agent/cfg2.ts", '["model"]'],
+  },
+  {
+    name: "FA-F18-016 bypass 5: defineAgent spreads a base built outside agent/",
+    files: {
+      "lib/agentBase.ts": 'export const base = { model: "anthropic/claude-sonnet-4.6" }\n',
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nimport { base } from "../lib/agentBase"\nexport default defineAgent({ ...base, model: committeeBrainLanguageModel })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "spread"],
+  },
+  {
+    name: "FA-F18-016 bypass 6: shorthand model after let reassignment",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nlet model = committeeBrainLanguageModel\nmodel = "anthropic/claude-sonnet-4.6"\nexport default defineAgent({ model })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", "shorthand"],
+  },
+  {
+    name: "FA-F18-016 bypass 6b: shorthand model bound in an inner scope",
+    files: {
+      "agent/agent.ts":
+        'import { defineAgent } from "eve"\nimport { committeeBrainLanguageModel } from "../platform/p1/committeeBrainModel"\nfunction inner() {\n  const model = committeeBrainLanguageModel\n  return { model }\n}\nexport default defineAgent({ model: inner().model })\n',
+      "platform/p1/committeeBrainModel.ts": "export const committeeBrainLanguageModel = {}\n",
+    },
+    names: ["agent/agent.ts", CANONICAL_MODEL_MODULE],
+  },
+  {
+    name: "FA-F18-016 bypass 7: one-line JSON model under agent/",
+    files: { "agent/eve.json": '{"model":"anthropic/claude-sonnet-4.6"}\n' },
+    names: ["agent/eve.json", "anthropic"],
   },
 ]
 
