@@ -41,8 +41,14 @@ function posixRel(abs: string, root: string): string {
   return path.relative(root, abs).split(path.sep).join("/")
 }
 
+function normalizeRepoModulePath(modulePath: string): string {
+  let p = modulePath.replace(/\.(?:[cm]?[jt]sx?)$/i, "")
+  if (p.endsWith("/index")) p = p.slice(0, -"/index".length)
+  return path.posix.normalize(p)
+}
+
 function modulePathFromRel(rel: string): string {
-  return rel.replace(/\.(?:[cm]?[jt]sx?)$/i, "")
+  return normalizeRepoModulePath(rel)
 }
 
 function resolveRepoModule(spec: string, importerRel: string): string | null {
@@ -59,11 +65,36 @@ function resolveRepoModule(spec: string, importerRel: string): string | null {
   } else {
     modulePath = raw
   }
-  modulePath = modulePath.replace(/\.(?:[cm]?[jt]sx?)$/i, "")
-  if (modulePath.endsWith("/index")) modulePath = modulePath.slice(0, -"/index".length)
-  modulePath = path.posix.normalize(modulePath)
+  modulePath = normalizeRepoModulePath(modulePath)
   if (modulePath === ".." || modulePath.startsWith("../")) return null
   return modulePath
+}
+
+function literalModuleSpecifier(expr: ts.Expression | undefined): string | null {
+  if (!expr) return null
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text
+  return null
+}
+
+function isBareRequireCall(node: ts.CallExpression): boolean {
+  return ts.isIdentifier(node.expression) && node.expression.text === "require"
+}
+
+function isModuleRequireCall(node: ts.CallExpression): boolean {
+  return (
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "require" &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === "module"
+  )
+}
+
+function isRequireLikeCall(node: ts.CallExpression): boolean {
+  return isBareRequireCall(node) || isModuleRequireCall(node)
+}
+
+function isCreateRequireCall(node: ts.CallExpression): boolean {
+  return ts.isIdentifier(node.expression) && node.expression.text === "createRequire"
 }
 
 function isSkippedRel(rel: string): boolean {
@@ -485,11 +516,11 @@ function forbiddenAgentDynamicLoads(sf: ts.SourceFile, rel: string, findings: st
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         findings.push(`${rel}: dynamic import() is not allowed under agent/ (${tag})`)
       }
-      if (ts.isIdentifier(node.expression) && node.expression.text === "require" && node.arguments[0]) {
-        const arg = node.arguments[0]
-        if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
-          findings.push(`${rel}: require() is not allowed under agent/ (${tag})`)
-        }
+      if (isRequireLikeCall(node)) {
+        findings.push(`${rel}: require() is not allowed under agent/ (${tag})`)
+      }
+      if (isCreateRequireCall(node)) {
+        findings.push(`${rel}: createRequire() is not allowed under agent/ (${tag})`)
       }
     }
     ts.forEachChild(node, visit)
@@ -509,24 +540,61 @@ function forbiddenAgentExternalReexports(sf: ts.SourceFile, rel: string, finding
   }
 }
 
-function collectModuleImports(sf: ts.SourceFile, importerRel: string): string[] {
-  const mods: string[] = []
-  for (const stmt of sf.statements) {
-    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
-    const resolved = resolveRepoModule(stmt.moduleSpecifier.text, importerRel)
-    if (resolved) mods.push(resolved)
+type ModuleEdges = { deps: string[]; opaqueDynamic: boolean }
+
+function collectModuleEdges(sf: ts.SourceFile, importerRel: string): ModuleEdges {
+  const deps: string[] = []
+  let opaqueDynamic = false
+
+  const addSpec = (spec: string) => {
+    const resolved = resolveRepoModule(spec, importerRel)
+    if (resolved) deps.push(resolved)
   }
-  return mods
+
+  for (const stmt of sf.statements) {
+    if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
+      addSpec(stmt.moduleSpecifier.text)
+    }
+    if (ts.isExportDeclaration(stmt) && stmt.moduleSpecifier && ts.isStringLiteral(stmt.moduleSpecifier)) {
+      addSpec(stmt.moduleSpecifier.text)
+    }
+  }
+
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const lit = literalModuleSpecifier(node.arguments[0])
+        if (lit !== null) addSpec(lit)
+        else if (node.arguments[0]) opaqueDynamic = true
+      } else if (isRequireLikeCall(node)) {
+        const lit = literalModuleSpecifier(node.arguments[0])
+        if (lit !== null) addSpec(lit)
+        else if (node.arguments[0]) opaqueDynamic = true
+      } else if (
+        ts.isCallExpression(node.expression) &&
+        isCreateRequireCall(node.expression) &&
+        node.arguments[0]
+      ) {
+        const lit = literalModuleSpecifier(node.arguments[0])
+        if (lit !== null) addSpec(lit)
+        else opaqueDynamic = true
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+
+  return { deps, opaqueDynamic }
 }
 
 function buildTouchesCanonicalMap(root: string, runtimeFiles: string[]): Map<string, boolean> {
-  const importsByModule = new Map<string, string[]>()
+  const edgesByModule = new Map<string, ModuleEdges>()
   for (const abs of runtimeFiles) {
     const rel = posixRel(abs, root)
     const modulePath = modulePathFromRel(rel)
     const text = fs.readFileSync(abs, "utf8")
     const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true)
-    importsByModule.set(modulePath, collectModuleImports(sf, rel))
+    edgesByModule.set(modulePath, collectModuleEdges(sf, rel))
   }
   const touches = new Map<string, boolean>()
   const visiting = new Set<string>()
@@ -535,15 +603,21 @@ function buildTouchesCanonicalMap(root: string, runtimeFiles: string[]): Map<str
     if (cached !== undefined) return cached
     if (visiting.has(mod)) return false
     visiting.add(mod)
+    const edges = edgesByModule.get(mod)
+    if (edges?.opaqueDynamic) {
+      visiting.delete(mod)
+      touches.set(mod, true)
+      return true
+    }
     const direct = mod === CANONICAL_MODULE
-    const deps = importsByModule.get(mod) ?? []
+    const deps = edges?.deps ?? []
     const transitive = deps.some((d) => visit(d))
     const value = direct || transitive
     visiting.delete(mod)
     touches.set(mod, value)
     return value
   }
-  for (const mod of importsByModule.keys()) visit(mod)
+  for (const mod of edgesByModule.keys()) visit(mod)
   visit(CANONICAL_MODULE)
   return touches
 }
@@ -564,6 +638,31 @@ function forbiddenImportsTouchingCanonicalModel(
       `${rel}: import of ${mod} pulls in ${CANONICAL_MODULE}; only the canonical ${MODEL_BINDING} import is allowed (${tag})`
     )
   }
+}
+
+function forbiddenOpaqueModuleLoads(sf: ts.SourceFile, rel: string, findings: string[]): void {
+  const tag = "FA-F18-036"
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0]) {
+        if (literalModuleSpecifier(node.arguments[0]) === null) {
+          findings.push(`${rel}: dynamic import() with computed module specifier is not allowed (${tag})`)
+        }
+      }
+      if (isRequireLikeCall(node) && node.arguments[0]) {
+        if (literalModuleSpecifier(node.arguments[0]) === null) {
+          findings.push(`${rel}: require() with computed module specifier is not allowed (${tag})`)
+        }
+      }
+      if (ts.isCallExpression(node.expression) && isCreateRequireCall(node.expression) && node.arguments[0]) {
+        if (literalModuleSpecifier(node.arguments[0]) === null) {
+          findings.push(`${rel}: createRequire() load with computed module specifier is not allowed (${tag})`)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
 }
 
 function forbiddenEveOutsideAgentEntry(sf: ts.SourceFile, rel: string, findings: string[]): void {
@@ -982,6 +1081,7 @@ function main(): number {
     if (rel.startsWith(FUNCTIONS_PREFIX)) continue
     const sf = ts.createSourceFile(abs, fs.readFileSync(abs, "utf8"), ts.ScriptTarget.Latest, true)
     forbiddenEveOutsideAgentEntry(sf, rel, findings)
+    forbiddenOpaqueModuleLoads(sf, rel, findings)
   }
 
   const agentTs = path.join(agentDir, "agent.ts")

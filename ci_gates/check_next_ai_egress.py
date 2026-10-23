@@ -43,12 +43,16 @@ It fails on any of:
       no local `defineAgent` binding; only `agent/agent.ts` may import `{ defineAgent }` from `"eve"`; in that file every
       `defineAgent` reference must be the callee of a direct `defineAgent({...})` call (no `.call`/`.apply`/`.bind` or
       passing the import elsewhere); exactly one eve `defineAgent` call under `agent/`; object-literal argument without
-      spread; no bare side-effect `import "..."` under `agent/` (FA-F18-031); no dynamic `import()` or `require()` under
-      `agent/` (FA-F18-032); no non-type import under `agent/` of any module that transitively imports
-      `platform/p1/committeeBrainModel` except the direct `{ committeeBrainLanguageModel }` import from that module
-      (FA-F18-032, so mutation of the canonical model in other files cannot run via a pulled-in module); no re-export
-      (`export *` / `export { ... } from`) from outside `agent/` (FA-F18-033); outside `functions/`, only
-      `agent/agent.ts` may import `"eve"`, name `defineAgent`, or call `defineAgent` (FA-F18-033). Under `agent/` only,
+      spread; no bare side-effect `import "..."` under `agent/` (FA-F18-031); no dynamic `import()` or `require()`
+      (including `module.require` and `createRequire`) under `agent/` (FA-F18-032); no non-type import under `agent/` of
+      any module that transitively reaches `platform/p1/committeeBrainModel` (static `import`, `export … from`,
+      string-literal `import()` / `require()`, including `…/index` directory entries normalized to the parent path)
+      except the direct `{ committeeBrainLanguageModel }` import from that module; any module with a computed
+      `import()` / `require()` / `createRequire` load is treated as touching the canonical model (FA-F18-032,
+      FA-F18-034, FA-F18-035); no re-export (`export *` / `export { ... } from`) from outside `agent/` (FA-F18-033);
+      outside `functions/`, only `agent/agent.ts` may import `"eve"`, name `defineAgent`, or call `defineAgent`
+      (FA-F18-033); outside `functions/`, no `import()` / `require()` / `createRequire` load with a computed module
+      specifier (FA-F18-036). Under `agent/` only,
       no mutation of `committeeBrainLanguageModel` (property/element/compound/logical assignment, `delete`, `++`/`--`,
       or `Object`/`Reflect` APIs, including when `Object`/`Reflect` are aliased to a local); the
       `committeeBrainLanguageModel` identifier may appear only as the `model:` value in that single `defineAgent`
