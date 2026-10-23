@@ -870,11 +870,15 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const doc = await seedDoc({ firmId, matterId, classification: "internal" })
     const targetId = "f04-stuck-0502"
     const target = legacyRow({ id: targetId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    const badFirmIds: string[] = []
     for (let start = 1; start <= 501; start += 500) {
       const end = Math.min(start + 499, 501)
       for (let i = start; i <= end; i++) {
         const id = `f04-stuck-${String(i).padStart(4, "0")}`
-        if (i % 2 === 0) await writeCancelledLegacyStuck(id, firmId)
+        if (i % 3 === 0) {
+          badFirmIds.push(id)
+          await writeLegacy(i % 2 === 0 ? missingFirmLegacyFiller(id) : unsafeFirmLegacyFiller(id))
+        } else if (i % 2 === 0) await writeCancelledLegacyStuck(id, firmId)
         else await writeLegacy(incompleteLegacyFiller(id, firmId))
       }
     }
@@ -888,6 +892,11 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     const legacy = await adminDb().collection("jobs").doc(targetId).get()
     expect(legacy.get("ocrStatus")).toBe("done")
     expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
+    for (const id of badFirmIds) {
+      const row = await adminDb().collection("jobs").doc(id).get()
+      expect(row.get("ocrStatus")).toBe("failed")
+      expect(row.get("ocrFailureCode")).toBe("invalid_job")
+    }
   }, 120_000)
 
   it("FA-F04-016: ocrStatus backfill reaches legacy rows after five hundred stamped OCR rows", async () => {
