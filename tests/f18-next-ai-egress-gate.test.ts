@@ -162,6 +162,14 @@ const FAILING: Case[] = [
     names: ["app/v.ts", "functions/src/p1/transport"],
   },
   {
+    name: "block and line comments between each vi.importActual token (FA-F18-009)",
+    files: {
+      "app/commented-loader.ts":
+        'export const t = vi /* block\ncomment */ . // line\nimportActual /* between method and generic */\n<unknown> // before the call\n( /* before the specifier */\n"@/functions/src/p1/transport")\n',
+    },
+    names: ["app/commented-loader.ts", "functions/src/p1/transport"],
+  },
+  {
     name: "jest.requireActual of the Functions P1 gateway",
     files: { "app/j.ts": 'export const t = jest.requireActual<unknown>("@/functions/src/p1/gateway")\n' },
     names: ["app/j.ts", "functions/src/p1/gateway"],

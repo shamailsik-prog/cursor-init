@@ -372,6 +372,8 @@ describe("activeTransport outside the Functions runtime (FA-F18-001)", () => {
     vi.stubEnv("FUNCTION_TARGET", "")
     vi.stubEnv("K_SERVICE", "")
     vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", "")
+    vi.stubEnv("FUNCTIONS_EMULATOR", "")
+    vi.stubEnv("FIREBASE_CONFIG", "")
   }
 
   it("with a key and no Functions runtime marker, builds nothing and does not call fetch", () => {
@@ -447,6 +449,51 @@ describe("activeTransport outside the Functions runtime (FA-F18-001)", () => {
     vi.stubEnv("AI_GATEWAY_API_KEY", "")
     expect(activeTransport()).toBeNull()
     expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe("activeTransport in the Firebase debug emulator (FA-F18-008)", () => {
+  const FAKE_KEY = "placeholder-not-a-key"
+  const FIREBASE_CONFIG = '{"projectId":"demo-sikander"}'
+  const blankMarkers = () => {
+    vi.stubEnv("FUNCTION_TARGET", "")
+    vi.stubEnv("K_SERVICE", "")
+    vi.stubEnv("SIKANDER_FUNCTIONS_RUNTIME", "")
+    vi.stubEnv("FUNCTIONS_EMULATOR", "")
+    vi.stubEnv("FIREBASE_CONFIG", "")
+    vi.stubEnv("VERCEL", "")
+  }
+
+  it("builds the Gateway when the debug emulator sets FUNCTIONS_EMULATOR and FIREBASE_CONFIG, with no trigger marker", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    blankMarkers()
+    vi.stubEnv("FUNCTIONS_EMULATOR", " true ")
+    vi.stubEnv("FIREBASE_CONFIG", `  ${FIREBASE_CONFIG}  `)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    const t = activeTransport()
+    expect(t).not.toBeNull()
+    expect(typeof t?.send).toBe("function")
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("p1.provider_key_in_next_runtime")
+  })
+
+  it("refuses FUNCTIONS_EMULATOR alone, and refuses a Next-side FIREBASE_CONFIG or VERCEL without the emulator pair", () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    vi.stubEnv("AI_GATEWAY_API_KEY", FAKE_KEY)
+    for (const env of [
+      { FUNCTIONS_EMULATOR: "true", FIREBASE_CONFIG: "", VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "", FIREBASE_CONFIG: FIREBASE_CONFIG, VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "true", FIREBASE_CONFIG: "", VERCEL: "1" },
+      { FUNCTIONS_EMULATOR: " true ", FIREBASE_CONFIG: "   ", VERCEL: "" },
+      { FUNCTIONS_EMULATOR: "yes", FIREBASE_CONFIG: FIREBASE_CONFIG, VERCEL: "" },
+    ]) {
+      blankMarkers()
+      vi.stubEnv("FUNCTIONS_EMULATOR", env.FUNCTIONS_EMULATOR)
+      vi.stubEnv("FIREBASE_CONFIG", env.FIREBASE_CONFIG)
+      vi.stubEnv("VERCEL", env.VERCEL)
+      expect(activeTransport(), JSON.stringify(env)).toBeNull()
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 
