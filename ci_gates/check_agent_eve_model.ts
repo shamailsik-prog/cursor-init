@@ -666,10 +666,13 @@ function validateModelInDefineAgent(
     const decl = sym?.valueDeclaration
     if (decl && ts.isImportSpecifier(decl)) {
       const importerRel = posixRel(decl.getSourceFile().fileName, root)
-      const importDecl = decl.parent?.parent
+      let importDeclNode: ts.ImportDeclaration | undefined
+      let importWalk: ts.Node | undefined = decl.parent
+      if (importWalk && ts.isNamedImports(importWalk)) importWalk = importWalk.parent
+      if (importWalk && ts.isImportDeclaration(importWalk)) importDeclNode = importWalk
       const mod =
-        importDecl && ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)
-          ? resolveRepoModule(importDecl.moduleSpecifier.text, importerRel)
+        importDeclNode && ts.isStringLiteral(importDeclNode.moduleSpecifier)
+          ? resolveRepoModule(importDeclNode.moduleSpecifier.text, importerRel)
           : null
       const imported = decl.propertyName?.text ?? decl.name.text
       if (imported === MODEL_BINDING && mod === CANONICAL_MODULE) return
