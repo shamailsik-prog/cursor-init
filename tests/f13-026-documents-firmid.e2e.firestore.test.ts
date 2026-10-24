@@ -1,5 +1,6 @@
 // FA-F13-026: production Firebase auth + Firestore persistence — documents GET must not serve a stale in-process row
 // when the stored row's firmId is malformed (get throws DocumentMalformedError; the route drops the cache).
+import { FieldValue } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GET as documentsGet } from "@/app/api/d1/documents/route"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
@@ -10,7 +11,6 @@ import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/run
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
 import { uniq } from "@/functions/test/emu"
-import { FieldValue } from "firebase-admin/firestore"
 
 requireAuthFirestoreEmulators("F13 FA-F13-026 documents firmId e2e")
 
