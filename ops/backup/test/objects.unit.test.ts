@@ -96,6 +96,41 @@ describe("restoreObjects", () => {
     expect(report.unrecoverable).toEqual(["row1"])
     expect(putCalled).toBe(false)
   })
+
+  it("rejects decrypted bytes whose content hash does not match the row", async () => {
+    const store = newStore()
+    const bytes = Buffer.from("vault-plaintext-2")
+    const hash = store.hashKey("firmA", bytes)
+    const put = await putImmutableDocumentObject({
+      store,
+      firmId: "firmA",
+      docId: "doc_hash_mismatch",
+      bytes,
+      contentHash: hash,
+      mimeType: "application/octet-stream",
+    })
+    const encrypted = await readFile(filesystemPathForStoragePath(put.storagePath))
+    const wrongHash = store.hashKey("firmA", Buffer.from("other"))
+
+    const report = await restoreObjects({
+      rows: [{ id: "row2", firmId: "firmA", storagePath: put.storagePath, contentHash: wrongHash, key: "k" }],
+      source: {
+        listVersions: async () => [{ key: "k", versionId: "v1" }],
+        getVersion: async () => encrypted,
+        put: async () => {},
+      },
+      target: {
+        listVersions: async () => [],
+        getVersion: async () => Buffer.alloc(0),
+        put: async () => {
+          throw new Error("should not put")
+        },
+      },
+      store,
+    })
+    expect(report.restored).toEqual([])
+    expect(report.unrecoverable).toEqual(["row2"])
+  })
 })
 
 describe("validateR2LockRules", () => {
