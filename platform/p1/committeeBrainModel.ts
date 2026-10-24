@@ -15,8 +15,9 @@ import type {
   LanguageModelV3GenerateResult,
   LanguageModelV3StreamResult,
   LanguageModelV3Usage,
+  SharedV3ProviderMetadata,
 } from "@ai-sdk/provider"
-import { callCommitteeBrain } from "@/platform/p1/internalAICaller"
+import { callCommitteeBrain, type OutboundResponse } from "@/platform/p1/internalAICaller"
 import {
   COMMITTEE_BRAIN_GATEWAY_MODEL,
 } from "@/platform/p1/constants"
@@ -27,18 +28,47 @@ import {
 } from "@/platform/p1/promptText"
 import { PROVIDER_KEY_IN_RUNTIME_REASON, checkProviderKeys } from "@/platform/p1/providerKeyGuard"
 
-const EMPTY_USAGE: LanguageModelV3Usage = {
-  inputTokens: {
-    total: undefined,
-    noCache: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
+/**
+ * Audit F34 (spec docs/superpowers/specs/2026-10-24-f34-decision-trace-reproducibility-design.md, ruling R12): the bridge
+ * reports real usage, or says it was not reported and why. A call refused before P1 or blocked by P1 sent nothing, so its
+ * usage is zero (`none_sent`); in every deployment the bridge is blocked (audit F18: no provider transport in Next or eve),
+ * so that is what production reports. An answered call reports the transport's counts when it gave both (`reported`);
+ * otherwise every count stays undefined and the status says `usage_unreported` with the reason. The status rides in
+ * `usage.raw` and in `providerMetadata.sikander`, on the result and on the stream's finish part.
+ */
+type UsageReport = { usage: LanguageModelV3Usage; providerMetadata: SharedV3ProviderMetadata }
+
+export const USAGE_UNREPORTED_REASON = "transport_reported_no_usage"
+
+const noneSent = (): UsageReport => ({
+  usage: {
+    inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 0, text: 0, reasoning: 0 },
+    raw: { status: "none_sent" },
   },
-  outputTokens: {
-    total: undefined,
-    text: undefined,
-    reasoning: undefined,
-  },
+  providerMetadata: { sikander: { usageStatus: "none_sent" } },
+})
+
+function usageOf(result: OutboundResponse): UsageReport {
+  if (result.blocked) return noneSent()
+  if (result.usage !== undefined) {
+    return {
+      usage: {
+        inputTokens: { total: result.usage.inputTokens, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: result.usage.outputTokens, text: undefined, reasoning: undefined },
+        raw: { status: "reported" },
+      },
+      providerMetadata: { sikander: { usageStatus: "reported" } },
+    }
+  }
+  return {
+    usage: {
+      inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+      raw: { status: "usage_unreported", reason: USAGE_UNREPORTED_REASON },
+    },
+    providerMetadata: { sikander: { usageStatus: "usage_unreported", usageReason: USAGE_UNREPORTED_REASON } },
+  }
 }
 
 function blockedAssistantText(reason: string): string {
@@ -55,7 +85,7 @@ function refusedBeforeP1(reason: string, raw: string): LanguageModelV3GenerateRe
   return {
     content: [{ type: "text", text: blockedAssistantText(keys.refuse ? PROVIDER_KEY_IN_RUNTIME_REASON : reason) }],
     finishReason: { unified: "error", raw: keys.refuse ? "provider key in runtime" : raw },
-    usage: EMPTY_USAGE,
+    ...noneSent(),
     warnings: [],
   }
 }
@@ -92,7 +122,7 @@ async function runP1(
       unified: result.blocked ? "error" : "stop",
       raw: result.blocked ? result.reason : "stop",
     },
-    usage: EMPTY_USAGE,
+    ...usageOf(result),
     warnings: [],
     request: { body: { messages: result.messages } },
   }
@@ -123,6 +153,7 @@ export const committeeBrainLanguageModel: LanguageModelV3 = {
           type: "finish",
           finishReason: result.finishReason,
           usage: result.usage,
+          ...(result.providerMetadata === undefined ? {} : { providerMetadata: result.providerMetadata }),
         })
         controller.close()
       },

@@ -131,9 +131,18 @@ async function reconstruct(key: { traceId?: string; usageLogId?: string }): Prom
   return mod!.reconstructP1Decision!(db(), key)
 }
 
+/** The operator CLI (spec R13), imported where it is used. */
+async function decisionCli(): Promise<{
+  runDecisionCli: (deps: { argv: readonly string[]; out: (line: string) => void; db: () => unknown }) => Promise<number>
+}> {
+  const mod = (await import("../src/cli/p1Decision").catch(() => null)) as Awaited<ReturnType<typeof decisionCli>> | null
+  expect(mod?.runDecisionCli, "the operator CLI exists (spec R13)").toBeTypeOf("function")
+  return mod!
+}
+
 /** The export reconciler (spec R11), imported where it is used. */
 async function exportReconciler(): Promise<{
-  reconcileTraceExports: (opts: { now: () => number }) => Promise<{ exported: string[]; rescheduled: string[]; abandoned: string[] }>
+  reconcileTraceExports: (opts: { now: () => number }) => Promise<{ exported: string[]; rescheduled: string[]; abandoned: string[]; skipped: string[] }>
   traceExportTestSeam: { afterClaim?: (usageLogId: string) => Promise<void> }
 }> {
   const mod = (await import("../src/p1/traceExport").catch(() => null)) as Awaited<ReturnType<typeof exportReconciler>> | null
@@ -269,6 +278,25 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     expect(JSON.stringify(r)).not.toContain(PLANTED_ANSWER)
     expect(JSON.stringify(r)).not.toContain(BODY)
     expect(await reconstruct({ usageLogId })).toEqual(r)
+
+    // The operator CLI prints the same join as JSON, Timestamps as ISO strings.
+    const { runDecisionCli } = await decisionCli()
+    const lines: string[] = []
+    expect(await runDecisionCli({ argv: ["--trace", out.traceId], out: (l) => lines.push(l), db })).toBe(0)
+    const printed = JSON.parse(lines.join("\n")) as { checks: unknown; decision: { settledAt: unknown } }
+    expect(printed.checks).toEqual(r!.checks)
+    expect(printed.decision.settledAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it("the operator CLI refuses a malformed request and reports an unknown attempt as not found", async () => {
+    const { runDecisionCli } = await decisionCli()
+    const lines: string[] = []
+    expect(await runDecisionCli({ argv: [], out: (l) => lines.push(l), db })).toBe(64)
+    expect(await runDecisionCli({ argv: ["--trace"], out: (l) => lines.push(l), db })).toBe(64)
+    expect(await runDecisionCli({ argv: ["--other", "x"], out: (l) => lines.push(l), db })).toBe(64)
+    expect(await runDecisionCli({ argv: ["--usage", "no-such-usage-row"], out: (l) => lines.push(l), db })).toBe(2)
+    expect(await runDecisionCli({ argv: ["--trace", "01a12a67-0000-7000-8000-000000000000"], out: (l) => lines.push(l), db })).toBe(2)
+    expect(await runDecisionCli({ argv: ["--usage", "../escape"], out: (l) => lines.push(l), db })).toBe(2)
   })
 
   it("the facts hash of an anchor changes when the corpus changes what the verdict read", async () => {
@@ -355,12 +383,18 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     expect((await reconcileTraceExports({ now: () => T + 60_000 })).exported).not.toContain(r.usageLogId)
     expect(opik.bodies).toHaveLength(1)
 
-    // Fenced: a run that lost its lease to another run between the claim and the result writes nothing.
+    // Leased: a second run while the first holds the record does not touch it. Fenced: a run that lost its lease to
+    // another run between the claim and the result writes nothing.
     status.code = 204
+    const seen: { concurrent?: Awaited<ReturnType<typeof reconcileTraceExports>> } = {}
     traceExportTestSeam.afterClaim = async (usageLogId) => {
-      if (usageLogId === r.usageLogId) await db().collection("p1_decisions").doc(usageLogId).update({ "export.leaseToken": "another-run" })
+      if (usageLogId !== r.usageLogId || seen.concurrent !== undefined) return
+      seen.concurrent = await reconcileTraceExports({ now: () => T + 6 * 60_000 })
+      await db().collection("p1_decisions").doc(usageLogId).update({ "export.leaseToken": "another-run" })
     }
     const fenced = await reconcileTraceExports({ now: () => T + 6 * 60_000 })
+    expect(seen.concurrent?.skipped).toContain(r.usageLogId)
+    expect(seen.concurrent?.exported).not.toContain(r.usageLogId)
     expect(fenced.exported).not.toContain(r.usageLogId)
     expect((await decisionOf(r.usageLogId))!.export).toMatchObject({ state: "pending", attempts: 1, leaseToken: "another-run" })
     delete traceExportTestSeam.afterClaim
@@ -392,7 +426,8 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     const e = (await decisionOf(r.usageLogId))!.export
     expect(e).toMatchObject({ state: "failed", attempts: 5, lastCode: "export_failed" })
     expect(e.abandonedAt).toBeInstanceOf(Timestamp)
-    const abandoned = error.mock.calls.filter((c) => c[0] === "p1.trace_export_abandoned")
+    // Other suites' pending records may be due in the shared emulator too: only this record's line is asserted.
+    const abandoned = error.mock.calls.filter((c) => c[0] === "p1.trace_export_abandoned" && (c[1] as { usageLogId?: string }).usageLogId === r.usageLogId)
     expect(abandoned).toEqual([["p1.trace_export_abandoned", { firmId, usageLogId: r.usageLogId, traceId: r.traceId, attempts: 5, code: "export_failed" }]])
     expect((await reconstruct({ usageLogId: r.usageLogId }))!.checks).toMatchObject({ exportState: "failed" })
   })

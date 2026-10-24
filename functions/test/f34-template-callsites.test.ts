@@ -4,7 +4,7 @@ import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { PROMPT_TEMPLATE_PINS } from "@/platform/p1/promptTemplates"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
-import { SYSTEM_POLICY_IDS } from "@/platform/p1/systemPolicy"
+import { SYSTEM_POLICY_IDS, SYSTEM_POLICY_VERSION } from "@/platform/p1/systemPolicy"
 import { firmConfigRef, platformConfigRef } from "../src/p1/config"
 import { callP1, p1TestSeam, type P1Request } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
@@ -94,6 +94,19 @@ describe.skipIf(!EMULATORS)("F34 R3: what callP1 sends is a pinned template (emu
     }
     expect(systems).toHaveLength(SYSTEM_POLICY_IDS.length + 1)
     for (const s of systems) expect(pins.has(sha256(s))).toBe(true)
+    await firmConfigRef(firmId).delete()
+  })
+
+  it("a registry text that no longer hashes to its pin (edited without a version bump) is refused and nothing is sent", async () => {
+    const firmId = uniq("firm")
+    await firmConfigRef(firmId).set({ monthlyBudgetMicroUsd: 1_000_000_000 })
+    p1TestSeam.templatePins = { ...PROMPT_TEMPLATE_PINS, [`committee-brain@${SYSTEM_POLICY_VERSION}`]: sha256("an earlier text of the same version") }
+    const blocked = await callP1(req(firmId, "committee-brain"), { now: () => Date.parse("2026-10-11T10:00:00.000Z") })
+    expect([blocked.outcome, blocked.blockReason]).toEqual(["blocked", "system_unverified"])
+    expect(systems).toEqual([])
+    // Another template, still pinned, goes through.
+    expect((await callP1(req(firmId, "summarise"), { now: () => Date.parse("2026-10-11T10:00:00.000Z") })).outcome).toBe("ok")
+    expect(systems).toHaveLength(1)
     await firmConfigRef(firmId).delete()
   })
 

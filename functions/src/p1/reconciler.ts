@@ -7,8 +7,10 @@ import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
+import { reconciledDecision } from "./decisionRecord"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
+import { opikConfig } from "./opik"
 import { modelId } from "./transport"
 import type { P1Outcome, TaskType } from "./types"
 
@@ -46,6 +48,10 @@ import type { P1Outcome, TaskType } from "./types"
  *   when it did (`reconciledFrom: "recorded"`: the provider's reported usage, or the I1 charge); otherwise the
  *   reserved worst case, the input ceiling and the 4,096-token ceiling (`reconciledFrom: "worst_case"`,
  *   `tokensEstimated: true`).
+ *
+ * A settled reservation also gets the call's decision record (audit F34, spec ruling R2), staged in the same transaction
+ * from the reservation's `decisionSeed` and its provider attempt (`reconciledDecision` in decisionRecord.ts). A released
+ * one does not: nothing was sent and no usage row is written, and the released reservation is its record.
  *
  * Either way, in the same transaction (Codex P2 on PR #40), the call's `committee_outputs` rows (found by their
  * `usageLogId`) take `accounting: "settled"`, and so does the answer stored for the request's Idempotency-Key (the
@@ -240,6 +246,10 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       reconciledFrom: recorded ? "recorded" : "worst_case",
     }
     const state = recorded ? settledState(true, recorded.result, recorded.costMicroUsd) : "settled"
+    // Audit F34 (R2): the call never committed, so its decision record is written here, from the seed it left on the
+    // reservation before dispatch and the attempt's ids and transport time; its trace export is left to the export
+    // reconciler (`pending`, nothing tried), or `disabled` when tracing is off.
+    const decision = reconciledDecision({ usageLogId: ref.id, traceId: p.traceId, seed: snap.get("decisionSeed"), attempt: p.attempt, record, nowMs, tracing: opikConfig().enabled })
     const staged = await stage(db, tx, {
       usageRef: db.collection("ai_usage_logs").doc(ref.id),
       configRef,
@@ -250,6 +260,7 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       seam: {},
       reservation: { ref, state, mustBeLive: true },
       settledBy: "reconciler",
+      decision,
     })
     markSettled()
     return { state, staged, firmId: p.firmId, monthKey: p.monthKey }
