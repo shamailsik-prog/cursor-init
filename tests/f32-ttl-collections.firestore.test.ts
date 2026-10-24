@@ -7,10 +7,13 @@ import {
 } from "@firebase/rules-unit-testing"
 import {
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
+  limit,
+  query,
   setDoc,
   updateDoc,
 } from "firebase/firestore"
@@ -27,18 +30,27 @@ const TTL_COLLECTIONS = manifest.firestore.ttl.map((t) => t.collectionGroup)
 const FIRM = "f32-ttl-firm"
 const OTHER_FIRM = "f32-ttl-firm-b"
 const MAX = "privileged-restricted"
+const LOW_CLEARANCE = "public"
+
+const EXPIRED_SEED_ID = "seed"
 
 type Caller = { uid: string; claims: Record<string, unknown> }
-const caller = (uid: string, firmId: string, role: string): Caller => ({
+const caller = (uid: string, firmId: string, role: string, clearanceLevel: string = MAX): Caller => ({
   uid,
-  claims: { firmId, role, clearanceLevel: MAX },
+  claims: { firmId, role, clearanceLevel },
 })
 
 const PARTNER = caller("f32-ttl-partner", FIRM, "partner")
 const OTHER_FIRM_PARTNER = caller("f32-ttl-other-partner", OTHER_FIRM, "partner")
 const ASSOCIATE = caller("f32-ttl-assoc", FIRM, "associate")
+const LOW_CLEARANCE_PARTNER = caller("f32-ttl-low-partner", FIRM, "partner", LOW_CLEARANCE)
 
-type ActorKey = "unauthenticated" | "crossFirmPartner" | "nonPartner" | "sameFirmPartner"
+type ActorKey =
+  | "unauthenticated"
+  | "crossFirmPartner"
+  | "nonPartner"
+  | "sameFirmPartner"
+  | "lowClearancePartner"
 
 let testEnv: RulesTestEnvironment
 
@@ -52,17 +64,31 @@ async function dbFor(actor: ActorKey) {
       return testEnv.authenticatedContext(ASSOCIATE.uid, ASSOCIATE.claims).firestore()
     case "sameFirmPartner":
       return testEnv.authenticatedContext(PARTNER.uid, PARTNER.claims).firestore()
+    case "lowClearancePartner":
+      return testEnv.authenticatedContext(LOW_CLEARANCE_PARTNER.uid, LOW_CLEARANCE_PARTNER.claims).firestore()
   }
 }
 
-async function seedDoc(collectionName: string, docId: string, expiresAt: Date) {
+async function seedDoc(
+  collectionName: string,
+  docId: string,
+  data: { firmId?: string; expiresAt: Date },
+) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const admin = ctx.firestore()
-    await setDoc(doc(admin, collectionName, docId), { firmId: FIRM, expiresAt })
+    await setDoc(doc(admin, collectionName, docId), data)
   })
 }
 
-const ACTORS: ActorKey[] = ["unauthenticated", "crossFirmPartner", "nonPartner", "sameFirmPartner"]
+const ACTORS: ActorKey[] = [
+  "unauthenticated",
+  "crossFirmPartner",
+  "nonPartner",
+  "sameFirmPartner",
+  "lowClearancePartner",
+]
+
+const LIST_LIMITS = [1, 5, 25] as const
 
 describe("F32 TTL collections are server-only (rules emulator)", () => {
   beforeAll(async () => {
@@ -79,32 +105,69 @@ describe("F32 TTL collections are server-only (rules emulator)", () => {
   for (const name of TTL_COLLECTIONS) {
     describe(name, () => {
       for (const actor of ACTORS) {
-        it(`denies ${actor} create`, async () => {
+        it(`denies ${actor} create with firmId and future expiry`, async () => {
           const db = await dbFor(actor)
-          const docId = `${actor}-create-${name}`
-          await assertFails(setDoc(doc(db, name, docId), { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) }))
+          const docId = `${actor}-create-firm-${name}`
+          await assertFails(
+            setDoc(doc(db, name, docId), { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) }),
+          )
+        })
+
+        it(`denies ${actor} create without firmId`, async () => {
+          const db = await dbFor(actor)
+          const docId = `${actor}-create-nofirm-${name}`
+          await assertFails(setDoc(doc(db, name, docId), { expiresAt: new Date(Date.now() + 86_400_000) }))
+        })
+
+        it(`denies ${actor} create with past expiry`, async () => {
+          const db = await dbFor(actor)
+          const docId = `${actor}-create-expired-${name}`
+          await assertFails(
+            setDoc(doc(db, name, docId), { firmId: FIRM, expiresAt: new Date(Date.now() - 86_400_000) }),
+          )
         })
 
         it(`denies ${actor} update on seeded doc`, async () => {
           const docId = `${actor}-update-${name}`
-          await seedDoc(name, docId, new Date(Date.now() + 86_400_000))
+          await seedDoc(name, docId, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
           const db = await dbFor(actor)
           await assertFails(updateDoc(doc(db, name, docId), { firmId: FIRM }))
         })
 
         it(`denies ${actor} delete on seeded doc`, async () => {
           const docId = `${actor}-delete-${name}`
-          await seedDoc(name, docId, new Date(Date.now() + 86_400_000))
+          await seedDoc(name, docId, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
           const db = await dbFor(actor)
           await assertFails(deleteDoc(doc(db, name, docId)))
         })
 
-        it(`denies ${actor} get and list on unexpired doc`, async () => {
+        it(`denies ${actor} get on unexpired doc`, async () => {
           const docId = `${actor}-live-read-${name}`
-          await seedDoc(name, docId, new Date(Date.now() + 7 * 86_400_000))
+          await seedDoc(name, docId, { firmId: FIRM, expiresAt: new Date(Date.now() + 7 * 86_400_000) })
           const db = await dbFor(actor)
           await assertFails(getDoc(doc(db, name, docId)))
-          await assertFails(getDocs(collection(db, name)))
+        })
+
+        for (const listLimit of LIST_LIMITS) {
+          it(`denies ${actor} collection list with limit ${listLimit}`, async () => {
+            const docId = `${actor}-list-${listLimit}-${name}`
+            await seedDoc(name, docId, { firmId: FIRM, expiresAt: new Date(Date.now() + 7 * 86_400_000) })
+            const db = await dbFor(actor)
+            await assertFails(getDocs(query(collection(db, name), limit(listLimit))))
+          })
+        }
+
+        it(`denies ${actor} collection-group list with limit 1`, async () => {
+          const docId = `${actor}-cg-list-${name}`
+          await seedDoc(name, docId, { firmId: FIRM, expiresAt: new Date(Date.now() + 7 * 86_400_000) })
+          const db = await dbFor(actor)
+          await assertFails(getDocs(query(collectionGroup(db, name), limit(1))))
+        })
+
+        it(`denies ${actor} get on expired seed doc`, async () => {
+          await seedDoc(name, EXPIRED_SEED_ID, { firmId: FIRM, expiresAt: new Date(Date.now() - 86_400_000) })
+          const db = await dbFor(actor)
+          await assertFails(getDoc(doc(db, name, EXPIRED_SEED_ID)))
         })
       }
     })
