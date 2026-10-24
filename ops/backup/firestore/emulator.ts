@@ -14,7 +14,11 @@ const FIRESTORE_DRILL_PROJECT = "f33-backup-drill"
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..")
 
 /** firebase-tools has no `emulators:import`; import data via `emulators:exec --import`. */
-export function firestoreEmulatorImportArgv(importDir: string, innerCommand: string[]): string[] {
+export function firestoreEmulatorExecArgv(innerCommand: string): string[] {
+  return ["firebase", "emulators:exec", "--only", "firestore", "--project", FIRESTORE_DRILL_PROJECT, innerCommand]
+}
+
+export function firestoreEmulatorImportArgv(importDir: string, innerCommand: string): string[] {
   return [
     "firebase",
     "emulators:exec",
@@ -24,7 +28,7 @@ export function firestoreEmulatorImportArgv(importDir: string, innerCommand: str
     importDir,
     "--project",
     FIRESTORE_DRILL_PROJECT,
-    ...innerCommand,
+    innerCommand,
   ]
 }
 
@@ -84,18 +88,15 @@ export async function restoreFirestoreEmulator(opts: {
     }
     const manifestPath = path.join(opts.importDir, ".expected-manifest.json")
     await fsp.writeFile(manifestPath, JSON.stringify(expected), "utf8")
-    const importRun = await runCommand(
-      firestoreEmulatorImportArgv(opts.importDir, [
-        "npx",
-        "vite-node",
-        "ops/backup/test/helpers/firestore-verify-import.ts",
-        manifestPath,
-      ]),
-      {
-        cwd: REPO_ROOT,
-        env: { ...process.env, NPM_CONFIG_LOGLEVEL: "error", FIRESTORE_DRILL_PROJECT: FIRESTORE_DRILL_PROJECT },
-      }
-    )
+    const inner = `npx vite-node ops/backup/test/helpers/firestore-verify-import.ts ${JSON.stringify(manifestPath)}`
+    const importRun = await runCommand(firestoreEmulatorImportArgv(opts.importDir, inner), {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        NPM_CONFIG_LOGLEVEL: "error",
+        FIRESTORE_DRILL_PROJECT: FIRESTORE_DRILL_PROJECT,
+      },
+    })
     if (importRun.code !== 0) {
       const msg = [importRun.stderr, importRun.stdout].filter(Boolean).join("\n").trim() || "firestore import failed"
       return { ok: false, differences: [msg], rtoMs: Date.now() - started, stop: () => {} }

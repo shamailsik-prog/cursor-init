@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { startCluster } from "./helpers/cluster"
+import { DRILL_CLUSTER_TIMEZONE, startCluster } from "./helpers/cluster"
 import { seedAnnexA, seedRows } from "./helpers/seeds"
 import { backupLogical, restoreLogical } from "../postgres/logical"
 import { makeKeyRing } from "../lib/envelope.mjs"
@@ -16,10 +16,10 @@ describe("postgres logical backup drill", () => {
       const key = randomBytes(32)
       const ring = makeKeyRing(key)
       const out = mkdtempSync(path.join(os.tmpdir(), "f33-bundles-"))
-      const source = await startCluster({ port: 55432 })
-      const target = await startCluster({ port: 55433 })
       const priorTz = process.env.TZ
-      process.env.TZ = "Asia/Karachi"
+      process.env.TZ = DRILL_CLUSTER_TIMEZONE
+      const source = await startCluster({ port: 55432, timezone: DRILL_CLUSTER_TIMEZONE })
+      const target = await startCluster({ port: 55433, timezone: DRILL_CLUSTER_TIMEZONE })
       try {
         await seedAnnexA(source)
         await seedRows(source)

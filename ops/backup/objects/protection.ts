@@ -1,4 +1,5 @@
 import {
+  GetBucketVersioningCommand,
   GetObjectLockConfigurationCommand,
   PutObjectLockConfigurationCommand,
   PutBucketVersioningCommand,
@@ -30,6 +31,10 @@ export async function applyVaultProtection(s3: S3Client, bucket: string, cfg: Do
 
 export async function checkVaultProtection(s3: S3Client, bucket: string, cfg: DocumentVaultConfig): Promise<string[]> {
   const problems: string[] = []
+  const versioning = await s3.send(new GetBucketVersioningCommand({ Bucket: bucket }))
+  if (versioning.Status !== "Enabled") {
+    problems.push(`bucket versioning ${versioning.Status ?? "off"} != Enabled`)
+  }
   const lock = await s3.send(new GetObjectLockConfigurationCommand({ Bucket: bucket }))
   const retention = lock.ObjectLockConfiguration?.Rule?.DefaultRetention
   const days = retention?.Days

@@ -98,6 +98,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh label create backup-drill-failure --repo "${GITHUB_REPOSITORY}" --description "F33 scheduled backup drill failed" --color d73a4a 2>/dev/null || true
           title="F33 weekly backup drill failed (${GITHUB_SHA:0:7})"
           body=$(cat <<EOF
           Scheduled backup drill workflow **${GITHUB_WORKFLOW}** failed on \`${GITHUB_REF}\`.

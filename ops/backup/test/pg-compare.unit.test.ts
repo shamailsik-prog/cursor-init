@@ -17,7 +17,8 @@ function emptyManifest(): PgManifest {
     links: {},
     extensions: {},
     definitions: [],
-    rolesGrants: [],
+    roles: [],
+    grants: [],
   }
 }
 

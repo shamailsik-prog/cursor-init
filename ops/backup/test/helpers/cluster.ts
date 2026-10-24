@@ -3,6 +3,8 @@ import os from "node:os"
 import path from "node:path"
 import { runCommand } from "../../lib/exec"
 
+export const DRILL_CLUSTER_TIMEZONE = "Asia/Karachi"
+
 export type PgCluster = {
   dir: string
   port: number
@@ -18,7 +20,8 @@ function findFreePort(start: number): number {
 
 function pgEnv(extra: Partial<NodeJS.ProcessEnv> = {}): NodeJS.ProcessEnv {
   const bin = process.env.SIKANDER_BACKUP_DRILL_PG_BIN?.trim() || "/usr/lib/postgresql/16/bin"
-  return { ...process.env, ...extra, PATH: `${bin}:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv
+  const tz = extra.TZ ?? process.env.TZ
+  return { ...process.env, ...extra, ...(tz ? { TZ: tz } : {}), PATH: `${bin}:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv
 }
 
 function pgPrefix(): string[] {
@@ -29,6 +32,7 @@ function pgPrefix(): string[] {
 export async function startCluster(opts: {
   port?: number
   walSegSize?: number
+  timezone?: string
   archive?: { archiveDir: string; keyFile: string; walScript: string }
 }): Promise<PgCluster> {
   const prefix = pgPrefix()
@@ -54,7 +58,13 @@ export async function startCluster(opts: {
     extra += `archive_command = 'node ${opts.archive.walScript} archive %p %f --archive-dir ${opts.archive.archiveDir} --key-file ${opts.archive.keyFile}'\n`
   }
   writeFileSync(conf, extra, { flag: "a" })
-  const env = pgEnv({ PGDATA: dir, PGPORT: String(port), PGHOST: dir, PGUSER: "postgres" })
+  const env = pgEnv({
+    PGDATA: dir,
+    PGPORT: String(port),
+    PGHOST: dir,
+    PGUSER: "postgres",
+    ...(opts.timezone ? { TZ: opts.timezone } : {}),
+  })
   const start = await runCommand(["pg_ctl", "-D", dir, "-l", path.join(dir, "log"), "-w", "start"], {
     env,
     pgPrefix: prefix,

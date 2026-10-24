@@ -26,7 +26,8 @@ export type PgManifest = {
   links: Record<string, number | "absent">
   extensions: Record<string, string>
   definitions: string[]
-  rolesGrants: string[]
+  roles: string[]
+  grants: string[]
 }
 
 function multisetDigestFromParts(count: number, s0: string, s1: string, s2: string, s3: string): string {
@@ -154,11 +155,20 @@ WHERE table_schema NOT IN ('pg_catalog','information_schema')
 ORDER BY 1 LIMIT 500;
 `)
 
-  const rolesGrants = await session.queryLines(`
-SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY 1;
+  const roles = await session.queryLines(`
+SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' AND rolname <> 'postgres' ORDER BY 1;
 `)
 
-  return { meta, tables, sequences, foreignKeys, links, extensions, definitions, rolesGrants }
+  const grants = await session.queryLines(`
+SELECT format('GRANT %s ON %I.%I TO %I', privilege_type, table_schema, table_name, grantee)
+FROM information_schema.role_table_grants
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+  AND grantee NOT LIKE 'pg_%'
+  AND grantee <> 'PUBLIC'
+ORDER BY 1;
+`)
+
+  return { meta, tables, sequences, foreignKeys, links, extensions, definitions, roles, grants }
 }
 
 export function comparePgManifests(expected: PgManifest, actual: PgManifest): string[] {
@@ -182,7 +192,8 @@ export function comparePgManifests(expected: PgManifest, actual: PgManifest): st
   lines.push(...diffRecords("links", expected.links, actual.links))
   lines.push(...diffRecords("extensions", expected.extensions, actual.extensions))
   lines.push(...diffSets("definitions", expected.definitions, actual.definitions))
-  lines.push(...diffSets("rolesGrants", expected.rolesGrants, actual.rolesGrants))
+  lines.push(...diffSets("roles", expected.roles, actual.roles))
+  lines.push(...diffSets("grants", expected.grants, actual.grants))
   return lines
 }
 

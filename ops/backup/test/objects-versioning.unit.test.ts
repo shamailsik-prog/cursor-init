@@ -1,22 +1,19 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import { GetBucketVersioningCommand, GetObjectLockConfigurationCommand } from "@aws-sdk/client-s3"
+import { describe, expect, it, vi } from "vitest"
 import { checkVaultProtection } from "../objects/protection"
 
 describe("checkVaultProtection versioning", () => {
-  beforeEach(() => {
-    vi.resetModules()
-  })
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it("reports when bucket versioning is not Enabled", async () => {
-    const send = vi.fn(async (cmd: { constructor: { name: string } }) => {
-      if (cmd.constructor.name === "GetBucketVersioningCommand") {
+    const send = vi.fn(async (cmd: unknown) => {
+      if (cmd instanceof GetBucketVersioningCommand) {
         return { Status: "Suspended" }
       }
-      return {
-        ObjectLockConfiguration: { Rule: { DefaultRetention: { Days: 2555, Mode: "COMPLIANCE" } } },
+      if (cmd instanceof GetObjectLockConfigurationCommand) {
+        return {
+          ObjectLockConfiguration: { Rule: { DefaultRetention: { Days: 2555, Mode: "COMPLIANCE" } } },
+        }
       }
+      throw new Error("unexpected command")
     })
     const s3 = { send } as unknown as import("@aws-sdk/client-s3").S3Client
     const problems = await checkVaultProtection(s3, "b", {

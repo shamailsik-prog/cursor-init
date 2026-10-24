@@ -1,16 +1,14 @@
 import { randomBytes } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import os from "node:os"
-import path from "path"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import { runCommand } from "../lib/exec"
-import { restoreFirestoreEmulator } from "../firestore/emulator"
-import { firestoreEmulatorExecArgv } from "../firestore/emulator"
+import { restoreFirestoreEmulator, firestoreEmulatorExecArgv } from "../firestore/emulator"
 import { recordDrillResult } from "../lib/results"
 
 const REPO = path.resolve(__dirname, "../../..")
-const FIREBASE = path.join(REPO, "node_modules", ".bin", "firebase")
 const FIRESTORE_PORT = 18088
 
 describe("firestore SKB1 bundle drill", () => {
@@ -26,11 +24,11 @@ describe("firestore SKB1 bundle drill", () => {
       const bundleMarker = path.join(tmp, "bundle-dir.txt")
       const importDir = path.join(tmp, "import")
       try {
-        const inner = `npx vite-node ops/backup/test/helpers/firestore-bundle-backup.ts ${exportDir} ${outRoot} ${key.toString("hex")} ${bundleMarker}`
-        const backup = await runCommand(
-          ["bash", "-lc", `"${FIREBASE}" ${firestoreEmulatorExecArgv(inner).slice(1).map((a) => (a.includes(" ") ? `'${a.replace(/'/g, `'\"'\"'`)}'` : a)).join(" ")}`],
-          { cwd: REPO, env: { ...process.env, NPM_CONFIG_LOGLEVEL: "error" } }
-        )
+        const inner = `npx vite-node ops/backup/test/helpers/firestore-bundle-backup.ts ${JSON.stringify(exportDir)} ${JSON.stringify(outRoot)} ${key.toString("hex")} ${JSON.stringify(bundleMarker)}`
+        const backup = await runCommand(firestoreEmulatorExecArgv(inner), {
+          cwd: REPO,
+          env: { ...process.env, NPM_CONFIG_LOGLEVEL: "error" },
+        })
         expect(backup.code, (backup.stderr || backup.stdout).trim()).toBe(0)
         const bundleDir = readFileSync(bundleMarker, "utf8").trim()
         const res = await restoreFirestoreEmulator({
