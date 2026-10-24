@@ -150,7 +150,7 @@ export async function createResearchDb(suite: string): Promise<ResearchDb> {
     })
 
   const createLogin = async (prefix: string) => {
-    if (!/^[a-z_]{1,12}$/.test(prefix)) throw new Error(`createLogin: bad prefix ${prefix}`)
+    if (!/^[a-z][a-z0-9_]{0,11}$/.test(prefix)) throw new Error(`createLogin: bad prefix ${prefix}`)
     const user = `${prefix}_${randomBytes(3).toString("hex")}`
     const password = secret()
     secrets.push(password)
