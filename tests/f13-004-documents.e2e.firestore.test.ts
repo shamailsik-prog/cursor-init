@@ -79,6 +79,19 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: documents are read
     await expect(repo().documents.get(id, firmId)).rejects.toThrow(/malformed/)
     expect(await repo().documents.get(uniq("nodoc"), firmId)).toBeNull()
   })
+
+  it("FA-F13-026: a non-string or blank stored firmId throws before the firm gate", async () => {
+    const firmId = uniq("f13d4firm")
+    for (const badFirm of [12, null, "", "   "] as const) {
+      const id = await stored({ ...good(firmId), firmId: badFirm })
+      await expect(repo().documents.get(id, firmId)).rejects.toMatchObject({
+        name: "DocumentMalformedError",
+        documentId: id,
+      })
+    }
+    const foreignId = await stored(good(uniq("other")))
+    expect(await repo().documents.get(foreignId, firmId)).toBeNull()
+  })
   it("an update that would repair a malformed row is still refused: the stored row is checked before the merge (Codex P2)", async () => {
     const firmId = uniq("f13d4firm")
     const id = await stored({ ...good(firmId), byteSize: "12" })
