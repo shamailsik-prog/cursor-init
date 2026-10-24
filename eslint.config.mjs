@@ -43,6 +43,7 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "functions/lib/**",
+    "functions/scripts/**",
     "functions/node_modules/**",
     "functions/.stryker-tmp/**",
     ".stryker-tmp/**",
