@@ -5,12 +5,17 @@ import { POST as documentsPost } from "@/app/api/d1/documents/route"
 import { POST as workflowPost } from "@/app/api/d1/document-workflow/route"
 import { DocumentMalformedError } from "@/platform/d1/documentRecord"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
-import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { addMember, createMatter } from "@/services/d1-2/matters"
 import type { DocumentRecord } from "@/platform/spine/store"
 
 const docId = "doc_f13_037_malformed"
+
+/** `undefined` delegates to the real repository `get`; `null` is an explicit absence. */
+type DocumentsGetOverride = (
+  id: string,
+  firmId: string
+) => Promise<DocumentRecord | null | undefined>
 
 function seedMatterAndDocument(): { matterId: string; doc: DocumentRecord } {
   const store = getRuntimeStore()
@@ -43,10 +48,10 @@ function seedMatterAndDocument(): { matterId: string; doc: DocumentRecord } {
 
 vi.mock("@/platform/persistence/runtimeRepositories", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@/platform/persistence/runtimeRepositories")>()
-  let getImpl: SpineRepositories["documents"]["get"] | null = null
+  let getImpl: DocumentsGetOverride | null = null
   return {
     ...mod,
-    __setDocumentsGet(impl: SpineRepositories["documents"]["get"] | null) {
+    __setDocumentsGet(impl: DocumentsGetOverride | null) {
       getImpl = impl
     },
     getRuntimeRepositories: async (store: Parameters<typeof mod.getRuntimeRepositories>[0]) => {
@@ -63,8 +68,9 @@ vi.mock("@/platform/persistence/runtimeRepositories", async (importOriginal) => 
   }
 })
 
-type RepoSeam = { __setDocumentsGet: (impl: SpineRepositories["documents"]["get"] | null) => void }
-const repoSeam = () => import("@/platform/persistence/runtimeRepositories") as Promise<RepoSeam>
+type RepoSeam = { __setDocumentsGet: (impl: DocumentsGetOverride | null) => void }
+const repoSeam = () =>
+  import("@/platform/persistence/runtimeRepositories") as unknown as Promise<RepoSeam>
 
 describe("F13 FA-F13-037: malformed documents.get on routes", () => {
   beforeEach(() => {
@@ -80,9 +86,10 @@ describe("F13 FA-F13-037: malformed documents.get on routes", () => {
     const { matterId } = seedMatterAndDocument()
     let calls = 0
     const seam = await repoSeam()
-    seam.__setDocumentsGet(async (id) => {
+    seam.__setDocumentsGet(async (id, _firmId) => {
       calls += 1
       if (calls === 1) throw new DocumentMalformedError(id)
+      return undefined
     })
     const store = getRuntimeStore()
     const res = await documentsPost(
@@ -111,9 +118,10 @@ describe("F13 FA-F13-037: malformed documents.get on routes", () => {
     const { matterId } = seedMatterAndDocument()
     let calls = 0
     const seam = await repoSeam()
-    seam.__setDocumentsGet(async (id) => {
+    seam.__setDocumentsGet(async (id, _firmId) => {
       calls += 1
       if (calls >= 2) throw new DocumentMalformedError(id)
+      return undefined
     })
     const store = getRuntimeStore()
     const res = await documentsPost(
@@ -141,8 +149,9 @@ describe("F13 FA-F13-037: malformed documents.get on routes", () => {
   it("workflow review_decision returns 400 and drops cache when documents.get throws DocumentMalformedError", async () => {
     seedMatterAndDocument()
     const seam = await repoSeam()
-    seam.__setDocumentsGet(async (id) => {
+    seam.__setDocumentsGet(async (id, _firmId) => {
       if (id === docId) throw new DocumentMalformedError(id)
+      return undefined
     })
     const store = getRuntimeStore()
     const res = await workflowPost(
