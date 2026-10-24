@@ -86,6 +86,11 @@ const FAILING: Case[] = [
     reports: ["platform/p1/x.ts: imports P1Transport from functions/src/p1/transport"],
   },
   {
+    name: "an inline type specifier beside an allowed name",
+    files: { "functions/src/p1/x.ts": 'import { modelId, type P1Transport } from "./transport"\nexport const go = (t: P1Transport) => [t, modelId]\n' },
+    reports: ["functions/src/p1/x.ts: imports P1Transport from functions/src/p1/transport"],
+  },
+  {
     name: "a renamed import, with a comment between the tokens and a .js extension",
     files: { "functions/src/d4/x.ts": 'import { gatewayTransport as gt, modelId } /* why */ from "../p1/transport.js"\nexport const t = gt\nexport const m = modelId\n' },
     reports: ["functions/src/d4/x.ts: imports gatewayTransport from functions/src/p1/transport"],
