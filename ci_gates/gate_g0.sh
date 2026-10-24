@@ -81,7 +81,7 @@ python3 ci_gates/check_next_ai_egress.py || fail=1
 echo "[20] deploy-contract guard (audit F32: manifest, firebase.json, indexes TTL, alerts, Next maxDuration, terraform drift)"
 python3 ci_gates/check_deploy_contract.py || fail=1
 
-echo "[21] data-inventory guard (audit F42: every Firestore collection, object prefix and Postgres table is inventoried with its classification, key, retention class, deleter and acknowledgement)"
+echo "[21] data-inventory guard (audit F42: every Firestore collection, object prefix and Postgres table or view is inventoried with its classification, key, retention class, deleter and acknowledgement)"
 python3 ci_gates/check_data_inventory.py || fail=1
 python3 ci_gates/test_check_data_inventory.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_data_inventory.py"; fail=1; }
 

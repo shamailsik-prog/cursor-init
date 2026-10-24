@@ -65,7 +65,14 @@ COLLECTION_PATTERNS = (
 )
 OBJECT_SEGMENT_RE = re.compile(r"\$\{firmId\}/([a-z][a-z0-9_-]*)/")
 RULES_MATCH_RE = re.compile(r"^\s*match /([a-z][a-z0-9_]*)/\{", re.M)
-DDL_TABLE_RE = re.compile(r"CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?([a-z_][a-z0-9_]*)\"?", re.I)
+# A relation name, optionally schema-qualified (`public.x`, `"public"."x"`): the relation is the last part.
+SQL_NAME = r'(?:"?[a-z_][a-z0-9_]*"?\.)?"?([a-z_][a-z0-9_]*)"?'
+DDL_TABLE_RE = re.compile(r"CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + SQL_NAME, re.I)
+# Views are relations too (FA-D5-003's research views, the corpus contract's v_* views): each is inventoried.
+DDL_VIEW_RE = re.compile(
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:RECURSIVE\s+)?(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?" + SQL_NAME,
+    re.I,
+)
 PY_TABLENAME_RE = re.compile(r"__tablename__\s*=\s*[\"']([a-z_][a-z0-9_]*)[\"']")
 PY_CREATE_TABLE_RE = re.compile(r"create_table\(\s*[\"']([a-z_][a-z0-9_]*)[\"']")
 WEEKS_DAYS_RE = re.compile(r"^(\d+)([dw])$")
@@ -143,8 +150,10 @@ def discover_postgres(root: Path) -> dict[str, str]:
     ddl = root / "postgres/ddl"
     if ddl.is_dir():
         for path in sorted(ddl.glob("*.sql")):
-            for name in DDL_TABLE_RE.findall(path.read_text(encoding="utf-8")):
-                found.setdefault(name.lower(), path.relative_to(root).as_posix())
+            text = path.read_text(encoding="utf-8")
+            for pattern in (DDL_TABLE_RE, DDL_VIEW_RE):
+                for name in pattern.findall(text):
+                    found.setdefault(name.lower(), path.relative_to(root).as_posix())
     corpus = root / "corpus_service"
     if corpus.is_dir():
         for path in sorted(corpus.rglob("*.py")):

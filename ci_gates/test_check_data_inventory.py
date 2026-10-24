@@ -141,6 +141,25 @@ class Planted(unittest.TestCase):
         self.assertTrue(any("uninventoried Postgres table matter_vectors" in m for m in msgs), msgs)
         self.assertTrue(any("uninventoried Postgres table client_embeddings" in m for m in msgs), msgs)
 
+    def test_a_new_postgres_view_fails_and_a_schema_qualified_name_is_read_whole(self) -> None:
+        # FA-D5-003's views (postgres/ddl/005_research_reader.sql) are schema-qualified and use CREATE OR REPLACE.
+        self.write(
+            "postgres/ddl/005.sql",
+            "CREATE OR REPLACE VIEW public.v_research_judgment WITH (security_barrier = true) AS SELECT 1;\n"
+            "create materialized view if not exists matter_rollup as select 1;\n"
+            'CREATE TABLE IF NOT EXISTS public."judgment_extra" (id int);\n',
+        )
+        msgs = self.messages()
+        self.assertTrue(any("uninventoried Postgres table v_research_judgment" in m for m in msgs), msgs)
+        self.assertTrue(any("uninventoried Postgres table matter_rollup" in m for m in msgs), msgs)
+        self.assertTrue(any("uninventoried Postgres table judgment_extra" in m for m in msgs), msgs)
+        self.assertFalse(any("uninventoried Postgres table public" in m for m in msgs), msgs)
+        # Recorded as public corpus, out of matter-deletion scope: the tree passes.
+        for name in ("v_research_judgment", "matter_rollup", "judgment_extra"):
+            self.inventory["stores"].append({"id": f"postgres:{name}", "kind": "postgres", "name": name, "profile": "public_corpus", "key": {"kind": "none"}})
+        self.save()
+        self.assertEqual(self.messages(), [])
+
     def test_a_stale_entry_fails_and_a_pending_one_passes_absent_and_present(self) -> None:
         self.inventory["stores"].append({"id": "firestore:gone", "kind": "firestore", "name": "gone", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}})
         self.save()

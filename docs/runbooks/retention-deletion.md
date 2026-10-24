@@ -72,7 +72,7 @@ class's stores that declare an `ageField`, sparing rows of matters under a hold,
 
 ## Adding a store
 
-A new Firestore collection, object key prefix (`${firmId}/<segment>/`) or Postgres table fails G-0 step 21 until it is
+A new Firestore collection, object key prefix (`${firmId}/<segment>/`), Postgres table or Postgres view fails G-0 step 21 until it is
 in `infra/retention/inventory.json` with a profile (classification, retention class, who deletes, how deletion is
 acknowledged) and a key. A store another finding is adding may be registered with `"pending": "Fxx"`; the gate prints
 a note once it lands, and the flag is then dropped (F34's `p1_decisions` was registered so and is now inventoried for

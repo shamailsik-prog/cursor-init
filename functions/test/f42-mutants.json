@@ -308,5 +308,17 @@
     ],
     "runner": "python",
     "why": "an external store's sources must be field-keyed Firestore stores, or the saga cannot find the matter's copies"
+  },
+  {
+    "id": "G6-views-not-scanned",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "for pattern in (DDL_TABLE_RE, DDL_VIEW_RE):",
+    "new": "for pattern in (DDL_TABLE_RE,):",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "a Postgres view is a relation of the store and must be inventoried (FA-D5-003's research views)"
   }
 ]

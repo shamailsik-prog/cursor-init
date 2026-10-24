@@ -77,8 +77,12 @@ matter's rows are found (`docId`, `field` with the field name, `none`, `ttl`, `o
   (`.collection("x")`, `collection(db, "x")`, `doc(db, "x", ...)`, a helper call `(db, "x"`, `COLLECTION = "x"`), is
   not inventoried;
 - an object key segment of the form `${firmId}/<segment>/` in TypeScript is not an inventoried object prefix;
-- a Postgres table (`CREATE TABLE` in `postgres/ddl/*.sql`, `__tablename__` in `corpus_service`, `create_table` in its
-  migrations) is not inventoried;
+- a Postgres relation (`CREATE TABLE` or `CREATE [OR REPLACE] [MATERIALIZED] VIEW` in `postgres/ddl/*.sql`, the
+  name read whole when schema-qualified; `__tablename__` in `corpus_service`, `create_table` in its migrations) is not
+  inventoried. Views are recorded like their base tables (`"relation": "view"`): the corpus contract's `v_*`
+  views, the authority read views (004) and FA-D5-003's research views (005, `v_research_judgment`,
+  `v_research_embedding`) are all profile `public_corpus`: public law corpus, no client or matter data, out of the
+  scope of matter deletion (`not_applicable`);
 - an entry is malformed, names an unknown profile or retention class, duplicates a store, or is stale (in no source),
   unless it is `pending` on a named finding.
 
