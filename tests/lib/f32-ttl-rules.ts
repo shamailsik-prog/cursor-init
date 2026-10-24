@@ -77,9 +77,19 @@ export function extractMatchBlocks(rules: string): RulesMatchBlock[] {
   return blocks
 }
 
+function isPlainVariableSegment(segment: string): boolean {
+  return /^\{[^{}=]+\}$/.test(segment)
+}
+
+export function pathIsAllPlainVariableSegments(path: string): boolean {
+  const segments = path.split("/").filter(Boolean)
+  return segments.length > 0 && segments.every((seg) => isPlainVariableSegment(seg))
+}
+
 /** True when a rules path could apply to documents in this collection group. */
 export function matchPathAppliesToCollectionGroup(path: string, collectionGroup: string): boolean {
   if (path.includes("{document=**}")) return true
+  if (pathIsAllPlainVariableSegments(path)) return true
   const segments = path.split("/").filter(Boolean)
   for (const seg of segments) {
     if (seg === collectionGroup) return true
@@ -97,9 +107,9 @@ export function matchBlocksForCollectionGroup(rules: string, collectionGroup: st
   return extractMatchBlocks(rules).filter((b) => matchPathAppliesToCollectionGroup(b.path, collectionGroup))
 }
 
-export type AllowStatement = { verbs: string[]; condition: string }
+export type AllowStatement = { verbs: string[]; condition: string | null }
 
-const ALLOW_STMT_RE = /allow\s+([^:;]+)\s*:\s*if\s+([^;]+);/gi
+const ALLOW_STMT_RE = /allow\s+([^;]+);/gi
 
 export function extractAllowStatements(body: string): AllowStatement[] {
   const cleaned = stripRulesComments(body)
@@ -107,17 +117,29 @@ export function extractAllowStatements(body: string): AllowStatement[] {
   let m: RegExpExecArray | null
   ALLOW_STMT_RE.lastIndex = 0
   while ((m = ALLOW_STMT_RE.exec(cleaned)) !== null) {
-    const verbs = m[1]
-      .split(",")
-      .map((v) => v.trim().toLowerCase())
-      .filter(Boolean)
-    out.push({ verbs, condition: m[2].trim() })
+    const chunk = m[1].trim()
+    const ifMatch = chunk.match(/^(.+?)\s*:\s*if\s+(.+)$/i)
+    if (ifMatch) {
+      const verbs = ifMatch[1]
+        .split(",")
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+      out.push({ verbs, condition: ifMatch[2].trim() })
+    } else {
+      const verbs = chunk
+        .split(",")
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+      out.push({ verbs, condition: null })
+    }
   }
   return out
 }
 
 function isUnconditionallyFalse(condition: string): boolean {
-  return normalizeRuleBody(condition) === "false"
+  const n = normalizeRuleBody(condition)
+  if (n === "false") return true
+  return /^\(\s*false\s*\)$/.test(n)
 }
 
 /** Every allow in the block must be `if false` only (structural; equivalent spacing/order/split allows OK). */
@@ -128,6 +150,9 @@ export function assertBlockIsServerDenyOnly(body: string): void {
   }
   for (const { verbs, condition } of allows) {
     if (verbs.length === 0) throw new Error("TTL allow has no verbs")
+    if (condition === null) {
+      throw new Error(`TTL allow [${verbs.join(", ")}] must be if false (unconditional allow)`)
+    }
     if (!isUnconditionallyFalse(condition)) {
       throw new Error(`TTL allow [${verbs.join(", ")}] must be if false (got if ${condition})`)
     }
