@@ -13,6 +13,7 @@ import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
+import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { getDocumentTypes } from "@/lib/foundation-data"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
@@ -228,6 +229,10 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001: template analytics are 
       expect((await legacy.get()).data()).toEqual(legacyRow)
       const canonical = (await adminDb().collection(COLLECTION).doc(`template:${a.firmId}:${T}`).get()).data()
       expect(canonical).toMatchObject({ firmId: a.firmId, templateId: T, composeCount: 1, templateSearchCount: 0 })
+      // The Firestore repository the route reads through lists and gets only the firm-qualified row.
+      const repo = createFirestoreRepositories(adminDb() as never).draftTemplateAnalytics
+      expect((await repo.listByFirm(a.firmId)).map((r) => [r.id, r.composeCount])).toEqual([[`template:${a.firmId}:${T}`, 1]])
+      expect(await repo.get(`template:${T}`, a.firmId)).toBeNull()
     } finally {
       await legacy.delete()
     }
