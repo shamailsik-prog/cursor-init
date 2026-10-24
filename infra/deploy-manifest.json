@@ -296,7 +296,7 @@
     "orderedSteps": [
       "terraform apply stage 1",
       "write functions/.env.<projectId> ingress and proxy settings",
-      "bash scripts/deploy-preflight.sh --project-id",
+      "bash scripts/deploy-preflight.sh --profile",
       "firebase deploy",
       "terraform apply stage 2",
       "set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel"
