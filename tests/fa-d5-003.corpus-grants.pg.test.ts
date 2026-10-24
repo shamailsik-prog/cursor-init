@@ -565,32 +565,22 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         ["a SELECT on v_source_provenance", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON v_source_provenance TO "${u}"`]],
         ["a SELECT on the gate's v_authority_section_version", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON v_authority_section_version TO "${u}"`]],
         ["USAGE on a sequence in public", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT USAGE ON SEQUENCE corpus_publication_seq_seq TO "${u}"`]],
-        ["a SELECT on the term table itself", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON research_title_term TO "${u}"`]],
-        // FA-D5-003-R1-003 (spec R31): a readable or writable relation outside schema public, and ADMIN OPTION.
-        ["a SELECT on a table in another schema", (u) => [
-          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
-          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT SELECT ON fad5_side.secret TO "${u}"`,
+        // 006's base table, read directly rather than through v_research_term (absent on main: the grant is skipped there).
+        ["a SELECT on the term table itself", (u) => [
+          `GRANT corpus_research_reader TO "${u}"`,
+          `DO $$ BEGIN IF to_regclass('public.research_title_term') IS NOT NULL THEN EXECUTE 'GRANT SELECT ON public.research_title_term TO "${u}"'; ELSE EXECUTE 'GRANT SELECT ON public.judgment TO "${u}"'; END IF; END $$`,
         ]],
-        ["an INSERT on a table in another schema", (u) => [
-          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
-          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT INSERT ON fad5_side.secret TO "${u}"`,
-        ]],
-        ["corpus_research_reader held WITH ADMIN OPTION", (u) => [`GRANT corpus_research_reader TO "${u}" WITH ADMIN OPTION`]],
       ]
       const reasons: Record<string, string> = {}
-      try {
-        for (const [label, grants] of shapes) {
-          const login = await db.createLogin("fad5s")
-          for (const sql of grants(login.user)) await db.admin.query(sql)
-          const store = new PgResearchCorpus(await configFor(login.url))
-          try {
-            reasons[label] = await reasonOf(store.load(keywordPlan))
-          } finally {
-            await store.end()
-          }
+      for (const [label, grants] of shapes) {
+        const login = await db.createLogin("fad5s")
+        for (const sql of grants(login.user)) await db.admin.query(sql)
+        const store = new PgResearchCorpus(await configFor(login.url))
+        try {
+          reasons[label] = await reasonOf(store.load(keywordPlan))
+        } finally {
+          await store.end()
         }
-      } finally {
-        await db.admin.query("DROP SCHEMA IF EXISTS fad5_side CASCADE")
       }
       expect(reasons).toEqual(Object.fromEntries(shapes.map(([label]) => [label, "wrong_role"])))
       // Controls: the plain research login loads, and so does one that is also a member of corpus_clients (CONNECT only).
@@ -613,6 +603,37 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       } finally {
         await store.end()
       }
+    })
+
+    it("R1-003: a SELECT or INSERT in another schema, or the research role held WITH ADMIN OPTION, is wrong_role (spec R31)", async () => {
+      const { PgResearchCorpus } = await reader()
+      const shapes: Array<[string, (user: string) => string[]]> = [
+        ["a SELECT on a table in another schema", (u) => [
+          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
+          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT SELECT ON fad5_side.secret TO "${u}"`,
+        ]],
+        ["an INSERT on a table in another schema", (u) => [
+          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
+          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT INSERT ON fad5_side.secret TO "${u}"`,
+        ]],
+        ["corpus_research_reader held WITH ADMIN OPTION", (u) => [`GRANT corpus_research_reader TO "${u}" WITH ADMIN OPTION`]],
+      ]
+      const reasons: Record<string, string> = {}
+      try {
+        for (const [label, grants] of shapes) {
+          const login = await db.createLogin("fad5a")
+          for (const sql of grants(login.user)) await db.admin.query(sql)
+          const store = new PgResearchCorpus(await configFor(login.url))
+          try {
+            reasons[label] = await reasonOf(store.load(keywordPlan))
+          } finally {
+            await store.end()
+          }
+        }
+      } finally {
+        await db.admin.query("DROP SCHEMA IF EXISTS fad5_side CASCADE")
+      }
+      expect(reasons).toEqual(Object.fromEntries(shapes.map(([label]) => [label, "wrong_role"])))
     })
 
     it("over a per-query bound one search fails (row_cap, unindexed), never a truncated answer, and the next query is unaffected (spec R27)", async () => {
