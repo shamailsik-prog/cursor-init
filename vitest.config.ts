@@ -73,6 +73,7 @@ export default defineConfig({
             "tests/f32-ttl-collections.firestore.test.ts",
             "tests/fa-d4-001-template-analytics.e2e.firestore.test.ts",
             "tests/fa-d4-001-template-analytics.rules.firestore.test.ts",
+            "tests/fa-d4-001-template-analytics-backfill.e2e.firestore.test.ts",
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
             "tests/f02-next-authority.e2e.firestore.test.ts",
