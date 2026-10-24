@@ -107,9 +107,9 @@ export function matchBlocksForCollectionGroup(rules: string, collectionGroup: st
   return extractMatchBlocks(rules).filter((b) => matchPathAppliesToCollectionGroup(b.path, collectionGroup))
 }
 
-export type AllowStatement = { verbs: string[]; condition: string }
+export type AllowStatement = { verbs: string[]; condition: string | null }
 
-const ALLOW_STMT_RE = /allow\s+([^:;]+)\s*:\s*if\s+([^;]+);/gi
+const ALLOW_STMT_RE = /allow\s+([^;]+);/gi
 
 export function extractAllowStatements(body: string): AllowStatement[] {
   const cleaned = stripRulesComments(body)
@@ -117,11 +117,21 @@ export function extractAllowStatements(body: string): AllowStatement[] {
   let m: RegExpExecArray | null
   ALLOW_STMT_RE.lastIndex = 0
   while ((m = ALLOW_STMT_RE.exec(cleaned)) !== null) {
-    const verbs = m[1]
-      .split(",")
-      .map((v) => v.trim().toLowerCase())
-      .filter(Boolean)
-    out.push({ verbs, condition: m[2].trim() })
+    const chunk = m[1].trim()
+    const ifMatch = chunk.match(/^(.+?)\s*:\s*if\s+(.+)$/i)
+    if (ifMatch) {
+      const verbs = ifMatch[1]
+        .split(",")
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+      out.push({ verbs, condition: ifMatch[2].trim() })
+    } else {
+      const verbs = chunk
+        .split(",")
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+      out.push({ verbs, condition: null })
+    }
   }
   return out
 }
