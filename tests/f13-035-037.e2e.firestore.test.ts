@@ -1,4 +1,5 @@
-// FA-F13-035: documents list exposes droppedDocuments from listByFirm.
+// FA-F13-035: operators see dropped rows via server logs (not the list JSON).
+// FA-F13-038: list JSON must not expose dropped document ids to callers without clearance.
 // FA-F13-036: Firestore-mode GET by docId must not fall back to cache when get returns null.
 import { FieldValue } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -66,6 +67,32 @@ async function provisionPartner(): Promise<Provisioned> {
   return { firmId, uid, token: idToken }
 }
 
+async function provisionAssociatePublic(firmId: string): Promise<Provisioned> {
+  const uid = adminDb().collection("users").doc().id
+  const email = `${uid.toLowerCase()}@example.test`
+  const password = "emulator-pass-123"
+  await adminAuth().createUser({ uid, email, password })
+  await adminAuth().setCustomUserClaims(uid, { firmId, role: "associate", clearanceLevel: "public" })
+  await adminDb().collection("users").doc(uid).create({
+    firmId,
+    role: "associate",
+    clearanceLevel: "public",
+    mfaEnabled: false,
+    active: true,
+    createdAt: FieldValue.serverTimestamp(),
+  })
+  const host = process.env.FIREBASE_AUTH_EMULATOR_HOST
+  if (!host) throw new Error("FIREBASE_AUTH_EMULATOR_HOST is required")
+  const res = await fetch(`http://${host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  })
+  if (!res.ok) throw new Error(`emulator sign-in failed: ${res.status} ${await res.text()}`)
+  const { idToken } = (await res.json()) as { idToken: string }
+  return { firmId, uid, token: idToken }
+}
+
 const goodRow = (firmId: string) => ({
   firmId,
   matterId: null as string | null,
@@ -89,7 +116,7 @@ function authGet(partner: Provisioned, query: string) {
   )
 }
 
-describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-035: documents list reports dropped rows", () => {
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-035/038: documents list does not leak dropped row ids", () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production")
     vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
@@ -105,7 +132,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-035: documents list rep
     restart()
   })
 
-  it("a signed-in partner sees droppedDocuments for malformed same-firm rows", async () => {
+  it("a signed-in partner lists valid rows but the response body never names malformed rows", async () => {
     const partner = await provisionPartner()
     const okId = uniq("doc_ok")
     const badId = uniq("doc_bad")
@@ -114,9 +141,32 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-035: documents list rep
 
     const res = await authGet(partner, `userId=${partner.uid}&limit=50&cursor=0`)
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { items: { id: string }[]; droppedDocuments?: { id: string; reason: string }[] }
+    const text = await res.text()
+    const body = JSON.parse(text) as { items: { id: string }[]; droppedDocuments?: unknown }
     expect(body.items.map((row) => row.id)).toEqual([okId])
-    expect(body.droppedDocuments).toEqual([{ id: badId, reason: "byteSize" }])
+    expect(text).not.toContain(badId)
+    expect(body.droppedDocuments).toBeUndefined()
+  })
+
+  it("a public-clearance associate does not receive privileged-restricted dropped document ids in the list body", async () => {
+    const partner = await provisionPartner()
+    const associate = await provisionAssociatePublic(partner.firmId)
+    const secretId = uniq("doc_pr_bad")
+    await adminDb()
+      .collection("documents")
+      .doc(secretId)
+      .set({
+        ...goodRow(partner.firmId),
+        classification: "privileged-restricted",
+        byteSize: "12",
+      })
+
+    const res = await authGet(associate, `userId=${associate.uid}&limit=50&cursor=0`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { items: unknown[]; droppedDocuments?: unknown }
+    expect(body.items).toEqual([])
+    expect(body.droppedDocuments).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain(secretId)
   })
 })
 
