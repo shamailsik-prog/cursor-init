@@ -286,7 +286,8 @@ hold a tombstone; the mechanism is Firestore-mode only.
 - The reporting route no longer shows a non-member the matter rows of the firm (R-2 alignment). A partner who relied
   on seeing every matter there must be a member.
 - New engine error `matter_deleted` on P2 jobs of a tombstoned matter (dead letter).
-- Next Firestore reads cost one extra read per `getById` of a matter-keyed row and one tombstone query per list page.
+- Next Firestore reads in Admin mode cost one extra document read per `getById` of a matter-keyed row, and one per
+  distinct matter on a list page that has matter-keyed rows (parallel reads through the modular `getDoc` helper).
 
 ## 9. Stress test
 
@@ -299,7 +300,7 @@ misses copies. Revocation and read refusal are needed regardless.
 **Devil's advocate against this design.**
 
 - *The tombstone check adds a read to every permission check.* True: one document read per matter-level decision
-  (batched with the matter read in Functions). Accepted for correctness; measured cost is NOT DEMONSTRATED.
+  (read in parallel with the matter in Functions). Accepted for correctness; measured cost is NOT DEMONSTRATED.
 - *A write already past its permission check can land after its store is acknowledged.* The approval's membership
   revocation stops writers that re-check membership in their transaction (D4, the Next repositories); the purge's
   final re-query catches anything that lands before the acknowledgement. A write that lands after the acknowledgement

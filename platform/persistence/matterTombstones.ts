@@ -1,6 +1,5 @@
-import type { DocumentReference as AdminDocumentReference, Firestore as AdminFirestore } from "firebase-admin/firestore"
 import { MATTER_TOMBSTONES, isTombstoneFor, matterKeyOfRow } from "@/platform/retention/tombstone"
-import { doc, firestoreSdkOf, type Firestore } from "@/platform/persistence/firestoreDbModular"
+import { doc, firestoreSdkOf, getDoc, type Firestore } from "@/platform/persistence/firestoreDbModular"
 
 /**
  * Audit F42: the Next repository's tombstone filter. A firm-scoped read (`getById`, every firm-scoped list page) drops
@@ -15,14 +14,14 @@ import { doc, firestoreSdkOf, type Firestore } from "@/platform/persistence/fire
 
 const canRead = (db: Firestore): boolean => firestoreSdkOf(db) === "admin"
 
-/** The distinct matter ids, of `ids`, that are tombstoned for `firmId` (one batched read). */
+/** The distinct matter ids, of `ids`, that are tombstoned for `firmId` (one document read each, in parallel). */
 export async function tombstonedAmong(db: Firestore, firmId: string, ids: readonly string[]): Promise<ReadonlySet<string>> {
   const unique = [...new Set(ids.filter((id) => typeof id === "string" && id !== "" && !id.includes("/")))]
   if (!canRead(db) || unique.length === 0) return new Set()
-  // One batched read of the tombstones (document reads only; FA-F01-001: no collection scan outside firestoreDbModular).
-  const refs = unique.map((id) => doc(db, MATTER_TOMBSTONES, id)) as unknown as AdminDocumentReference[]
-  const snaps = await (db as unknown as AdminFirestore).getAll(...refs)
-  return new Set(snaps.filter((s) => isTombstoneFor(s.data(), firmId, s.id)).map((s) => s.id))
+  // Document reads through the modular helpers only (FA-F01-001: no collection scan; F10: no Firestore SDK import or
+  // direct call outside firestoreDbModular).
+  const snaps = await Promise.all(unique.map(async (id) => ({ id, data: (await getDoc(doc(db, MATTER_TOMBSTONES, id))).data() })))
+  return new Set(snaps.filter((s) => isTombstoneFor(s.data, firmId, s.id)).map((s) => s.id))
 }
 
 /** Whether one stored row of `collection` belongs to a matter tombstoned for `firmId`. */
