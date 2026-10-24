@@ -25,8 +25,22 @@ import { plainId } from "./transport"
  */
 
 export const DECISIONS_COLLECTION = "p1_decisions"
-/** The record's own format version; also stamped on every trace (R10). */
-export const DECISION_RECORD_VERSION = "f34.1"
+/**
+ * The record's own format version; also stamped on every trace (R10). f34.2 (re-audit R1 follow-up, spec section 5) adds
+ * `decisions.mask.policyVersion` (R25), `export.disabledReason` (R23), `decisions.fromSeed` on a reconciled record (R21) and
+ * the embedding path's records with `caller` and `corpusOperationId` (R16).
+ */
+export const DECISION_RECORD_VERSION = "f34.2"
+
+/**
+ * The hash an embedding's record keeps of what was sent (re-audit R1-002, spec ruling R16): the SHA-256 of the masked input
+ * string, UTF-8. Never the text; server-only like every record (R15: never exported above rank 1 or on a blocked call).
+ */
+export const EMBEDDING_INPUT_HASH_ALGORITHM = "sha256/p1-embedding-input-v1"
+
+export function embeddingInputHash(maskedInput: string): string {
+  return sha256Hex(maskedInput)
+}
 
 export function decisionRef(usageLogId: string, db: Firestore = adminDb()): DocumentReference {
   return db.collection(DECISIONS_COLLECTION).doc(usageLogId)
@@ -91,6 +105,11 @@ export type ExportStep = {
   nextAttemptAtMs?: number
   exportedAtMs?: number
   abandonedAtMs?: number
+  /**
+   * Re-audit R1-009 (spec ruling R23): on a `disabled` export, why tracing was off (`opikConfig().reason`: `unset`, or a
+   * set but rejected `invalid_url`, `unconfirmed`, `third_party_host`), so turned off is told apart from misconfigured.
+   */
+  disabledReason?: string
 }
 
 function failedAttempt(attempts: number, code: ExportCode, nowMs: number): ExportStep {
@@ -98,10 +117,13 @@ function failedAttempt(attempts: number, code: ExportCode, nowMs: number): Expor
   return { state: "pending", attempts, lastCode: code, nextAttemptAtMs: nowMs + TRACE_EXPORT_BACKOFF_MS * 2 ** (attempts - 1) }
 }
 
-/** The export after the call's own attempt (step 10): exported, disabled (nothing to retry), or pending after a failure. */
-export function exportAfterCall(status: "exported" | "failed" | "disabled", nowMs: number): ExportStep {
+/**
+ * The export after the call's own attempt (step 10): exported, disabled (nothing to retry, with why tracing was off when
+ * the caller says, R23), or pending after a failure.
+ */
+export function exportAfterCall(status: "exported" | "failed" | "disabled", nowMs: number, disabledReason?: string): ExportStep {
   if (status === "exported") return { state: "exported", attempts: 1, exportedAtMs: nowMs }
-  if (status === "disabled") return { state: "disabled", attempts: 0 }
+  if (status === "disabled") return { state: "disabled", attempts: 0, ...(disabledReason === undefined ? {} : { disabledReason }) }
   return failedAttempt(1, "export_failed", nowMs)
 }
 
@@ -124,6 +146,7 @@ export function exportFields(step: ExportStep): Record<string, unknown> {
     ...(step.nextAttemptAtMs === undefined ? {} : { nextAttemptAt: Timestamp.fromMillis(step.nextAttemptAtMs) }),
     ...(step.exportedAtMs === undefined ? {} : { exportedAt: Timestamp.fromMillis(step.exportedAtMs) }),
     ...(step.abandonedAtMs === undefined ? {} : { abandonedAt: Timestamp.fromMillis(step.abandonedAtMs) }),
+    ...(step.disabledReason === undefined ? {} : { disabledReason: step.disabledReason }),
   }
 }
 
@@ -134,8 +157,15 @@ export function exportFields(step: ExportStep): Record<string, unknown> {
 /**
  * The decision record of a reservation the lease reconciler settled: the seed the call left on the reservation before it
  * dispatched (`decisionSeed`), the provider attempt's ids and transport time, the reconciled usage record's figures, and
- * the export state the reconciler can give it (`pending` with nothing tried, or `disabled`). A reservation made before
- * F34 has no seed: the record says so (`seedMissing: true`) and carries what the reservation and the attempt hold.
+ * the export state the reconciler can give it (`pending` with nothing tried, or `disabled` with why tracing is off, R23). A
+ * reservation made before F34 has no seed: the record says so (`seedMissing: true`) and carries what the reservation and
+ * the attempt hold.
+ *
+ * Re-audit R1-007 (spec ruling R21): the seed's verdicts are the ones known before dispatch, when no provider attempt had
+ * been recorded yet. A reservation the reconciler settles holds one, so `decisions.attemptRecord` is `"recorded"`, and
+ * `decisions.fromSeed: true` says the other verdicts are the seed's. Re-audit R1-002 (R16): an embedding's reconciled
+ * usage record carries the verified `caller` and the corpus's `corpusOperationId`, and so does its decision record; a chat
+ * call's record gains neither.
  */
 export function reconciledDecision(a: {
   usageLogId: string
@@ -145,10 +175,13 @@ export function reconciledDecision(a: {
   record: Record<string, unknown> & { firmId: string; monthKey: string; model: string }
   nowMs: number
   tracing: boolean
+  /** Why tracing is off (`opikConfig().reason`), recorded on a `disabled` export (R23). */
+  disabledReason?: string
 }): Record<string, unknown> {
   const seed = objectOf(a.seed)
   const seedModel = objectOf(seed?.model) ?? {}
   const seedPhases = objectOf(seed?.phases) ?? {}
+  const seedDecisions = objectOf(seed?.decisions)
   const reported = typeof a.record.modelReported === "string" ? a.record.modelReported : null
   const transportMs = a.attempt !== null && typeof a.attempt.transportMs === "number" && a.attempt.transportMs >= 0 ? a.attempt.transportMs : null
   const r = a.record
@@ -179,7 +212,9 @@ export function reconciledDecision(a: {
       requestId: plainId(a.attempt?.requestId) ?? null,
     },
     retrieval: { context: objectOf(seed?.retrieval)?.context ?? null },
-    decisions: seed?.decisions ?? null,
+    decisions: seedDecisions === null ? null : { ...seedDecisions, ...(a.attempt === null ? {} : { attemptRecord: "recorded" }), fromSeed: true },
+    ...(typeof r.caller === "string" ? { caller: r.caller } : {}),
+    ...(typeof r.corpusOperationId === "string" ? { corpusOperationId: r.corpusOperationId } : {}),
     phases: {
       firstReadsMs: typeof seedPhases.firstReadsMs === "number" ? seedPhases.firstReadsMs : null,
       maskMs: typeof seedPhases.maskMs === "number" ? seedPhases.maskMs : null,
@@ -200,7 +235,9 @@ export function reconciledDecision(a: {
       reservation: `ai_reservations/${a.usageLogId}`,
       reconciledFrom: r.reconciledFrom ?? null,
     },
-    export: exportFields(a.tracing ? { state: "pending", attempts: 0, nextAttemptAtMs: a.nowMs } : { state: "disabled", attempts: 0 }),
+    export: exportFields(
+      a.tracing ? { state: "pending", attempts: 0, nextAttemptAtMs: a.nowMs } : { state: "disabled", attempts: 0, ...(a.disabledReason === undefined ? {} : { disabledReason: a.disabledReason }) }
+    ),
     ...(seed === null ? { seedMissing: true } : {}),
     settledBy: "reconciler",
   }

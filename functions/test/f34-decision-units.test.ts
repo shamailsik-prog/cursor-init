@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { logger } from "firebase-functions"
+import { describe, expect, it, vi } from "vitest"
 import { AGENT_INSTRUCTIONS_SHA256 } from "@/platform/p1/agentInstructions"
+import { MASK_POLICY_VERSION, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { PROMPT_HASH_ALGORITHM, PROMPT_TEMPLATE_PINS, promptHash, promptTemplateOf } from "@/platform/p1/promptTemplates"
 import { SYSTEM_POLICIES, SYSTEM_POLICY_IDS, SYSTEM_POLICY_VERSION, systemPolicyText } from "@/platform/p1/systemPolicy"
 import {
@@ -8,19 +10,50 @@ import {
   TRACE_EXPORT_MAX_ATTEMPTS,
   authorityFactsSha256,
   exportAfterCall,
+  exportFields,
   joinDecision,
   nextExport,
+  reconciledDecision,
   type DecisionParts,
 } from "../src/p1/decisionRecord"
-import { TRACE_TEXT_MAX_RANK, buildTrace, type TraceRecord } from "../src/p1/opik"
+import { TRACE_TEXT_MAX_RANK, buildTrace, exportTrace, opikConfig, type TraceRecord } from "../src/p1/opik"
+import { modelMatches } from "../src/p1/ops"
 
 /**
  * Audit F34 units (spec docs/superpowers/specs/2026-10-24-f34-decision-trace-reproducibility-design.md): the prompt hash
  * and the template pin (R3), the authority facts hash (R5), the export state machine (R11), the trace content rule (R10)
- * and the reconstruction join (R13). Pure: no emulator.
+ * and the reconstruction join (R13). Pure: no emulator. The re-audit R1 follow-up (section 5) adds the hash export rule
+ * (R15), the exported model name (R19), the disabled reason and the misconfiguration line (R23), the mask version (R25)
+ * and the lease reconciler's record (R16, R21).
  */
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex")
+
+/** A trace record as a call builds it; tests override what they vary. */
+const record = (over: Partial<TraceRecord> = {}): TraceRecord => ({
+  traceId: "0199c3a0-0000-7000-8000-000000000001",
+  startMs: 0,
+  endMs: 1,
+  taskType: "committee",
+  classification: "internal",
+  outcome: "ok",
+  blockReason: null,
+  model: "anthropic/claude-opus-5.5",
+  provider: "ai-gateway",
+  inputTokens: 1,
+  outputTokens: 1,
+  costMicroUsd: 24,
+  firmId: "firm-1",
+  matterId: "matter-1",
+  usageLogId: "usage-1",
+  maskedBody: "MASKED BODY",
+  maskedResponse: "MASKED RESPONSE",
+  promptHash: "a".repeat(64),
+  promptTemplateId: "committee-brain",
+  promptTemplateVersion: SYSTEM_POLICY_VERSION,
+  modelReported: "claude-opus-5.5",
+  ...over,
+})
 const SYSTEM = SYSTEM_POLICIES["committee-brain"].text
 const MESSAGES = [
   { role: "system" as const, content: SYSTEM },
@@ -150,31 +183,6 @@ describe("F34 R11: the export state machine", () => {
 })
 
 describe("F34 R10: what a trace may carry", () => {
-  const record = (over: Partial<TraceRecord> = {}): TraceRecord => ({
-    traceId: "0199c3a0-0000-7000-8000-000000000001",
-    startMs: 0,
-    endMs: 1,
-    taskType: "committee",
-    classification: "internal",
-    outcome: "ok",
-    blockReason: null,
-    model: "anthropic/claude-opus-5.5",
-    provider: "ai-gateway",
-    inputTokens: 1,
-    outputTokens: 1,
-    costMicroUsd: 24,
-    firmId: "firm-1",
-    matterId: "matter-1",
-    usageLogId: "usage-1",
-    maskedBody: "MASKED BODY",
-    maskedResponse: "MASKED RESPONSE",
-    promptHash: "a".repeat(64),
-    promptTemplateId: "committee-brain",
-    promptTemplateVersion: SYSTEM_POLICY_VERSION,
-    modelReported: "claude-opus-5.5",
-    ...over,
-  })
-
   it("text only at ranks 0 and 1", () => {
     expect(TRACE_TEXT_MAX_RANK).toBe(1)
     for (const c of ["public", "internal"] as const) {
@@ -190,16 +198,130 @@ describe("F34 R10: what a trace may carry", () => {
     }
   })
 
-  it("ids and hashes in the metadata at every rank", () => {
-    for (const c of ["internal", "privileged-restricted"] as const) {
+  it("ids in the metadata at every rank; the prompt hash only where the text may ride (re-audit R1-001, R15)", () => {
+    for (const c of ["public", "internal", "confidential", "privileged", "privileged-restricted"] as const) {
       expect(buildTrace(record({ classification: c }), "p").metadata, c).toMatchObject({
-        promptHash: "a".repeat(64),
         promptTemplateId: "committee-brain",
         promptTemplateVersion: SYSTEM_POLICY_VERSION,
         modelReported: "claude-opus-5.5",
-        decisionRecordVersion: "f34.1",
+        decisionRecordVersion: "f34.2",
+        usageLogId: "usage-1",
       })
     }
+    for (const c of ["public", "internal"] as const) expect(buildTrace(record({ classification: c }), "p").metadata, c).toMatchObject({ promptHash: "a".repeat(64) })
+    for (const c of ["confidential", "privileged", "privileged-restricted"] as const) {
+      const t = buildTrace(record({ classification: c }), "p")
+      expect(t.metadata, c).not.toHaveProperty("promptHash")
+      expect(JSON.stringify(t), c).not.toContain("a".repeat(64))
+    }
+  })
+
+  it("no prompt hash on a blocked call at any rank, and none on a failed or reconciled call above rank 1 (R15)", () => {
+    for (const c of ["public", "internal", "privileged"] as const) {
+      expect(buildTrace(record({ classification: c, outcome: "blocked", blockReason: "not_minimised", maskedResponse: null }), "p").metadata, c).not.toHaveProperty("promptHash")
+    }
+    expect(buildTrace(record({ classification: "internal", outcome: "failed" }), "p").metadata).toMatchObject({ promptHash: "a".repeat(64) })
+    expect(buildTrace(record({ classification: "internal", outcome: "reconciled" }), "p").metadata).toMatchObject({ promptHash: "a".repeat(64) })
+    for (const outcome of ["failed", "reconciled"] as const) expect(buildTrace(record({ classification: "confidential", outcome }), "p").metadata, outcome).not.toHaveProperty("promptHash")
+  })
+
+  it("the provider's model name is exported only when it is the configured model or its alias, as F17's modelMatches reads it (R1-005, R19)", () => {
+    const cases: [string, string | null, string | null][] = [
+      ["anthropic/claude-opus-5.5", "claude-opus-5.5", "claude-opus-5.5"],
+      ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5.5", "anthropic/claude-opus-5.5"],
+      ["anthropic/claude-opus-5.5", "zanzibar-quokka-restricted-strategy", "unrecognised"],
+      ["anthropic/claude-opus-5.5", "claude-opus-5.4", "unrecognised"],
+      ["anthropic/claude-opus-5.5", "opus-5.5", "unrecognised"],
+      ["anthropic/claude-opus-5.5", null, null],
+      ["openai/text-embedding-3-small", "text-embedding-3-small", "text-embedding-3-small"],
+    ]
+    for (const [model, reported, exported] of cases) {
+      expect(buildTrace(record({ model, modelReported: reported }), "p").metadata, `${model} / ${String(reported)}`).toMatchObject({ modelReported: exported })
+      expect(exported !== null && exported !== "unrecognised", `${model} / ${String(reported)}`).toBe(modelMatches(model, reported))
+    }
+    expect(buildTrace(record({ modelReported: undefined }), "p").metadata).not.toHaveProperty("modelReported")
+  })
+})
+
+describe("F34 R1-009 (R23): Opik turned off is told apart from Opik misconfigured", () => {
+  it("records the reason a disabled export was disabled", () => {
+    expect(exportAfterCall("disabled", 0, "unset")).toEqual({ state: "disabled", attempts: 0, disabledReason: "unset" })
+    expect(exportFields(exportAfterCall("disabled", 0, "invalid_url"))).toEqual({ state: "disabled", attempts: 0, disabledReason: "invalid_url" })
+    expect(exportAfterCall("exported", 7, "unset")).toEqual({ state: "exported", attempts: 1, exportedAtMs: 7 })
+    expect(exportAfterCall("failed", 7, "unset")).not.toHaveProperty("disabledReason")
+  })
+
+  it.each([
+    ["unset", {}, null],
+    ["invalid_url", { OPIK_BASE_URL: "http://opik.example.com" }, "invalid_url"],
+    ["unconfirmed", { OPIK_BASE_URL: "https://opik.example.com" }, "unconfirmed"],
+    ["third_party_host", { OPIK_BASE_URL: "https://www.comet.com/opik/api", OPIK_SELF_HOSTED_CONFIRMED: "true" }, "third_party_host"],
+  ] as const)("an export under a config that is %s logs the misconfiguration at ERROR when the URL is set, never the URL", async (_name, env, reason) => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    try {
+      const cfg = opikConfig(env as NodeJS.ProcessEnv)
+      expect(cfg.enabled).toBe(false)
+      expect(await exportTrace(record(), cfg)).toBe("disabled")
+      const lines = error.mock.calls.filter((c) => c[0] === "p1.opik_misconfigured")
+      expect(lines).toEqual(reason === null ? [] : [["p1.opik_misconfigured", { reason }]])
+      expect(JSON.stringify(error.mock.calls)).not.toContain("example.com")
+      expect(JSON.stringify(error.mock.calls)).not.toContain("comet")
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
+describe("F34 R1-011 (R25): the mask policy version", () => {
+  // A golden set: if what the mask redacts changes, these outputs change, and MASK_POLICY_VERSION must be bumped with them.
+  it("is f34.1, and the mask still gives the outputs that version named", () => {
+    expect(MASK_POLICY_VERSION).toBe("f34.1")
+    const golden: [string, string[], string][] = [
+      ["CNIC 35202-1234567-1 on file.", [], "CNIC [CNIC] on file."],
+      ["Call 0300-1234567 or write to a.b@example.com.", [], "Call [PHONE] or write to [EMAIL]."],
+      ["Tariq Zarvani asks about bail.", ["Tariq Zarvani"], "[PARTY] asks about bail."],
+      ["Draft a reply to the notice.", [], "Draft a reply to the notice."],
+    ]
+    for (const [text, partyNames, masked] of golden) expect(maskOutboundPII(text, { partyNames }).masked, text).toBe(masked)
+  })
+})
+
+const RECONCILED_RECORD = { firmId: "firm-1", monthKey: "2026-10", model: "openai/text-embedding-3-small", outcome: "reconciled", taskType: "embedding" }
+
+describe("F34 R1-007 and R16: the lease reconciler's record", () => {
+  const seed = {
+    recordVersion: "f34.2",
+    operationId: null,
+    startedAtMs: 1,
+    prompt: { templateId: null, hash: "b".repeat(64), hashAlgorithm: "sha256/p1-embedding-input-v1", messageCount: 1 },
+    model: { configured: "openai/text-embedding-3-small", provider: "ai-gateway", transport: "ai-gateway-embeddings", gatewayVersion: "f34.1" },
+    retrieval: { context: { state: "none", anchors: [] } },
+    decisions: { killSwitch: { platform: "clear", firm: "clear" }, budget: { firstLook: "fits", reservation: "reserved" }, attemptRecord: "not_attempted" },
+    phases: { firstReadsMs: 1, maskMs: 1 },
+  }
+
+  it("says the attempt was recorded and that its other verdicts are the seed's (R21)", () => {
+    const d = reconciledDecision({ usageLogId: "u-1", traceId: "t-1", seed, attempt: { outcome: "returned", transportMs: 5 }, record: RECONCILED_RECORD, nowMs: 9, tracing: false })
+    expect(d.decisions).toEqual({ ...seed.decisions, attemptRecord: "recorded", fromSeed: true })
+    expect(d.prompt).toEqual(seed.prompt)
+    expect(d.export).toEqual({ state: "disabled", attempts: 0 })
+  })
+
+  it("carries the embedding's caller and corpus operation, and the reason tracing was off (R16, R23)", () => {
+    const d = reconciledDecision({
+      usageLogId: "u-1",
+      traceId: "t-1",
+      seed,
+      attempt: { outcome: "pending" },
+      record: { ...RECONCILED_RECORD, caller: "corpus@example.iam.gserviceaccount.com", corpusOperationId: "c".repeat(64) },
+      nowMs: 9,
+      tracing: false,
+      disabledReason: "unset",
+    })
+    expect(d).toMatchObject({ caller: "corpus@example.iam.gserviceaccount.com", corpusOperationId: "c".repeat(64), recordVersion: "f34.2", export: { state: "disabled", disabledReason: "unset" } })
+    const chat = reconciledDecision({ usageLogId: "u-2", traceId: "t-2", seed, attempt: {}, record: { ...RECONCILED_RECORD, taskType: "committee" }, nowMs: 9, tracing: true })
+    expect(chat).not.toHaveProperty("caller")
+    expect(chat).not.toHaveProperty("corpusOperationId")
   })
 })
 

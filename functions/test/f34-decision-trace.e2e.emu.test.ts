@@ -213,7 +213,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     const usageLogId = row.usageLogId as string
     const d = await decisionOf(usageLogId)
     expect(d, "a decision record exists for the attempt (spec R1)").toBeDefined()
-    expect(d).toMatchObject({ recordVersion: "f34.1", traceId: out.traceId, usageLogId, firmId: f.firmId, matterId: f.matterId, taskType: "committee", classification: "internal", outcome: "ok", blockReason: null })
+    expect(d).toMatchObject({ recordVersion: "f34.2", traceId: out.traceId, usageLogId, firmId: f.firmId, matterId: f.matterId, taskType: "committee", classification: "internal", outcome: "ok", blockReason: null })
 
     // R3: the registered template, its pinned hash, and the hash of exactly what the provider received.
     expect(d!.prompt).toMatchObject({
@@ -335,7 +335,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
   it.each([
     ["confidential", 2],
     ["privileged", 3],
-  ])("a %s call (rank %i) exports ids, hashes and metrics only: the planted text never reaches the trace", async (classification) => {
+  ])("a %s call (rank %i) exports ids and metrics only: the planted text never reaches the trace", async (classification) => {
     setProviderConfigForTests({ "ai-gateway": { dpaExecuted: true, inRegion: true } })
     const f = await newFirm(classification)
     setAuthorityStoreForTests(corpus())
@@ -351,7 +351,10 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     const trace = (JSON.parse(payload) as { traces: Record<string, unknown>[] }).traces[0]!
     expect("input" in trace).toBe(false)
     expect("output" in trace).toBe(false)
-    expect(trace.metadata).toMatchObject({ classification, promptHash: expect.stringMatching(HEX64), promptTemplateId: "committee-brain", promptTemplateVersion: SYSTEM_POLICY_VERSION })
+    expect(trace.metadata).toMatchObject({ classification, promptTemplateId: "committee-brain", promptTemplateVersion: SYSTEM_POLICY_VERSION })
+    // Re-audit R1-001 (spec ruling R15): the prompt hash is a dictionary oracle on a short body, so it never leaves at
+    // ranks 2 to 4 (functions/test/f34-fu-r1.e2e.emu.test.ts runs the attack).
+    expect(trace.metadata).not.toHaveProperty("promptHash")
   })
 
   it("an internal call still carries its masked text, and the metadata names the template and the prompt hash", async () => {
