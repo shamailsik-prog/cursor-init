@@ -225,10 +225,10 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
     const printed = JSON.parse(run(repoRoot, "--print-grants").out) as { restricted: Record<string, string[]>; grants: Record<string, Record<string, string[]>> }
     const guarded = new Set([...Object.keys(printed.restricted), ...Object.values(printed.grants).flatMap((g) => Object.keys(g).map((f) => f.replace(/\.ts$/, "")))])
     expect(pure.length).toBeGreaterThan(0)
-    for (const module of pure) {
-      expect(guarded.has(module), module).toBe(false)
-      const text = fs.readFileSync(path.join(repoRoot, `${module}.ts`), "utf8")
-      expect(text, module).not.toMatch(/["'`][^"'`]*\/(?:transport|embeddingTransport)(?:\.[cm]?[jt]s)?["'`]/)
+    for (const pureModule of pure) {
+      expect(guarded.has(pureModule), pureModule).toBe(false)
+      const text = fs.readFileSync(path.join(repoRoot, `${pureModule}.ts`), "utf8")
+      expect(text, pureModule).not.toMatch(/["'`][^"'`]*\/(?:transport|embeddingTransport)(?:\.[cm]?[jt]s)?["'`]/)
     }
   })
 
