@@ -5,17 +5,23 @@ import type { CitationVerdict } from "@/services/d4-2/citationVerdict"
 import { verifyCitations } from "@/services/d4-2/draftingIntelligence"
 
 /**
- * D5-1 research search (Module 18 `search`; audit FA-D5-001, FA-D5-002). Case-law search over the in-app corpus
- * read model (`store.judgments`, `store.embeddings`, `store.treatments`, the model the Next citation gate reads):
- * a validated query in, the top k judgments out, ranked and scored, each with its Module 33 treatment.
- * Rulings: docs/superpowers/specs/2026-10-18-fa-d5-research-search-design.md (R1-R13).
+ * D5-1 research search (Module 18 `search`; audit FA-D5-001, FA-D5-002, FA-D5-003). Case-law search over a corpus read
+ * model: a validated query in, the top k judgments out, ranked and scored, each with its Module 33 treatment.
+ * Rulings: docs/superpowers/specs/2026-10-18-fa-d5-research-search-design.md (R1-R13) and, for the corpus it reads,
+ * docs/superpowers/specs/2026-10-24-fa-d5-003-research-corpus-reader-design.md (R6-R8).
  *
- * - Keyword leg: the IDF-weighted share of the query's distinct terms found in a judgment's title or citation.
+ * The corpus is a `ResearchCorpus`: in production the published Annex A corpus, loaded in one snapshot by a
+ * `ResearchSource` (services/d5-1/researchCorpus.ts, platform/corpus/pgResearchCorpus.ts); in tests and local
+ * development, when explicitly selected, the in-app read model (`store.judgments`, `store.embeddings`,
+ * `store.treatments`, `storeResearchCorpus`). Both are ranked by the one function below, so they cannot drift.
+ *
+ * - Keyword leg: the IDF-weighted share of the query's distinct terms found in a judgment's title or citations.
  * - Semantic leg: cosine between a caller-supplied query vector and the stored 1536-d vector (P1 has no embedding
  *   operation yet, so no in-app caller supplies one: R3).
  * - Both legs: 0.6 semantic + 0.4 keyword (Module 18). Scores are in [0, 1]; only a score above 0 is a hit.
- * - A judgment whose citation is one the query text names (read by the citation gate's parser) scores 1 and ranks
- *   ahead of other score-1 hits: the authority asked for, not another sharing its numbers (R4a).
+ * - A judgment one of whose citations the query text names (read by the citation gate's parser) scores 1 and ranks
+ *   ahead of other score-1 hits: the authority asked for, not another sharing its numbers (R4a). The hit then shows
+ *   that citation; otherwise its first.
  * Every refusal is a PublicError with a fixed message (a clean 400 at any route) that never echoes the query.
  * Callers own the P5 `research` check (L19.10: "P5.checkPermission then D5-1"), as for verifyCitations.
  */
@@ -50,6 +56,7 @@ export type ResearchQuery = {
 export type ResearchHit = {
   entityId: string
   title: string
+  /** The citation the query named (R4a), else the judgment's first; null when it has none. */
   citation: string | null
   benchType: Judgment["benchType"]
   /** Relevance in (0, 1], to 6 decimals. */
@@ -59,6 +66,34 @@ export type ResearchHit = {
 }
 
 export type ResearchResult = { items: ResearchHit[]; k: number; mode: "keyword" | "semantic" | "blended" }
+
+/** One judgment as research ranks it: its title and every citation it may be found by. */
+export type ResearchDocument = {
+  id: string
+  title: string
+  citations: readonly string[]
+  benchType: Judgment["benchType"]
+}
+
+/** corpus_metadata as research reads it. */
+export type ResearchCorpusMeta = { embeddingModel: string; embeddingDim: string }
+
+/** A corpus read model in one snapshot (spec R6-R8). */
+export type ResearchCorpus = ResearchCorpusMeta & {
+  documents: readonly ResearchDocument[]
+  /** The (model, dimension) of the stored vectors search could read, in a stable order: the corpus lock reads them. */
+  storedVectors: Iterable<{ model: string; dim: number }>
+  /** The first stored vector of each entity, when the load asked for vectors (a query with an embedding); else null. */
+  vectors: ReadonlyMap<string, readonly number[]> | null
+  /** The Module 33 verdict of each judgment id asked about. */
+  verdicts(ids: readonly string[]): ReadonlyMap<string, CitationVerdict>
+}
+
+/** Called once per load with the snapshot's metadata: validates a query vector, and says whether vectors are needed. */
+export type ResearchLoadPlan = (meta: ResearchCorpusMeta) => { vectors: boolean }
+
+/** Where research reads its corpus: one snapshot per load. A failure to read it throws CorpusUnavailableError. */
+export type ResearchSource = { load(plan: ResearchLoadPlan): Promise<ResearchCorpus> }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -76,42 +111,43 @@ function termsOf(text: string): string[] {
   return out
 }
 
-const judgmentTerms = new WeakMap<Judgment, { key: string; terms: ReadonlySet<string> }>()
+const documentTerms = new WeakMap<ResearchDocument, { key: string; terms: ReadonlySet<string> }>()
 
-/** The distinct terms of a judgment's title and citation, cached per row (recomputed if the row's text changes). */
-function termsOfJudgment(judgment: Judgment): ReadonlySet<string> {
-  const key = `${judgment.title}\u0000${judgment.citation ?? ""}`
-  const cached = judgmentTerms.get(judgment)
+/** The distinct terms of a judgment's title and citations, cached per row (recomputed if the row's text changes). */
+function termsOfDocument(doc: ResearchDocument): ReadonlySet<string> {
+  const key = `${doc.title}\u0000${doc.citations.join("\u0001")}`
+  const cached = documentTerms.get(doc)
   if (cached?.key === key) return cached.terms
-  const terms = new Set(termsOf(`${judgment.title} ${judgment.citation ?? ""}`))
-  judgmentTerms.set(judgment, { key, terms })
+  const terms = new Set(termsOf(`${doc.title} ${doc.citations.join(" ")}`))
+  documentTerms.set(doc, { key, terms })
   return terms
 }
 
 const isNumberTerm = (term: string) => /^\p{N}+$/u.test(term)
 
 type QueryCitation = { canonical: string; numbers: string[] }
+type CitationEntry = { citation: string; numbers: ReadonlySet<string>; canonical?: string | null }
 
-const judgmentCitations = new WeakMap<
-  Judgment,
-  { key: string | undefined; numbers: ReadonlySet<string>; canonical?: string | null }
->()
+const documentCitations = new WeakMap<ResearchDocument, { key: string; entries: CitationEntry[] }>()
 
 /**
- * Whether `judgment`'s citation is `cited` (R4a). Only a judgment whose own citation carries every number of `cited`
- * reaches the citation parser (normaliseCitation, the gate's rule), so a corpus full of titles that mention the
- * numbers costs no parsing. Both steps are cached per row, recomputed if the citation changes.
+ * The citation of `doc` that is `cited`, or null (R4a). Only a citation that carries every number of `cited` reaches
+ * the citation parser (normaliseCitation, the gate's rule), so a corpus full of titles that mention the numbers costs no
+ * parsing. Both steps are cached per row, recomputed if its citations change.
  */
-function citesExactly(judgment: Judgment, cited: QueryCitation): boolean {
-  let entry = judgmentCitations.get(judgment)
-  if (!entry || entry.key !== judgment.citation) {
-    entry = { key: judgment.citation, numbers: new Set(termsOf(judgment.citation ?? "").filter(isNumberTerm)) }
-    judgmentCitations.set(judgment, entry)
+function citedCitation(doc: ResearchDocument, cited: QueryCitation): string | null {
+  const key = doc.citations.join("\u0001")
+  let entry = documentCitations.get(doc)
+  if (!entry || entry.key !== key) {
+    entry = { key, entries: doc.citations.map((citation) => ({ citation, numbers: new Set(termsOf(citation).filter(isNumberTerm)) })) }
+    documentCitations.set(doc, entry)
   }
-  const { numbers } = entry
-  if (!cited.numbers.every((n) => numbers.has(n))) return false
-  if (entry.canonical === undefined) entry.canonical = judgment.citation ? normaliseCitation(judgment.citation) : null
-  return entry.canonical === cited.canonical
+  for (const c of entry.entries) {
+    if (!cited.numbers.every((n) => c.numbers.has(n))) continue
+    if (c.canonical === undefined) c.canonical = normaliseCitation(c.citation)
+    if (c.canonical === cited.canonical) return c.citation
+  }
+  return null
 }
 
 function parseK(k: unknown): number {
@@ -140,12 +176,29 @@ function parseText(text: unknown): { terms: string[]; citations: QueryCitation[]
   return { terms, citations }
 }
 
+/** A query validated without the corpus: its shape, k and text. Its embedding waits for the corpus's live model. */
+export type PreparedResearchQuery = {
+  k: number
+  text: { terms: string[]; citations: QueryCitation[] } | null
+  embedding: unknown
+}
+
+/** Everything a query can be refused for before the corpus is read (so a refused query costs no corpus read). */
+export function prepareResearchQuery(query: unknown): PreparedResearchQuery {
+  if (!isRecord(query) || (query.text === undefined && query.embedding === undefined)) {
+    throw new PublicError("research query must be an object with text or embedding")
+  }
+  const k = parseK(query.k)
+  const text = query.text === undefined ? null : parseText(query.text)
+  return { k, text, embedding: query.embedding }
+}
+
 /** The query vector scaled to unit length (scaling first, so huge finite values cannot overflow the norm). */
-function parseEmbedding(store: SpineStore, embedding: unknown): number[] {
+export function parseResearchEmbedding(liveModel: string, embedding: unknown): number[] {
   if (!isRecord(embedding) || typeof embedding.model !== "string" || !Array.isArray(embedding.vector)) {
     throw new PublicError("research embedding must name a model and carry a vector")
   }
-  if (embedding.model !== store.corpusMetadata.embedding_model) throw new PublicError("search refuses: embedding_model mismatch")
+  if (embedding.model !== liveModel) throw new PublicError("search refuses: embedding_model mismatch")
   const vector: unknown[] = embedding.vector
   if (vector.length !== EMBEDDING_DIM) throw new PublicError("search refuses: embedding_dim mismatch")
   let max = 0
@@ -160,16 +213,28 @@ function parseEmbedding(store: SpineStore, embedding: unknown): number[] {
 }
 
 /**
- * Why the stored vectors cannot serve `model`, or null: a row under another model, or not EMBEDDING_DIM long.
+ * Why the stored vectors cannot serve `model`, or null: a vector under another model, or not EMBEDDING_DIM long.
  * The one rule behind both the search lock (G1-10) and the model-switch guard (FA-D5-002), so "may search" and
  * "may switch" cannot drift apart.
  */
-function storedVectorsProblem(store: SpineStore, model: string): "embedding_model mismatch" | "embedding_dim mismatch" | null {
-  for (const row of store.embeddings) {
+function storedVectorsProblem(
+  stored: Iterable<{ model: string; dim: number }>,
+  model: string
+): "embedding_model mismatch" | "embedding_dim mismatch" | null {
+  for (const row of stored) {
     if (row.model !== model) return "embedding_model mismatch"
-    if (!Array.isArray(row.vector) || row.vector.length !== EMBEDDING_DIM) return "embedding_dim mismatch"
+    if (row.dim !== EMBEDDING_DIM) return "embedding_dim mismatch"
   }
   return null
+}
+
+/** The in-app read model's stored vectors as (model, dimension), read afresh on each pass; a non-array has no dimension. */
+function storeVectorShapes(store: SpineStore): Iterable<{ model: string; dim: number }> {
+  return {
+    *[Symbol.iterator]() {
+      for (const row of store.embeddings) yield { model: row.model, dim: Array.isArray(row.vector) ? row.vector.length : Number.NaN }
+    },
+  }
 }
 
 /** Cosine of a unit query vector and a stored vector; a stored zero vector scores 0. */
@@ -190,36 +255,32 @@ function cosine(unitQuery: readonly number[], stored: readonly number[]): number
   return Math.min(1, Math.max(-1, dot / Math.sqrt(norm2)))
 }
 
-export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchResult {
-  if (!isRecord(query) || (query.text === undefined && query.embedding === undefined)) {
-    throw new PublicError("research query must be an object with text or embedding")
-  }
-  const k = parseK(query.k)
-  const text = query.text === undefined ? null : parseText(query.text)
+/** The ranking (R6): the corpus lock, both legs, R4a, the tie-breaks, the top k with their Module 33 treatment. */
+export function rankResearchCorpus(corpus: ResearchCorpus, query: PreparedResearchQuery, unitQuery: readonly number[] | null): ResearchResult {
+  const { k, text } = query
   const terms = text?.terms ?? null
-  const unitQuery = query.embedding === undefined ? null : parseEmbedding(store, query.embedding)
 
   // The corpus integrity lock (G1-10): a corpus caught mid-migration serves neither leg.
-  if (Number(store.corpusMetadata.embedding_dim) !== EMBEDDING_DIM) throw new PublicError("search refuses: embedding_dim mismatch")
-  const problem = storedVectorsProblem(store, store.corpusMetadata.embedding_model)
+  if (Number(corpus.embeddingDim) !== EMBEDDING_DIM) throw new PublicError("search refuses: embedding_dim mismatch")
+  const problem = storedVectorsProblem(corpus.storedVectors, corpus.embeddingModel)
   if (problem) throw new PublicError(`search refuses: ${problem}`)
 
   const mode: ResearchResult["mode"] = terms && unitQuery ? "blended" : terms ? "keyword" : "semantic"
-  const judgments = [...store.judgments.values()]
-  const docTerms = judgments.map(termsOfJudgment)
+  const documents = corpus.documents
+  const docTerms = documents.map(termsOfDocument)
 
   // BM25 idf over the candidate judgments: always positive, so a term absent from the corpus still counts.
   const idf = (terms ?? []).map((term) => {
     const df = docTerms.reduce((n, set) => n + (set.has(term) ? 1 : 0), 0)
-    return Math.log(1 + (judgments.length - df + 0.5) / (df + 0.5))
+    return Math.log(1 + (documents.length - df + 0.5) / (df + 0.5))
   })
 
   // Only a judgment is a hit (R1); the first live-model row of each entity is its vector.
-  const vectors = new Map<string, readonly number[]>()
-  if (unitQuery) for (const row of store.embeddings) if (!vectors.has(row.entityId)) vectors.set(row.entityId, row.vector)
+  if (unitQuery && corpus.vectors === null) throw new Error("research: the corpus was loaded without its vectors")
+  const vectors = unitQuery ? corpus.vectors : null
 
-  const scored: { judgment: Judgment; size: number; score: number; exact: boolean }[] = []
-  judgments.forEach((judgment, i) => {
+  const scored: { doc: ResearchDocument; size: number; score: number; cited: string | null }[] = []
+  documents.forEach((doc, i) => {
     let keyword = 0
     if (terms) {
       let total = 0
@@ -231,42 +292,115 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
       keyword = matched / total
     }
     let semantic = 0
-    const stored = unitQuery ? vectors.get(judgment.id) : undefined
+    const stored = unitQuery ? vectors?.get(doc.id) : undefined
     if (unitQuery && stored) semantic = Math.max(0, cosine(unitQuery, stored))
-    // R4a: the authority the query cites.
-    const exact = text !== null && text.citations.some((cited) => citesExactly(judgment, cited))
+    // R4a: the authority the query cites, by any of its citations.
+    let cited: string | null = null
+    if (text !== null) {
+      for (const c of text.citations) {
+        cited = citedCitation(doc, c)
+        if (cited !== null) break
+      }
+    }
+    const exact = cited !== null
     const raw = exact ? 1 : mode === "blended" ? SEMANTIC_WEIGHT * semantic + KEYWORD_WEIGHT * keyword : mode === "keyword" ? keyword : semantic
     // Rounded before the hit test, so a relevance too small to show at 6 decimals is not a hit that reads as 0.
     const score = Math.round(raw * 1e6) / 1e6
-    if (score > 0) scored.push({ judgment, size: docTerms[i].size, score, exact })
+    if (score > 0) scored.push({ doc, size: docTerms[i].size, score, cited })
   })
 
   // Score, then the cited authority (R4a), then the more specific one (fewer distinct terms), then the id.
   scored.sort(
     (a, b) =>
       b.score - a.score ||
-      Number(b.exact) - Number(a.exact) ||
+      Number(b.cited !== null) - Number(a.cited !== null) ||
       a.size - b.size ||
-      (a.judgment.id < b.judgment.id ? -1 : a.judgment.id > b.judgment.id ? 1 : 0)
+      (a.doc.id < b.doc.id ? -1 : a.doc.id > b.doc.id ? 1 : 0)
   )
   const top = scored.slice(0, k)
 
-  const verdicts = new Map<string, CitationVerdict>()
-  for (const finding of verifyCitations(store, top.map((h) => h.judgment.id)).findings) {
-    if (finding.judgmentId) verdicts.set(finding.judgmentId, finding.status)
-  }
+  const verdicts = corpus.verdicts(top.map((h) => h.doc.id))
   return {
     k,
     mode,
-    items: top.map(({ judgment, score }) => ({
-      entityId: judgment.id,
-      title: judgment.title,
-      citation: judgment.citation ?? null,
-      benchType: judgment.benchType,
+    items: top.map(({ doc, score, cited }) => ({
+      entityId: doc.id,
+      title: doc.title,
+      citation: cited ?? doc.citations[0] ?? null,
+      benchType: doc.benchType,
       score,
-      treatment: verdicts.get(judgment.id) ?? "UNVERIFIED",
+      treatment: verdicts.get(doc.id) ?? "UNVERIFIED",
     })),
   }
+}
+
+const storeDocuments = new WeakMap<Judgment, ResearchDocument>()
+
+/** A judgment of the in-app read model as research ranks it (the same object while the judgment is unchanged). */
+function documentOf(judgment: Judgment): ResearchDocument {
+  const cached = storeDocuments.get(judgment)
+  const citations = judgment.citation ? [judgment.citation] : []
+  if (
+    cached &&
+    cached.id === judgment.id &&
+    cached.title === judgment.title &&
+    cached.benchType === judgment.benchType &&
+    cached.citations.join("\u0001") === citations.join("\u0001")
+  ) {
+    return cached
+  }
+  const doc: ResearchDocument = { id: judgment.id, title: judgment.title, citations, benchType: judgment.benchType }
+  storeDocuments.set(judgment, doc)
+  return doc
+}
+
+/** The in-app read model as a research corpus: its judgments, stored vectors and the Next citation gate's verdicts. */
+export function storeResearchCorpus(store: SpineStore, withVectors: boolean): ResearchCorpus {
+  let vectors: Map<string, readonly number[]> | null = null
+  if (withVectors) {
+    vectors = new Map()
+    for (const row of store.embeddings) if (!vectors.has(row.entityId)) vectors.set(row.entityId, row.vector)
+  }
+  return {
+    embeddingModel: store.corpusMetadata.embedding_model,
+    embeddingDim: store.corpusMetadata.embedding_dim,
+    documents: [...store.judgments.values()].map(documentOf),
+    storedVectors: storeVectorShapes(store),
+    vectors,
+    verdicts(ids) {
+      const out = new Map<string, CitationVerdict>()
+      for (const finding of verifyCitations(store, ids).findings) {
+        if (finding.judgmentId) out.set(finding.judgmentId, finding.status)
+      }
+      return out
+    },
+  }
+}
+
+/** Search over the in-app read model (synchronous; the tests and the in-memory source use it). */
+export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchResult {
+  const prepared = prepareResearchQuery(query)
+  const unitQuery = prepared.embedding === undefined ? null : parseResearchEmbedding(store.corpusMetadata.embedding_model, prepared.embedding)
+  return rankResearchCorpus(storeResearchCorpus(store, unitQuery !== null), prepared, unitQuery)
+}
+
+/**
+ * Search over any research source (R6): the query is refused before the corpus is read when it can be; a query vector
+ * is checked against the live model of the snapshot the source loads, which loads vectors only for it.
+ */
+export async function searchResearch(source: ResearchSource, query: unknown): Promise<ResearchResult> {
+  const prepared = prepareResearchQuery(query)
+  const vector: { unit: number[] | null; model: string | null } = { unit: null, model: null }
+  const corpus = await source.load((meta) => {
+    if (prepared.embedding !== undefined) {
+      vector.unit = parseResearchEmbedding(meta.embeddingModel, prepared.embedding)
+      vector.model = meta.embeddingModel
+    }
+    return { vectors: vector.unit !== null }
+  })
+  // The vector was checked against the snapshot it is ranked over.
+  if (vector.unit !== null && vector.model !== corpus.embeddingModel) throw new PublicError("search refuses: embedding_model mismatch")
+  return rankResearchCorpus(corpus, prepared, vector.unit)
 }
 
 /**
@@ -274,7 +408,7 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
  * to a well-formed id that differs from the live one, and never away from the stored vectors: while any stored
  * vector is not a EMBEDDING_DIM row under `nextModel` the switch is refused (re-embed first), so an in-app switch
  * can never leave search refusing. No route calls this yet; the operator route that does must make a partner-only
- * P5 check (spec R13).
+ * P5 check (spec R13). It acts on the in-app read model only: Annex A's live model is changed by the corpus side.
  */
 export function changeEmbeddingModel(
   store: SpineStore,
@@ -285,7 +419,7 @@ export function changeEmbeddingModel(
   if (typeof nextModel !== "string" || !MODEL_ID.test(nextModel)) throw new PublicError("embedding model change refuses: invalid model id")
   const previous = store.corpusMetadata.embedding_model
   if (nextModel === previous) throw new PublicError("embedding model change refuses: model unchanged")
-  if (storedVectorsProblem(store, nextModel)) {
+  if (storedVectorsProblem(storeVectorShapes(store), nextModel)) {
     throw new PublicError("embedding model change refuses: stored vectors are not under the new model; re-embed first")
   }
   store.corpusMetadata.embedding_model = nextModel

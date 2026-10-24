@@ -228,6 +228,25 @@ authority views as a login that is a member of `corpus_authority_reader` and, fo
 plain SQL as `functions/src/d4/README.md` describes ("Creating the reader login"); the gate refuses a
 login that belongs to any other role.
 
+**The research reader login (audit FA-D5-003).** WhatsApp `/research` (the Next court-ops core) reads
+the published corpus through 005's `v_research_judgment` and `v_research_embedding`, 004's
+`v_authority_citation`, `v_authority_treatment` and `v_authority_pending_adverse`, and `corpus_metadata`,
+as a login that is a member of `corpus_research_reader` and, for CONNECT, `corpus_clients`, and of
+nothing else (`platform/corpus/pgResearchCorpus.ts` refuses any other login as `wrong_role`). It is not
+the gate's login: the two run in different runtimes with different secrets. The compose stack does not
+create it. After `15-apply-annex-a.sh` (which applies 005) and `20-provision-roles.sh`, as a superuser:
+
+```sql
+CREATE ROLE <login> LOGIN PASSWORD '<generated secret>';
+GRANT corpus_research_reader, corpus_clients TO <login>;
+```
+
+Where `corpus_clients` does not exist, grant `CONNECT ON DATABASE` instead of it. Its DSN
+(`sslmode=verify-full`) is the Vercel secret `SIKANDER_CORPUS_RESEARCH_READER_URL`, with
+`SIKANDER_CORPUS_RESEARCH_READER_CA` and `SIKANDER_CORPUS_MAX_STALENESS_HOURS`
+(`infra/deploy-manifest.json` `next.corpusResearch`). 005 also takes `v_source_provenance` and
+`corpus_embeddings` back from 001's `corpus_reader` (FA-DATA-003); it keeps the nine promoted-only views.
+
 **Tests.** `tests/test_f19_publication_db.py` (and the migrated `test_f20_trust_policy_db.py`) apply
 Annex A to each per-test database and publish as generated `corpus_writer` members; the pure tests
 are `test_publication_vocabulary.py`, `test_publication_citations.py` (checked against the golden
@@ -572,8 +591,8 @@ default, and all four differ.
   commands, cannot flush scripts/functions, and cannot switch databases.
 - **Annex A corpus contract (audit F19).** On a fresh volume the image's init runs `10-init.sql`
   (extensions), then `15-apply-annex-a.sh`, which applies `../postgres/ddl/001_corpus_contract.sql`,
-  `003_corpus_publication.sql` and `004_authority_read_views.sql` (mounted read-only) in one
-  transaction as the bootstrap superuser, then `20-provision-roles.sh`, which refuses to run without Annex A or on PostgreSQL
+  `003_corpus_publication.sql`, `004_authority_read_views.sql` and `005_research_reader.sql` (mounted read-only) in one
+  transaction as the bootstrap superuser, then `20-provision-roles.sh`, which refuses to run without Annex A (005 included) or on PostgreSQL
   older than 16, and refuses (before changing anything) an Annex A view the inventory does not list:
   re-applying 003 alone after 004 would otherwise hand 004's views to the migration role. Annex A stays the superuser's: provisioning leaves every relation that
   `corpus_contract_relations()` lists out of the move to the migration role and out of the runtime

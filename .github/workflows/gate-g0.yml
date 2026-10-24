@@ -560,6 +560,15 @@ jobs:
           SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
           SIKANDER_CORPUS_PYTHON: python
         run: npm run test:f05-authority
+      # Audit FA-D5-003 (closes FA-D2WA-001) and FA-DATA-003: WhatsApp /research through POST /api/d2/court-ops on
+      # production persistence (Auth and Firestore emulators, F02 dispatch) against this Postgres, seeded through the
+      # same publication CLI; and the research reader's grants, views, allowlist, row caps and timeout. The suites run
+      # only with FA_D5_003_SUITE=1, which `npm run test:fa-d5-003` sets; then a missing SIKANDER_POSTGRES_URL fails.
+      - name: FA-D5-003 research corpus e2e and Postgres suites (emulators + real Postgres)
+        env:
+          SIKANDER_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          SIKANDER_CORPUS_PYTHON: python
+        run: npm run test:fa-d5-003
 
   corpus-service:
     name: corpus_service pytest
@@ -570,7 +579,7 @@ jobs:
     # The F20 trust-vocabulary tests run against this real Postgres (each test creates and drops
     # its own database); under CI, tests/conftest.py stops the run if CORPUS_TEST_DATABASE_URL is
     # missing, so they cannot pass by being skipped. The F19 publication tests apply the Annex A
-    # contract (postgres/ddl 001 + 003 + 004, in that order) to each per-test database; the step below applies it once
+    # contract (postgres/ddl 001 + 003 + 004 + 005, in that order) to each per-test database; the step below applies it once
     # (twice) to the service database first, which creates the cluster-global corpus roles once
     # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest
@@ -602,11 +611,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: python -m pip install -r corpus_service/requirements-test.txt
-      - name: Annex A DDL (001, 003, 004) applies as the superuser, twice (idempotent)
+      - name: Annex A DDL (001, 003, 004, 005) applies as the superuser, twice (idempotent)
         run: |
           set -euo pipefail
           for pass in 1 2; do
-            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql; do
+            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql postgres/ddl/005_research_reader.sql; do
               docker exec -i "${{ job.services.postgres.id }}" \
                 psql -v ON_ERROR_STOP=1 --no-psqlrc -q -U postgres -d corpus_ci < "$f"
             done

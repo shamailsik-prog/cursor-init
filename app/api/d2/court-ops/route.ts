@@ -20,6 +20,11 @@ import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberS
 import { buildCourtOpsActivityRow, buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import { WHATSAPP_GRAMMAR_HELP, handleWhatsApp, whatsAppCommandName } from "@/services/d2-1/whatsapp"
 import {
+  CORPUS_UNAVAILABLE_CODE,
+  CORPUS_UNAVAILABLE_MESSAGE,
+  CorpusUnavailableError,
+} from "@/services/d5-1/corpusUnavailable"
+import {
   acknowledgeCourtOpsItem,
   listCourtOpsQueue,
   resolveFollowUp,
@@ -227,7 +232,7 @@ async function handlePost(request: Request) {
         claim.complete(payload)
         return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })
       }
-      const result = handleWhatsApp(store, parsed.actorId, text)
+      const result = await handleWhatsApp(store, parsed.actorId, text)
       if (!result.ok) {
         return NextResponse.json({ error: "permission denied", result }, { status: 403 })
       }
@@ -341,6 +346,11 @@ async function handlePost(request: Request) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    // FA-D5-003 (spec R10): research could not read its corpus. A 503, never an empty list; the reason stays in the log.
+    // The idempotency claim is not completed, so the same key may retry once the corpus is back.
+    if (err instanceof CorpusUnavailableError) {
+      return NextResponse.json({ error: CORPUS_UNAVAILABLE_MESSAGE, code: CORPUS_UNAVAILABLE_CODE }, { status: 503 })
+    }
     const message = publicErrorMessage(err, "court ops write failed")
     return NextResponse.json({ error: message, code: REQUEST_FAILED_CODE }, { status: 400 })
   }

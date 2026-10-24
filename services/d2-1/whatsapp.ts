@@ -1,7 +1,8 @@
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { listMattersForUser } from "@/services/d1-2/matters"
 import type { CitationVerdict } from "@/services/d4-2/citationVerdict"
-import { searchCorpus } from "@/services/d5-1/research"
+import { searchResearch, type ResearchSource } from "@/services/d5-1/research"
+import { activeResearchSource } from "@/services/d5-1/researchCorpus"
 import type { SpineStore } from "@/platform/spine/store"
 
 /**
@@ -53,11 +54,18 @@ export type WhatsAppResult = {
   research?: WhatsAppResearchItem[]
 }
 
-export function handleWhatsApp(
+/**
+ * Runs one command. `/research` reads its corpus through `researchSource` (audit FA-D5-003, spec R14): by default the source
+ * the environment selects (the published Annex A corpus in production; the in-app read model only when explicitly
+ * selected outside a hosted runtime). A corpus it cannot read throws CorpusUnavailableError, which the court-ops route
+ * answers as 503 `corpus_unavailable`, never as an empty list.
+ */
+export async function handleWhatsApp(
   store: SpineStore,
   userId: string,
-  command: string
-): WhatsAppResult {
+  command: string,
+  researchSource?: ResearchSource
+): Promise<WhatsAppResult> {
   const name = whatsAppCommandName(command)
   if (name === "matters") {
     const perm = checkPermission(store, userId, "list_matters")
@@ -72,10 +80,11 @@ export function handleWhatsApp(
     // P5 first (R-1, L19.10), before the query or the corpus is read: a denied caller learns nothing, whatever it sent.
     const perm = checkPermission(store, userId, "research")
     if (!perm.allow) return { ok: false, denied: true }
-    // D5-1 search (audit FA-D2WA-001): the query decides the reply. A refused query or corpus throws a PublicError,
-    // which the court-ops route answers with a 400 carrying the fixed message.
+    // D5-1 search (audit FA-D2WA-001, FA-D5-003): the query and the published corpus decide the reply. A refused query
+    // or corpus throws a PublicError, which the court-ops route answers with a 400 carrying the fixed message; a corpus
+    // that cannot be read throws CorpusUnavailableError (503).
     const query = whatsAppCommandArgument(command)
-    const found = searchCorpus(store, { text: query })
+    const found = await searchResearch(researchSource ?? activeResearchSource(store), { text: query })
     const research = found.items.map((hit, i) => ({
       n: i + 1,
       entityId: hit.entityId,

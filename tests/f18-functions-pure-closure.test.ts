@@ -132,6 +132,9 @@ describe("audit F18: FUNCTIONS_PURE_MODULES import closure (FA-F18-014)", () => 
         "functions/src/http/f02RouterBoundary",
         "functions/src/p1/costTable",
         "functions/src/p1/types",
+        // Audit FA-D5-003: the F05 reader's URL/TLS policy and pending-overruling fact, reused by the Next research reader.
+        "functions/src/d4/corpusReaderConfig",
+        "functions/src/d4/authorityPending",
       ].sort()
     )
   })

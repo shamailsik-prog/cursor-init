@@ -117,6 +117,10 @@ function buildBaseTree(): string {
     "scripts/deploy-preflight.sh",
     "app/api/p1/committee-brain/route.ts",
     "app/api/d1/documents/route.ts",
+    // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
+    "corpus_service/docker/postgres/provision-roles.sh",
+    "services/d5-1/researchCorpus.ts",
+    "platform/corpus/pgResearchCorpus.ts",
   ]) {
     copyFromRepo(dir, rel);
   }

@@ -191,10 +191,10 @@ async def db_migrate():
 
 
 # ---- audit F19, PR 2b: the Annex A corpus contract in the compose stack ---------------------------
-# corpus_contract_relations() as 004 defines it (003's 29 relations and the four authority read views of
-# audit F05). Neither application role may execute that function (EXECUTE is revoked from PUBLIC), so the
-# probe carries the list; store_security_e2e.sh checks the same properties against the function itself, as
-# the superuser, and the v_authority_* views by name as well.
+# corpus_contract_relations() as 005 defines it (003's 29 relations, the four authority read views of audit
+# F05 and the two research views of audit FA-D5-003). Neither application role may execute that function
+# (EXECUTE is revoked from PUBLIC), so the probe carries the list; store_security_e2e.sh checks the same
+# properties against the function itself, as the superuser, and the v_authority_* views by name as well.
 ANNEX_A_RELATIONS = (
     "classification_rank", "source_provenance", "court", "judge", "instrument", "statute", "statute_section",
     "statute_section_version", "judgment", "judgment_version", "citation", "treatment", "corpus_metadata",
@@ -203,13 +203,14 @@ ANNEX_A_RELATIONS = (
     "v_instrument", "v_court", "v_judge", "v_source_provenance",
     "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
     "v_authority_citation", "v_authority_treatment", "v_authority_section_version", "v_authority_pending_adverse",
+    "v_research_judgment", "v_research_embedding",
 )
 ANY_TABLE_PRIVILEGE = "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
 ANY_COLUMN_PRIVILEGE = "SELECT,INSERT,UPDATE,REFERENCES"
 PROBE_TITLE = "F19 E2E Probe v. Test 2099"  # synthetic: no real authority is written
-# 001's reader and the draft gate's reader (004's corpus_authority_reader, audit F05, #51 R1 D-3): neither
-# application role is a member of either.
-READER_ROLES = ("corpus_reader", "corpus_authority_reader")
+# 001's reader, the draft gate's reader (004's corpus_authority_reader, audit F05, #51 R1 D-3) and the research
+# reader (005's corpus_research_reader, audit FA-D5-003): neither application role is a member of any of them.
+READER_ROLES = ("corpus_reader", "corpus_authority_reader", "corpus_research_reader")
 
 
 def annex_a_page():

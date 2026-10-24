@@ -278,7 +278,7 @@ describe("G-1 spine hardening", () => {
     ).toThrow(/classification/)
   })
 
-  it("intern cannot /research; clerk below clearance cannot research a privileged matter", () => {
+  it("intern cannot /research; clerk below clearance cannot research a privileged matter", async () => {
     const store = newStore()
     seedUser(store, {
       id: "intern1",
@@ -300,7 +300,7 @@ describe("G-1 spine hardening", () => {
       classification: "privileged",
     })
     addMember(store, matter.id, "clerk1", "firmA")
-    expect(handleWhatsApp(store, "intern1", "/research PPC 302").denied).toBe(true)
+    expect((await handleWhatsApp(store, "intern1", "/research PPC 302")).denied).toBe(true)
     expect(checkPermission(store, "clerk1", "research", matter.id).allow).toBe(false)
     expect(checkPermission(store, "clerk1", "research", matter.id).reason).toBe("clearance")
   })
