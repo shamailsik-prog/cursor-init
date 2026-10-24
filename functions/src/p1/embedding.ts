@@ -201,7 +201,19 @@ export async function callP1Embedding(req: P1EmbeddingRequest, opts?: { now?: ()
         configRef,
         totalRef,
         seam: t,
-        fields: { actorId: "system", matterId: null, jobId: null, taskType: EMBEDDING_TASK, model, classification, traceId },
+        // The caller and the corpus operation ride on the reservation, so a row the lease reconciler writes for a call
+        // that died keeps them, as this call's own row does (Codex P2 on PR #118).
+        fields: {
+          actorId: "system",
+          matterId: null,
+          jobId: null,
+          taskType: EMBEDDING_TASK,
+          model,
+          classification,
+          traceId,
+          caller: req.caller,
+          corpusOperationId: req.operationId,
+        },
       })
       if (decision === "reserved") reservation = { ref: resRef, state: "released", mustBeLive: false }
       else blockReason = decision

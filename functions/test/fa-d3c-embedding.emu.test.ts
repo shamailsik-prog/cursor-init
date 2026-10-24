@@ -1,5 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto"
 import type { Response } from "express"
+import { FieldValue } from "firebase-admin/firestore"
 import type { Request } from "firebase-functions/v2/https"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
@@ -311,6 +312,59 @@ describe.skipIf(!EMULATORS)("FA-D3C-002: a lapsed embedding reservation is settl
     expect((await res.ref.get()).data()).toMatchObject({ state: "settled", actualMicroUsd: held, settledBy: "reconciler" })
     expect(await usageRow(res.id)).toMatchObject({ outcome: "reconciled", taskType: "embedding", outputTokens: 0, costMicroUsd: held, reconciledFrom: "worst_case" })
     expect(await month(firmId)).toMatchObject({ spentMicroUsd: held, reservedMicroUsd: 0 })
+  })
+
+  // Codex P2 on PR #118 (thread 4367413145): the reconciled row must still join the corpus's F27 receipt, so the verified
+  // caller and the corpus operation id travel on the reservation and the reconciler copies them into the row it writes.
+  it("a call that died after dispatch keeps its verified caller and corpus operation id on the reconciled row", async () => {
+    const firmId = await seedFirm()
+    fakeTransport()
+    p1EmbeddingTestSeam.crashAt = "dispatched"
+    await expect(callP1Embedding(request(firmId), at)).rejects.toThrow(/crashAt/)
+    const open = await db().collection("ai_reservations").where("firmId", "==", firmId).get()
+    const res = open.docs[0]!
+    expect(res.data()).toMatchObject({ state: "reserved", caller: CALLER, corpusOperationId: OP })
+
+    const done = await reconcileReservations({ now: () => T + RESERVATION_LEASE_MS + 1_000 })
+    expect(done.settled).toContain(res.id)
+    expect(await usageRow(res.id)).toMatchObject({ outcome: "reconciled", reconciledFrom: "worst_case", caller: CALLER, corpusOperationId: OP })
+  })
+
+  it("a call whose usage commit failed after the provider answered keeps its caller and operation id on the reconciled row", async () => {
+    const firmId = await seedFirm()
+    fakeTransport()
+    p1EmbeddingTestSeam.failCommit = true
+    const out = await callP1Embedding(request(firmId), at)
+    expect(out).toMatchObject({ outcome: "ok", accounting: "pending" })
+    expect((await db().collection("ai_usage_logs").doc(out.usageLogId).get()).exists).toBe(false)
+    delete p1EmbeddingTestSeam.failCommit
+
+    const done = await reconcileReservations({ now: () => T + RESERVATION_LEASE_MS + 1_000 })
+    expect(done.settled).toContain(out.usageLogId)
+    expect(await usageRow(out.usageLogId)).toMatchObject({
+      outcome: "reconciled",
+      reconciledFrom: "recorded",
+      costMicroUsd: out.costMicroUsd,
+      caller: CALLER,
+      corpusOperationId: OP,
+    })
+  })
+
+  it("a reservation without them (every committee and brain call) is reconciled as before: the row gains neither field", async () => {
+    const firmId = await seedFirm()
+    fakeTransport()
+    p1EmbeddingTestSeam.crashAt = "dispatched"
+    await expect(callP1Embedding(request(firmId), at)).rejects.toThrow(/crashAt/)
+    const res = (await db().collection("ai_reservations").where("firmId", "==", firmId).get()).docs[0]!
+    // As a chat call's reservation is written: no caller and no corpus operation.
+    await res.ref.update({ caller: FieldValue.delete(), corpusOperationId: FieldValue.delete() })
+
+    const done = await reconcileReservations({ now: () => T + RESERVATION_LEASE_MS + 1_000 })
+    expect(done.settled).toContain(res.id)
+    const row = await usageRow(res.id)
+    expect(row).toMatchObject({ outcome: "reconciled", actorId: "system" })
+    expect(row).not.toHaveProperty("caller")
+    expect(row).not.toHaveProperty("corpusOperationId")
   })
 })
 

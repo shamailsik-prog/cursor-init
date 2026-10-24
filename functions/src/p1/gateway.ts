@@ -830,6 +830,13 @@ export type ReserveArgs = {
     classification: Classification
     traceId: string
     idempotencyDoc?: string
+    /**
+     * FA-D3C-002 (Codex P2 on PR #118): an embedding call's verified service caller and the corpus's F27 operation id,
+     * kept on the reservation so a row the lease reconciler writes still joins the corpus's receipt. Absent on every
+     * chat call, whose reservation and reconciled row are unchanged.
+     */
+    caller?: string
+    corpusOperationId?: string
   }
 }
 

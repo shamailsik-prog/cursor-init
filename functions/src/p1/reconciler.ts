@@ -120,6 +120,9 @@ type Parsed = {
   attempt: Record<string, unknown> | null
   /** The `idempotency_keys` doc id of the request the call was made for, when it is a plain doc id. */
   idempotencyDoc: string | null
+  /** FA-D3C-002: an embedding call's verified service caller and corpus operation id; null on every chat call. */
+  caller: string | null
+  corpusOperationId: string | null
 }
 
 /** What a settlement needs from a reservation. The firm, the month and the hold are required; everything else is defaulted. */
@@ -144,6 +147,8 @@ function parseReservation(res: DocumentData): Parsed {
     // Any attempt, even an unreadable one, means the provider may have been called: it is settled, never released.
     attempt: attempt == null ? null : typeof attempt === "object" && !Array.isArray(attempt) ? (attempt as Record<string, unknown>) : {},
     idempotencyDoc: typeof res.idempotencyDoc === "string" && /^[A-Za-z0-9_-]{1,400}$/.test(res.idempotencyDoc) ? res.idempotencyDoc : null,
+    caller: nonEmpty(res.caller) ? res.caller : null,
+    corpusOperationId: nonEmpty(res.corpusOperationId) ? res.corpusOperationId : null,
   }
 }
 
@@ -238,6 +243,11 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       // The reconciler cannot know whether the call's trace was exported.
       trace: { id: p.traceId, status: "unknown" },
       reconciledFrom: recorded ? "recorded" : "worst_case",
+      // FA-D3C-002 (Codex P2 on PR #118): an embedding call's caller and corpus operation, as its own row would carry them,
+      // so the row still joins the corpus's F27 receipt. Added only when the reservation holds them: a chat call's row
+      // is unchanged.
+      ...(p.caller === null ? {} : { caller: p.caller }),
+      ...(p.corpusOperationId === null ? {} : { corpusOperationId: p.corpusOperationId }),
     }
     const state = recorded ? settledState(true, recorded.result, recorded.costMicroUsd) : "settled"
     const staged = await stage(db, tx, {
