@@ -125,6 +125,10 @@ function buildBaseTree(): string {
     "corpus_service/scraper/models.py",
     // Check [20] (audit F42): the runbook of the retention.deletion_unacknowledged alert.
     "docs/runbooks/retention-deletion.md",
+    // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
+    "corpus_service/docker/postgres/provision-roles.sh",
+    "services/d5-1/researchCorpus.ts",
+    "platform/corpus/pgResearchCorpus.ts",
   ]) {
     copyFromRepo(dir, rel);
   }

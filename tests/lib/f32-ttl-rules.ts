@@ -86,16 +86,28 @@ export function pathIsAllPlainVariableSegments(path: string): boolean {
   return segments.length > 0 && segments.every((seg) => isPlainVariableSegment(seg))
 }
 
+function segmentHasRecursiveWildcard(segment: string): boolean {
+  return segment.includes("=**")
+}
+
+function isCollectionNameSegmentIndex(index: number): boolean {
+  return index % 2 === 0
+}
+
 /** True when a rules path could apply to documents in this collection group. */
 export function matchPathAppliesToCollectionGroup(path: string, collectionGroup: string): boolean {
   if (path.includes("{document=**}")) return true
   if (pathIsAllPlainVariableSegments(path)) return true
   const segments = path.split("/").filter(Boolean)
-  for (const seg of segments) {
+  if (segments.some((seg) => segmentHasRecursiveWildcard(seg))) return true
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
     if (seg === collectionGroup) return true
     if (seg === `{${collectionGroup}}`) return true
     const recur = seg.match(/^\{([^=]+)=\*\*\}$/)
     if (recur && recur[1] === collectionGroup) return true
+    if (isCollectionNameSegmentIndex(i) && isPlainVariableSegment(seg)) return true
+    if (isCollectionNameSegmentIndex(i) && recur) return true
   }
   if (path.includes(`{path=**}/${collectionGroup}/`)) return true
   const wildcard = `{${collectionGroup}=**}`
@@ -136,10 +148,20 @@ export function extractAllowStatements(body: string): AllowStatement[] {
   return out
 }
 
+function normalizeBooleanLiteral(condition: string): string {
+  let n = normalizeRuleBody(condition)
+  for (;;) {
+    const wrapped = n.match(/^\(\s*(.+)\s*\)$/)
+    if (!wrapped) break
+    const inner = wrapped[1].trim()
+    if (inner === n) break
+    n = inner.replace(/\s+/g, " ").trim()
+  }
+  return n
+}
+
 function isUnconditionallyFalse(condition: string): boolean {
-  const n = normalizeRuleBody(condition)
-  if (n === "false") return true
-  return /^\(\s*false\s*\)$/.test(n)
+  return normalizeBooleanLiteral(condition) === "false"
 }
 
 /** Every allow in the block must be `if false` only (structural; equivalent spacing/order/split allows OK). */
