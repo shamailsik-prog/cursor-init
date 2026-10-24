@@ -22,7 +22,8 @@ export const holdsRef = () => adminDb().collection(LEGAL_HOLDS_COLLECTION)
 export const PREPARE_JOB_TYPE = "retention.matter.prepare"
 export const PURGE_JOB_TYPE = "retention.store.purge"
 
-export type RequestStatus = "pending_approval" | "refused" | "in_progress" | "completed"
+/** `expired`: pending past the approval window, ended by the next call that finds it (a final status, like `refused`). */
+export type RequestStatus = "pending_approval" | "refused" | "expired" | "in_progress" | "completed"
 
 /** What a store's acknowledgement says happened to the matter's copies in it (spec R8). */
 export type AckOutcome = "purged" | "anonymised" | "retained" | "not_applicable" | "expiry" | "lock_pending" | "external_requested"

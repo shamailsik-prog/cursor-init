@@ -254,8 +254,8 @@
     "id": "Z4-window-inverted",
     "area": "authorisation",
     "file": "functions/src/retention/ops.ts",
-    "old": "if (nowMs - requestedAt > policy.deletion.approvalWindowHours * HOUR_MS)",
-    "new": "if (nowMs - requestedAt < policy.deletion.approvalWindowHours * HOUR_MS)",
+    "old": "return nowMs - requestedAt > policy.deletion.approvalWindowHours * HOUR_MS",
+    "new": "return nowMs - requestedAt < policy.deletion.approvalWindowHours * HOUR_MS",
     "tests": [
       "test/f42-retention-deletion.e2e.emu.test.ts"
     ],
@@ -343,5 +343,120 @@
     ],
     "runner": "python",
     "why": "a Postgres view is a relation of the store and must be inventoried (FA-D5-003's research views)"
+  },
+  {
+    "id": "C1-continuation-skips-finished-stores",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (finished.length > 0) await acknowledge(",
+    "new": "if (false) await acknowledge(",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "chunk budget after finishing a store"
+    ],
+    "why": "Codex P2 (saga.ts runPurge): a job that passes its budget must acknowledge the stores it finished"
+  },
+  {
+    "id": "C2-vault-not-carried",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "const rest = stores.filter((s, j) => j >= i || !purged(s.key)).map((s) => s.key)",
+    "new": "const rest = stores.filter((s, j) => j >= i && purged(s.key)).map((s) => s.key)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "chunk budget after finishing a store"
+    ],
+    "why": "the continuation must carry the vault lock, or the vault is never acknowledged"
+  },
+  {
+    "id": "C3-budget-ignores-recorded-steps",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "let chunks = await recordedSteps(jobId)",
+    "new": "let chunks = 0",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "retried after a crash late in its chunk budget"
+    ],
+    "why": "a retried purge job must count the steps earlier attempts recorded, or it passes P2's 50-step limit"
+  },
+  {
+    "id": "C4-continuation-part-saturates",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "return m ? `${m[1]}${Number(m[2]) + 1}` : `${part}c1`",
+    "new": "return `${part}c`.slice(0, 20)",
+    "tests": [
+      "test/f42-retention.units.test.ts"
+    ],
+    "why": "every continuation needs a new part, or its enqueue dedupes to an old job and the purge stops"
+  },
+  {
+    "id": "E1-trace-ids-cut-at-two-parts",
+    "area": "external",
+    "file": "functions/src/retention/saga.ts",
+    "old": "parts.forEach((traceIds, n) =>",
+    "new": "parts.slice(0, 2).forEach((traceIds, n) =>",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "more than 10,000 exported traces"
+    ],
+    "why": "Codex P2 (saga.ts external): every exported trace id is recorded, never only the first 10,000"
+  },
+  {
+    "id": "E2-part-size-unbounded",
+    "area": "external",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (part.length === TRACE_IDS_PER_PART || bytes + size > TRACE_PART_BYTES) {",
+    "new": "if (bytes + size > TRACE_PART_BYTES) {",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "more than 10,000 exported traces"
+    ],
+    "why": "each part of the processor request stays within its id bound"
+  },
+  {
+    "id": "X1-guard-counts-lapsed-request",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "if (expired.length < open.size) throw new HttpError(409, \"deletion_request_open\")",
+    "new": "if (open.size > 0) throw new HttpError(409, \"deletion_request_open\")",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "Codex P2 (ops.ts): a request past its approval window must not block a new request"
+  },
+  {
+    "id": "X2-approval-leaves-lapsed-pending",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "tx.update(reqRef, expiryOf(at, caller.uid, null))",
+    "new": "void expiryOf(at, caller.uid, null)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "an approval past the window ends the request (expired), not leaves it pending"
+  },
+  {
+    "id": "X3-expiry-unaudited",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "        stageAudit({\n          firmId: caller.firmId,\n          actorId: caller.uid,\n          action: \"retention.request_expired\",",
+    "new": "        void ({\n          firmId: caller.firmId,\n          actorId: caller.uid,\n          action: \"retention.request_expired\",",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "the expiry of a lapsed request has its own audit row"
   }
 ]

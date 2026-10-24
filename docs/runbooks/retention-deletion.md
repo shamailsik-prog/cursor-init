@@ -19,7 +19,10 @@ source of any period: every proposed value in the policy file is inert and its l
    `POST /api/platform/retention/requestMatterDeletion { matterId, reasonCode }` (`reasonCode`: a short code such as
    `client_instruction`, never free text). The answer is `pending_approval`, or `refused` with the hold that refused it.
 2. A **different** partner calls `POST /api/platform/retention/approveMatterDeletion { requestId }` within the approval
-   window (PROPOSED 72 h). One transaction writes the tombstone `matter_tombstones/{matterId}`, deletes every
+   window (PROPOSED 72 h). Past the window the request ends instead: the answer is `expired` (`approval_expired`),
+   and a partner opens a new request (a new request also ends a lapsed one it finds, recorded as
+   `retention.request_expired` in the audit log). There is no cancel: an unwanted request lapses unless a second
+   partner approves it. One transaction writes the tombstone `matter_tombstones/{matterId}`, deletes every
    membership of the matter, fixes the plan on the request and enqueues the saga. From that commit on, both API
    stacks refuse the matter (`403 matter_deleted`) and omit it from every list, and no P2 job of the matter runs
    (engine code `matter_deleted`).
@@ -31,9 +34,12 @@ Acknowledgement outcomes: `purged`, `anonymised` (the matter row keeps its id an
 P1 spend rows keep their cost), `retained` (conflict register, audit trail), `not_applicable` (no matter key),
 `expiry` (TTL stores and F33 backups: `detail.windowEndsAt`), `lock_pending` (vault objects: a
 `vault_object_tombstones` row each, deletion after the COMPLIANCE lock by a lifecycle rule that is **NOT DEMONSTRATED**),
-`external_requested` (Opik: `deletion_external_requests/{requestId}_opik` lists the trace ids for the operator: every
-usage row whose call exported its trace, and every F34 decision record whose export is `exported` or still `pending`,
-read before the purge jobs anonymise those rows; the Opik deletion call is **NOT DEMONSTRATED**).
+`external_requested` (Opik: `deletion_external_requests/{requestId}_opik` is the summary for the operator: `count`,
+`parts`, the SHA-256 of every id; the ids are in `{requestId}_opik_p0` … `_p{parts-1}`, at most 5,000 each. They are
+every usage row whose call exported its trace, and every F34 decision record whose export is `exported` or still
+`pending`, all recorded before the purge jobs anonymise those rows. More than 120,000 ids fails the prepare job with
+`external_ids_over_limit` before anything is anonymised: the alert below fires, and the request needs an engineer.
+The Opik deletion call is **NOT DEMONSTRATED**).
 
 ## Legal holds
 
@@ -61,7 +67,8 @@ To act on it:
 3. Otherwise list the firm's jobs (`GET /api/platform/jobs/listJobs`) for `retention.store.purge` rows that are
    `dead_lettered` or stuck `queued`; fix the cause (`lastError.code`: `purge_incomplete` means rows kept arriving for
    the matter, `store_unavailable` a Firestore outage) and retry them. Every step is fenced, so a retry resumes and
-   never repeats an effect.
+   never repeats an effect. A large store spreads over continuation jobs (`part` `g0`, `g0c1`, `g0c2`, …); each
+   acknowledges the stores it finished before handing over.
 
 Once every store has acknowledged (or the hold is released and the saga finishes), resolve the alert.
 

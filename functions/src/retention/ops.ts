@@ -6,6 +6,7 @@ import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
+import { stageAudit } from "../p5/audit"
 import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../p5/common"
 import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
@@ -17,10 +18,13 @@ import { PREPARE_JOB_TYPE, REASON_CODE, acksRef, holdsRef, requestsRef, type Hol
  *
  * - requestMatterDeletion({ matterId, reasonCode }): a partner whose clearance reaches the matter's label opens a request.
  *   A legal hold (the matter's own, then the policy's) refuses it: the refusal is recorded on a `refused` request and in
- *   the audit log, and the answer is 200 with `status: "refused"`.
+ *   the audit log, and the answer is 200 with `status: "refused"`. One open request per matter: an in-progress one, or
+ *   a pending one within its approval window, refuses a new one (409 `deletion_request_open`); a pending one past its
+ *   window is expired in the same transaction (with its own audit row) and no longer blocks.
  * - approveMatterDeletion({ requestId }): a second partner (not the requester), within the approval window, approves.
  *   One transaction re-checks the holds, writes the tombstone, deletes every membership of the matter, fixes the plan on
- *   the request (`expected`, `plan`, `ackDeadlineAt`) and enqueues the saga's prepare job.
+ *   the request (`expected`, `plan`, `ackDeadlineAt`) and enqueues the saga's prepare job. Past the window the request
+ *   is expired instead, recorded like a refusal: 200 with `status: "expired"`.
  * - getDeletionRequest(?requestId=): the request and its acknowledgements.
  * - placeLegalHold({ matterId, reasonCode }) / releaseLegalHold({ matterId }): any partner places a hold; a different
  *   partner releases it. A hold may be placed on a tombstoned matter, which halts its saga.
@@ -64,6 +68,22 @@ function loadPolicy(): { policy: RetentionPolicy; plan: PlannedStore[] } {
 
 const refusalOf = (code: HoldRefusal, at: Timestamp, by: string) => ({ code, at, by })
 
+/**
+ * Whether a request is pending past its approval window. Codex P2 (PR #128): such a request was once refused approval
+ * yet left pending, so the open-request guard refused every new request for the matter for good. It now ends as
+ * `expired`, a final status, the partner's call that finds it recording the expiry (`expiry`, refusal-shaped).
+ */
+function lapsed(req: DocumentData, nowMs: number, policy: RetentionPolicy): boolean {
+  if (req.status !== "pending_approval") return false
+  const requestedAt = req.requestedAt instanceof Timestamp ? req.requestedAt.toMillis() : 0
+  return nowMs - requestedAt > policy.deletion.approvalWindowHours * HOUR_MS
+}
+
+const expiryOf = (at: Timestamp, by: string, supersededBy: string | null) => ({ status: "expired", expiry: { code: "approval_expired", at, by, supersededBy }, updatedAt: at })
+
+/** Requests a matter may have open at once: one (this guard keeps it so); a few more are read to fail safe. */
+const OPEN_SCAN = 5
+
 /** Stages a refusal's audit row (a deny that commits a domain change: the refusal record). */
 async function stageRefusalAudit(tx: Transaction, audit: CallAudit, code: HoldRefusal): Promise<void> {
   await audit.stage(tx, "deny", code, { effect: true })
@@ -89,15 +109,30 @@ export const requestMatterDeletionOp: FirmOperation<RequestResult> = {
     const result = await db().runTransaction(async (tx) => {
       const [matterSnap, tombSnap, holdSnap] = await tx.getAll(matterRef(matterId), tombRef(matterId), holdsRef().doc(matterId))
       const open = await tx.get(
-        requestsRef().where("firmId", "==", caller.firmId).where("matterId", "==", matterId).where("status", "in", ["pending_approval", "in_progress"]).limit(1)
+        requestsRef().where("firmId", "==", caller.firmId).where("matterId", "==", matterId).where("status", "in", ["pending_approval", "in_progress"]).limit(OPEN_SCAN)
       )
       if (isTombstoneFor(tombSnap.data(), caller.firmId, matterId)) throw new HttpError(409, "matter_deleted")
       const matter = readMatterDocument(matterSnap.data())
       if (!matter || matter.firmId !== caller.firmId) throw new HttpError(404, "not_found")
       const classification = requireCleared(caller, matter.classification)
-      if (!open.empty) throw new HttpError(409, "deletion_request_open")
+      const expired = open.docs.filter((d) => lapsed(d.data(), nowMs, policy))
+      if (expired.length < open.size) throw new HttpError(409, "deletion_request_open")
       const refusal = holdRefusal(policy, plan, holdSnap.data(), caller.firmId)
       const ref = requestsRef().doc()
+      // Writes only from here. A lapsed request ends before the new one opens, each expiry with its own audit row.
+      for (const d of expired) {
+        const label: unknown = d.get("classification")
+        tx.update(d.ref, expiryOf(at, caller.uid, ref.id))
+        stageAudit({
+          firmId: caller.firmId,
+          actorId: caller.uid,
+          action: "retention.request_expired",
+          target: `deletion_requests/${d.id}`,
+          classification: isKnownClassification(label) ? label : "privileged-restricted",
+          decision: "deny",
+          reason: "approval_expired",
+        }, tx)
+      }
       tx.create(ref, {
         requestId: ref.id,
         firmId: caller.firmId,
@@ -156,8 +191,12 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const matter = readMatterDocument(matterSnap.data())
       requireCleared(caller, req.classification)
       if (matter) requireCleared(caller, matter.classification)
-      const requestedAt = req.requestedAt instanceof Timestamp ? req.requestedAt.toMillis() : 0
-      if (nowMs - requestedAt > policy.deletion.approvalWindowHours * HOUR_MS) throw new HttpError(409, "approval_expired")
+      if (lapsed(req, nowMs, policy)) {
+        // Recorded like a refusal: the request ends, so it no longer holds the matter's one open request.
+        tx.update(reqRef, expiryOf(at, caller.uid, null))
+        await audit.stage(tx, "deny", "approval_expired", { effect: true })
+        return { requestId, status: "expired", refusal: { code: "approval_expired" } }
+      }
       if (isTombstoneFor(tombSnap.data(), caller.firmId, matterId)) throw new HttpError(409, "matter_deleted")
       if (!matter || matter.firmId !== caller.firmId) throw new HttpError(409, "matter_missing")
       if (members.size > limit) throw new HttpError(409, "matter_members_over_limit")

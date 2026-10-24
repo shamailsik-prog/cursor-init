@@ -23,22 +23,25 @@ import {
  * purge of `jobs` never removes them and the worker's tombstone refusal never applies to them).
  *
  * `retention.matter.prepare` ({ requestId }): acknowledges the stores that need no purge (retained, not applicable,
- * expiry), records the trace processor's deletion request (the exported trace ids, before any usage row is
- * anonymised), then enqueues `retention.store.purge` jobs, at most `storesPerPurgeJob` stores each; the documents
- * stores and the vault share the first.
+ * expiry), records the trace processor's deletion request (every exported trace id, in bounded parts, before any usage
+ * row is anonymised), then enqueues `retention.store.purge` jobs, at most `storesPerPurgeJob` stores each; the
+ * documents stores and the vault share the first.
  *
  * `retention.store.purge` ({ requestId, storeKeys, part }): for each store, deletes or anonymises the matter's rows in
  * fenced chunks (writing a vault tombstone for each purged row that names an object), re-checking the legal hold in
  * each chunk's transaction; then, in one fenced step, re-queries every store (rows that landed since are purged first,
- * by failing retryably) and acknowledges them all. A job that would pass `CHUNK_STEP_BUDGET` chunks enqueues a
- * continuation for the stores it has not acknowledged.
+ * by failing retryably) and acknowledges them all. A job that would pass `CHUNK_STEP_BUDGET` chunks (counting the
+ * steps its earlier attempts recorded) acknowledges the stores it finished, then enqueues a continuation for the rest.
  *
  * The treatment of each store is the request's `plan`, fixed at approval, so a policy change mid-saga changes nothing.
  * Every effect is a `runFenced` step: a crash resumes after its last committed step and never repeats one.
  */
 
 const CHUNK = 200
-/** Chunk steps per job; the rest of the 50 fenced steps are the acknowledgement and a possible halt. */
+/**
+ * Steps a purge job may record before it hands the rest to a continuation, counting every attempt's (P2 keeps them
+ * all, 50 at most per job); the rest are the acknowledgements, the continuation and a possible halt.
+ */
 export const CHUNK_STEP_BUDGET = 45
 const MAX_STORES_PER_JOB = 20
 const DAY_MS = 86_400_000
@@ -49,6 +52,7 @@ const DEFAULT_GROUP_SIZE = 12
 const invalid = () => new JobError("invalid_payload", { permanent: true })
 const errorCodes = {
   deletion_request_invalid: "The deletion request is missing, of another firm or not in progress.",
+  external_ids_over_limit: "The processor's trace ids exceed one deletion request; nothing of the matter is anonymised.",
   legal_hold_active: "A legal hold is active on the matter; the deletion is halted.",
   purge_incomplete: "Rows of the matter remain in a store; the purge is retried.",
   store_unknown: "A store of the deletion plan is not in the inventory.",
@@ -166,8 +170,39 @@ async function exportedTraceIds(firmId: string, matterId: string, store: Invento
   return [...ids].sort()
 }
 
-/** At most this many trace ids in one external request (Firestore's 1 MiB document limit); the count is always whole. */
-const MAX_TRACE_IDS = 10_000
+/**
+ * A processor's deletion request is a summary document `{requestId}_{processor}` and parts `{requestId}_{processor}_p{n}`,
+ * each at most `TRACE_IDS_PER_PART` ids and `TRACE_PART_BYTES` bytes (far under Firestore's 1 MiB document), all
+ * written in the one step that acknowledges the store: at most `MAX_TRACE_PARTS` parts (about 6 MiB, within one
+ * commit's 10 MiB). One step, so a retry never re-splits ids an earlier attempt recorded. Codex P2 (PR #128): the
+ * request once kept the first 10,000 ids only, and the purge then nulled the rows that held the rest.
+ */
+const TRACE_IDS_PER_PART = 5_000
+const TRACE_PART_BYTES = 256 * 1024
+const MAX_TRACE_PARTS = 24
+
+const overLimit = () => new JobError("external_ids_over_limit", { permanent: true })
+
+/** The ids in order, in parts within both bounds; more than `MAX_TRACE_PARTS` parts is refused, never cut short. */
+function traceIdParts(ids: readonly string[]): string[][] {
+  const parts: string[][] = []
+  let part: string[] = []
+  let bytes = 0
+  for (const id of ids) {
+    const size = Buffer.byteLength(id, "utf8") + 1
+    if (size > TRACE_PART_BYTES) throw overLimit()
+    if (part.length === TRACE_IDS_PER_PART || bytes + size > TRACE_PART_BYTES) {
+      parts.push(part)
+      part = []
+      bytes = 0
+    }
+    part.push(id)
+    bytes += size
+  }
+  if (part.length > 0) parts.push(part)
+  if (parts.length > MAX_TRACE_PARTS) throw overLimit()
+  return parts
+}
 
 const DOCUMENT_FIRST = ["firestore:documents", "firestore:document_versions", "objects:documents"]
 
@@ -204,31 +239,25 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
     })
   }
 
+  // Every id is recorded here, before the enqueue step below creates the first purge job (the only anonymiser).
   for (const key of req.expected.filter((k) => req.plan[k] === "external")) {
     const store = plannedStore(key)
     const ids = await exportedTraceIds(firmId, req.matterId, store)
     await step(ctx as JobContext<unknown>, `external-${sha256([key]).slice(0, 16)}`, async (tx) => {
+      const parts = traceIdParts(ids)
       await stageAcks(tx, requestId, [{
         key,
         storeId: store.id,
         outcome: ids.length > 0 ? "external_requested" : "not_applicable",
         count: ids.length,
         idsSha256: ids.length > 0 ? sha256(ids) : null,
-        detail: { processor: store.name, reason: ids.length > 0 ? "pending_operator" : "nothing_exported" },
+        detail: { processor: store.name, reason: ids.length > 0 ? "pending_operator" : "nothing_exported", parts: parts.length },
       }], { jobId, nowMs: nowMs(ctx as JobContext<unknown>) })
-      if (ids.length > 0) {
-        tx.set(adminDb().collection(DELETION_EXTERNAL_REQUESTS_COLLECTION).doc(`${requestId}_${store.name}`), {
-          firmId,
-          requestId,
-          matterId: req.matterId,
-          processor: store.name,
-          traceIds: ids.slice(0, MAX_TRACE_IDS),
-          count: ids.length,
-          truncated: ids.length > MAX_TRACE_IDS,
-          status: "pending_operator",
-          at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)),
-        })
-      }
+      if (ids.length === 0) return
+      const col = adminDb().collection(DELETION_EXTERNAL_REQUESTS_COLLECTION)
+      const base = { firmId, requestId, matterId: req.matterId, processor: store.name, at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)) }
+      parts.forEach((traceIds, n) => tx.set(col.doc(`${requestId}_${store.name}_p${n}`), { ...base, part: n, of: parts.length, traceIds }))
+      tx.set(col.doc(`${requestId}_${store.name}`), { ...base, count: ids.length, parts: parts.length, idsSha256: sha256(ids), status: "pending_operator" })
     })
   }
 
@@ -361,7 +390,9 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
   const req = await loadRequest(firmId, requestId)
   if (!req) return {}
   const stores = storeKeys.map((key) => ({ key, store: plannedStore(key) }))
-  let chunks = 0
+  // Counted from the steps earlier attempts recorded: a retry after a crash hands over sooner, never passing P2's limit
+  // (the permanent `fenced_step_limit` would leave the request unfinished).
+  let chunks = await recordedSteps(jobId)
   try {
     for (let i = 0; i < stores.length; i += 1) {
       const { key, store } = stores[i]
@@ -370,7 +401,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
       for (let round = 0; ; round += 1) {
         const rows = await matterRows(store, req.plan[key], firmId, req.matterId, CHUNK)
         if (rows.length === 0) break
-        if (chunks >= CHUNK_STEP_BUDGET) return await continueWith(ctx, req, stores.slice(i).map((s) => s.key), part)
+        if (chunks >= CHUNK_STEP_BUDGET) return await continueWith(ctx, req, stores, i, jobId)
         const ids = rows.map((r) => r.id).sort()
         // A step id from the chunk's own ids; `round` keeps it new if the same ids come back (re-written since).
         const stepId = `chunk-${i}-${sha256(ids).slice(0, 24)}-${round}`
@@ -378,7 +409,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
         chunks += 1
       }
     }
-    await acknowledge(ctx, req, stores, jobId)
+    await acknowledge(ctx, req, stores, jobId, `ack-${part}`)
   } catch (err) {
     if (err instanceof JobError && err.code === "legal_hold_active") {
       await step(ctx as JobContext<unknown>, `halt-${ctx.job.attempt}`, async (tx) => {
@@ -390,16 +421,44 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
   return {}
 }
 
-/** Enqueues the rest of this job's stores as a continuation (its own fenced step, once). */
-async function continueWith(ctx: JobContext<PurgePayload>, req: Request, storeKeys: string[], part: string): Promise<JobResult> {
-  const next = `${part}c`.slice(0, 20)
+/** The distinct step ids the job has recorded, every attempt's (the worker's `fencedSteps`). */
+async function recordedSteps(jobId: string): Promise<number> {
+  const steps = (await (await enqueue()).jobsRef().doc(jobId).get()).get("fencedSteps")
+  return steps !== null && typeof steps === "object" ? Object.keys(steps).length : 0
+}
+
+/** A continuation's part: `g0` → `g0c1` → `g0c2`, a counter (so every continuation is a new job), within `PART_RE`. */
+function nextPart(part: string): string {
+  const m = /^(.*c)(\d+)$/.exec(part)
+  return m ? `${m[1]}${Number(m[2]) + 1}` : `${part}c1`
+}
+
+/**
+ * The job passed its chunk budget at store `i`. The purge and anonymise stores before `i` are finished (no rows left):
+ * acknowledge them now, in a step of their own, then enqueue a continuation for the rest: store `i` on, and the vault
+ * lock (its count grows with every document the rest purges). Codex P2 (PR #128): the finished stores were once left
+ * to no job, so the request stayed in progress for good. The step id names `i`: a retry that passes the budget at a
+ * later store acknowledges the stores between too (an acknowledgement already made stands).
+ */
+async function continueWith(
+  ctx: JobContext<PurgePayload>,
+  req: Request,
+  stores: Array<{ key: string; store: InventoryStore }>,
+  i: number,
+  jobId: string
+): Promise<JobResult> {
+  const purged = (key: string) => req.plan[key] === "purge" || req.plan[key] === "anonymise"
+  const finished = stores.slice(0, i).filter((s) => purged(s.key))
+  const rest = stores.filter((s, j) => j >= i || !purged(s.key)).map((s) => s.key)
+  if (finished.length > 0) await acknowledge(ctx, req, finished, jobId, `ack-${ctx.payload.part}-p${i}`)
+  const next = nextPart(ctx.payload.part)
   await step(ctx as JobContext<unknown>, "continue", async (tx) => {
     await (await enqueue()).enqueueJobs(tx, [{
       firmId: ctx.job.firmId,
       jobType: PURGE_JOB_TYPE,
       classification: ctx.job.classification,
       matterId: null,
-      payload: { requestId: ctx.payload.requestId, storeKeys, part: next },
+      payload: { requestId: ctx.payload.requestId, storeKeys: rest, part: next },
       idempotencyKey: `${ctx.payload.requestId}:purge:${next}`,
       createdBy: "system",
     }], { now: nowMs(ctx as JobContext<unknown>) })
@@ -408,14 +467,20 @@ async function continueWith(ctx: JobContext<PurgePayload>, req: Request, storeKe
 }
 
 /**
- * The final step: re-query every purged store in the transaction (a row written since fails the step retryably, so
- * the retry purges it), then acknowledge every store of the job, the vault last from what the chunks counted.
+ * The acknowledgement step `stepId`: re-query every purged store in the transaction (a row written since fails the step
+ * retryably, so the retry purges it), then acknowledge every store given, the vault last from what the chunks counted.
  */
-async function acknowledge(ctx: JobContext<PurgePayload>, req: Request, stores: Array<{ key: string; store: InventoryStore }>, jobId: string): Promise<void> {
+async function acknowledge(
+  ctx: JobContext<PurgePayload>,
+  req: Request,
+  stores: Array<{ key: string; store: InventoryStore }>,
+  jobId: string,
+  stepId: string
+): Promise<void> {
   const { firmId } = ctx.job
   const { requestId, part } = ctx.payload
   if (process.env.NODE_ENV !== "production") await retentionTestSeam.beforeAck?.(part)
-  await step(ctx as JobContext<unknown>, `ack-${part}`, async (tx) => {
+  await step(ctx as JobContext<unknown>, stepId, async (tx) => {
     await assertNoHold(tx, firmId, req.matterId)
     const acks: AckInput[] = []
     const progressRefs = stores.map((s) => ackRefOf(requestId, s.key))
@@ -470,4 +535,4 @@ export const retentionPurgeHandler: JobHandler<PurgePayload> = {
 }
 
 /** Exposed for the unit tests. */
-export const sagaInternals = { staticAck, parsePurge, parsePrepare }
+export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts }

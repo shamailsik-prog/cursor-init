@@ -5,6 +5,7 @@ import inventory from "@/infra/retention/inventory.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
 import { adminDb } from "../src/admin"
 import { ROUTES, createRouter } from "../src/http/router"
+import { sha256 } from "../src/retention/acks"
 import { retentionTestSeam, storeKey, type RetentionPolicy } from "../src/retention/config"
 import { enqueueJob } from "../src/p2/enqueue"
 import { runJobTask } from "../src/p2/worker"
@@ -123,6 +124,32 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
   ids.p1_decisions_pending = await put("p1_decisions", { matterId, traceId: `trace-${tag}-4`, classification: "internal", export: { state: "pending", attempts: 1 }, settledAt: Timestamp.now() })
   ids.p1_decisions_failed = await put("p1_decisions", { matterId, traceId: `trace-${tag}-5`, classification: "internal", export: { state: "failed", attempts: 5 }, settledAt: Timestamp.now() })
   return ids
+}
+
+/** Writes `n` rows of `collection` in batches of 500: `row(i)` gives each row's id and data. */
+async function seedMany(collection: string, n: number, row: (i: number) => [string, DocumentData]): Promise<void> {
+  for (let start = 0; start < n; start += 500) {
+    const batch = adminDb().batch()
+    for (let i = start; i < Math.min(n, start + 500); i++) {
+      const [id, data] = row(i)
+      batch.set(adminDb().collection(collection).doc(id), data)
+    }
+    await batch.commit()
+  }
+}
+
+/** Every trace id the request's processor documents hold, across all of them (duplicates kept, to be counted). */
+async function recordedTraceIds(requestId: string): Promise<{ ids: string[]; perDoc: number[] }> {
+  const snap = await adminDb().collection("deletion_external_requests").where("requestId", "==", requestId).get()
+  const ids: string[] = []
+  const perDoc: number[] = []
+  for (const d of snap.docs) {
+    const t = d.get("traceIds")
+    if (!Array.isArray(t)) continue
+    ids.push(...(t as string[]))
+    perDoc.push(t.length)
+  }
+  return { ids, perDoc }
 }
 
 const PURGED = [
@@ -293,7 +320,8 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     const vault = await adminDb().collection("vault_object_tombstones").where("requestId", "==", requestId).get()
     expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/m-d1/v1`, `fs://${f.firmId}/documents/m-d1/v2`])
     const external = (await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()
-    expect(external).toMatchObject({ processor: "opik", traceIds: ["trace-m-1", "trace-m-3", "trace-m-4"], count: 3, status: "pending_operator" })
+    expect(external).toMatchObject({ processor: "opik", count: 3, parts: 1, status: "pending_operator" })
+    expect((await recordedTraceIds(requestId)).ids.sort()).toEqual(["trace-m-1", "trace-m-3", "trace-m-4"])
     // The tombstone survives with the finish stamped.
     const tomb = (await adminDb().collection("matter_tombstones").doc(f.matterId).get()).data()
     expect(tomb).toMatchObject({ firmId: f.firmId, requestId, membersRevoked: 4 })
@@ -476,12 +504,131 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     // The outsider partner (no membership) may approve: deletion is firm administration, not matter membership.
     const ok = await send(approveApi, f, f.outsider, { requestId: req.requestId })
     expect(ok.status).toBe("in_progress")
-    // The window: an old request expires.
+    // The window: an old request expires. The approval records the expiry (the request ends) and answers so.
     const h = await newFirm()
     const old = await send(requestApi, h, h.P, { matterId: h.matterId, reasonCode: "client_instruction" })
     await adminDb().collection("deletion_requests").doc(old.requestId).update({ requestedAt: Timestamp.fromMillis(Date.now() - 73 * 3_600_000) })
-    expect((await apiErrorOf(send(approveApi, h, h.Q, { requestId: old.requestId }))).code).toBe("approval_expired")
+    expect(await send(approveApi, h, h.Q, { requestId: old.requestId })).toMatchObject({ requestId: old.requestId, status: "expired", refusal: { code: "approval_expired" } })
   })
+
+  it("Codex P2 (ops.ts): a request whose approval window lapsed no longer blocks a new one, which still needs a second partner", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const old = await send(requestApi, f, f.P, { matterId: f.matterId, reasonCode: "client_instruction" })
+    expect(old.status).toBe("pending_approval")
+    // Within the window the open request blocks a second one.
+    expect((await apiErrorOf(send(requestApi, f, f.Q, { matterId: f.matterId, reasonCode: "client_instruction" }))).code).toBe("deletion_request_open")
+    await adminDb().collection("deletion_requests").doc(old.requestId).update({ requestedAt: Timestamp.fromMillis(Date.now() - 73 * 3_600_000) })
+
+    // Past the window, unapproved: another partner's new request is accepted, and the lapsed one ends as expired.
+    const fresh = await send(requestApi, f, f.Q, { matterId: f.matterId, reasonCode: "client_instruction" })
+    expect(fresh.status).toBe("pending_approval")
+    const lapsed = (await adminDb().collection("deletion_requests").doc(old.requestId).get()).data()
+    expect(lapsed).toMatchObject({ status: "expired", expiry: { code: "approval_expired", by: f.Q.uid, supersededBy: fresh.requestId } })
+    expect(lapsed?.expiry.at).toBeInstanceOf(Timestamp)
+    const expiryAudit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.request_expired").get()
+    expect(expiryAudit.docs.map((d) => [d.get("target"), d.get("actorId"), d.get("reason")])).toEqual([[`deletion_requests/${old.requestId}`, f.Q.uid, "approval_expired"]])
+    // The lapsed request can no longer be approved.
+    expect((await apiErrorOf(send(approveApi, f, f.outsider, { requestId: old.requestId }))).code).toBe("request_not_pending")
+    // The two-partner rule holds for the new request: its requester cannot approve it, another partner can.
+    expect((await apiErrorOf(send(approveApi, f, f.Q, { requestId: fresh.requestId }))).code).toBe("second_partner_required")
+    expect((await send(approveApi, f, f.P, { requestId: fresh.requestId })).status).toBe("in_progress")
+
+    // An approval attempt on a lapsed request also ends it (recorded, no tombstone), and a new request then passes.
+    const h = await newFirm()
+    const stale = await send(requestApi, h, h.P, { matterId: h.matterId, reasonCode: "client_instruction" })
+    await adminDb().collection("deletion_requests").doc(stale.requestId).update({ requestedAt: Timestamp.fromMillis(Date.now() - 73 * 3_600_000) })
+    expect(await send(approveApi, h, h.Q, { requestId: stale.requestId })).toMatchObject({ requestId: stale.requestId, status: "expired", refusal: { code: "approval_expired" } })
+    expect((await adminDb().collection("deletion_requests").doc(stale.requestId).get()).data()).toMatchObject({ status: "expired", expiry: { code: "approval_expired", by: h.Q.uid, supersededBy: null } })
+    expect(await exists("matter_tombstones", h.matterId)).toBe(false)
+    const approveAudit = await adminDb().collection("audit_log").where("firmId", "==", h.firmId).where("action", "==", "retention.approve_deletion").get()
+    expect(approveAudit.docs.map((d) => `${d.get("decision")} ${d.get("reason")}`)).toContain("deny approval_expired")
+    expect((await send(requestApi, h, h.P, { matterId: h.matterId, reasonCode: "client_instruction" })).status).toBe("pending_approval")
+  })
+
+  it("Codex P2 (saga.ts runPurge): a purge job that passes its chunk budget after finishing a store acknowledges that store; its continuation finishes the rest", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    // The first purge job holds documents, document_versions and the vault: one document, then 9,000 versions (45
+    // chunks of 200), so the job passes its 45-chunk budget inside the second store, after finishing the first.
+    await adminDb().collection("documents").doc(uniq("spill-doc")).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/spill/v1` })
+    await seedMany("document_versions", 9_000, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/spill/v${i + 2}` }])
+    const { requestId } = await requestAndApprove(f)
+    const outcomes = await drain(f.firmId, new FakeClock(Date.now()))
+    expect(outcomes.every((o) => o === "done")).toBe(true)
+
+    const view = await send(statusApi, f, f.P, { requestId })
+    const expected = (inventory.stores as Array<{ id: string }>).map((s) => storeKey(s.id)).sort()
+    expect(expected.filter((k) => !Object.hasOwn(view.acked, k))).toEqual([])
+    expect(view.status).toBe("completed")
+    const ack = (id: string) => view.acks.find((a) => a.storeId === id)
+    expect(ack("firestore:documents")).toMatchObject({ outcome: "purged", count: 1 })
+    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: 9_000 })
+    // The vault went on with the continuation: its acknowledgement counts every object, the continuation's too.
+    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 9_001 })
+    expect((await adminDb().collection("document_versions").where("firmId", "==", f.firmId).where("matterId", "==", f.matterId).limit(1).get()).empty).toBe(true)
+    const purgeJobs = await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("jobType", "==", "retention.store.purge").get()
+    const parts = purgeJobs.docs.map((d) => String(d.get("payload.part")))
+    expect(parts).toContain("g0")
+    expect(parts.filter((p) => p.startsWith("g0c"))).toHaveLength(1)
+  }, 300_000)
+
+  it("a purge job retried after a crash late in its chunk budget counts the steps it already recorded, continues and finishes", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("documents").doc(uniq("retry-doc")).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/retry/v1` })
+    await seedMany("document_versions", 10_000, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/retry/v${i + 2}` }])
+    // A crash after the first job's 44th committed chunk (the document, then the 43rd chunk of versions): the retry
+    // starts with 44 steps recorded on the job and 1,400 versions left.
+    let crashed = false
+    retentionTestSeam.afterStep = async (step) => {
+      if (!crashed && /^chunk-1-[0-9a-f]{24}-42$/.test(step)) {
+        crashed = true
+        throw new Error("simulated crash after a committed step")
+      }
+    }
+    const { requestId } = await requestAndApprove(f)
+    const outcomes = await drain(f.firmId, new FakeClock(Date.now()))
+    expect(crashed).toBe(true)
+    expect(outcomes).toContain("failed")
+    const dead = await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("status", "==", "dead_lettered").get()
+    expect(dead.docs.map((d) => d.get("lastError.code"))).toEqual([])
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.status).toBe("completed")
+    const ack = (id: string) => view.acks.find((a) => a.storeId === id)
+    expect(ack("firestore:documents")).toMatchObject({ outcome: "purged", count: 1 })
+    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: 10_000 })
+    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 10_001 })
+  }, 300_000)
+
+  it("Codex P2 (saga.ts external): more than 10,000 exported traces are all recorded, in bounded parts, before any usage row is anonymised", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const N = 10_001
+    const traceIds = Array.from({ length: N }, (_, i) => `trace-${f.matterId}-${String(i).padStart(5, "0")}`)
+    await seedMany("ai_usage_logs", N, (i) => [`${f.matterId}-u${i}`, { firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: traceIds[i], status: "exported" }, createdAt: Timestamp.now() }])
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    // The prepare job alone: it records the processor's deletion request, then enqueues the purge jobs (not yet run).
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    const recorded = await recordedTraceIds(requestId)
+    const have = new Set(recorded.ids)
+    expect(traceIds.filter((id) => !have.has(id))).toEqual([])
+    expect(recorded.ids).toHaveLength(N)
+    expect(recorded.perDoc.every((n) => n >= 1 && n <= 5_000)).toBe(true)
+    expect((await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()).toMatchObject({ processor: "opik", count: N, parts: 3, idsSha256: sha256([...traceIds].sort()), status: "pending_operator" })
+    // Nothing is anonymised yet: every usage row still names the matter.
+    expect((await adminDb().collection("ai_usage_logs").where("firmId", "==", f.firmId).where("matterId", "==", f.matterId).select().get()).size).toBe(N)
+
+    expect((await drain(f.firmId, clock, deps)).every((o) => o === "done")).toBe(true)
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.status).toBe("completed")
+    const ack = (id: string) => view.acks.find((a) => a.storeId === id)
+    expect(ack("external:opik")).toMatchObject({ outcome: "external_requested", count: N, idsSha256: sha256([...traceIds].sort()), detail: { parts: 3 } })
+    expect(ack("firestore:ai_usage_logs")).toMatchObject({ outcome: "anonymised", count: N })
+    expect((await adminDb().collection("ai_usage_logs").where("firmId", "==", f.firmId).where("matterId", "==", f.matterId).limit(1).get()).empty).toBe(true)
+  }, 300_000)
 
   it("the deletion trail keeps ids, codes, counts and hashes only, never the matter's content", async () => {
     retentionTestSeam.policy = testPolicy()

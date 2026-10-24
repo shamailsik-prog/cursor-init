@@ -113,6 +113,19 @@ must come from a different partner (`second_partner_required`) within the approv
 admin plus a second partner approval"; firm administration is partner-only in this codebase; two-person control is
 the standard safeguard against an irreversible act.
 
+**R4a. A lapsed request ends as `expired` (Codex P2 on PR #128).** A request still `pending_approval` past its window
+is over: the call that finds it records the end, so it never holds the matter's one open request. An approval attempt
+by a second partner moves it to `expired` and answers 200 `{ status: "expired", refusal: { code: "approval_expired" } }`
+(recorded like a hold refusal: a deny audit row in the same transaction). A new request for the matter expires a lapsed
+one in its own transaction (`expiry.supersededBy` names the new request) with an audit row
+`retention.request_expired` (deny, `approval_expired`, target the old request), then opens; an `in_progress` request,
+or a pending one within its window, still refuses it. The record is `expiry: { code, at, by, supersededBy }`, shaped
+like `refusal`. The new request needs a second partner as before. Reason: before this, approval refused the lapsed
+request yet left it pending, and the guard then refused every replacement, so the matter could never be deleted.
+Ruling: **no cancel route**. The window already bounds a request, the second partner is the control on an unwanted
+one (they decline to approve), and a legal hold refuses the approval; a cancel would add a third partner-only route
+for no case these do not cover. Recorded as FU-6 should the firm want early withdrawal.
+
 **R5. The tombstone and the revocation commit together.** The approval transaction re-checks the request, the policy
 and the matter hold, then writes `matter_tombstones/{matterId}`, deletes every `matter_members` row of the matter
 (Functions caps a matter at 20 members; the transaction refuses more than 400 with `matter_members_over_limit`),
@@ -147,11 +160,12 @@ choke points every read already passes, so no route needs its own check.
 and the worker check in R6 never refuses them):
 
 - `retention.matter.prepare`: writes the acknowledgements that need no Firestore purge (retained, not applicable,
-  expiry, external, lock), records the Opik deletion request (trace ids of exported or pending traces, R7a), then enqueues
-  `retention.store.purge` jobs for the stores whose action is `purge` or `anonymise`, at most 12 stores per job.
+  expiry, external, lock), records the Opik deletion request (every trace id of exported or pending traces, R7a, in
+  bounded parts, R7b), then enqueues `retention.store.purge` jobs for the stores whose action is `purge` or
+  `anonymise`, at most 12 stores per job.
 - `retention.store.purge`: for each of its stores, deletes (or anonymises) the matter's rows in fenced chunks of up
   to 200, then, in one fenced step, re-queries the store (rows written since are purged first) and writes the store's
-  acknowledgement. A job that would exceed 45 fenced steps enqueues a continuation of itself for the rest.
+  acknowledgement. A job that would pass 45 recorded steps hands over (R7c).
 
 Every effect is a `runFenced` step, so a crash resumes after its last committed step and a replay writes nothing
 twice. A store's key is its id with every character outside `[A-Za-z0-9]` as `_`; an id longer than 80 characters
@@ -160,6 +174,26 @@ characters of its SHA-256 (the gate computes the same key and fails on a collisi
 `deletion_acks/{requestId}_{storeKey}` plus an entry in the request's `acked` map, in one transaction; the transaction that records the last expected store finishes the request (`status: "completed"`,
 `completedAt`) and stamps the tombstone. A store acknowledged twice keeps its first acknowledgement. Reason: the
 brief's "fenced P2 saga", modelled on the un-merge saga (`functions/src/d1/entity/unmergeJobs.ts`).
+
+**R7b. The Opik request is never cut short (Codex P2 on PR #128).** The request is a summary
+`deletion_external_requests/{requestId}_opik` (count, part count, SHA-256 of every id, `pending_operator`) and parts
+`{requestId}_opik_p{n}`, each at most 5,000 ids and 256 KiB, all written in the one fenced step that acknowledges the
+store (at most 24 parts, about 6 MiB, within one commit). The step precedes the enqueue step, so every id is
+recorded before any purge job exists to anonymise a row. One step rather than one per part, so a retry never re-splits
+ids an earlier attempt recorded (the id set can shift between attempts as F34 settles pending exports). Past 24 parts
+(120,000 ids) the prepare job fails permanently with `external_ids_over_limit` before any purge: nothing is
+anonymised and the request's alert (R10) fires. Reason: the request once kept the first 10,000 ids and acknowledged
+the store, and the purge then nulled `matterId` on the rows that held the rest, so those ids were lost.
+
+**R7c. A purge job hands over without dropping a store (Codex P2 on PR #128).** At the budget the job acknowledges,
+in a step of its own (`ack-{part}-p{i}`), the purge and anonymise stores it finished, then enqueues a continuation for
+the rest and the vault lock (whose count grows with every document the rest purges; a lock store is never
+acknowledged early). Continuations are numbered (`g0`, `g0c1`, `g0c2`; the old `c` suffix stopped growing at 20
+characters, after which a continuation would dedupe to an earlier job). The budget counts the steps the job recorded
+in every attempt (P2 keeps them all, at most 50): a job retried after a crash late in its budget hands over at once
+instead of failing permanently with `fenced_step_limit`. Reason: a job that passed its budget after finishing a store
+passed only the rest to its continuation, so the finished store was never acknowledged and the request stayed
+`in_progress` for good; the retry budget was found while fixing it (same symptom, same function).
 
 **R8. Store treatments.**
 
@@ -243,8 +277,9 @@ hold a tombstone; the mechanism is Firestore-mode only.
 ## 4. Data shapes
 
 - `deletion_requests/{requestId}`: `firmId`, `matterId`, `classification`, `status` (`pending_approval` | `refused` |
-  `in_progress` | `completed`), `requestedBy`, `requestedAt`, `reasonCode`, `approvedBy`, `approvedAt`, `refusal`
-  (`{ code, at, by }` or null), `halted` (`{ code, at }` or null), `policyVersion`, `inventoryVersion`, `expected`
+  `expired` | `in_progress` | `completed`), `requestedBy`, `requestedAt`, `reasonCode`, `approvedBy`, `approvedAt`,
+  `refusal` (`{ code, at, by }` or null), `expiry` (`{ code, at, by, supersededBy }`, once expired, R4a), `halted`
+  (`{ code, at }` or null), `policyVersion`, `inventoryVersion`, `expected`
   (store keys), `acked` (store key → outcome), `ackDeadlineAt`, `alertedAt`, `completedAt`.
 - `matter_tombstones/{matterId}`: `firmId`, `matterId`, `requestId`, `classification`, `tombstonedAt`, `requestedBy`,
   `approvedBy`, `membersRevoked`, `policyVersion`, `purgeCompletedAt`.
@@ -252,8 +287,9 @@ hold a tombstone; the mechanism is Firestore-mode only.
   `idsSha256`, `detail` (codes and numbers only), `jobId`, `at`.
 - `legal_holds/{matterId}`: `firmId`, `matterId`, `active`, `reasonCode`, `placedBy`, `placedAt`, `releasedBy`,
   `releasedAt`.
-- `deletion_external_requests/{requestId}_opik`: `firmId`, `requestId`, `processor`, `traceIds`, `count`,
-  `truncated`, `status: "pending_operator"`, `at`.
+- `deletion_external_requests/{requestId}_opik`: `firmId`, `requestId`, `matterId`, `processor`, `count`, `parts`,
+  `idsSha256`, `status: "pending_operator"`, `at`; and `{requestId}_opik_p{n}`: `firmId`, `requestId`, `matterId`,
+  `processor`, `part`, `of`, `traceIds` (at most 5,000), `at` (R7b).
 - `vault_object_tombstones/{sha256(storagePath)}`: `firmId`, `requestId`, `documentId`, `storagePath`,
   `lockUntil`, `at`.
 - `retention_runs/{firmId}_{period}`: `firmId`, `period`, `policyVersion`, `deleted` (store key → count), `skippedHeld`.
@@ -289,6 +325,11 @@ hold a tombstone; the mechanism is Firestore-mode only.
   holds no content; the tombstone alone (memberships intact) refuses reads, lists and the matter's queued P2 job; a
   row that lands after its store's purge is purged before the acknowledgement; F34 decision records of the matter are
   anonymised and acknowledged, and the Opik request lists their exported and pending traces (not the abandoned one).
+  Codex P2 follow-up: a request whose window lapsed no longer blocks a new one, which still needs a second partner, and
+  an approval attempt on it records the expiry (R4a); a purge job that passes its budget after finishing a store
+  acknowledges it and its continuation finishes the rest (one document, 9,000 versions); a job retried after a crash
+  late in its budget hands over instead of passing the step limit (10,000 versions, R7c); 10,001 exported traces are
+  all recorded in bounded parts before any usage row is anonymised (R7b).
 - `functions/test/f42-retention-apply.e2e.emu.test.ts`: the default policy deletes nothing; a test policy deletes
   old rows and keeps held ones; the watch raises one F43 durable alert per late request (one page, no matter id, no
   second raise); a request that falls overdue behind a full page of
@@ -298,9 +339,10 @@ hold a tombstone; the mechanism is Firestore-mode only.
 - `ci_gates/test_check_data_inventory.py`: an uninventoried collection, object prefix or table fails; a stale entry
   fails; a pending entry passes absent and present; malformed entries fail; the real tree passes.
 - `functions/test/f42-retention.units.test.ts`: the policy, inventory, store-key (shared with the Python gate) and
-  acknowledgement logic.
-- Mutation: `functions/test/f42-mutants.json` (29 mutants over the tombstone check, acknowledgement completeness, legal
-  hold, authorisation and the inventory gate), run by `functions/scripts/f42-mutants.mjs` after a passing baseline.
+  acknowledgement logic; continuation part naming and the trace id parts.
+- Mutation: `functions/test/f42-mutants.json` (39 mutants over the tombstone check, acknowledgement completeness, legal
+  hold, authorisation, the inventory gate, the purge hand-over, the Opik parts and request expiry), run by
+  `functions/scripts/f42-mutants.mjs` after a passing baseline.
 - Neighbour lists updated for the new routes and exports: the F09 effect-marker guard registers
   `functions/src/retention/ops.ts`, whose four `once` POST routes pass its static check with no write outside their
   transactions; the G-0 end-to-end tree carries the files that name the inventoried stores and the new runbook.
@@ -346,10 +388,13 @@ lifecycle rule can honour per-object holds (NOT DEMONSTRATED); that Firestore TT
 
 - RES-1: client-SDK reads that rules do not gate on membership (`matter_client_search_index`, a client reading its own
   matter row) end when the saga purges them.
-- RES-2: a write that passed its checks before the tombstone and lands after its store's acknowledgement.
+- RES-2: a write that passed its checks before the tombstone and lands after its store's acknowledgement; likewise a
+  usage row of a call in flight at the approval, written after the prepare job read the trace ids: the purge
+  anonymises it, but its trace id is not in the Opik request.
 - RES-3: vault objects stay until their COMPLIANCE lock ends (up to 2555 days); the lifecycle executor is not built.
 - RES-4: the Opik deletion is a recorded request, not a call.
 - RES-5: deleted rows live on in backups until the backup retention window ends.
 - FU-1: client-record erasure. FU-2: ratification of `infra/retention/policy.json`. FU-3 (route the alert through
   F43) is done (R10). FU-4: the R2 lifecycle executor for `vault_object_tombstones`. FU-5: the Opik
-  deletion call once its API is verified.
+  deletion call once its API is verified. FU-6: a partner-only cancel of a pending request, if the firm wants early
+  withdrawal (ruled unnecessary, R4a).

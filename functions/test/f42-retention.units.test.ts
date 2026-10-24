@@ -15,7 +15,8 @@ import {
   type InventoryStore,
   type RetentionPolicy,
 } from "../src/retention/config"
-import { purgeGroups } from "../src/retention/saga"
+import { JobError } from "../src/p2/errors"
+import { purgeGroups, sagaInternals } from "../src/retention/saga"
 
 /** Audit F42: the pure parts of the retention mechanism (no emulator). */
 
@@ -136,6 +137,47 @@ describe("F42 units: treatments, plan and holds", () => {
     const purged = order.filter((k) => ["purge", "anonymise", "lock"].includes(plan[k]))
     expect(groups.flat().sort()).toEqual([...purged].sort())
     expect(purgeGroups(Object.fromEntries(order.map((k) => [k, "retained"])), order, 12)).toEqual([])
+  })
+
+  it("names each continuation of a purge job anew: a counter, never a saturating suffix, always a valid part", () => {
+    const { nextPart } = sagaInternals
+    expect(nextPart("g0")).toBe("g0c1")
+    expect(nextPart("g0c1")).toBe("g0c2")
+    expect(nextPart("g12c9")).toBe("g12c10")
+    const seen = new Set<string>()
+    let part = "g19"
+    for (let i = 0; i < 2_000; i++) {
+      part = nextPart(part)
+      expect(part).toMatch(/^[a-z0-9]{1,20}$/)
+      expect(seen.has(part)).toBe(false)
+      seen.add(part)
+    }
+  })
+
+  it("splits trace ids into bounded parts, in order, losing none; an id set past the bound is refused, never cut", () => {
+    const { traceIdParts } = sagaInternals
+    expect(traceIdParts([])).toEqual([])
+    const ids = Array.from({ length: 10_001 }, (_, i) => `t-${String(i).padStart(5, "0")}`)
+    const parts = traceIdParts(ids)
+    expect(parts.map((p) => p.length)).toEqual([5_000, 5_000, 1])
+    expect(parts.flat()).toEqual(ids)
+    // The byte bound: 5,000 ids of 100 bytes pass 256 KiB, so they split by size first.
+    const long = Array.from({ length: 5_000 }, (_, i) => `${String(i).padStart(5, "0")}${"x".repeat(95)}`)
+    const byBytes = traceIdParts(long)
+    expect(byBytes.length).toBe(2)
+    expect(byBytes.flat()).toEqual(long)
+    expect(byBytes.every((p) => p.reduce((n, id) => n + Buffer.byteLength(id) + 1, 0) <= 256 * 1024)).toBe(true)
+    const refused = (f: () => unknown) => {
+      try {
+        f()
+      } catch (err) {
+        return err instanceof JobError ? `${err.code} ${err.permanent}` : String(err)
+      }
+      return "accepted"
+    }
+    expect(refused(() => traceIdParts(["y".repeat(256 * 1024)]))).toBe("external_ids_over_limit true")
+    expect(refused(() => traceIdParts(Array.from({ length: 24 * 5_000 + 1 }, (_, i) => `t-${i}`)))).toBe("external_ids_over_limit true")
+    expect(traceIdParts(Array.from({ length: 24 * 5_000 }, (_, i) => `t-${i}`))).toHaveLength(24)
   })
 })
 
