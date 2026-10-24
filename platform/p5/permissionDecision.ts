@@ -7,8 +7,8 @@
  *
  * Rows, in order:
  *   - no caller                                  -> deny no-user
- *   - a firm-administration action (FIRM_ADMIN_ACTIONS: identity and MFA administration)
- *                                                -> partner only (deny partner-only)
+ *   - a firm-administration action (FIRM_ADMIN_ACTIONS: identity and MFA administration) or a
+ *     retention action (RETENTION_ACTIONS, audit F42)  -> partner only (deny partner-only)
  *   - accounts (L17.6 #41): only ACCOUNTS_REGISTER_ACTIONS, never matter documents, and a
  *     named matter must be in the caller's firm  -> deny accounts-register-only / cross-firm
  *   - a D1 action (D1_ACTIONS): client -> client-denied; matter-level ones need the matter
@@ -26,8 +26,9 @@
  *                                                -> deny staff-only
  *   - client or own_matters scope: no research / draft; list_matters is own matters only
  *   - list_matters                               -> allow
- *   - a named matter: same firm (cross-firm), a member (not-member), cleared for its
- *     classification (clearance; an unreadable classification is refused: fail closed)
+ *   - a named matter: same firm (cross-firm), not tombstoned (matter-deleted, audit F42), a member
+ *     (not-member), cleared for its classification (clearance; an unreadable classification is
+ *     refused: fail closed). Every matter-level row above goes through the same gate.
  *   - client research                            -> deny client-research-denied
  *   - otherwise                                  -> allow ok
  */
@@ -40,9 +41,11 @@ export type DecisionCaller = { role: string; firmId: string; clearanceLevel: Cla
 
 /**
  * The named matter: `undefined` when the action names no matter, `null` when it names one that
- * does not exist (treated as cross-firm, so existence never leaks).
+ * does not exist (treated as cross-firm, so existence never leaks). `deleted`: the matter has a
+ * tombstone of its own firm (audit F42); a named matter of the caller's firm that is deleted is
+ * refused `matter-deleted` before membership or clearance is considered.
  */
-export type DecisionMatter = { firmId: string; classification: unknown } | null | undefined
+export type DecisionMatter = { firmId: string; classification: unknown; deleted?: boolean } | null | undefined
 
 /** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
 export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set(["intimation_register", "record_accounts_entry"])
@@ -64,6 +67,26 @@ const FIRM_ADMIN_ACTION_SET: ReadonlySet<string> = new Set(FIRM_ADMIN_ACTIONS)
 
 export function isFirmAdminAction(action: string): action is FirmAdminAction {
   return FIRM_ADMIN_ACTION_SET.has(action)
+}
+
+/**
+ * Audit F42: retention and deletion (functions/src/retention/ops.ts). Firm administration, partner only, firm level:
+ * they name no matter here, so a hold or a status read still works after an approval has revoked every membership.
+ * The operations add their own guards: the partner's clearance must reach the matter's label, and the approval (and a
+ * hold's release) must come from a partner other than the one who requested (or placed) it.
+ */
+export const RETENTION_ACTIONS = [
+  "retention.request_deletion",
+  "retention.approve_deletion",
+  "retention.read",
+  "retention.hold.place",
+  "retention.hold.release",
+] as const
+export type RetentionAction = (typeof RETENTION_ACTIONS)[number]
+const RETENTION_ACTION_SET: ReadonlySet<string> = new Set(RETENTION_ACTIONS)
+
+export function isRetentionAction(action: string): action is RetentionAction {
+  return RETENTION_ACTION_SET.has(action)
 }
 
 /**
@@ -216,6 +239,8 @@ function knownRank(value: unknown): number | null {
 /** A named matter: same firm, a member, cleared for its classification (unreadable: fail closed). */
 function matterGate(caller: DecisionCaller, matter: DecisionMatter, isMember: boolean): PermissionDecision | null {
   if (!matter || matter.firmId !== caller.firmId) return deny("cross-firm")
+  // Audit F42: a tombstoned matter is refused at once, whatever membership or clearance remains.
+  if (matter.deleted === true) return deny("matter-deleted")
   if (!isMember) return deny("not-member")
   const required = knownRank(matter.classification)
   const held = knownRank(caller.clearanceLevel)
@@ -232,7 +257,7 @@ export function decide(
 ): PermissionDecision {
   if (!caller) return deny("no-user")
 
-  if (isFirmAdminAction(action)) {
+  if (isFirmAdminAction(action) || isRetentionAction(action)) {
     return caller.role === "partner" ? allow("ok") : deny("partner-only")
   }
 

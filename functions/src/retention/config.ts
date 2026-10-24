@@ -1,0 +1,193 @@
+import { createHash } from "node:crypto"
+import shippedInventory from "@/infra/retention/inventory.json"
+import shippedPolicy from "@/infra/retention/policy.json"
+import type { HoldRefusal, Treatment } from "./model"
+
+/**
+ * Audit F42: the retention policy (infra/retention/policy.json, versioned configuration, PROPOSED until the owner
+ * ratifies it) and the data inventory (infra/retention/inventory.json, gated by ci_gates/check_data_inventory.py), as
+ * the deletion saga and the retention job read them (spec R2, R3, R7 to R11).
+ */
+
+export type PolicyAction = "retain" | "purge" | "anonymise" | "expiry" | "external" | "lock"
+export type PeriodicAction = "retain" | "purge" | "anonymise"
+
+export type ClassPolicy = {
+  onMatterDeletion: PolicyAction
+  legalHold: boolean
+  periodDays: number | null
+  periodicAction: PeriodicAction
+  basis: string
+  proposed?: unknown
+}
+
+export type RetentionPolicy = {
+  policyVersion: string
+  status: string
+  ratifiedBy: string | null
+  ratifiedAt: string | null
+  note?: string
+  deletion: { approvalWindowHours: number; ackDeadlineHours: number; maxMembersRevokedAtApproval: number; storesPerPurgeJob: number; proposed?: string }
+  classes: Record<string, ClassPolicy>
+}
+
+export type StoreKey =
+  | { kind: "docId" }
+  | { kind: "field"; field: string }
+  | { kind: "none" }
+  | { kind: "ttl"; windowHours: number }
+  | { kind: "objects"; via: string; pathField: string }
+  | { kind: "traceExport"; source: string; idField: string; statusField: string; exportedValue: string }
+  | { kind: "backup"; windowDays: number; config: string }
+
+export type InventoryStore = {
+  id: string
+  kind: "firestore" | "objectPrefix" | "postgres" | "external" | "backup"
+  name: string
+  profile: string
+  key: StoreKey
+  anonymise?: Record<string, string | number | null>
+  ageField?: { field: string; type: "timestamp" | "millis" }
+  pending?: string
+}
+
+export type Inventory = {
+  inventoryVersion: number
+  profiles: Record<string, { classification: string; retentionClass: string; deleter: string; acknowledgement: string }>
+  stores: InventoryStore[]
+}
+
+/** One store's place in a deletion: its key (the acknowledgement's id part), retention class and treatment. */
+export type PlannedStore = { key: string; store: InventoryStore; retentionClass: string; treatment: Treatment }
+
+/**
+ * Test seams (never set in production code): `policy` replaces the shipped policy, `afterStep` runs after each
+ * committed fenced step of the saga (a throw there stands in for a crash after the commit).
+ */
+export const retentionTestSeam: { policy?: RetentionPolicy; afterStep?: (stepId: string) => Promise<void> } = {}
+
+/** The longest store key. Some legacy collection names run to 1,500 characters, past Firestore's field-name limit. */
+export const MAX_STORE_KEY = 80
+
+/**
+ * A store's acknowledgement key (a field name of the request's `acked` and `plan` maps and part of an acknowledgement's
+ * document id): its id with every character outside [A-Za-z0-9] as `_`; an id longer than `MAX_STORE_KEY` keeps its
+ * first 48 characters and adds `_h` and 24 hex characters of its SHA-256. ci_gates/check_data_inventory.py computes the
+ * same key and fails on a collision.
+ */
+export function storeKey(storeId: string): string {
+  const plain = storeId.replace(/[^A-Za-z0-9]/g, "_")
+  if (plain.length <= MAX_STORE_KEY) return plain
+  return `${plain.slice(0, 48)}_h${createHash("sha256").update(storeId).digest("hex").slice(0, 24)}`
+}
+
+export class RetentionConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "RetentionConfigError"
+  }
+}
+
+const ACTIONS: ReadonlySet<string> = new Set(["retain", "purge", "anonymise", "expiry", "external", "lock"])
+const PERIODIC: ReadonlySet<string> = new Set(["retain", "purge", "anonymise"])
+const MATTER_KEYED: ReadonlySet<StoreKey["kind"]> = new Set(["docId", "field", "objects", "traceExport"])
+
+const positiveInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
+
+/** Checks the policy the code relies on (the CI gate checks the same file more fully); throws RetentionConfigError. */
+export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
+  if (typeof p.policyVersion !== "string" || p.policyVersion === "") throw new RetentionConfigError("policyVersion")
+  const d = p.deletion
+  if (!d || !positiveInt(d.approvalWindowHours) || !positiveInt(d.ackDeadlineHours) || !positiveInt(d.maxMembersRevokedAtApproval) || !positiveInt(d.storesPerPurgeJob)) {
+    throw new RetentionConfigError("deletion")
+  }
+  for (const [name, c] of Object.entries(p.classes ?? {})) {
+    if (!ACTIONS.has(c.onMatterDeletion) || typeof c.legalHold !== "boolean" || !PERIODIC.has(c.periodicAction)) throw new RetentionConfigError(`class ${name}`)
+    if (c.periodDays !== null && !positiveInt(c.periodDays)) throw new RetentionConfigError(`class ${name} periodDays`)
+  }
+  for (const s of inv.stores) {
+    const cls = classOfStore(s, inv, p)
+    if (cls === undefined) throw new RetentionConfigError(`store ${s.id} class`)
+    const needsAnon = (s.key.kind === "docId" || s.key.kind === "field") && (cls.onMatterDeletion === "anonymise" || cls.periodicAction === "anonymise")
+    if (needsAnon && (s.anonymise === undefined || Object.keys(s.anonymise).length === 0)) throw new RetentionConfigError(`store ${s.id} anonymise`)
+    // An anonymised row of a field-keyed store must leave the matter's query, or the saga would find it again.
+    if (s.anonymise !== undefined && s.key.kind === "field" && s.anonymise[s.key.field] !== null) throw new RetentionConfigError(`store ${s.id} anonymise key`)
+  }
+}
+
+function classOfStore(s: InventoryStore, inv: Inventory, p: RetentionPolicy): ClassPolicy | undefined {
+  const cls = inv.profiles[s.profile]?.retentionClass
+  return cls === undefined ? undefined : p.classes[cls]
+}
+
+/** The shipped inventory. */
+export function inventory(): Inventory {
+  return shippedInventory as unknown as Inventory
+}
+
+/** The active policy: the shipped file, or the test seam outside production. Validated against the inventory. */
+export function activePolicy(): RetentionPolicy {
+  const seam = process.env.NODE_ENV === "production" ? undefined : retentionTestSeam.policy
+  const p = seam ?? (shippedPolicy as unknown as RetentionPolicy)
+  validatePolicy(p, inventory())
+  return p
+}
+
+export function retentionClassOf(s: InventoryStore, inv: Inventory = inventory()): string {
+  const cls = inv.profiles[s.profile]?.retentionClass
+  if (cls === undefined) throw new RetentionConfigError(`store ${s.id} profile`)
+  return cls
+}
+
+/**
+ * How a deletion treats each store (spec R8): a store with no matter key is not applicable; TTL and backup stores
+ * expire; the vault locks (or is retained); the trace processor gets an external request (or is retained); a
+ * matter-keyed Firestore store is purged, anonymised or retained as its class says. An action the store cannot take
+ * (expiry, external or lock on a Firestore matter store) is retained: nothing is destroyed by a misconfiguration.
+ */
+export function treatmentOf(s: InventoryStore, action: PolicyAction): Treatment {
+  switch (s.key.kind) {
+    case "none":
+      return "not_applicable"
+    case "ttl":
+    case "backup":
+      return "expiry"
+    case "objects":
+      return action === "lock" || action === "purge" ? "lock" : "retained"
+    case "traceExport":
+      return action === "external" || action === "purge" ? "external" : "retained"
+    case "docId":
+    case "field":
+      return action === "purge" ? "purge" : action === "anonymise" ? "anonymise" : "retained"
+  }
+}
+
+/** The deletion plan: every inventoried store, in inventory order, with its treatment under `p`. */
+export function planDeletion(p: RetentionPolicy, inv: Inventory = inventory()): PlannedStore[] {
+  return inv.stores.map((store) => {
+    const retentionClass = retentionClassOf(store, inv)
+    const cls = p.classes[retentionClass]
+    if (!cls) throw new RetentionConfigError(`class ${retentionClass}`)
+    return { key: storeKey(store.id), store, retentionClass, treatment: treatmentOf(store, cls.onMatterDeletion) }
+  })
+}
+
+/**
+ * The policy's legal hold (spec R9): any class that holds a matter-keyed store (a record, the vault or the trace
+ * processor) with `legalHold: true` blocks the whole deletion, whatever its action.
+ */
+export function policyHolds(p: RetentionPolicy, plan: readonly PlannedStore[]): boolean {
+  return plan.some((ps) => MATTER_KEYED.has(ps.store.key.kind) && p.classes[ps.retentionClass]?.legalHold === true)
+}
+
+/** The refusal a hold produces: the matter's own active hold first, then the policy's; null when nothing holds. */
+export function holdRefusal(p: RetentionPolicy, plan: readonly PlannedStore[], hold: { active?: unknown; firmId?: unknown } | undefined, firmId: string): HoldRefusal | null {
+  if (hold && hold.active === true && hold.firmId === firmId) return "legal_hold_matter"
+  if (policyHolds(p, plan)) return "legal_hold_policy"
+  return null
+}
+
+/** The inventory store a plan key names, or undefined. */
+export function storeByKey(key: string, inv: Inventory = inventory()): InventoryStore | undefined {
+  return inv.stores.find((s) => storeKey(s.id) === key)
+}

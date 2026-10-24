@@ -111,5 +111,11 @@ resource "google_monitoring_alert_policy" "functions_errors" {
       filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="audit.outbox_sweep_failed"'
     }
   }
+  conditions {
+    display_name = "retention.deletion_unacknowledged"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="retention.deletion_unacknowledged"'
+    }
+  }
   notification_channels = [google_monitoring_notification_channel.oncall.name]
 }

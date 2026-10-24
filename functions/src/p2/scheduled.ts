@@ -5,6 +5,7 @@ import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { logFailure } from "../log"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
+import { RETENTION_APPLY_SPEC } from "../retention/apply"
 import { enqueueJob } from "./enqueue"
 import { handlerFor } from "./registry"
 
@@ -18,8 +19,11 @@ import { handlerFor } from "./registry"
 export type Period = "hour" | "day" | "week" | "month"
 export type ScheduledJobSpec = { jobType: string; cron: string; period: Period }
 
-/** The scheduled P2 jobs: none in 3a; the 3c auto-confirm materialisation (P3-43); the F37 conflict name index reconciliation. */
-export const SCHEDULED_JOBS: readonly ScheduledJobSpec[] = [AUTO_CONFIRM_SPEC, NAME_REINDEX_SPEC]
+/**
+ * The scheduled P2 jobs: none in 3a; the 3c auto-confirm materialisation (P3-43); the F37 conflict name index
+ * reconciliation; the F42 retention execution.
+ */
+export const SCHEDULED_JOBS: readonly ScheduledJobSpec[] = [AUTO_CONFIRM_SPEC, NAME_REINDEX_SPEC, RETENTION_APPLY_SPEC]
 
 const PKT_OFFSET_MS = 5 * 3_600_000
 const DAY_MS = 86_400_000

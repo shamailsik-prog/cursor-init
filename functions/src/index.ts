@@ -21,3 +21,5 @@ export { d1ConflictClientWritten, d1ConflictPartyWritten, d1ConflictIndexChunkWr
 export { p1ReservationReconciler } from "./p1/reconciler"
 // Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
 export { auditOutboxReconciler } from "./p5/auditOutboxReconciler"
+// Audit F42: the daily retention run (01:00 Asia/Karachi, one P2 run per firm) and the unacknowledged-deletion watch (every 15 minutes).
+export { retentionApplyTick, retentionDeletionWatch } from "./retention/functions"

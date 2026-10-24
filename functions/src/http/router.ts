@@ -24,6 +24,7 @@ import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, s
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
 import { approveDraftOp, gateDraftOp, getVerificationReportOp, overrideGateOp } from "../d4/gateOps"
+import { approveMatterDeletionOp, getDeletionRequestOp, placeLegalHoldOp, releaseLegalHoldOp, requestMatterDeletionOp } from "../retention/ops"
 import { F02_NEXT_AUTHORITY_ROUTES } from "./f02NextAuthority"
 import { createRouter, type Route } from "./routerRuntime"
 
@@ -69,6 +70,8 @@ const PLATFORM_BRAIN = "/api/platform/brain"
 const D4_DRAFTING = "/api/d4/drafting"
 /** D4-2 intelligence (P4-10): the document-type catalogue, the citation gate and its verification report. */
 const D4_INTELLIGENCE = "/api/d4/intelligence"
+/** Audit F42: matter deletion (two partners, tombstone, saga) and legal holds. CORE, no layer flag. */
+const PLATFORM_RETENTION = "/api/platform/retention"
 
 /** A POST route whose rate-limit kind is the operation's own. */
 const post = (path: string, handler: Operation, extra: Pick<Route, "redactReplay" | "idempotency"> = {}): Route => ({
@@ -148,6 +151,12 @@ export const ROUTES: readonly Route[] = [
   get(`${D4_INTELLIGENCE}/getTypeProfile`, getTypeProfileOp),
   post(`${D4_INTELLIGENCE}/gateDraft`, gateDraftOp),
   get(`${D4_INTELLIGENCE}/getVerificationReport`, getVerificationReportOp),
+  // Audit F42: a partner requests a matter's deletion, a second partner approves it; holds stop it.
+  post(`${PLATFORM_RETENTION}/requestMatterDeletion`, requestMatterDeletionOp),
+  post(`${PLATFORM_RETENTION}/approveMatterDeletion`, approveMatterDeletionOp),
+  get(`${PLATFORM_RETENTION}/getDeletionRequest`, getDeletionRequestOp),
+  post(`${PLATFORM_RETENTION}/placeLegalHold`, placeLegalHoldOp),
+  post(`${PLATFORM_RETENTION}/releaseLegalHold`, releaseLegalHoldOp),
   // Audit F02: the nine Next domain routes, authorised here and served by the Next core in-process.
   ...F02_NEXT_AUTHORITY_ROUTES,
 ]

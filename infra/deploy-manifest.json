@@ -208,6 +208,36 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "every 1 minutes"
+    },
+    {
+      "name": "retentionApplyTick",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "0 1 * * *",
+      "timeZone": "Asia/Karachi",
+      "retryConfig": { "retryCount": 3, "minBackoffSeconds": 60, "maxBackoffSeconds": 600 },
+      "why": { "schedule": "Audit F42: one retention.apply run per firm per PKT day (the architecture's autoPurgeExpired slot); the shipped policy deletes nothing" }
+    },
+    {
+      "name": "retentionDeletionWatch",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 120,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 15 minutes",
+      "why": { "schedule": "Audit F42: alerts once per deletion request whose stores are not all acknowledged by the deadline" }
     }
   ],
   "firebase": {
@@ -262,7 +292,8 @@
       { "event": "audit.outbox_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "audit.outbox_row_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "audit.outbox_reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
-      { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" }
+      { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "retention.deletion_unacknowledged", "level": "ERROR", "surface": "functions", "files": ["functions/src/retention/alert.ts"], "runbook": "docs/runbooks/retention-deletion.md" }
     ],
     "exemptions": [
       { "event": "p1.provider_key_in_next_runtime", "reason": "Next runtime; external delivery F43", "delivery": "external" }

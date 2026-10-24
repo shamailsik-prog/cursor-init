@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Timestamp, type DocumentReference, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
 import { stageJobAudit, stageJobAuditSync } from "./audit"
@@ -270,6 +271,13 @@ async function withinBudget<T>(work: Promise<T>, budgetMs: number): Promise<T> {
 
 type HandlerOutcome = { ok: true; result: JobResult; handler: JobHandler } | { ok: false; err: unknown; handler: JobHandler | undefined }
 
+/** Whether the job's matter has a tombstone of the job's firm (audit F42). A read failure throws (retryable). */
+async function matterTombstoned(firmId: string, matterId: unknown): Promise<boolean> {
+  if (typeof matterId !== "string" || matterId === "" || matterId.includes("/")) return false
+  const snap = await adminDb().collection(MATTER_TOMBSTONES).doc(matterId).get()
+  return isTombstoneFor(snap.data(), firmId, matterId)
+}
+
 async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDeps): Promise<HandlerOutcome> {
   const { row, owner } = claimed
   const handler = handlerFor(row.jobType)
@@ -282,6 +290,8 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
       // The parse contract (P3-6): any rejection of the payload is the permanent invalid_payload.
       throw new JobError("invalid_payload", { permanent: true })
     }
+    // Audit F42: a job of a tombstoned matter never runs, so nothing is written for the matter after its deletion.
+    if (row.matterId !== null && (await matterTombstoned(row.firmId, row.matterId))) throw new JobError("matter_deleted", { permanent: true })
     const result = await withinBudget(
       handler.run({
         job: {
