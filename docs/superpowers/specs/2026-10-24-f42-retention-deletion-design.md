@@ -291,7 +291,7 @@ hold a tombstone; the mechanism is Firestore-mode only.
   fails; a pending entry passes absent and present; malformed entries fail; the real tree passes.
 - `functions/test/f42-retention.units.test.ts`: the policy, inventory, store-key (shared with the Python gate) and
   acknowledgement logic.
-- Mutation: `functions/test/f42-mutants.json` (27 mutants over the tombstone check, acknowledgement completeness, legal
+- Mutation: `functions/test/f42-mutants.json` (28 mutants over the tombstone check, acknowledgement completeness, legal
   hold, authorisation and the inventory gate), run by `functions/scripts/f42-mutants.mjs` after a passing baseline.
 - Neighbour lists updated for the new routes and exports: the F09 effect-marker guard registers
   `functions/src/retention/ops.ts`, whose four `once` POST routes pass its static check with no write outside their

@@ -40,11 +40,30 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 
 ## RED/GREEN ledger
 
-(Filled in as tasks land; the same numbers go to the PR body.)
+(The same numbers are in the PR body. RED: an export of `origin/main` 99681ba with the F42 test files copied in.)
 
 | Suite | RED on main (count, reason) | GREEN on branch |
 | --- | --- | --- |
+| `tests/f42-tombstone-next.e2e.firestore.test.ts` | 2 of 2 failed; the soft-assertion probe failed 12 assertions (lists, search and document reads still serve the tombstoned matter; a docId read 400, a matter-named read 200 without `matter_deleted`; four repository reads return rows; a revoked clerk and a never-member still find the matter in search) | 2 of 2 |
+| `functions/test/f42-retention-deletion.e2e.emu.test.ts` | file fails: no `infra/retention/policy.json`, no `/api/platform/retention` routes; main probe: `getMatter` 200, `getDraft` 200, `listMatters` lists the matter, the matter's queued job runs `done` | 10 of 10 (alone twice, and in the final full Functions run) |
+| `functions/test/f42-retention-apply.e2e.emu.test.ts` | file fails (no policy) | 5 of 5 |
+| `functions/test/f42-retention.units.test.ts` | file fails (no policy) | 12 of 12 |
+| `ci_gates/test_check_data_inventory.py` | `ModuleNotFoundError`: no gate | 18 of 18 |
+| Postgres views (gate test added after FA-D5-003 landed) | RED on the merged branch before the fix: views unfound, `CREATE TABLE public.x` read as `public` | GREEN |
+| Watch page window (added test) | RED on the branch before the fix: `expected [] to have a length of 1` | GREEN |
+| F34 decision records (added assertions after F34 landed) | RED on the merged branch before the fix: Opik request held 1 trace, not 3; `retention.apply` left an old decision record | GREEN (27 of 27 F42 Functions tests) |
 
 ## Verification log
 
-(Commands and exit codes, appended as run; full output in the evidence log.)
+(Full output in the evidence log, `scratchpad/evidence-f42.txt`.)
+
+- Typecheck: `tsc --noEmit -p .`, `tsc --noEmit -p tsconfig.tests.json`, `functions: tsc --noEmit -p .`: exit 0 each.
+- `eslint --max-warnings 0` on every touched TS file: exit 0 (two pre-existing unused imports removed from
+  `firestoreSpineRepositories.ts`; `functions/scripts/f42-mutants.mjs` is outside the lint config).
+- G-0 (`BASE=origin/main bash ci_gates/gate_g0.sh`): PASSED, step 21 PASS (321 stores).
+- G-1 (`python3 ci_gates/gate_g1.py`): 10 of 10.
+- G-2 (the gate's suites and coverage evaluation on the private emulator): PASS, 450 tested, 0 allowed; the five
+  retention routes tested with 12 attempts each.
+- Deploy contract: static PASS, bundle mode PASS (`--profile staging`), its tests 30 OK.
+- Mutation: 28 mutants, all killed (27 of 27 on 6aacb5b; the six gate mutants again on 6a6fdcb); table in the PR body.
+- Neighbour suites and their wall-clock reruns: see the PR body.
