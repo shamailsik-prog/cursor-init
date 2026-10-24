@@ -50,10 +50,11 @@ const PARTNER = caller("f32-ttl-partner", FIRM, "partner")
 const OTHER_FIRM_PARTNER = caller("f32-ttl-other-partner", OTHER_FIRM, "partner")
 const ASSOCIATE = caller("f32-ttl-assoc", FIRM, "associate")
 const LOW_CLEARANCE_PARTNER = caller("f32-ttl-low-partner", FIRM, "partner", LOW_CLEARANCE)
-const PLATFORM_ADMIN_PARTNER = caller("f32-ttl-platform-admin", FIRM, "partner", MAX, { platformAdmin: true })
-const WHITELIST_UID = "f32-ttl-whitelist-uid"
-const WHITELISTED_PARTNER = caller(WHITELIST_UID, FIRM, "partner")
-const VICTIM_DOC_ID = "victim"
+const ELEVATED_CLAIMS_PARTNER = caller("f32-ttl-elevated-partner", FIRM, "partner", MAX, {
+  support: true,
+  customBypass: true,
+})
+const STRUCTURAL_PROBE_DOC_ID = "target"
 
 type ActorKey =
   | "unauthenticated"
@@ -183,25 +184,23 @@ describe("F32 TTL collections are server-only (rules emulator)", () => {
     })
   }
 
-  describe("mutant bypass killers (R116-001)", () => {
+  describe("structural deny-only enforcement (R117-006)", () => {
     for (const name of TTL_COLLECTIONS) {
-      it(`denies platformAdmin partner read of doc ${VICTIM_DOC_ID} on ${name}`, async () => {
-        await seedDoc(name, VICTIM_DOC_ID, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
-        const db = testEnv.authenticatedContext(PLATFORM_ADMIN_PARTNER.uid, PLATFORM_ADMIN_PARTNER.claims).firestore()
-        await assertFails(getDoc(doc(db, name, VICTIM_DOC_ID)))
+      it(`denies elevated-token partner read/write on probe doc ${STRUCTURAL_PROBE_DOC_ID} for ${name}`, async () => {
+        await seedDoc(name, STRUCTURAL_PROBE_DOC_ID, {
+          firmId: FIRM,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        })
+        const db = testEnv
+          .authenticatedContext(ELEVATED_CLAIMS_PARTNER.uid, ELEVATED_CLAIMS_PARTNER.claims)
+          .firestore()
+        await assertFails(getDoc(doc(db, name, STRUCTURAL_PROBE_DOC_ID)))
         await assertFails(getDocs(query(collection(db, name), limit(1))))
-      })
-
-      it(`denies whitelisted uid read of doc ${VICTIM_DOC_ID} on ${name}`, async () => {
-        await seedDoc(name, VICTIM_DOC_ID, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
-        const db = testEnv.authenticatedContext(WHITELISTED_PARTNER.uid, WHITELISTED_PARTNER.claims).firestore()
-        await assertFails(getDoc(doc(db, name, VICTIM_DOC_ID)))
-      })
-
-      it(`denies platformAdmin create on ${name} doc ${VICTIM_DOC_ID}`, async () => {
-        const db = testEnv.authenticatedContext(PLATFORM_ADMIN_PARTNER.uid, PLATFORM_ADMIN_PARTNER.claims).firestore()
         await assertFails(
-          setDoc(doc(db, name, VICTIM_DOC_ID), { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) }),
+          setDoc(doc(db, name, `${STRUCTURAL_PROBE_DOC_ID}-create`), {
+            firmId: FIRM,
+            expiresAt: new Date(Date.now() + 86_400_000),
+          }),
         )
       })
     }
