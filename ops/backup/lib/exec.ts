@@ -64,25 +64,33 @@ export class PsqlSession {
   }
 
   async queryLines(sql: string): Promise<string[]> {
-    return this.query(sql)
+    const r = await runCommand(psqlArgv(this.database, ["-t", "-A", "-c", sql]), {
+      env: this.env,
+      pgPrefix: this.pgPrefix,
+    })
+    if (r.code !== 0) throw new Error(r.stderr || r.stdout || `psql exited ${r.code}`)
+    return r.stdout
       .split("\n")
       .map((l) => l.trimEnd())
       .filter((l) => l.length > 0)
   }
 
   async queryScalar(sql: string): Promise<string> {
-    const lines = await this.queryLines(sql)
-    if (!lines.length) return ""
-    const last = lines[lines.length - 1]
-    return last.trim()
+    const r = await runCommand(psqlArgv(this.database, ["-t", "-A", "-c", sql]), {
+      env: this.env,
+      pgPrefix: this.pgPrefix,
+    })
+    if (r.code !== 0) throw new Error(r.stderr || r.stdout || `psql exited ${r.code}`)
+    return r.stdout.trim()
   }
 
-  /** BEGIN RR READ ONLY and return pg_export_snapshot() id (caller must COMMIT/ROLLBACK). */
+  /** BEGIN RR READ ONLY and return pg_export_snapshot() id (same psql invocation). */
   async beginSnapshot(): Promise<string> {
-    const snap = await this.queryScalar("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();")
-    const id = snap.split("\n").pop()?.trim()
-    if (!id) throw new Error("pg_export_snapshot returned nothing")
-    return id
+    const snap = await this.queryScalar(
+      "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT pg_export_snapshot();"
+    )
+    if (!snap) throw new Error("pg_export_snapshot returned nothing")
+    return snap.split("\n").pop()!.trim()
   }
 
   async rollback(): Promise<void> {

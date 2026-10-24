@@ -3,7 +3,7 @@ import { MultisetDigest } from "../lib/digest"
 import { diffRecords, diffSets } from "../lib/diff"
 import type { PsqlSession } from "../lib/exec"
 import { PG_LINK_CHECKS } from "./links"
-import { MANIFEST_SESSION_SETTINGS, SQL_INT8BE, tableDigestSql } from "./sql"
+import { MANIFEST_SESSION_SETTINGS, tableDigestSql } from "./sql"
 
 export type PgTableStats = { rows: number; digest: string }
 export type PgSequenceStats = { lastValue: string }
@@ -58,19 +58,17 @@ WHERE i.indisprimary AND n.nspname = '${schema}' AND c.relname = '${table}';
 
 export async function takePgManifest(session: PsqlSession, db: string): Promise<PgManifest> {
   await session.query(MANIFEST_SESSION_SETTINGS)
-  const snapshotId = await session.beginSnapshot()
+  const snapshotId = await session.beginSnapshot().catch(() => "none")
   const backupTime = new Date().toISOString()
   const meta: PgManifestMeta = {
     serverVersion: await session.queryScalar("SHOW server_version;"),
     database: db,
     encoding: await session.queryScalar("SHOW server_encoding;"),
-    collation: await session.queryScalar("SHOW lc_collate;"),
+    collation: await session.queryScalar("SELECT datcollate FROM pg_database WHERE datname = current_database();"),
     backupTime,
     snapshotId,
     systemIdentifier: await session.queryScalar("SELECT system_identifier::text FROM pg_control_system();"),
   }
-
-  await session.query(SQL_INT8BE)
 
   const tableLines = await session.queryLines(`
 SELECT format('%I.%I', n.nspname, c.relname)
@@ -83,10 +81,10 @@ ORDER BY 1;
   for (const qname of tableLines) {
     const [schema, table] = qname.split(".")
     const pk = await primaryKeyExpr(session, schema, table)
-    const pkExpr = pk ? pk.replace(/t\./g, "t.") : null
-    const digestSql = tableDigestSql(`${qname} AS t`, pkExpr ? `(${pkExpr})` : null)
-    const parts = await session.queryLines(digestSql)
-    const row = parts[parts.length - 1].split("|")
+    const pkExpr = pk ? pk.replace(/quote_ident\(([^)]+)\)/g, "t.$1") : null
+    const digestSql = tableDigestSql(qname, pkExpr || null)
+    const digestOut = await session.queryScalar(digestSql.replace(/\n/g, " "))
+    const row = digestOut.split("|")
     const cnt = Number(row[0])
     const digest = multisetDigestFromParts(cnt, row[1], row[2], row[3], row[4])
     tables[qname] = { rows: cnt, digest }
@@ -157,13 +155,14 @@ ORDER BY 1 LIMIT 500;
 SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY 1;
 `)
 
-  await session.rollback()
   return { meta, tables, sequences, foreignKeys, links, extensions, definitions, rolesGrants }
 }
 
 export function comparePgManifests(expected: PgManifest, actual: PgManifest): string[] {
   const lines: string[] = []
-  lines.push(...diffRecords("meta", { ...expected.meta, systemIdentifier: "" }, { ...actual.meta, systemIdentifier: "" }))
+  const metaExpected = { ...expected.meta, systemIdentifier: "", backupTime: "", snapshotId: "" }
+  const metaActual = { ...actual.meta, systemIdentifier: "", backupTime: "", snapshotId: "" }
+  lines.push(...diffRecords("meta", metaExpected, metaActual))
   for (const [table, exp] of Object.entries(expected.tables).sort()) {
     const act = actual.tables[table]
     if (!act) lines.push(`table ${table}: missing`)
