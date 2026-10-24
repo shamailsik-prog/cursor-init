@@ -575,10 +575,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)("F14: Next Firestore-mode 
     }
     const list = await documentsGet(new Request(`${B}/api/d1/documents?userId=clerk_a&limit=100&cursor=0`))
     expect(list.status).toBe(200)
-    const text = await list.text()
-    expect(text).not.toContain("f14c2missing")
-    expect(text).not.toContain("f14c2empty")
-    expect(text).toContain("f14c2null")
+    const body = (await list.json()) as {
+      items: { id: string }[]
+      droppedDocuments?: { id: string; reason: string }[]
+    }
+    expect(body.items.map((row) => row.id)).not.toContain("f14c2missing")
+    expect(body.items.map((row) => row.id)).not.toContain("f14c2empty")
+    expect(body.items.map((row) => row.id)).toContain("f14c2null")
+    expect(body.droppedDocuments).toEqual(
+      expect.arrayContaining([
+        { id: "f14c2missing", reason: "matterId" },
+        { id: "f14c2empty", reason: "matterId" },
+      ])
+    )
   })
   it("a stored document row that fails validation denies the read; this process's cached copy is never the fallback (FA-F13-004, Codex P1)", async () => {
     const id = "f13d4stale"
