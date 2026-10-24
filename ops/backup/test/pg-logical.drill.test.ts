@@ -18,6 +18,8 @@ describe("postgres logical backup drill", () => {
       const out = mkdtempSync(path.join(os.tmpdir(), "f33-bundles-"))
       const source = await startCluster({ port: 55432 })
       const target = await startCluster({ port: 55433 })
+      const priorTz = process.env.TZ
+      process.env.TZ = "Asia/Karachi"
       try {
         await seedAnnexA(source)
         await seedRows(source)
@@ -32,6 +34,8 @@ describe("postgres logical backup drill", () => {
         })
         expect(res.ok, res.differences.join("\n")).toBe(true)
       } finally {
+        if (priorTz === undefined) delete process.env.TZ
+        else process.env.TZ = priorTz
         await source.stop()
         await target.stop()
         rmSync(out, { recursive: true, force: true })
