@@ -450,7 +450,10 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     }
   })
 
-  it("HTTP api: each firm-B role on each route with X-Firm-Id=A, or with a firm-A target, is denied, leaks nothing", async () => {
+  // Every firm-B role against every route (the F43 alert routes among them). Re-audit FA-F43-R1-007: under the 15 s
+  // default it timed out (15.0 s, 2 of 2 local gate runs on main d3b857c); with this limit it took 24.2 and 19.1 s.
+  // A per-test limit only; every probe still runs.
+  it("HTTP api: each firm-B role on each route with X-Firm-Id=A, or with a firm-A target, is denied, leaks nothing", { timeout: 60_000 }, async () => {
     const tokens = firmATokens(A)
     const router = createRouter(ROUTES)
     const failures: string[] = []
