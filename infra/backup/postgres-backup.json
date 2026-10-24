@@ -1,0 +1,7 @@
+{
+  "walLevel": "replica",
+  "archiveMode": "on",
+  "archiveTimeoutSeconds": 60,
+  "archiveCommandTemplate": "node <repo>/ops/backup/bin/pg-wal.mjs archive %p %f --archive-dir <archiveDir> --key-file <keyFile>",
+  "baseBackupRetentionDays": 14
+}

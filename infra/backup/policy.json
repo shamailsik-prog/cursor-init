@@ -1,0 +1,32 @@
+{
+  "stores": {
+    "postgres-logical": {
+      "rpo": "24h (daily dump)",
+      "rtoTargetMinutes": 240,
+      "ownerRole": "Backup and Recovery Owner",
+      "deputyRole": "On-call engineer",
+      "schedule": "daily 02:00 UTC"
+    },
+    "postgres-pitr": {
+      "rpo": "60s + segment flush",
+      "rtoTargetMinutes": 120,
+      "ownerRole": "Backup and Recovery Owner",
+      "deputyRole": "On-call engineer",
+      "schedule": "continuous WAL archive; base backup daily"
+    },
+    "firestore": {
+      "rpo": "PITR 7d; export weekly",
+      "rtoTargetMinutes": 180,
+      "ownerRole": "Backup and Recovery Owner",
+      "deputyRole": "On-call engineer",
+      "schedule": "daily scheduled backup; weekly export"
+    },
+    "document-vault": {
+      "rpo": "real-time versioned write",
+      "rtoTargetMinutes": 120,
+      "ownerRole": "Backup and Recovery Owner",
+      "deputyRole": "On-call engineer",
+      "schedule": "continuous immutable writes"
+    }
+  }
+}

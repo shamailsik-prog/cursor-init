@@ -75,3 +75,6 @@ reports/
 functions/.stryker-tmp/
 functions/reports/
 test-results/
+
+# backup drill results (audit F33)
+ops/backup/.results/
