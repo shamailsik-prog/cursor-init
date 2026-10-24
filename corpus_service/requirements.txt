@@ -10,7 +10,6 @@ redis
 httpx==0.28.1
 beautifulsoup4
 lxml
-playwright
 pdfplumber
 pytesseract
 pillow

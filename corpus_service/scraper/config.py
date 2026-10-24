@@ -2,7 +2,8 @@
 Production settings for Pakistani Legal Scraper System.
 
 Stack: PostgreSQL 16 + pgvector, FastAPI, Celery, httpx, BeautifulSoup,
-       playwright, pdfplumber, pytesseract, cryptography Fernet, OpenAI embeddings.
+       pdfplumber, pytesseract, cryptography Fernet; embeddings through the P1 gateway
+       (FA-D3C-002). No headless browser (FA-D3C-001).
 
 Implements dual Blackletter seat failover ONLY on real failure (exceptions,
 network errors, 5xx, auth failure after retry) — never on empty results.
@@ -233,9 +234,6 @@ class Settings(BaseSettings):
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 PakistaniLegalBot/1.0"
     )
     SCRAPER_CONCURRENT_REQUESTS: int = Field(default=3, ge=1, le=20)
-    PLAYWRIGHT_ENABLED: bool = Field(default=True, description="Enable Playwright for JS-heavy pages")
-    PLAYWRIGHT_HEADLESS: bool = Field(default=True)
-    PLAYWRIGHT_TIMEOUT_MS: int = Field(default=30000, ge=5000, le=120000)
 
     # FINAL_2 — login scraping permanently disabled in production
     # Fail closed: without an explicit ENVIRONMENT=development / APP_ENV=development the service is production.
@@ -614,7 +612,7 @@ class Settings(BaseSettings):
             if status_code == 429:
                 return True  # Rate limit - might need other seat
         if exception is not None:
-            # httpx / playwright / network layer
+            # httpx / network layer (FA-D3C-001: no browser in this runtime, so no browser timeout class)
             real_exception_names = (
                 "TimeoutException",
                 "ConnectTimeout",
@@ -622,7 +620,6 @@ class Settings(BaseSettings):
                 "NetworkError",
                 "ConnectionError",
                 "RemoteProtocolError",
-                "PlaywrightTimeoutError",
                 "APIConnectionError",
             )
             if exception.__class__.__name__ in real_exception_names:

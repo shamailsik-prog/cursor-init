@@ -8,7 +8,10 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
 
 ## Source policy (FINAL_2)
 
-1. Public government portals — polite HTTP / Playwright, robots.txt respected.
+1. Public government portals — polite HTTPS through the F25 fetch boundary, robots.txt respected.
+   No headless browser: FA-D3C-001 removed Playwright from this runtime (OR-4, L17.12, Layer 18 W-6),
+   and `tests/test_fa_d3c_runtime_boundary.py` and Gate G-0 [2] fail if one returns. A source that ever
+   needs a rendered page belongs in the separate corpus repository (L17.12 step 65), never in this image.
 2. Open non-governmental sites — full provenance, `review` trust until verified.
 3. Subscription databases (e.g. PakistanLawSite) — **licensed API** or **import
    folder only**. Login-form scraping is disabled (`ALLOW_LOGIN_SCRAPING=false`,
