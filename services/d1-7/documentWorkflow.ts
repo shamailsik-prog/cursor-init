@@ -54,6 +54,8 @@ function requireActorAndDocument(
   if (actor.role === "client" || actor.role === "intern" || actor.role === "accounts") {
     throw new PublicError("actor role not allowed for workflow actions")
   }
+  // FA-F13-039: in-process reads here follow member/matter sync on the route; Firestore-mode POST
+  // paths re-validate with repos.documents.get (FA-F13-026/037). No cache-before-Firestore merge.
   const doc = store.documents.get(documentId)
   if (!doc) throw new PublicError("unknown document")
   if (!isUserVisibleForDocument(store, actor, doc)) {

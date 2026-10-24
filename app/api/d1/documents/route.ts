@@ -213,7 +213,6 @@ async function handleGet(request: Request) {
     limit,
     cursor,
     nextCursor,
-    droppedDocuments,
   })
 }
 

@@ -21,7 +21,7 @@ import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from 
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
 import { DocumentMalformedError } from "@/platform/d1/documentRecord"
-import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { getRuntimeRepositories, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
 import {
@@ -111,7 +111,9 @@ async function handleGet(request: Request) {
       const timelineRows = (await repos.workflowEvents.listByFirm(user.firmId))
         .filter((event) => event.matterId === matterId)
         .filter((event) => {
-          const eventDoc = docsById.get(event.documentId) ?? store.documents.get(event.documentId)
+          const eventDoc =
+            docsById.get(event.documentId) ??
+            (resolvePersistenceMode() === "firestore" ? undefined : store.documents.get(event.documentId))
           return eventDoc !== undefined && canViewWorkflowDocument(store, userId, eventDoc)
         })
         .sort((a, b) => a.at - b.at)
