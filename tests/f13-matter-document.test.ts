@@ -209,11 +209,11 @@ describe("F13 re-audit: null-court read paths", () => {
     const shc = ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" })
     expect(shc("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
     expect(shc("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(true)
-    const drafts = readFileSync(path.join(path.resolve(__dirname, ".."), "services/d4-1/drafts.ts"), "utf8")
-    // FA-F13-025: the null/non-string branch must be explicit. `!ids.has` alone is equivalent for these
-    // values because Set.has returns false, and `typeof === "string" &&` fails open for every non-string
-    // other than null.
-    expect(drafts).toContain('typeof matter.courtId !== "string" || !ids.has(matter.courtId)')
+    // FA-F13-027: behavioural pin — a numeric courtId must fail closed on a mentioned foreign court (revert of the
+    // explicit typeof branch would admit Supreme Court text as this matter's own case).
+    const numericCourt = ownCaseReferenceMatcher({ courtId: 12 as never, caseNumber: "CP 12/2019" })
+    expect(numericCourt("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(numericCourt("CP 12/2019", { before: "As recorded,", after: "the suit continues" })).toBe(true)
   })
 
   it.each([

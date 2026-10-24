@@ -6,6 +6,13 @@ import {
   type DroppedDocument,
 } from "@/platform/d1/documentRecord"
 import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
+import {
+  draftTemplateAnalyticsId,
+  draftTemplateAnalyticsSearchHitIds,
+  nextDraftTemplateAnalyticsRow,
+  nextDraftTemplateAnalyticsSearchRows,
+  readDraftTemplateAnalyticsRow,
+} from "@/platform/persistence/draftTemplateAnalytics"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -486,12 +493,19 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
       // A row that exists but is malformed throws DocumentMalformedError (Codex P1 on #99): a caller must never mistake
       // it for an absent row and fall back to a cached copy.
+      // FA-F13-026: firmId's type is checked before the firm gate (same order as reportingIndex.get, FA-F13-020).
+      // getById compares `firmId !== firm` first, so a non-string or blank firmId came back as null (absence) and
+      // routes fell back to a stale in-process cache.
       async get(id, firmId) {
-        const row = await getById<DocumentRecord>(db, "documents", id, firmId)
-        if (!row) return null
-        const doc = readDocumentRecord(id, row)
-        if (!doc) throw new DocumentMalformedError(id)
-        return doc
+        const firm = requireCallerFirmId(firmId, "documents.get")
+        const snap = await getDoc(doc(db, "documents", id))
+        if (!snap.exists()) return null
+        const data = (snap.data() ?? {}) as Record<string, unknown>
+        if (typeof data.firmId !== "string" || data.firmId.trim() === "") throw new DocumentMalformedError(id)
+        if (data.firmId !== firm) return null
+        const parsed = readDocumentRecord(id, data)
+        if (!parsed) throw new DocumentMalformedError(id)
+        return parsed
       },
       // Codex P2 on #99: the stored row and the merged result are both validated, in one transaction, BEFORE the write,
       // so a refused update leaves storage unchanged.
@@ -2329,15 +2343,50 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         return asFirmScopedList({ ...page, items })
       },
     },
+    // FA-D4-001: rows are keyed by firm and template; the only write is `record`, one transaction that reads the
+    // caller's own row, refuses another firm's or a malformed one, and writes the next row. Legacy `template:{T}` rows
+    // are never read (the validator refuses their id) and never written.
     draftTemplateAnalytics: {
-      async upsert(row) {
-        await setDoc(doc(db, "draft_template_analytics", row.id), row)
+      async record(firmId, template, change, opts) {
+        const id = draftTemplateAnalyticsId(requireCallerFirmId(firmId, "draftTemplateAnalytics.record"), template.id)
+        const ref = doc(db, "draft_template_analytics", id)
+        return runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref)
+          const next = nextDraftTemplateAnalyticsRow(firmId, template, snap.exists() ? snap.data() : null, change, opts)
+          tx.set(ref, next)
+          return next
+        })
+      },
+      // PR #126 (Codex P2): one search page is ONE transaction. Every hit's row is read first, every next row is
+      // decided (one refusal throws and the transaction writes nothing), then every row is set. At most
+      // DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS (100) rows: within Firestore's 500 writes per transaction.
+      async recordSearchHits(firmId, templates, query, opts) {
+        const firm = requireCallerFirmId(firmId, "draftTemplateAnalytics.recordSearchHits")
+        const refs = draftTemplateAnalyticsSearchHitIds(firm, templates).map((id) => doc(db, "draft_template_analytics", id))
+        if (refs.length === 0) return []
+        return runTransaction(db, async (tx) => {
+          const snaps = await Promise.all(refs.map((ref) => tx.get(ref)))
+          const next = nextDraftTemplateAnalyticsSearchRows(
+            firm,
+            templates,
+            snaps.map((snap) => (snap.exists() ? snap.data() : null)),
+            query,
+            opts
+          )
+          next.forEach((row, i) => tx.set(refs[i] as (typeof refs)[number], row))
+          return next
+        })
       },
       async get(id, firmId) {
-        return getById<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", id, firmId)
+        const row = await getById<StoredRow>(db, "draft_template_analytics", id, firmId)
+        return row ? readDraftTemplateAnalyticsRow(id, row) : null
       },
       async listByFirm(firmId) {
-        return listByFirm<DraftTemplateAnalyticsRow>(db, "draft_template_analytics", firmId)
+        const page = await listAllRowsByFirm<StoredRow & { id: string }>(db, "draft_template_analytics", firmId)
+        const items = page.items
+          .map((row) => readDraftTemplateAnalyticsRow(row.id, row))
+          .filter((row): row is DraftTemplateAnalyticsRow => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     matterReportExportAnalytics: {

@@ -433,22 +433,15 @@ describe("Firestore repository adapters", () => {
       expect(indexRow?.label).toBe("Indexed Matter")
       const indexRows = await repos.reportingIndex.listByFirm("firmA")
       expect(indexRows.some((row) => row.id === "idx_1" && row.rowType === "matter")).toBe(true)
-      await repos.draftTemplateAnalytics.upsert({
-        id: "template:motion_template",
-        firmId: "firmA",
-        templateId: "motion_template",
-        templateName: "Motion Template",
-        templatePosture: "motion",
-        templateCategory: "drafting",
-        composeCount: 4,
-        templateSearchCount: 7,
-        lastComposedAt: 40,
-        lastTemplateSearchAt: 41,
-        lastTemplateSearchQuery: "motion",
-        updatedAt: 42,
-      })
-      const draftTemplateAnalytics = await repos.draftTemplateAnalytics.get("template:motion_template", "firmA")
+      // FA-D4-001: `record` (one transaction per compose or search) replaces the blind upsert; the id carries the firm.
+      const motion = { id: "motion_template", name: "Motion Template", posture: "motion", category: "drafting" }
+      for (let i = 0; i < 4; i += 1) await repos.draftTemplateAnalytics.record("firmA", motion, { kind: "compose" }, { now: 40 })
+      for (let i = 0; i < 7; i += 1) {
+        await repos.draftTemplateAnalytics.record("firmA", motion, { kind: "search", query: "motion" }, { now: 41 })
+      }
+      const draftTemplateAnalytics = await repos.draftTemplateAnalytics.get("template:firmA:motion_template", "firmA")
       expect(draftTemplateAnalytics?.composeCount).toBe(4)
+      expect(await repos.draftTemplateAnalytics.get("template:firmA:motion_template", "firmB")).toBeNull()
       const analyticsRows = await repos.draftTemplateAnalytics.listByFirm("firmA")
       expect(
         analyticsRows.some(
