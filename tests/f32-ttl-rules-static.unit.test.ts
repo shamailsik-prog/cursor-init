@@ -78,6 +78,7 @@ describe("F32 TTL rules static shape (R117-001..003 / R117-006)", () => {
       "allow read: if false; allow write: if false;",
       "allow read,write: if false;",
       "allow read, write: if (false);",
+      "allow read, write: if ((false));",
     ]
     for (const rules of variants) {
       expect(() => assertBlockIsServerDenyOnly(rules)).not.toThrow()
