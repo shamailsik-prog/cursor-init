@@ -1,6 +1,9 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../src/admin"
+import type { AlertSpec } from "../src/alerts/model"
+import { raiseAlert } from "../src/alerts/raise"
 import { jobRuntime } from "../src/p2/dispatch"
 import { ApiError, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
@@ -133,7 +136,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
   }
 
   // Eight escalator runs (two concurrent) and their reads: 14 s measured on a cold emulator.
-  it("a missed deadline escalates exactly once per step: operator, then the firm's partners, then the founding partner, then nothing", { timeout: E2E_TIMEOUT_MS }, async () => {
+  it("a missed deadline escalates exactly once per step: operator, then the firm's partners, then the founding partner, who is then re-paged each critical window (R1-005)", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     expect(alert).toMatchObject({ level: 0, ownerRole: "operator", severity: "high", state: "open" })
     expect(millis(alert.escalateAt)).toBe(T0 + 30 * MIN)
@@ -162,8 +165,11 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     // Fifteen minutes later (critical window): the founding partner, as firm administrator; then the ladder is spent.
     expect((await run(T0 + 45 * MIN)).escalated).toEqual([alert.id])
     const l2 = await alertDoc(alert.id)
-    expect(l2).toMatchObject({ level: 2, ownerRole: "firm_admin", severity: "critical", state: "open", escalateAt: null })
+    // FA-F43-R1-005 (spec R21): the last level keeps a deadline of one critical window, for its re-page.
+    expect(l2).toMatchObject({ level: 2, ownerRole: "firm_admin", severity: "critical", state: "open" })
+    expect(millis(l2.escalateAt)).toBe(T0 + 60 * MIN)
     expect((await userNotes(alert.id)).filter((n) => n.level === 2).map((n) => n.userId)).toEqual([founder.uid])
+    // Hours later there is no level to step to: the escalator re-pages level 2 once, and records no further step.
     expect((await run(T0 + 10 * 60 * MIN)).escalated).toEqual([])
     expect((await alertDoc(alert.id)).escalations).toHaveLength(2)
 
@@ -172,6 +178,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
       [`${alert.id}_e1_l0`, 0, "operator"],
       [`${alert.id}_e1_l1`, 1, "partner"],
       [`${alert.id}_e1_l2`, 2, "firm_admin"],
+      [`${alert.id}_e1_l2_r1`, 2, "firm_admin"],
     ])
     expect(sortTargets(delivered[1].targets)).toEqual(sortTargets([{ kind: "oncall" }, { kind: "user", uid: founder.uid }, { kind: "user", uid: partner2.uid }]))
     expect(sortTargets(delivered[2].targets)).toEqual(sortTargets([{ kind: "oncall" }, { kind: "user", uid: founder.uid }]))
@@ -179,6 +186,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
       [`${alert.id}_e1_l0`, "delivered"],
       [`${alert.id}_e1_l1`, "delivered"],
       [`${alert.id}_e1_l2`, "delivered"],
+      [`${alert.id}_e1_l2_r1`, "delivered"],
     ])
   })
 
@@ -305,5 +313,110 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(Object.keys(p2.items[0]).sort()).toEqual(
       ["acknowledgedAt", "acknowledgedBy", "alertId", "condition", "count", "detail", "episode", "escalateAt", "firstSeenAt", "lastSeenAt", "level", "ownerRole", "ref", "resolvedAt", "resolvedBy", "severity", "state", "subjectKey", "totalCount"].sort()
     )
+  })
+
+  // FA-F43-R1-003: the auditor's probes PROBE-06, 08 and 09, kept as regression tests for code that was already right.
+
+  /** A stall alert of this file's firm (high), raised directly: the raise path is the one the sweeper uses. */
+  const stall = (subject = "jobType:platform.diagnostic"): AlertSpec => ({ condition: "job.dispatch_stalled", firmId, subjectKey: subject, ref: null, severity: "high", detail: { jobs: 1 } })
+
+  it("a raise racing the escalator keeps its count, the step and the raised severity; a reopen is not stepped by the old deadline (PROBE-06)", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const { id } = await raiseAlert(stall(), T0)
+    const { runAlertEscalator } = await escalatorModule()
+    await Promise.all([raiseAlert(stall(), T0 + 30 * MIN), runAlertEscalator({ now: () => T0 + 30 * MIN, notifier }), raiseAlert(stall(), T0 + 30 * MIN)])
+    const raced = await alertDoc(id)
+    expect([raced.count, raced.totalCount, raced.level, raced.severity, raced.state]).toEqual([3, 3, 1, "critical", "open"])
+    // A raise after the step counts it and never lowers the escalated severity (the raise itself is high).
+    await raiseAlert(stall(), T0 + 31 * MIN)
+    expect(await alertDoc(id)).toMatchObject({ count: 4, level: 1, severity: "critical" })
+
+    // Resolved, then a reopen and an escalator run concurrently, after the old deadline and before the new one.
+    clock.set(T0 + 50 * MIN)
+    await useOperatorClock(clock)
+    await viaApi("operatorAlertAction", route())({ token: operator.token, data: { alertId: id, action: "resolve" } } as never)
+    await Promise.all([raiseAlert(stall(), T0 + 50 * MIN), runAlertEscalator({ now: () => T0 + 50 * MIN, notifier })])
+    const reopened = await alertDoc(id)
+    expect([reopened.state, reopened.episode, reopened.level, reopened.count, millis(reopened.escalateAt)]).toEqual(["open", 2, 0, 1, T0 + 80 * MIN])
+  })
+
+  it("every role but an active partner of the firm is refused on both firm routes, and only a boolean platformAdmin claim reaches the operator route (PROBE-08)", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const { id } = await raiseAlert(stall(), T0)
+    const { runAlertEscalator } = await escalatorModule()
+    await runAlertEscalator({ now: () => T0 + 30 * MIN, notifier }) // level 1: the partners' rung
+    clock.set(T0 + 31 * MIN)
+    const outcome: Record<string, unknown> = {}
+    const attempt = async (key: string, p: Promise<unknown>) => {
+      try {
+        await p
+        outcome[key] = "ok"
+      } catch (err) {
+        outcome[key] = err instanceof ApiError ? [err.status, err.code] : String(err)
+      }
+    }
+    const member = async (role: string) => {
+      const m = await mintIdToken({ firmId, role, clearanceLevel: "privileged-restricted" })
+      uids.push(m.uid)
+      return m
+    }
+    for (const role of ["associate", "clerk", "intern", "client", "accounts"]) {
+      const m = await member(role)
+      await attempt(`${role}.list`, viaApi("listAlerts", route())({ token: m.token, data: { firmId } } as never))
+      await attempt(`${role}.ack`, viaApi("acknowledgeAlert", route())({ token: m.token, data: { firmId, alertId: id } } as never))
+      await attempt(`${role}.resolve`, viaApi("resolveAlert", route())({ token: m.token, data: { firmId, alertId: id } } as never))
+    }
+    const inactive = await member("partner")
+    await adminDb().collection("users").doc(inactive.uid).update({ active: false })
+    await attempt("inactivePartner.list", viaApi("listAlerts", route())({ token: inactive.token, data: { firmId } } as never))
+    await attempt("inactivePartner.ack", viaApi("acknowledgeAlert", route())({ token: inactive.token, data: { firmId, alertId: id } } as never))
+    const demoted = await member("partner")
+    await adminDb().collection("users").doc(demoted.uid).update({ role: "associate" })
+    await attempt("demotedPartner.list", viaApi("listAlerts", route())({ token: demoted.token, data: { firmId } } as never))
+    await attempt("demotedPartner.ack", viaApi("acknowledgeAlert", route())({ token: demoted.token, data: { firmId, alertId: id } } as never))
+    await useOperatorClock(clock)
+    const adminString = await mintIdToken({ platformAdmin: "true" })
+    uids.push(adminString.uid)
+    await attempt("platformAdminString.op", viaApi("operatorAlertAction", route())({ token: adminString.token, data: { alertId: id, action: "acknowledge" } } as never))
+    const noClaims = await mintIdToken(null)
+    uids.push(noClaims.uid)
+    await attempt("noClaims.op", viaApi("operatorAlertAction", route())({ token: noClaims.token, data: { alertId: id, action: "acknowledge" } } as never))
+    expect(Object.entries(outcome).filter(([, v]) => v === "ok")).toEqual([])
+    expect(outcome["platformAdminString.op"]).toEqual([403, "platform_admin_only"])
+    expect(await alertDoc(id)).toMatchObject({ state: "open", actions: [] })
+
+    // The shared decision table: alert.read and alert.ack allow the partner only, scoped or not.
+    const allowed: string[] = []
+    for (const role of ["partner", "associate", "clerk", "intern", "client", "accounts", "unknown"]) {
+      for (const action of ["alert.read", "alert.ack"]) {
+        if (decide({ role, firmId, clearanceLevel: "privileged-restricted" }, action, undefined, false).allow) allowed.push(`${role}.${action}`)
+        if (decide({ role, firmId, clearanceLevel: "privileged-restricted" }, action, undefined, false, { scope: "own_matters" }).allow) allowed.push(`${role}.${action}.scoped`)
+      }
+    }
+    expect(allowed.filter((k) => !k.startsWith("partner."))).toEqual([])
+    expect(allowed.filter((k) => !k.endsWith(".scoped"))).toEqual(["partner.alert.read", "partner.alert.ack"])
+  })
+
+  it("the ladder's targets: only the firm's active partners at level 1; level 2 falls back to them when the founder left the firm; never another firm's user (PROBE-09)", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const active = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(active.uid)
+    // partner2 is deactivated; the founder moves to the other firm; planted onboarding rows point this firm at the
+    // other firm's partner and at a user that does not exist.
+    await adminDb().collection("users").doc(partner2.uid).update({ active: false })
+    await adminDb().collection("users").doc(founder.uid).update({ firmId: otherFirmId })
+    await adminDb().collection("platform_onboarding").doc(otherPartner.uid).set({ firmId })
+    await adminDb().collection("platform_onboarding").doc(`ghost-${uniq("u")}`).set({ firmId })
+    const { id } = await raiseAlert(stall(), T0)
+    const { runAlertEscalator } = await escalatorModule()
+    await runAlertEscalator({ now: () => T0 + 30 * MIN, notifier })
+    await runAlertEscalator({ now: () => T0 + 45 * MIN, notifier })
+    const notes = (await userNotes(id)).map((n) => [n.level, n.userId, n.firmId])
+    expect(notes.sort()).toEqual(
+      [
+        [1, active.uid, firmId],
+        [2, active.uid, firmId],
+      ].sort()
+    )
+    const pages = await pagesOf(id)
+    expect(pages.filter((p) => p.level === 2).map((p) => p.fallback)).toEqual(["partners"])
+    expect(pages.filter((p) => p.level === 1).map((p) => p.fallback)).toEqual([null])
   })
 })

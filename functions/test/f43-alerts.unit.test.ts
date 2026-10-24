@@ -48,6 +48,26 @@ describe("audit F43: the alert model", () => {
     expect(m.RESERVATION_UNRESOLVED_ALERT_MS).toBe(10 * 60_000)
   })
 
+  it("R1 rulings: an acknowledgment holds 4 h; kill-switch alerts never escalate; the platform subject; re-page ids", async () => {
+    const m = await model()
+    // Spec R18 (FA-F43-R1-002): a raise 4 h or more after the acknowledgment opens a new episode.
+    expect(m.ACK_HOLD_MS).toBe(4 * 3_600_000)
+    // Spec R23: a kill switch is a deliberate act; every other condition escalates.
+    expect(m.ALERT_CONDITIONS.filter((c) => !m.escalates(c))).toEqual(["ai.kill_switch_blocked"])
+    // Spec R24: the platform subject is an id no firm can have (Firestore reserves ids matching __.*__).
+    expect(m.PLATFORM_ALERT_FIRM).toBe("__platform__")
+    expect(m.PLATFORM_ALERT_FIRM).toMatch(/^__.*__$/)
+    // Spec R21: a level's own page keeps its id; each re-page of the last level has its own.
+    expect([m.pageIdFor("a1", 2, 1), m.pageIdFor("a1", 2, 2, 0), m.pageIdFor("a1", 2, 2, 3)]).toEqual(["a1_e2_l1", "a1_e2_l2", "a1_e2_l2_r3"])
+  })
+
+  it("R1 rulings: the checker's raises get 5 s past the scan budget, and the run still ends 10 s before its timeout", async () => {
+    const CHECKER = ["..", "src", "alerts", "checker"].join("/")
+    const c = (await import(/* @vite-ignore */ CHECKER)) as Record<string, unknown>
+    expect([c.CHECKER_BUDGET_MS, c.CHECK_RAISE_GRACE_MS]).toEqual([40_000, 5_000])
+    expect(c.CHECK_PASSES).toEqual(["jobs", "sagas", "reservations"])
+  })
+
   it("detail carries codes, ids and integers only: free text, nested values, non-integers and long strings are refused", async () => {
     const { assertSafeDetail } = await model()
     expect(() => assertSafeDetail({ jobType: "platform.diagnostic", code: "diag_failure", attempts: 4, ref: "jobs/j1:x" })).not.toThrow()

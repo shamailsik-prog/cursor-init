@@ -4,6 +4,8 @@ import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { firmConfigRef, monthRef, platformConfigRef } from "../src/p1/config"
 import { costMicroUsd } from "../src/p1/costTable"
+import { callP1Embedding } from "../src/p1/embedding"
+import { setP1EmbeddingTransportForTests } from "../src/p1/embeddingTransport"
 import { RESERVATION_LEASE_MS, callP1, p1TestSeam, type P1Request } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { setP1TransportForTests } from "../src/p1/transport"
@@ -42,6 +44,19 @@ const pagesOf = async (alertId: string): Promise<Alert[]> =>
   (await adminDb().collection("ops_alert_notifications").where("alertId", "==", alertId).get()).docs.map((d) => ({ id: d.id, ...d.data() }))
 const millis = (t: unknown) => (t instanceof Timestamp ? t.toMillis() : null)
 const at = (ms: number) => ({ now: () => ms })
+/** The platform subject (spec R24): no firm can have this id (Firestore reserves ids matching `__.*__`). */
+const PLATFORM = "__platform__"
+
+/** Deletes the platform-subject alerts and their pages (`deleteFirmData` cannot page from a reserved id). */
+async function deletePlatformAlerts(): Promise<void> {
+  for (const col of ["ops_alerts", "ops_alert_notifications", "notifications"]) {
+    const snap = await adminDb().collection(col).where("firmId", "==", PLATFORM).select().get()
+    if (snap.size === 0) continue
+    const batch = adminDb().batch()
+    for (const d of snap.docs) batch.delete(d.ref)
+    await batch.commit()
+  }
+}
 
 const req = (firmId: string): P1Request => ({
   firmId,
@@ -87,6 +102,7 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
   afterEach(async () => {
     vi.unstubAllEnvs()
     setP1TransportForTests(null)
+    setP1EmbeddingTransportForTests(null)
     setOpikFetchForTests(null)
     setProviderConfigForTests(null)
     resetSeam()
@@ -138,7 +154,8 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
     expect(alert.detail).toMatchObject({ unresolved: 1, quarantined: 0, oldestAgeMs: 10 * 60_000 })
 
     // The reconciler gave up on it (quarantine): still unresolved, now counted as quarantined.
-    await adminDb().collection("ai_reservations").doc(r.usageLogId).update({ state: "reconcile_failed" })
+    // (As the reconciler quarantines: the state and the time it was quarantined, which orders the checker's query.)
+    await adminDb().collection("ai_reservations").doc(r.usageLogId).update({ state: "reconcile_failed", quarantinedAt: Timestamp.fromMillis(lapse + 15 * 60_000) })
     await runAlertChecker({ now: () => lapse + 20 * 60_000, passes: ["reservations"] })
     const later = await alertsOf(firmId)
     expect(later.map((a) => [a.id, a.count, a.detail.unresolved, a.detail.quarantined])).toEqual([[alert.id, 2, 1, 1]])
@@ -159,7 +176,8 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
     expect(alerts[0].detail).toMatchObject({ monthKey: MONTH, threshold: 70, budgetMicroUsd: BUDGET })
   })
 
-  it("calls refused by the firm's or the platform's kill switch raise ai.kill_switch_blocked, one alert per switch", async () => {
+  it("calls refused by the firm's or the platform's kill switch raise ai.kill_switch_blocked: the firm's under the firm, the platform's once under the platform subject, neither escalating", async () => {
+    await deletePlatformAlerts()
     await seedFirm({ killSwitch: { disableAll: true, disabledModels: [], reason: "Partner stopped AI for the month." } })
     const a = await callP1(req(firmId), at(T))
     const b = await callP1(req(firmId), at(T + 1_000))
@@ -168,13 +186,41 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
     await platformConfigRef().set({ killSwitch: { disableAll: true, disabledModels: [], reason: "Operator stop." } })
     const c = await callP1(req(firmId), at(T + 2_000))
     expect(c.blockReason).toBe("kill_switch_platform")
-    const alerts = (await alertsOf(firmId)).sort((x, y) => String(x.subjectKey).localeCompare(String(y.subjectKey)))
-    expect(alerts.map((x) => [x.condition, x.subjectKey, x.ref, x.severity, x.count])).toEqual([
-      ["ai.kill_switch_blocked", "killSwitch:firm", `ai_config/${firmId}`, "warning", 2],
-      ["ai.kill_switch_blocked", "killSwitch:platform", "platform/p1", "warning", 1],
-    ])
+    // FA-F43-R1-006 (spec R23, R24): a kill switch is a deliberate act, so neither alert has an escalation deadline;
+    // the platform's switch is one alert under the platform subject, not one per firm.
+    const alerts = await alertsOf(firmId)
+    expect(alerts.map((x) => [x.condition, x.subjectKey, x.ref, x.severity, x.count, x.escalateAt])).toEqual([["ai.kill_switch_blocked", "killSwitch:firm", `ai_config/${firmId}`, "warning", 2, null]])
+    const platform = await alertsOf(PLATFORM)
+    expect(platform.map((x) => [x.condition, x.subjectKey, x.ref, x.severity, x.count, x.escalateAt])).toEqual([["ai.kill_switch_blocked", "killSwitch:platform", "platform/p1", "warning", 1, null]])
     // No reason text (a partner's free text) is copied into the alert.
-    expect(JSON.stringify(alerts)).not.toContain("Partner stopped")
+    expect(JSON.stringify([alerts, platform])).not.toContain("Partner stopped")
+    await deletePlatformAlerts()
+  })
+
+  it("the corpus embedding path (FA-D3C): a kill-switch block and a 70 percent crossing raise their alerts in the commit, at the call's clock (FA-F43-R1-008)", async () => {
+    setP1EmbeddingTransportForTests({ embed: async () => ({ embedding: new Array(1536).fill(0), inputTokens: 1_000_000, model: "openai/text-embedding-3-small" }) } as never)
+    const body = { caller: "corpus@example.iam.gserviceaccount.com", corpusModel: "text-embedding-3-small", dimensions: 1536, input: "Section 497 bail", classification: "public" as const }
+    await seedFirm({ killSwitch: { disableAll: true, disabledModels: [], reason: "Partner stopped AI." } })
+    const blocked = await callP1Embedding({ ...body, firmId, operationId: "c".repeat(64) }, at(T))
+    expect([blocked.outcome, blocked.blockReason]).toEqual(["blocked", "kill_switch_firm"])
+    const [stop, ...none] = await alertsOf(firmId)
+    expect(none).toEqual([])
+    expect([stop.condition, stop.subjectKey, millis(stop.firstSeenAt), stop.escalateAt]).toEqual(["ai.kill_switch_blocked", "killSwitch:firm", T, null])
+
+    const other = uniq("firm")
+    try {
+      // A small budget, 69 percent spent: one embedding (a million tokens, 20,000 micro-dollars) crosses 70 percent only.
+      await firmConfigRef(other).set({ monthlyBudgetMicroUsd: 100_000 })
+      await monthRef(other, MONTH).set({ firmId: other, monthKey: MONTH, spentMicroUsd: 69_000 })
+      const crossed = await callP1Embedding({ ...body, firmId: other, operationId: "d".repeat(64) }, at(T + 60_000))
+      expect([crossed.outcome, crossed.accounting]).toEqual(["ok", "settled"])
+      const alerts = await alertsOf(other)
+      expect(alerts.map((a) => [a.condition, a.subjectKey, a.severity, millis(a.firstSeenAt), millis(a.escalateAt)])).toEqual([
+        ["ai.budget_threshold", `budget:${MONTH}:70`, "warning", T + 60_000, T + 60_000 + 4 * 3_600_000],
+      ])
+    } finally {
+      await deleteFirmData([other])
+    }
   })
 
   it("transaction coupling: a crossing whose commit fails writes no alert; the same crossing that commits writes it", async () => {

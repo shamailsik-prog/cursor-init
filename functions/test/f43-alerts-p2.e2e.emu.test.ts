@@ -66,6 +66,14 @@ class BrokenQueue implements JobDispatcher {
   }
 }
 
+/** Cloud Tasks that accepts every task and never delivers one (the queue is paused, or the worker unreachable). */
+class BlackHoleQueue implements JobDispatcher {
+  calls: JobTask[] = []
+  async dispatch(task: JobTask): Promise<void> {
+    this.calls.push(task)
+  }
+}
+
 /** Firestore's stored size of a document (name, fields, 32 bytes overhead), per the documented size rules. */
 function valueSize(v: unknown): number {
   if (v === null || v === undefined || typeof v === "boolean") return 1
@@ -279,6 +287,41 @@ describe.skipIf(!EMULATORS)("audit F43: P2 faults raise durable alerts (e2e)", (
     await runAlertChecker({ now: () => T0 + 16 * 60_000, passes: ["jobs"] })
     const later = await alertsOf(firmId)
     expect(later.map((x) => [x.id, x.count, x.ref, x.detail.waiting, x.detail.oldestAgeMs])).toEqual([[alert.id, 2, `jobs/${jobId}`, 2, 16 * 60_000]])
+  })
+
+  // FA-F43-R1-003: the auditor's PROBE-14 and PROBE-15, the stall rule's two arms against a queue that accepts tasks
+  // and never delivers them (no dispatch ever throws, so only the sweeper's own bookkeeping can see the stall).
+
+  it("a queue that accepts every task and delivers none raises job.dispatch_stalled at the third re-dispatch (PROBE-14)", async () => {
+    const queue = new BlackHoleQueue()
+    const d = { ...testDeps(clock), dispatcher: queue }
+    const { jobId } = await enqueueAt(diagSpec(firmId, { behaviour: "succeed" }), T0)
+    await onJobCreatedCore(jobId, (await jobsRef().doc(jobId).get()).data(), d)
+    for (const at of [T0 + 30_000, T0 + 90_000]) {
+      clock.set(at)
+      await sweep(d)
+    }
+    expect(await alertsOf(firmId)).toEqual([])
+    clock.set(T0 + 210_000)
+    const r = await sweep(d)
+    expect([r.dispatched.includes(jobId), r.stalled]).toEqual([true, [jobId]])
+    expect((await readJob(jobId)).status).toBe("queued")
+    expect(queue.calls).toHaveLength(4)
+    const alerts = await alertsOf(firmId)
+    expect(alerts.map((a) => [a.condition, a.count, a.detail.maxRedispatches])).toEqual([["job.dispatch_stalled", 1, 3]])
+  })
+
+  it("a row first re-dispatched after waiting 15 minutes raises the stall on that re-dispatch: the wait arm (PROBE-15)", async () => {
+    const queue = new BlackHoleQueue()
+    const d = { ...testDeps(clock), dispatcher: queue }
+    const { jobId } = await enqueueAt(diagSpec(firmId, { behaviour: "succeed" }), T0)
+    // Neither the create trigger nor the sweeper ran for 16 minutes; the row has been due since T0.
+    clock.set(T0 + 16 * 60_000)
+    const r = await sweep(d)
+    expect(r.stalled).toEqual([jobId])
+    expect((await readJob(jobId)).redispatches).toBe(1)
+    const alerts = await alertsOf(firmId)
+    expect(alerts.map((a) => [a.condition, a.detail.maxRedispatches, a.detail.oldestWaitMs])).toEqual([["job.dispatch_stalled", 1, 16 * 60_000]])
   })
 })
 
