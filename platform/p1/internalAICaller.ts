@@ -65,10 +65,21 @@ export type OutboundResponse = {
    * and never stored; empty when the call is refused for its size.
    */
   messages: OutboundMessage[]
+  /**
+   * Audit F34 (spec ruling R12): the tokens the transport reported for an answered call, present only when it reported
+   * both counts as non-negative integers. Absent on a blocked call (nothing was sent) and when the transport reported none.
+   */
+  usage?: { inputTokens: number; outputTokens: number }
 }
 
 export type Transport = {
-  send: (request: OutboundSend) => Promise<{ text: string }>
+  /** Audit F34 (R12): a transport may report the tokens it was billed; the eve bridge passes them on as its usage. */
+  send: (request: OutboundSend) => Promise<{ text: string; inputTokens?: number | null; outputTokens?: number | null }>
+}
+
+/** A token count, when it is a non-negative integer. */
+function tokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
 /** UTF-8 length of a string, without encoding it. */
@@ -209,12 +220,14 @@ export async function callCommitteeBrain(
     const inbound = maskOutboundPII(result.text, {
       partyNames: input.partyNames,
     })
+    const [inputTokens, outputTokens] = [tokenCount(result.inputTokens), tokenCount(result.outputTokens)]
     return {
       blocked: false,
       provider: input.provider,
       text: inbound.masked,
       outbound,
       messages,
+      ...(inputTokens === null || outputTokens === null ? {} : { usage: { inputTokens, outputTokens } }),
     }
   } catch (err) {
     // The reason is returned to callers and persisted with committee outputs,

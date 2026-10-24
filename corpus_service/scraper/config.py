@@ -2,7 +2,8 @@
 Production settings for Pakistani Legal Scraper System.
 
 Stack: PostgreSQL 16 + pgvector, FastAPI, Celery, httpx, BeautifulSoup,
-       playwright, pdfplumber, pytesseract, cryptography Fernet, OpenAI embeddings.
+       pdfplumber, pytesseract, cryptography Fernet; embeddings through the P1 gateway
+       (FA-D3C-002). No headless browser (FA-D3C-001).
 
 Implements dual Blackletter seat failover ONLY on real failure (exceptions,
 network errors, 5xx, auth failure after retry) — never on empty results.
@@ -211,9 +212,20 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------------
-    # OpenAI
+    # Embeddings, through the P1 gateway (FA-D3C-002)
     # ---------------------------------------------------------------------
-    OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key for embeddings")
+    # The corpus holds no provider key or SDK. Every paid embedding goes to P1's p1CorpusEmbedding Cloud Function
+    # (scraper/p1_client.py), which applies the kill switches, the budget, the P1 ledger, the provider policy and the
+    # outbound mask. An empty URL turns embeddings off: the batch is skipped, as it was with no key.
+    P1_EMBEDDING_URL: str = Field(
+        default="",
+        description="https URL of P1's p1CorpusEmbedding function (a Google serverless host on 443); empty disables embeddings",
+    )
+    P1_ID_TOKEN_FILE: str = Field(
+        default="/run/secrets/p1_id_token",
+        description="File holding the corpus service account's current Google-signed OIDC ID token, audience P1_EMBEDDING_URL; "
+        "the deployment keeps it current. Read on every call, never logged.",
+    )
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", description="OpenAI embedding model name")
     OPENAI_EMBEDDING_DIMENSIONS: int = Field(default=1536, ge=256, le=3072)
     EMBEDDING_BATCH_SIZE: int = Field(default=50, ge=1, le=500, description="Number of texts per embedding API call")
@@ -233,9 +245,6 @@ class Settings(BaseSettings):
         default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 PakistaniLegalBot/1.0"
     )
     SCRAPER_CONCURRENT_REQUESTS: int = Field(default=3, ge=1, le=20)
-    PLAYWRIGHT_ENABLED: bool = Field(default=True, description="Enable Playwright for JS-heavy pages")
-    PLAYWRIGHT_HEADLESS: bool = Field(default=True)
-    PLAYWRIGHT_TIMEOUT_MS: int = Field(default=30000, ge=5000, le=120000)
 
     # FINAL_2 — login scraping permanently disabled in production
     # Fail closed: without an explicit ENVIRONMENT=development / APP_ENV=development the service is production.
@@ -614,7 +623,7 @@ class Settings(BaseSettings):
             if status_code == 429:
                 return True  # Rate limit - might need other seat
         if exception is not None:
-            # httpx / playwright / network layer
+            # httpx / network layer (FA-D3C-001: no browser in this runtime, so no browser timeout class)
             real_exception_names = (
                 "TimeoutException",
                 "ConnectTimeout",
@@ -622,7 +631,6 @@ class Settings(BaseSettings):
                 "NetworkError",
                 "ConnectionError",
                 "RemoteProtocolError",
-                "PlaywrightTimeoutError",
                 "APIConnectionError",
             )
             if exception.__class__.__name__ in real_exception_names:
@@ -643,7 +651,7 @@ class Settings(BaseSettings):
     def model_dump_safe(self) -> Dict[str, str | int | float | bool | List[str]]:
         """Return dict for logging with secrets redacted."""
         data = self.model_dump()
-        for key in ["PLS_PASS", "PLS_PASS_B", "ENCRYPTION_KEY", "ADMIN_API_KEY", "OPENAI_API_KEY", "SECRET_KEY"]:
+        for key in ["PLS_PASS", "PLS_PASS_B", "ENCRYPTION_KEY", "ADMIN_API_KEY", "SECRET_KEY"]:
             if key in data and data[key]:
                 val = str(data[key])
                 data[key] = val[:4] + "***REDACTED***" + val[-2:] if len(val) > 6 else "***REDACTED***"

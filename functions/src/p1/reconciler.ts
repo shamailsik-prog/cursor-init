@@ -7,10 +7,12 @@ import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
+import { reconciledDecision } from "./decisionRecord"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
+import { opikConfig } from "./opik"
 import { modelId } from "./transport"
-import type { P1Outcome, TaskType } from "./types"
+import type { LedgerTaskType, P1Outcome } from "./types"
 
 /**
  * The lease reconciler for P1 reservations (audit F07, F08), run every minute by `p1ReservationReconciler`, the
@@ -46,6 +48,10 @@ import type { P1Outcome, TaskType } from "./types"
  *   when it did (`reconciledFrom: "recorded"`: the provider's reported usage, or the I1 charge); otherwise the
  *   reserved worst case, the input ceiling and the 4,096-token ceiling (`reconciledFrom: "worst_case"`,
  *   `tokensEstimated: true`).
+ *
+ * A settled reservation also gets the call's decision record (audit F34, spec ruling R2), staged in the same transaction
+ * from the reservation's `decisionSeed` and its provider attempt (`reconciledDecision` in decisionRecord.ts). A released
+ * one does not: nothing was sent and no usage row is written, and the released reservation is its record.
  *
  * Either way, in the same transaction (Codex P2 on PR #40), the call's `committee_outputs` rows (found by their
  * `usageLogId`) take `accounting: "settled"`, and so does the answer stored for the request's Idempotency-Key (the
@@ -112,7 +118,7 @@ type Parsed = {
   actorId: string
   matterId: string | null
   jobId: string | null
-  taskType: TaskType
+  taskType: LedgerTaskType
   model: string
   classification: Classification
   reservedInputTokens: number
@@ -120,6 +126,9 @@ type Parsed = {
   attempt: Record<string, unknown> | null
   /** The `idempotency_keys` doc id of the request the call was made for, when it is a plain doc id. */
   idempotencyDoc: string | null
+  /** FA-D3C-002: an embedding call's verified service caller and corpus operation id; null on every chat call. */
+  caller: string | null
+  corpusOperationId: string | null
 }
 
 /** What a settlement needs from a reservation. The firm, the month and the hold are required; everything else is defaulted. */
@@ -136,7 +145,7 @@ function parseReservation(res: DocumentData): Parsed {
     actorId: nonEmpty(res.actorId) ? res.actorId : "system",
     matterId: nonEmpty(res.matterId) ? res.matterId : null,
     jobId: nonEmpty(res.jobId) ? res.jobId : null,
-    taskType: (nonEmpty(res.taskType) ? res.taskType : "committee") as TaskType,
+    taskType: (nonEmpty(res.taskType) ? res.taskType : "committee") as LedgerTaskType,
     model: nonEmpty(res.model) ? res.model : "unknown",
     classification: isClassification(res.classification) ? res.classification : "privileged-restricted",
     reservedInputTokens: count(res.reservedInputTokens) ?? 0,
@@ -144,6 +153,8 @@ function parseReservation(res: DocumentData): Parsed {
     // Any attempt, even an unreadable one, means the provider may have been called: it is settled, never released.
     attempt: attempt == null ? null : typeof attempt === "object" && !Array.isArray(attempt) ? (attempt as Record<string, unknown>) : {},
     idempotencyDoc: typeof res.idempotencyDoc === "string" && /^[A-Za-z0-9_-]{1,400}$/.test(res.idempotencyDoc) ? res.idempotencyDoc : null,
+    caller: nonEmpty(res.caller) ? res.caller : null,
+    corpusOperationId: nonEmpty(res.corpusOperationId) ? res.corpusOperationId : null,
   }
 }
 
@@ -238,8 +249,17 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       // The reconciler cannot know whether the call's trace was exported.
       trace: { id: p.traceId, status: "unknown" },
       reconciledFrom: recorded ? "recorded" : "worst_case",
+      // FA-D3C-002 (Codex P2 on PR #118): an embedding call's caller and corpus operation, as its own row would carry them,
+      // so the row still joins the corpus's F27 receipt. Added only when the reservation holds them: a chat call's row
+      // is unchanged.
+      ...(p.caller === null ? {} : { caller: p.caller }),
+      ...(p.corpusOperationId === null ? {} : { corpusOperationId: p.corpusOperationId }),
     }
     const state = recorded ? settledState(true, recorded.result, recorded.costMicroUsd) : "settled"
+    // Audit F34 (R2): the call never committed, so its decision record is written here, from the seed it left on the
+    // reservation before dispatch and the attempt's ids and transport time; its trace export is left to the export
+    // reconciler (`pending`, nothing tried), or `disabled` when tracing is off.
+    const decision = reconciledDecision({ usageLogId: ref.id, traceId: p.traceId, seed: snap.get("decisionSeed"), attempt: p.attempt, record, nowMs, tracing: opikConfig().enabled })
     const staged = await stage(db, tx, {
       usageRef: db.collection("ai_usage_logs").doc(ref.id),
       configRef,
@@ -250,6 +270,7 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       seam: {},
       reservation: { ref, state, mustBeLive: true },
       settledBy: "reconciler",
+      decision,
     })
     markSettled()
     return { state, staged, firmId: p.firmId, monthKey: p.monthKey }

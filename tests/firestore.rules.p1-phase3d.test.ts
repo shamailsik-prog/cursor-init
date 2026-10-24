@@ -50,7 +50,8 @@ const FIRM_B_PARTNER = caller("p3d-b-partner", OTHER_FIRM, "partner")
 const FIRM_B_ADMIN = caller("p3d-b-admin", OTHER_FIRM, "partner", { platformAdmin: true })
 const EVERYONE = [PARTNER, PARTNER_ADMIN, ASSOC, CLERK, INTERN, CLIENT, ACCOUNTS, FIRM_B_PARTNER, FIRM_B_ADMIN]
 
-const COLLECTIONS = ["ai_usage_logs", "ai_usage_months", "ai_budget_alerts", "ai_config", "ai_reservations"] as const
+// Audit F34: plus the P1 decision records.
+const COLLECTIONS = ["ai_usage_logs", "ai_usage_months", "ai_budget_alerts", "ai_config", "ai_reservations", "p1_decisions"] as const
 
 /** A live, second-factor signed-in caller whose users/{uid} record matches its token (SEC-3). */
 async function as(c: Caller) {
@@ -74,6 +75,7 @@ beforeAll(async () => {
     await setDoc(doc(db, "ai_budget_alerts", `${FIRM}_2026-10_70`), row({ threshold: 70 }))
     await setDoc(doc(db, "ai_config", FIRM), row({ monthlyBudgetMicroUsd: 1_500_000, pkrPerUsd: 280 }))
     await setDoc(doc(db, "ai_reservations", "res1"), row({ state: "reserved", reservedMicroUsd: 81_960, usageLogId: "res1" }))
+    await setDoc(doc(db, "p1_decisions", "res1"), row({ traceId: "t-1", usageLogId: "res1", export: { state: "exported", attempts: 1 } }))
     await setDoc(doc(db, "platform", "p1"), { killSwitch: { disableAll: true, disabledModels: [], reason: "seed", setBy: "admin" } })
   })
 })
@@ -100,7 +102,7 @@ describe("firestore.rules names the P1 collections explicitly (P3-72)", () => {
 
 describe.each(COLLECTIONS)("%s is server-only", (name) => {
   const id = (n: string) =>
-    n === "ai_usage_logs" ? "log1" : n === "ai_usage_months" ? `${FIRM}_2026-10` : n === "ai_budget_alerts" ? `${FIRM}_2026-10_70` : n === "ai_reservations" ? "res1" : FIRM
+    n === "ai_usage_logs" ? "log1" : n === "ai_usage_months" ? `${FIRM}_2026-10` : n === "ai_budget_alerts" ? `${FIRM}_2026-10_70` : n === "ai_reservations" || n === "p1_decisions" ? "res1" : FIRM
 
   it("no role of the same firm, with or without the platformAdmin claim, reads, lists, writes or deletes it", async () => {
     for (const c of EVERYONE) {

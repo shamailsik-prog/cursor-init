@@ -927,3 +927,45 @@ def fetcher_for(name: str, *, headers: typing.Mapping[str, str] | None = None) -
 def sync_fetcher_for(name: str, *, headers: typing.Mapping[str, str] | None = None) -> SyncPolicyFetcher:
     """The production factory for synchronous callers. It accepts no test hook."""
     return SyncPolicyFetcher(PolicyFetcher(policy_for(name), headers=headers))
+
+
+# ---------------------------------------------------------------------------------------------
+# FA-D3C-002: the P1 gateway (not a source)
+# ---------------------------------------------------------------------------------------------
+# The corpus's paid embeddings go to P1's `p1CorpusEmbedding` Cloud Function (scraper/p1_client.py). Its URL is the
+# deployment's P1_EMBEDDING_URL, so the policy is built from it, but only a Google serverless host on 443 is admitted
+# (reviewed here, R4): never a provider API, never an address inside the network. Everything else about the request is
+# the boundary's: https only, the host's addresses vetted at connect, no redirect (a POST is never redirected), a
+# bounded body and deadline.
+P1_POLICY_NAME = "P1Gateway"
+P1_HOST_SUFFIXES = (".run.app", ".cloudfunctions.net")
+# An answer is about 30 KB (1,536 numbers); a megabyte is far beyond any honest one.
+P1_MAX_BYTES = 1024 * 1024
+# Longer than the function's own timeout (90 s), so P1's answer arrives before the corpus gives up on it.
+P1_DEADLINE_SECONDS = 100.0
+
+
+def p1_policy(url: typing.Any) -> FetchPolicy:
+    """The policy for the P1 endpoint ``url``, or ``FetchRefused``: an https URL on port 443 whose host ends in one of
+    P1_HOST_SUFFIXES (a label before it), with no userinfo, query or fragment, and every other check of ``check_url``."""
+    raw = str(url)
+    try:
+        parts = urlsplit(raw)
+        host, port = (parts.hostname or "").lower(), parts.port
+    except ValueError as error:
+        raise FetchRefused(UNPARSEABLE, url, P1_POLICY_NAME, str(error)) from None
+    if parts.query or parts.fragment:
+        raise FetchRefused(AMBIGUOUS, url, P1_POLICY_NAME, "a query or fragment in the P1 URL")
+    if port not in (None, DEFAULT_PORT):
+        raise FetchRefused(PORT_NOT_ALLOWED, url, P1_POLICY_NAME, f"port {port}")
+    if not any(host.endswith(suffix) and len(host) > len(suffix) for suffix in P1_HOST_SUFFIXES):
+        raise FetchRefused(HOST_NOT_ALLOWED, url, P1_POLICY_NAME, "not a Google serverless host")
+    policy = FetchPolicy(name=P1_POLICY_NAME, hosts=frozenset({host}), ports=frozenset({DEFAULT_PORT}), upgrade_http=False)
+    policy.check_url(raw)
+    return policy
+
+
+def p1_fetcher(url: typing.Any) -> PolicyFetcher:
+    """The production factory for the P1 endpoint (FA-D3C-002). Looked up at call time, so tests can substitute it; it
+    accepts no test hook."""
+    return PolicyFetcher(p1_policy(url), max_bytes=P1_MAX_BYTES, deadline=P1_DEADLINE_SECONDS)

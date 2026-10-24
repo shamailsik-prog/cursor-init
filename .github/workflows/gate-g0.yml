@@ -627,7 +627,7 @@ jobs:
     # db_connected, and the Celery app with its Redis broker transport and result backend (no Redis server: the live
     # broker round trip is the F30 compose e2e). requirements.txt is unpinned until F46, so this job resolves current
     # releases; a failure without a source change is a real break in what the image would install. The production
-    # Docker image itself (apt packages, browser) is not built here (F46).
+    # Docker image itself (apt packages; no browser since FA-D3C-001) is not built here (F46).
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -656,3 +656,63 @@ jobs:
           CORPUS_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/corpus_ci
           PYTHON: python
         run: bash corpus_service/tests/e2e/runtime_smoke.sh
+
+  corpus-p1-embedding:
+    name: Corpus embeddings through P1 e2e (FA-D3C-002)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # FA-D3C-002 (spec docs/superpowers/specs/2026-10-24-d3c-corpus-runtime-boundary-design.md, R17): the corpus
+    # `process-embeddings` batch, in process, against real Postgres (pgvector) and the real p1CorpusEmbedding function
+    # in the Functions emulator (functions/test/harness/fa-d3c-p1-emulator-entry.ts: the real handler, OIDC check and P1
+    # ledger code with a fake embedding transport and a test key set). Proves the request goes through P1, the kill
+    # switch stops it, the budget refuses it, every decision is in the P1 ledger, and F27's lease and dead-letter
+    # semantics hold. Not path-gated: a change on either side (corpus_service/ or functions/src/p1/) can break it. The
+    # script sets FA_D3C_P1_E2E=1, so a missing setting fails the run instead of skipping it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: corpus_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d corpus_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Cache Firebase emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: firebase-emulators-${{ runner.os }}-
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: corpus_service/requirements-test.txt
+      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: npm ci
+      - name: Functions install
+        run: npm --prefix functions ci
+      - name: Corpus embeddings through p1CorpusEmbedding (Functions emulator + real Postgres)
+        env:
+          CORPUS_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/corpus_ci
+          PYTHON: python
+        run: bash corpus_service/tests/e2e/p1_embedding_e2e.sh

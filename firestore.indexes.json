@@ -272,6 +272,14 @@
       ]
     },
     {
+      "collectionGroup": "p1_decisions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "export.state", "order": "ASCENDING" },
+        { "fieldPath": "export.nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "jobs",
       "queryScope": "COLLECTION",
       "fields": [
