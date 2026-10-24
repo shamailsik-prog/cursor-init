@@ -295,9 +295,10 @@ OPIKCFG_TESTS=(
   'allows a plain-http base only for loopback, a private IPv4 literal, or a host ending in .internal or .local'
   'refuses a plain-http base on any other host as invalid_url, before the confirmation is read; https is unaffected'
 )
-TRACE_SUITE='P1 Opik trace payload (P3-67)'
+# Audit F34 (spec ruling R10) narrowed P3-67's content rule to ranks 0 and 1 and renamed the suite and this test.
+TRACE_SUITE='P1 Opik trace payload (P3-67, audit F34 R10)'
 TRACE_TESTS=(
-  'carries content at ranks 0 to 3 and metadata only at rank 4'
+  'carries content at ranks 0 and 1 and metadata only at ranks 2 to 4'
   'carries no content for a blocked call, at any rank, and records the reason'
 )
 TRANSPORT_SUITE='P1 Gateway transport (P3-68)'
