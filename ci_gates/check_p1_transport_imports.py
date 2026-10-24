@@ -23,21 +23,29 @@ tree, where F18's check [19](e) already refuses any import of a non-pure Functio
 
 It fails on, outside a grant:
   - a named import or an `export { } from` re-export of a restricted name (type-only included; `as` resolved to the
-    original name);
-  - a namespace import, a default import, `export *` or `export * as` of a transport module;
-  - any `import()`, `require()`, `require.resolve()`, createRequire loader or vitest/jest importActual / requireActual /
-    importMock / requireMock of a transport module (the names it uses cannot be read: fail closed).
-And anywhere in scope:
-  - a re-export of a restricted value name from a granted file (`export { activeTransport }`, `export default
-    gatewayTransport`, `export const t = activeTransport`), and any `export ... from` of a restricted name;
-  - under functions/src, platform/ and services/, an `import()` or `require()` whose argument is not a string literal
-    (or is a template literal with a substitution): what it loads cannot be read;
+    original name).
+And anywhere in scope, granted files included (PR #129 review, Codex P2, thread 4368766679: a grant is per name, so a
+whole-module binding in a granted file must not reach the names it was not granted):
+  - a namespace import, a default import, `export *` or `export * as` of a transport module, and any `import()`,
+    `require()`, `require.resolve()`, createRequire loader or vitest/jest importActual / requireActual / importMock /
+    requireMock of one (the names it uses cannot be read: fail closed). These pass only in a file granted every
+    restricted name of the module, and no file is (the test seams are granted to none);
+  - a granted file exporting a restricted value or a value derived from one (`derived_exports`): `export {
+    activeTransport }`, `export default gatewayTransport`, `export const t = activeTransport`, and `const t =
+    activeTransport` (or `transport.activeTransport()`) followed by `export { t }`, `export default t`, `export =` or
+    `module.exports`; any `export ... from` of a restricted name;
+  - under functions/src, platform/ and services/, an `import()` or `require()` whose specifier is not exactly one
+    string literal (`computed_load`, read token by token so whitespace and comments after the parenthesis are skipped,
+    PR #129 review, Codex P2, thread 4368766681): a variable, a call, a concatenation or a template literal with a
+    substitution;
   - a grant whose file is missing (a stale grant).
 A side-effect `import "…/transport"` binds nothing and passes. Specifiers resolve by path: relative, the `@/` alias or a
 bare repository path, with or without a JS/TS extension or `/index`, a query or a hash.
 
 `--print-grants` prints RESTRICTED and GRANTS as JSON (tests/f34-p1-transport-import-gate.test.ts reads it).
-Residual (spec R17): a granted file that exports a multi-line function returning a transport is not caught.
+Residual (spec R17, residual 11): in a granted file, a function that returns a transport, a derived value whose
+initializer spans several lines, and a transport stored in an object property are not traced; the four grants are
+reviewed with this gate.
 """
 from __future__ import annotations
 
@@ -89,9 +97,19 @@ _TEST_LOADER_RE = re.compile(
     rf"\b(?:vi|jest){JS_WS}\.{JS_WS}(?:importActual|requireActual|importMock|requireMock){JS_WS}(?:<(?:[^<>()]|<[^<>()]*>)*>)?{JS_WS}\({JS_WS}{_STRING}",
     re.DOTALL,
 )
-_COMPUTED_RE = re.compile(rf"(?<![\w$.])(?:import|require){JS_WS}\({JS_WS}(?![\"'`)])|(?<![\w$.])(?:import|require){JS_WS}\({JS_WS}`[^`]*\$\{{", re.DOTALL)
+# An import( or require( call, read on comment-blanked text; `computed_load` reads its argument token by token.
+_LOADER_CALL_RE = re.compile(r"(?<![\w$.])(?:import|require)\s*\(")
 _COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 _SEND_TOKEN_RE = re.compile(r"(?<![\w$])(?:send|embed)(?![\w$])")
+_IDENT = r"[A-Za-z_$][\w$]*"
+# `const x = <initializer on the same line>` (an optional type annotation), and `const { a, b: c } = <initializer>`.
+_DECL_RE = re.compile(rf"(?<![\w$.])(?:const|let|var)\s+({_IDENT})\s*(?::[^=\n]*)?=(?![=>])\s*([^\n;]*)")
+_DESTRUCTURE_RE = re.compile(r"(?<![\w$.])(?:const|let|var)\s*\{([^}]*)\}\s*(?::[^=\n]*)?=(?![=>])\s*([^\n;]*)")
+# `export { a, b as c }` with no `from` after it (an export-from is read by _STATIC_RE).
+_EXPORT_LIST_RE = re.compile(r"(?<![\w$.])export\s+(?:type\s+)?\{([^}]*)\}(?!\s*from\b)")
+_EXPORT_DEFAULT_RE = re.compile(rf"(?<![\w$.])export\s+default\s+({_IDENT})\s*(?:;|$)", re.M)
+_EXPORT_DECL_RE = re.compile(rf"(?<![\w$.])export\s+(?:const|let|var)\s+({_IDENT})\s*(?::[^=\n]*)?=(?![=>])\s*([^\n;]*)")
+_EXPORT_ASSIGN_RE = re.compile(rf"(?<![\w$.])(?:export\s*=|module\s*\.\s*exports\s*(?:\.\s*{_IDENT}\s*)?=|exports\s*\.\s*{_IDENT}\s*=)\s*([^\n;]*)")
 
 
 def strip_comments(text: str) -> str:
@@ -135,6 +153,96 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def computed_load(code: str) -> bool:
+    """Whether comment-blanked `code` calls import() or require() with anything but one string literal as its specifier
+    (PR #129 review, Codex P2, thread 4368766681). The argument is read token by token, so whitespace, a line break or a
+    comment (already blanked) after the parenthesis is skipped, never mistaken for the argument. A literal passes only
+    when it is the whole specifier: the next token is `)` or the `,` of import options. A template literal with a
+    substitution, a variable, a call or a concatenation is computed."""
+    n = len(code)
+    for m in _LOADER_CALL_RE.finditer(code):
+        i = m.end()
+        while i < n and code[i].isspace():
+            i += 1
+        if i >= n:
+            return True
+        quote = code[i]
+        if quote == ")":
+            continue
+        if quote not in "'\"`":
+            return True
+        j = i + 1
+        while j < n and code[j] != quote:
+            if code[j] == "\\":
+                j += 2
+                continue
+            if quote == "`" and code.startswith("${", j):
+                return True
+            if quote != "`" and code[j] == "\n":
+                return True
+            j += 1
+        if j >= n:
+            return True
+        j += 1
+        while j < n and code[j].isspace():
+            j += 1
+        if j >= n or code[j] not in "),":
+            return True
+    return False
+
+
+def _mentions(text: str, names: set[str]) -> str | None:
+    """The first of `names` used as an identifier in `text` (not as a property after a dot), or None."""
+    for name in sorted(names):
+        if re.search(rf"(?<![\w$.]){re.escape(name)}(?![\w$])", text):
+            return name
+    return None
+
+
+def derived_exports(code: str, bound: set[str]) -> list[str]:
+    """The exported local names that hold a restricted transport value or a value derived from one (PR #129 review,
+    Codex P2, thread 4368766681). `bound` is what the file's imports of a transport module bound (the restricted value
+    names, their `as` aliases, a namespace or default binding). A `const`/`let`/`var` whose same-line initializer uses a
+    tainted name is tainted, to a fixpoint; then `export { x }`, `export default x`, `export const y = <tainted>`,
+    `export =` and `module.exports` / `exports.x =` of a tainted name fail. Limits (spec R17, residual 11): an initializer
+    spread over several lines, a function that returns a transport, and a transport stored in an object property are not
+    traced."""
+    tainted = set(bound)
+    changed = True
+    while changed:
+        changed = False
+        for m in _DECL_RE.finditer(code):
+            if m.group(1) not in tainted and _mentions(m.group(2), tainted):
+                tainted.add(m.group(1))
+                changed = True
+        for m in _DESTRUCTURE_RE.finditer(code):
+            if _mentions(m.group(2), tainted):
+                for item in m.group(1).split(","):
+                    local = item.split(":")[-1].split("=")[0].strip()
+                    if re.fullmatch(_IDENT, local) and local not in tainted:
+                        tainted.add(local)
+                        changed = True
+    exported: set[str] = set()
+    for m in _EXPORT_LIST_RE.finditer(code):
+        for item in m.group(1).split(","):
+            words = item.split()
+            if words and words[0] == "type":
+                words = words[1:]
+            if words and words[0] in tainted:
+                exported.add(words[0])
+    for m in _EXPORT_DEFAULT_RE.finditer(code):
+        if m.group(1) in tainted:
+            exported.add(m.group(1))
+    for m in _EXPORT_DECL_RE.finditer(code):
+        if _mentions(m.group(2), tainted):
+            exported.add(m.group(1))
+    for m in _EXPORT_ASSIGN_RE.finditer(code):
+        hit = _mentions(m.group(1), tainted)
+        if hit:
+            exported.add(hit)
+    return sorted(exported)
+
+
 def _module_id(path: str) -> str:
     p = _JS_EXT_RE.sub("", path)
     return p[: -len("/index")] if p.endswith("/index") else p
@@ -175,8 +283,32 @@ def _names(clause: str) -> tuple[list[str], bool]:
     return names, whole
 
 
+def _bindings(clause: str) -> list[str]:
+    """The local names an import clause binds: `a`, the `b` of `a as b`, a default binding, the `ns` of `* as ns`."""
+    text = re.sub(r"^\s*type\b", " ", _COMMENT_RE.sub(" ", clause))
+    braces = re.search(r"\{(.*)\}", text, re.DOTALL)
+    out: list[str] = []
+    if braces is not None:
+        for item in braces.group(1).split(","):
+            words = [w for w in item.split() if w != "type"]
+            if words:
+                out.append(words[-1])
+    outside = text if braces is None else text[: braces.start()] + text[braces.end():]
+    out += re.findall(_IDENT, outside.replace(" as ", " "))
+    return [b for b in out if b != "as"]
+
+
+def _covers_module(module: str, rel: str) -> bool:
+    """Whether `rel` holds a grant for every restricted name of `module`. No file does (the test seams are granted to
+    none), so a whole-module binding of a transport is refused everywhere (PR #129 review, Codex P2, thread 4368766679)."""
+    return set(RESTRICTED[module]) <= set(GRANTS[module].get(rel, ()))
+
+
 def file_findings(rel: str, text: str) -> list[str]:
     out: list[str] = []
+    # What this file's imports of a transport bound: restricted value names under their local names, and whole-module
+    # bindings. Read by derived_exports for a granted file.
+    bound: set[str] = set()
     for m in _STATIC_RE.finditer(text):
         module = resolve(m.group("spec"), rel)
         if module not in RESTRICTED:
@@ -191,18 +323,26 @@ def file_findings(rel: str, text: str) -> list[str]:
                 if name in RESTRICTED[module]:
                     out.append(f"{rel}: re-exports {name} from {module}")
             continue
-        if whole and rel not in GRANTS[module]:
+        # A namespace or default binding reaches every restricted name, whatever the file's name-level grant (Codex P2).
+        if whole and not _covers_module(module, rel):
             out.append(f"{rel}: imports all of {module} (a namespace or default import binds every transport name)")
         for name in names:
             if name in RESTRICTED[module] and name not in granted:
                 out.append(f"{rel}: imports {name} from {module}")
+        locals_ = _bindings(m.group("clause"))
+        for local, original in zip(locals_[: len(names)], names):
+            if original in VALUE_NAMES:
+                bound.add(local)
+        if whole:
+            bound.update(locals_[len(names):])
     specs = [m.group("spec") for r in (_DYNAMIC_RE, _TEST_LOADER_RE) for m in r.finditer(text)] + _create_require_specifiers(text)
     for spec in specs:
         module = resolve(spec, rel)
-        if module in RESTRICTED and rel not in GRANTS[module]:
+        # The names a dynamic load uses cannot be read, so it is refused unless the file holds every name (none does).
+        if module in RESTRICTED and not _covers_module(module, rel):
             out.append(f"{rel}: loads {module} dynamically (the names it uses cannot be read)")
     code = strip_comments(text)
-    if rel.startswith(COMPUTED_SCOPE) and _COMPUTED_RE.search(code):
+    if rel.startswith(COMPUTED_SCOPE) and computed_load(code):
         out.append(f"{rel}: computed module load (import() or require() of a non-literal specifier)")
     granted_any = any(rel in g for g in GRANTS.values())
     if granted_any:
@@ -211,6 +351,8 @@ def file_findings(rel: str, text: str) -> list[str]:
                 for name in VALUE_NAMES:
                     if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", line):
                         out.append(f"{rel}: re-exports {name} (a granted file may not hand a transport on)")
+        for name in derived_exports(code, bound | VALUE_NAMES):
+            out.append(f"{rel}: re-exports {name} (a value derived from a restricted transport name)")
         if rel not in SEND_SITES and _SEND_TOKEN_RE.search(code):
             out.append(f"{rel}: calls send or embed (only {', '.join(sorted(SEND_SITES))} send)")
     return sorted(set(out))

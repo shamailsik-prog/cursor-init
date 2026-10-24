@@ -236,6 +236,16 @@ const PLANTED: GateCase[] = [
     },
     reports: ["FAIL: functions/src/p1/zzAuditAdhoc2.ts: imports activeTransport from functions/src/p1/transport"],
   },
+  // PR #129 review, Codex P2 (thread 4368766679): a granted file binding the whole transport and handing a value on.
+  {
+    name: "F34 R1-003 Codex P2: the granted eval CLI imports the whole transport and re-exports activeTransport()",
+    rel: "functions/src/cli/committeeEval.ts",
+    body: 'import * as transport from "../p1/transport"\nconst t = transport.activeTransport()\nexport { t }\n',
+    reports: [
+      "FAIL: functions/src/cli/committeeEval.ts: imports all of functions/src/p1/transport",
+      "FAIL: functions/src/cli/committeeEval.ts: re-exports t",
+    ],
+  },
 ];
 
 describe("Gate G-0 end to end (FA-CI-001)", () => {
@@ -284,6 +294,25 @@ describe("Gate G-0 end to end (FA-CI-001)", () => {
       for (const report of reports) expect(result.out).toContain(report);
       expect(result.out).toContain("=== Gate G-0 FAILED ===");
       expect(result.status).toBe(1);
+    },
+    GATE_TIMEOUT_MS,
+  );
+
+  // PR #129 review, Codex P2 (thread 4368766681): G-0 runs check [21] on every change, so a literal dynamic import
+  // written with a space, a line break or a comment inside the parenthesis must pass the whole gate.
+  it(
+    "a literal dynamic import written with whitespace or a comment passes G-0 (F34 R1-003, Codex P2)",
+    () => {
+      const dir = caseTree(base);
+      plant(
+        dir,
+        "functions/src/p1/zzLazy.ts",
+        'export const a = () => import( "./month")\nexport const b = () => import(\n  "./month"\n)\nexport const c = () => require( \'./month\' )\nexport const d = () => import(/* lazy */ "./month")\n',
+      );
+      const result = runGate(dir);
+      expect(result.out).toContain("PASS: P1 transports are imported only by their grants");
+      expect(result.out).toContain("=== Gate G-0 PASSED (static) ===");
+      expect(result.status).toBe(0);
     },
     GATE_TIMEOUT_MS,
   );

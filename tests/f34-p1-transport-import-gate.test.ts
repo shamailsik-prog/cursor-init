@@ -163,6 +163,50 @@ const FAILING: Case[] = [
     files: { "lib/x.ts": 'export const load = () => vi.importActual<Record<string, unknown>>("@/functions/src/p1/transport")\n' },
     reports: ["lib/x.ts: loads functions/src/p1/transport dynamically"],
   },
+  // PR #129 review, Codex P2 (thread 4368766679): a grant is per name, but a whole-module binding in a granted file
+  // reached every restricted name, and a value derived from a restricted name could be re-exported under a new name.
+  {
+    name: "Codex P2 #1: the granted eval CLI importing the whole transport and handing on activeTransport()",
+    files: { "functions/src/cli/committeeEval.ts": 'import * as transport from "../p1/transport"\nconst t = transport.activeTransport()\nexport { t }\n' },
+    reports: ["functions/src/cli/committeeEval.ts: imports all of functions/src/p1/transport", "functions/src/cli/committeeEval.ts: re-exports t"],
+  },
+  {
+    name: "Codex P2 #1: gateway.ts re-exporting setP1TransportForTests through an alias",
+    files: { "functions/src/p1/gateway.ts": 'import * as transport from "./transport"\nconst reset = transport.setP1TransportForTests\nexport { reset }\n' },
+    reports: ["functions/src/p1/gateway.ts: imports all of functions/src/p1/transport", "functions/src/p1/gateway.ts: re-exports reset"],
+  },
+  {
+    name: "Codex P2 #1: a granted file re-exporting a granted transport value through a local alias",
+    files: { "functions/src/p1/evalSet.ts": 'import { activeTransport } from "./transport"\nconst t = activeTransport\nconst u = t\nexport { u as current }\n' },
+    reports: ["functions/src/p1/evalSet.ts: re-exports u"],
+  },
+  {
+    name: "Codex P2 #1: a default export of a value derived from a granted transport name",
+    files: { "functions/src/p1/embedding.ts": 'import { activeEmbeddingTransport } from "./embeddingTransport"\nconst e = activeEmbeddingTransport()\nexport default e\n' },
+    reports: ["functions/src/p1/embedding.ts: re-exports e"],
+  },
+  {
+    name: "Codex P2 #1: a granted file loading the transport dynamically",
+    files: { "functions/src/p1/evalSet.ts": 'const m = import("./transport")\nexport const go = () => m\n' },
+    reports: ["functions/src/p1/evalSet.ts: loads functions/src/p1/transport dynamically"],
+  },
+  {
+    name: "Codex P2 #1: a default import of the transport in a granted file",
+    files: { "functions/src/p1/gateway.ts": 'import transport from "./transport"\nexport const x = transport\n' },
+    reports: ["functions/src/p1/gateway.ts: imports all of functions/src/p1/transport"],
+  },
+  // PR #129 review, Codex P2 (thread 4368766681): the computed-load check must read the first token after the
+  // parenthesis, and a literal must be the whole argument: concatenation is computed.
+  {
+    name: "Codex P2 #2: a literal concatenated into the specifier is a computed load",
+    files: { "functions/src/p1/x.ts": 'export const load = () => import("./trans" + "port")\n' },
+    reports: ["functions/src/p1/x.ts: computed module load"],
+  },
+  {
+    name: "Codex P2 #2: a spaced require of a concatenation across lines is a computed load",
+    files: { "services/d5-1/x.ts": 'export const load = () => require( "../../functions/src/p1/trans" +\n  "port" )\n' },
+    reports: ["services/d5-1/x.ts: computed module load"],
+  },
 ]
 
 describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
@@ -191,6 +235,14 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
       "prose in comments that reads like a computed load",
       { "platform/corpus/x.ts": "// that module is not one the Next runtime may import (audit F18), so it is restated\n/* they require (at least) a reader */\nexport const url = \"https://example.invalid/a\" // trailing\n" },
     ],
+    // PR #129 review, Codex P2 (thread 4368766681): literal dynamic imports written with whitespace or a comment.
+    ["Codex P2 #2: import( \"./x\") with a space", { "functions/src/p1/x.ts": 'export const load = () => import( "./month")\n' }],
+    ["Codex P2 #2: import( on its own line with the literal on the next", { "functions/src/p1/x.ts": 'export const load = () => import(\n  "./month"\n)\n' }],
+    ["Codex P2 #2: require( './x' ) with spaces", { "platform/p1/x.ts": "export const load = () => require( './promptText' )\n" }],
+    ["Codex P2 #2: a comment before the literal", { "services/d5-1/x.ts": 'export const load = () => import(/* lazy */ "./researchCorpus")\n' }],
+    ["Codex P2 #2: a literal with import options", { "functions/src/p1/x.ts": 'export const load = () => import( "./data.json", { with: { type: "json" } })\n' }],
+    ["Codex P2 #2: a template literal without a substitution", { "functions/src/p1/x.ts": "export const load = () => import( `./month`)\n" }],
+    ["Codex P2 #1: a granted file's own locals derived from the transport, not exported", { "functions/src/p1/evalSet.ts": 'import { activeTransport, type P1Transport } from "./transport"\nexport async function run(): Promise<void> {\n  const transport: P1Transport | null = activeTransport()\n  if (transport !== null) await transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n' }],
   ])("passes: %s", (_name, files) => {
     const r = run(probe(files as Record<string, string>))
     expect(r.out).toContain("PASS: P1 transports are imported only by their grants")
