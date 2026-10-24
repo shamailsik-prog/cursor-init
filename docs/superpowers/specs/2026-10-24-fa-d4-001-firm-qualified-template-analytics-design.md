@@ -100,10 +100,12 @@ stored `id`. No F12 or F13 helper is edited.
 template) is dropped by `listByFirm`, is `null` from `get`, and is never addressed by `record`. It stays in storage until
 the backfill moves or reports it.
 
-**R5. A refusal is an error, not an absence.** Both paths answer **409** `{ code: "template_analytics_refused",
-reason: "foreign_firm" | "malformed" }`. Compose: the draft is created first (as on main), then the analytics
-transaction refuses; through the F02 router the 409 keeps the F10 `effectCommitted` signal, so a retry with the same key
-is not taken for a fresh compose. Search: the GET answers 409 and writes nothing. Reason: the FA-F13-004 precedent
+**R5. A refusal is an error, not an absence.** Both paths answer **409** with code `template_analytics_refused`. The
+Next core sends `{ error, code, reason: "foreign_firm" | "malformed" }`; through the F02 router (production) the client
+receives `{ error: { code: "template_analytics_refused" } }` (the router forwards the code only). Compose: the draft is
+created first (as on main), then the analytics transaction refuses; the 409 carries the F10 `effectCommitted` signal
+(observed through the F02 router), so a retry with the same key is not taken for a fresh compose. Search: the GET
+answers 409 and writes nothing. Reason: the FA-F13-004 precedent
 (`SearchIndexMalformedError`): a refused integrity check must never be taken for a missing row and silently replaced.
 Observed before this ruling (route e2e, production mode): compose answered 400 `invalid_request` and search 500
 `internal`, both misleading for a stored-state conflict; the e2e now pins 409 and the code. Devil's advocate: the compose
