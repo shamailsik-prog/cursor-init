@@ -4,6 +4,7 @@ import { z } from "zod"
 
 const policySchema = z.object({
   stores: z.record(
+    z.string(),
     z.object({
       rpo: z.string(),
       rtoTargetMinutes: z.number().int().positive(),

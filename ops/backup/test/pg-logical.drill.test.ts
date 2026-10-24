@@ -26,7 +26,7 @@ describe("postgres logical backup drill", () => {
         const res = await restoreLogical({
           bundleDir: dir,
           ring,
-          db: "legal_scraper_restored",
+          db: "legal_scraper",
           env: target.env,
           recordStore: "postgres-logical",
         })

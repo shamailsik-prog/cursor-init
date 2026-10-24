@@ -1,5 +1,5 @@
 import { getImmutableDocumentObject } from "@/platform/documents/documentObjectStore"
-import type { S3Client } from "@aws-sdk/client-s3"
+import type { SpineStore } from "@/platform/spine/store"
 
 export type DocumentRow = {
   id: string
@@ -14,7 +14,7 @@ export type ObjectReport = { issues: ObjectIssue[]; clean: boolean }
 
 export async function verifyDocumentObjects(opts: {
   rows: DocumentRow[]
-  store: S3Client
+  store: SpineStore
   productionMode?: boolean
 }): Promise<ObjectReport> {
   const issues: ObjectIssue[] = []

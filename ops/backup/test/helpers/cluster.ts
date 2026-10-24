@@ -16,9 +16,9 @@ function findFreePort(start: number): number {
   return base
 }
 
-function pgEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+function pgEnv(extra: Partial<NodeJS.ProcessEnv> = {}): NodeJS.ProcessEnv {
   const bin = process.env.SIKANDER_BACKUP_DRILL_PG_BIN?.trim() || "/usr/lib/postgresql/16/bin"
-  return { ...process.env, ...extra, PATH: `${bin}:${process.env.PATH ?? ""}` }
+  return { ...process.env, ...extra, PATH: `${bin}:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv
 }
 
 function pgPrefix(): string[] {

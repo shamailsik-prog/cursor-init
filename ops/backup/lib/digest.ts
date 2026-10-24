@@ -3,10 +3,10 @@ import { createHash } from "node:crypto"
 /** Order-independent multiset digest over 32-byte row hashes (spec R8). */
 export class MultisetDigest {
   private _count = 0
-  private s0 = 0n
-  private s1 = 0n
-  private s2 = 0n
-  private s3 = 0n
+  private s0 = BigInt(0)
+  private s1 = BigInt(0)
+  private s2 = BigInt(0)
+  private s3 = BigInt(0)
 
   get count(): number {
     return this._count

@@ -224,7 +224,7 @@ describe("loadKeyRing", () => {
     const current = hex()
     const previous = [hex(), hex()]
     const ring = loadKeyRing({
-      env: { SIKANDER_BACKUP_KEY: current, SIKANDER_BACKUP_PREVIOUS_KEYS: previous.join(",") },
+      env: { ...process.env, SIKANDER_BACKUP_KEY: current, SIKANDER_BACKUP_PREVIOUS_KEYS: previous.join(",") },
     })
     expect(ring.current.toString("hex")).toBe(current)
     expect(ring.byId.size).toBe(3)
@@ -235,29 +235,33 @@ describe("loadKeyRing", () => {
     const value = hex()
     writeFileSync(file, `${value}\n`)
     chmodSync(file, 0o600)
-    expect(loadKeyRing({ env: {}, keyFile: file }).current.toString("hex")).toBe(value)
+    expect(loadKeyRing({ env: { ...process.env }, keyFile: file }).current.toString("hex")).toBe(value)
   })
 
   it("refuses a key file readable by group or others", () => {
     const file = path.join(root, "backup.key")
     writeFileSync(file, hex())
     chmodSync(file, 0o644)
-    expect(() => loadKeyRing({ env: {}, keyFile: file })).toThrow(/mode/)
+    expect(() => loadKeyRing({ env: { ...process.env }, keyFile: file })).toThrow(/mode/)
   })
 
   it("refuses when both a key and a key file are given, and when neither is", () => {
     const file = path.join(root, "backup.key")
     writeFileSync(file, hex())
     chmodSync(file, 0o600)
-    expect(() => loadKeyRing({ env: { SIKANDER_BACKUP_KEY: hex() }, keyFile: file })).toThrow(/both/)
-    expect(() => loadKeyRing({ env: {} })).toThrow(/no backup key/)
+    expect(() => loadKeyRing({ env: { ...process.env, SIKANDER_BACKUP_KEY: hex() }, keyFile: file })).toThrow(/both/)
+    const noKey = { ...process.env }
+    delete noKey.SIKANDER_BACKUP_KEY
+    expect(() => loadKeyRing({ env: noKey })).toThrow(/no backup key/)
   })
 
   it("refuses a bad previous key without echoing it", () => {
     const bad = "ab".repeat(32)
-    expect(() => loadKeyRing({ env: { SIKANDER_BACKUP_KEY: hex(), SIKANDER_BACKUP_PREVIOUS_KEYS: bad } })).toThrow(/previous/)
+    expect(() =>
+      loadKeyRing({ env: { ...process.env, SIKANDER_BACKUP_KEY: hex(), SIKANDER_BACKUP_PREVIOUS_KEYS: bad } })
+    ).toThrow(/previous/)
     try {
-      loadKeyRing({ env: { SIKANDER_BACKUP_KEY: hex(), SIKANDER_BACKUP_PREVIOUS_KEYS: bad } })
+      loadKeyRing({ env: { ...process.env, SIKANDER_BACKUP_KEY: hex(), SIKANDER_BACKUP_PREVIOUS_KEYS: bad } })
     } catch (err) {
       expect((err as Error).message).not.toContain(bad)
     }

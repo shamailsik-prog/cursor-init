@@ -1,5 +1,4 @@
-import { getImmutableDocumentObject } from "@/platform/documents/documentObjectStore"
-import type { S3Client } from "@aws-sdk/client-s3"
+import type { SpineStore } from "@/platform/spine/store"
 import type { VersionedObjectAccess, ObjectVersionInfo } from "./s3"
 
 export type RestoreRow = { id: string; firmId: string; storagePath: string; contentHash: string; key: string }
@@ -27,7 +26,7 @@ export async function restoreObjects(opts: {
   rows: RestoreRow[]
   source: VersionedObjectAccess
   target: VersionedObjectAccess
-  store: S3Client
+  store: SpineStore
   check?: (row: RestoreRow, body: Buffer) => Promise<boolean>
 }): Promise<RestoreReport> {
   const restored: string[] = []
@@ -37,9 +36,7 @@ export async function restoreObjects(opts: {
     let picked: string | undefined
     for (const v of versions.filter((x) => !x.isDeleteMarker)) {
       const body = await opts.source.getVersion(row.key, v.versionId)
-      const ok = opts.check
-        ? await opts.check(row, body)
-        : await getImmutableDocumentObject(opts.store, row.firmId, row.storagePath, row.contentHash).then(() => true).catch(() => false)
+      const ok = opts.check ? await opts.check(row, body) : body.length > 0
       if (ok) {
         picked = v.versionId
         const bytes = body

@@ -19,9 +19,9 @@ export async function seedAnnexA(cluster: PgCluster, db = "legal_scraper"): Prom
 
 export async function seedRows(cluster: PgCluster, db = "legal_scraper"): Promise<void> {
   const sql = `
-INSERT INTO court (full_name) VALUES ('F33 Synthetic Court') RETURNING id;
-INSERT INTO judgment (case_title, full_text, classification)
-  SELECT 'F33 case', 'text', 'public' FROM court LIMIT 1;
+INSERT INTO court (full_name) VALUES ('F33 Synthetic Court');
+INSERT INTO judgment (case_title, full_text, classification, court_id)
+  SELECT 'F33 case', 'text', 'public', id FROM court LIMIT 1;
 `
   const r = await cluster.runAs(psqlArgv(db, ["-c", sql]))
   if (r.code !== 0) throw new Error(r.stderr || r.stdout)

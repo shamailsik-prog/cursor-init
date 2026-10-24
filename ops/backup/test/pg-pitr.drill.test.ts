@@ -6,7 +6,7 @@ describe("postgres PITR drill", () => {
     "fails fast when PostgreSQL client programs are missing",
     async () => {
       const r = await runCommand(["bash", "-lc", "command -v initdb && command -v pg_basebackup"], {
-        env: { PATH: `/usr/lib/postgresql/16/bin:${process.env.PATH ?? ""}` },
+        env: { ...process.env, PATH: `/usr/lib/postgresql/16/bin:${process.env.PATH ?? ""}` },
       })
       if (r.code !== 0) {
         expect(r.code).not.toBe(0)

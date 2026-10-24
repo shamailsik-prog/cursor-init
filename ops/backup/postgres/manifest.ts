@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { MultisetDigest } from "../lib/digest"
 import { diffRecords, diffSets } from "../lib/diff"
-import type { PsqlSession } from "../lib/exec"
+import type { PsqlQueryable } from "../lib/exec"
 import { PG_LINK_CHECKS } from "./links"
 import { MANIFEST_SESSION_SETTINGS, tableDigestSql } from "./sql"
 
@@ -34,7 +34,7 @@ function multisetDigestFromParts(count: number, s0: string, s1: string, s2: stri
   return createHash("sha256").update(body, "utf8").digest("hex")
 }
 
-async function tableExists(session: PsqlSession, schema: string, table: string): Promise<boolean> {
+async function tableExists(session: PsqlQueryable, schema: string, table: string): Promise<boolean> {
   const n = await session.queryScalar(
     `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = '${schema}' AND c.relname = '${table}' AND c.relkind IN ('r','p');`
@@ -42,7 +42,7 @@ async function tableExists(session: PsqlSession, schema: string, table: string):
   return Number(n) > 0
 }
 
-async function primaryKeyExpr(session: PsqlSession, schema: string, table: string): Promise<string | null> {
+async function primaryKeyExpr(session: PsqlQueryable, schema: string, table: string): Promise<string | null> {
   const line = await session.queryScalar(`
 SELECT coalesce(string_agg(quote_ident(a.attname), ' || chr(30) || ' ORDER BY k.ord), '')
 FROM pg_index i
@@ -56,17 +56,20 @@ WHERE i.indisprimary AND n.nspname = '${schema}' AND c.relname = '${table}';
   return expr ? expr : null
 }
 
-export async function takePgManifest(session: PsqlSession, db: string): Promise<PgManifest> {
+export async function takePgManifest(
+  session: PsqlQueryable,
+  db: string,
+  opts?: { snapshotId?: string; backupTime?: string }
+): Promise<PgManifest> {
   await session.query(MANIFEST_SESSION_SETTINGS)
-  const snapshotId = await session.beginSnapshot().catch(() => "none")
-  const backupTime = new Date().toISOString()
+  const backupTime = opts?.backupTime ?? new Date().toISOString()
   const meta: PgManifestMeta = {
     serverVersion: await session.queryScalar("SHOW server_version;"),
     database: db,
     encoding: await session.queryScalar("SHOW server_encoding;"),
     collation: await session.queryScalar("SELECT datcollate FROM pg_database WHERE datname = current_database();"),
     backupTime,
-    snapshotId,
+    snapshotId: opts?.snapshotId ?? "none",
     systemIdentifier: await session.queryScalar("SELECT system_identifier::text FROM pg_control_system();"),
   }
 
@@ -160,8 +163,8 @@ SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY 1;
 
 export function comparePgManifests(expected: PgManifest, actual: PgManifest): string[] {
   const lines: string[] = []
-  const metaExpected = { ...expected.meta, systemIdentifier: "", backupTime: "", snapshotId: "" }
-  const metaActual = { ...actual.meta, systemIdentifier: "", backupTime: "", snapshotId: "" }
+  const metaExpected = { ...expected.meta, systemIdentifier: "", backupTime: "", snapshotId: "", database: "" }
+  const metaActual = { ...actual.meta, systemIdentifier: "", backupTime: "", snapshotId: "", database: "" }
   lines.push(...diffRecords("meta", metaExpected, metaActual))
   for (const [table, exp] of Object.entries(expected.tables).sort()) {
     const act = actual.tables[table]

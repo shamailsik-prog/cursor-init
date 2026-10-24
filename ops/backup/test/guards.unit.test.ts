@@ -3,7 +3,7 @@ import { PsqlSession } from "../lib/exec"
 import { assertPgTargetClean, PgTargetNotCleanError } from "../postgres/guards"
 
 function mockSession(scalars: Record<string, string>): PsqlSession {
-  const s = new PsqlSession(undefined, {}, "postgres")
+  const s = new PsqlSession(undefined, process.env, "postgres")
   vi.spyOn(s, "queryScalar").mockImplementation(async (sql: string) => {
     if (sql.includes("server_version")) return scalars.serverVersion ?? "16.4"
     if (sql.includes("pg_database")) return scalars.dbExists ?? "0"

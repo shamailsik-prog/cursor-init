@@ -33,7 +33,7 @@ export async function assertPgTargetClean(
   if (Number(exists) > 0) throw new PgTargetNotCleanError(`target database ${db} already exists`)
 
   for (const role of roleNamesFromGlobals) {
-    if (role.startsWith("pg_")) continue
+    if (role.startsWith("pg_") || role === "postgres") continue
     const n = await session.queryScalar(
       `SELECT count(*) FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}';`
     )

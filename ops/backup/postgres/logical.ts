@@ -3,10 +3,11 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle } from "../lib/bundle"
-import { runCommand, psqlArgv, PsqlSession } from "../lib/exec"
+import { runCommand, psqlArgv, PersistentPsqlSession, PsqlSession } from "../lib/exec"
 import { recordDrillResult } from "../lib/results"
 import { assertPgTargetClean } from "./guards"
 import { comparePgManifests, takePgManifest, type PgManifest } from "./manifest"
+import { MANIFEST_SESSION_SETTINGS } from "./sql"
 
 export type BackupLogicalOptions = {
   db: string
@@ -31,33 +32,55 @@ function envOf(opts: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
 
 export async function backupLogical(opts: BackupLogicalOptions): Promise<{ dir: string; manifest: PgManifest }> {
   const env = envOf(opts)
-  const session = new PsqlSession(opts.pgPrefix, env, opts.db)
-  const manifest = await takePgManifest(session, opts.db)
-  const snap = manifest.meta.snapshotId
-  const writer = await BundleWriter.create(opts.outRoot, "postgres-logical", opts.key)
-  const globals = await runCommand(["pg_dumpall", "--globals-only", "--no-role-passwords"], {
-    env,
-    pgPrefix: opts.pgPrefix,
-  })
-  if (globals.code !== 0) throw new Error(globals.stderr || globals.stdout)
-  await writer.addBuffer("globals.sql", Buffer.from(globals.stdout, "utf8"))
-  const dump = await runCommand(
-    ["pg_dump", "--format=custom", `--snapshot=${snap}`, opts.db],
-    { env, pgPrefix: opts.pgPrefix }
-  )
-  if (dump.code !== 0) throw new Error(dump.stderr || dump.stdout)
-  await writer.addBuffer("database.dump", Buffer.from(dump.stdout, "binary"))
-  const dir = await writer.finish(manifest)
-  return { dir, manifest }
+  const session = await PersistentPsqlSession.open(opts.pgPrefix, env, opts.db)
+  let manifest: PgManifest
+  let snap: string
+  try {
+    await session.query(MANIFEST_SESSION_SETTINGS)
+    await session.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;")
+    snap = await session.queryScalar("SELECT pg_export_snapshot();")
+    const backupTime = new Date().toISOString()
+    manifest = await takePgManifest(session, opts.db, { snapshotId: snap, backupTime })
+    const dump = await runCommand(
+      ["pg_dump", "--format=custom", `--snapshot=${snap}`, opts.db],
+      { env, pgPrefix: opts.pgPrefix, binaryStdout: true }
+    )
+    if (dump.code !== 0) throw new Error(dump.stderr || dump.stdout)
+    const dumpBytes = dump.stdoutBytes
+    if (!dumpBytes?.length) throw new Error("pg_dump produced an empty custom-format dump")
+    await session.query("ROLLBACK;")
+    const writer = await BundleWriter.create(opts.outRoot, "postgres-logical", opts.key)
+    const globals = await runCommand(["pg_dumpall", "--globals-only", "--no-role-passwords"], {
+      env,
+      pgPrefix: opts.pgPrefix,
+    })
+    if (globals.code !== 0) throw new Error(globals.stderr || globals.stdout)
+    await writer.addBuffer("globals.sql", Buffer.from(globals.stdout, "utf8"))
+    await writer.addBuffer("database.dump", dumpBytes)
+    const dir = await writer.finish(manifest)
+    return { dir, manifest }
+  } finally {
+    session.close()
+  }
 }
 
 function parseRolesFromGlobals(sql: string): string[] {
   const roles: string[] = []
   for (const line of sql.split("\n")) {
     const m = /^CREATE ROLE\s+([^\s;]+)/i.exec(line.trim())
-    if (m) roles.push(m[1].replace(/"/g, ""))
+    if (m) {
+      const name = m[1].replace(/"/g, "")
+      if (!name.startsWith("pg_") && name !== "postgres") roles.push(name)
+    }
   }
   return roles
+}
+
+function stripBootstrapSuperuser(sql: string): string {
+  return sql
+    .split("\n")
+    .filter((line) => !/^CREATE ROLE\s+postgres\b/i.test(line.trim()) && !/^ALTER ROLE\s+postgres\b/i.test(line.trim()))
+    .join("\n")
 }
 
 async function decryptToFile(bundleDir: string, name: string, ring: KeyRing, dest: string): Promise<void> {
@@ -78,7 +101,9 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<{
   const env = envOf(opts)
   const globalsTmp = path.join(opts.bundleDir, ".globals.plain.part")
   await decryptToFile(opts.bundleDir, "globals.sql", opts.ring, globalsTmp)
-  const globalsSql = await fsp.readFile(globalsTmp, "utf8")
+  let globalsSql = await fsp.readFile(globalsTmp, "utf8")
+  globalsSql = stripBootstrapSuperuser(globalsSql)
+  await fsp.writeFile(globalsTmp, globalsSql, "utf8")
   const roles = parseRolesFromGlobals(globalsSql)
   const admin = new PsqlSession(opts.pgPrefix, env, "postgres")
   try {
@@ -95,6 +120,17 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<{
     await fsp.rm(globalsTmp, { force: true })
     return { ok: false, differences: [create.stderr || create.stdout], rtoMs: Date.now() - started }
   }
+  const extensions = await runCommand(
+    psqlArgv(opts.db, [
+      "-c",
+      "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+    ]),
+    { env, pgPrefix: opts.pgPrefix }
+  )
+  if (extensions.code !== 0) {
+    await fsp.rm(globalsTmp, { force: true })
+    return { ok: false, differences: [extensions.stderr || extensions.stdout], rtoMs: Date.now() - started }
+  }
   const applyGlobals = await runCommand(psqlArgv(opts.db, ["-f", globalsTmp]), { env, pgPrefix: opts.pgPrefix })
   await fsp.rm(globalsTmp, { force: true })
   if (applyGlobals.code !== 0) {
@@ -102,18 +138,21 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<{
   }
   const dumpTmp = path.join(opts.bundleDir, ".dump.part")
   await decryptToFile(opts.bundleDir, "database.dump", opts.ring, dumpTmp)
-  const restore = await runCommand(["pg_restore", "--no-owner", "-d", opts.db, dumpTmp], {
+  const restore = await runCommand(["pg_restore", "--no-owner", "--no-acl", "-d", opts.db, dumpTmp], {
     env,
     pgPrefix: opts.pgPrefix,
   })
   await fsp.rm(dumpTmp, { force: true })
   if (restore.code !== 0) {
-    return { ok: false, differences: [restore.stderr || restore.stdout], rtoMs: Date.now() - started }
+    const msg = [restore.stderr, restore.stdout].filter(Boolean).join("\n").trim() || `pg_restore exited ${restore.code}`
+    return { ok: false, differences: [msg], rtoMs: Date.now() - started }
   }
   const targetSession = new PsqlSession(opts.pgPrefix, env, opts.db)
   const actual = await takePgManifest(targetSession, opts.db)
   const differences = comparePgManifests(expected, actual)
   const rtoMs = Date.now() - started
-  if (opts.recordStore) await recordDrillResult(opts.recordStore, rtoMs, { ok: differences.length === 0 })
+  if (opts.recordStore) {
+    recordDrillResult({ store: opts.recordStore, rtoMs, details: { ok: differences.length === 0 } })
+  }
   return { ok: differences.length === 0, differences, rtoMs }
 }

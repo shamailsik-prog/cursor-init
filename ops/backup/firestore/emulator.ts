@@ -66,10 +66,10 @@ export async function restoreFirestoreEmulator(opts: {
   const actual = await collectFirestoreManifest(db)
   const differences = compareFirestoreManifests(expected as typeof actual, actual)
   const rtoMs = Date.now() - started
-  await recordDrillResult("firestore-emulator", rtoMs, { ok: differences.length === 0 })
+  recordDrillResult({ store: "firestore-emulator", rtoMs, details: { ok: differences.length === 0 } })
   return { ok: differences.length === 0, differences, rtoMs, stop: () => {} }
 }
 
-export function seedFirmDocs(db: Firestore, firmId: string): Promise<void> {
-  return db.collection("firms").doc(firmId).set({ name: firmId, firmId })
+export async function seedFirmDocs(db: Firestore, firmId: string): Promise<void> {
+  await db.collection("firms").doc(firmId).set({ name: firmId, firmId })
 }
