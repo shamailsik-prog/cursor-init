@@ -53,9 +53,14 @@ export function extractMatchBlocks(rules: string): RulesMatchBlock[] {
 
 /** True when a rules path could apply to documents in this collection group. */
 export function matchPathAppliesToCollectionGroup(path: string, collectionGroup: string): boolean {
-  const segment = `/${collectionGroup}/`
-  if (path === `/${collectionGroup}/{id}` || path.startsWith(segment)) return true
-  if (path.includes(`/${collectionGroup}/`)) return true
+  if (path.includes("{document=**}")) return true
+  const segments = path.split("/").filter(Boolean)
+  for (const seg of segments) {
+    if (seg === collectionGroup) return true
+    if (seg === `{${collectionGroup}}`) return true
+    const recur = seg.match(/^\{([^=]+)=\*\*\}$/)
+    if (recur && recur[1] === collectionGroup) return true
+  }
   if (path.includes(`{path=**}/${collectionGroup}/`)) return true
   const wildcard = `{${collectionGroup}=**}`
   if (path.includes(wildcard)) return true
