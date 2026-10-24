@@ -26,6 +26,7 @@ import {
   type P1Receipt,
   type P1Result,
 } from "./gateway"
+import { decisionRef, publicationFields, type RetrievalAnchor } from "./decisionRecord"
 import { GROUNDING_BUDGET_MS, groundAnswer, isAdvisory, unverifiableGrounding, type Grounding, type GroundingPolicy } from "./grounding"
 import { isMonthKey, monthKeyPkt } from "./month"
 import { modelId } from "./transport"
@@ -304,11 +305,12 @@ function policyOf(system: SystemRecord | undefined): GroundingPolicy | null {
 
 /**
  * The grounding of a masked answer against the store the D4 gate uses (audit F17, rulings 2 and 6): never rejects, so a
- * resolution failure never loses the answer. `text` undefined (a blocked or failed call) is `not_assessed`.
+ * resolution failure never loses the answer. `text` undefined (a blocked or failed call) is `not_assessed`. `anchors`
+ * (audit F34, R5) receives the corpus judgments the grounding read, for the call's decision record.
  */
-async function groundingOf(text: string | undefined, policy: GroundingPolicy | null, partyNames: string[]): Promise<Grounding> {
+async function groundingOf(text: string | undefined, policy: GroundingPolicy | null, partyNames: string[], anchors?: RetrievalAnchor[]): Promise<Grounding> {
   try {
-    return await groundAnswer({ text, policy, partyNames }, activeAuthorityStore(), { budgetMs: seam().groundingBudgetMs ?? GROUNDING_BUDGET_MS })
+    return await groundAnswer({ text, policy, partyNames }, activeAuthorityStore(), { budgetMs: seam().groundingBudgetMs ?? GROUNDING_BUDGET_MS, anchors })
   } catch (err) {
     logger.warn("p1.grounding_failed", { code: errorCode(err) })
     return unverifiableGrounding(policy)
@@ -325,6 +327,9 @@ type CommitteeOutputRow = Record<string, unknown>
  * idempotency_claim_lost too); a call that never dispatched (blocked) creates the marker here. An attempt that finds
  * its answer already stored is an earlier attempt of this transaction whose commit landed and whose reply was lost: done.
  * Retried by withOutputWriteRetry like the output write before it.
+ *
+ * Audit F34 (spec rulings R5, R9): the same transaction merges into the call's decision record (`p1_decisions/{usageLogId}`)
+ * the judgments that graded the answer, the grounding summary, the output it was published as and the approval state.
  */
 async function publish(a: {
   operation: IdempotentOperation | undefined
@@ -334,6 +339,7 @@ async function publish(a: {
   response: CommitteeBrainResponse
   usageLogId: string
   traceId: string
+  decision: Record<string, unknown>
 }): Promise<void> {
   await seam().beforePublish?.()
   // One SDK attempt per try (Codex P1 on PR #40): the retries and their deadline are withOutputWriteRetry's alone.
@@ -353,6 +359,7 @@ async function publish(a: {
           await a.audit.stage(tx, "allow", "ok", { effect })
           tx.create(a.outputRef, a.row)
           a.operation?.stageAnswer(tx, { status: 200, body: a.response })
+          tx.set(decisionRef(a.usageLogId), a.decision, { merge: true })
         },
         { maxAttempts: 1 }
       ),
@@ -552,7 +559,8 @@ async function resumeCommittee(a: {
   const blocked = receipt.outcome !== "ok"
   const reason = blocked ? TRANSPORT_ERROR : undefined
   const policy = policyOf(receipt.outbound.system)
-  const grounding = await groundingOf(receipt.text, policy, receipt.text === undefined ? [] : await a.partyNames())
+  const anchors: RetrievalAnchor[] = []
+  const grounding = await groundingOf(receipt.text, policy, receipt.text === undefined ? [] : await a.partyNames(), anchors)
   const modelReported = receipt.modelReported ?? null
   const outputRef = adminDb().collection("committee_outputs").doc()
   const response: CommitteeBrainResponse = {
@@ -588,7 +596,8 @@ async function resumeCommittee(a: {
     model: receipt.model,
     modelReported,
   })
-  await publish({ operation: a.operation, audit: a.audit, outputRef, row, response, usageLogId, traceId })
+  const decision = publicationFields({ usageLogId, traceId, firmId: a.caller.firmId, outputId: outputRef.id, advisory: isAdvisory(grounding), grounding, anchors })
+  await publish({ operation: a.operation, audit: a.audit, outputRef, row, response, usageLogId, traceId, decision })
   return response
 }
 
@@ -650,6 +659,8 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     // Audit F17 (ruling 6, R6a): grounding starts the moment the masked answer exists and runs beside the call's own
     // remaining phases; it never rejects (groundingOf), and the policy reference is filled in from the call's record.
     let grounding: Promise<Grounding> | undefined
+    // Audit F34 (R5): the corpus judgments the grounding reads, for the call's decision record.
+    const anchors: RetrievalAnchor[] = []
     // The router's clock for the month and the trace id, plus real elapsed time so the trace has a duration.
     const t0 = Date.now()
     const clock = () => (routerNow ?? t0) + (Date.now() - t0)
@@ -673,7 +684,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
           // Its matter too (re-audit MEDIUM-1): resumeCommittee publishes the receipt only on that matter.
           ...(operation === undefined ? {} : { operation: { markerRef: operation.markerRef, fields: { ...operation.markerFields(), matterId } } }),
           onAnswer: (masked) => {
-            grounding = groundingOf(masked, null, partyNames)
+            grounding = groundingOf(masked, null, partyNames, anchors)
           },
         },
         { now: clock, preCallDeadline }
@@ -689,7 +700,7 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
     const outputRef = adminDb().collection("committee_outputs").doc()
     const text = result.outcome === "ok" ? result.text : undefined
     // An ok answer was handed over by onAnswer; anything else (no text) is not_assessed at once.
-    const graded: Grounding = { ...(await (grounding ?? groundingOf(text, null, partyNames))), policy: policyOf(result.outbound.system) }
+    const graded: Grounding = { ...(await (grounding ?? groundingOf(text, null, partyNames, anchors))), policy: policyOf(result.outbound.system) }
     const response: CommitteeBrainResponse = {
       outputId: outputRef.id,
       blocked,
@@ -723,7 +734,16 @@ export const committeeBrainOp: FirmOperation<CommitteeBrainResponse> = {
       model: result.model,
       modelReported: result.modelReported,
     })
-    await publish({ operation, audit, outputRef, row, response, usageLogId: result.usageLogId, traceId: result.traceId })
+    const decision = publicationFields({
+      usageLogId: result.usageLogId,
+      traceId: result.traceId,
+      firmId: caller.firmId,
+      outputId: outputRef.id,
+      advisory: isAdvisory(graded),
+      grounding: graded,
+      anchors,
+    })
+    await publish({ operation, audit, outputRef, row, response, usageLogId: result.usageLogId, traceId: result.traceId, decision })
     return response
   },
 }

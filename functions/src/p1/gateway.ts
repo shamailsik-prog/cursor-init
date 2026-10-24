@@ -2,8 +2,9 @@ import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Tra
 import { logger } from "firebase-functions"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { buildOutbound, residualCountsOfMessages, verifySystemMessage, type OutboundMessage, type SystemRecord } from "@/platform/p1/outboundPrompt"
+import { PROMPT_HASH_ALGORITHM, promptHash, promptTemplateOf } from "@/platform/p1/promptTemplates"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
-import { isClassification, type Classification } from "@/platform/p1/types"
+import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { prepareAlerts, stageAlert } from "../alerts/raise"
 import { p1CommitSpecs } from "../alerts/specs"
@@ -29,6 +30,7 @@ import {
   spentOf,
 } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
+import { DECISIONS_COLLECTION, DECISION_RECORD_VERSION, anchorsOf, exportAfterCall, exportFields, type RetrievalAnchor } from "./decisionRecord"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
@@ -95,7 +97,22 @@ export type P1Request = {
    * call goes on.
    */
   onAnswer?: (maskedText: string) => void
+  /**
+   * Audit F34 (spec ruling R5): the sources the caller retrieved and put into the prompt, recorded on the decision record
+   * as its retrieval context (`sourceId`, the canonical ref as masked, a status, a content hash). No caller passes any
+   * yet: committeeBrain sends no retrieved context (documents are refused), so its records say `context: none`.
+   */
+  retrieval?: { anchors: RetrievalAnchor[] }
 }
+
+/**
+ * The pipeline's own version on decision records (audit F34, spec ruling R4): bumped with any change to what `callP1`
+ * decides, so a record says which pipeline decided it.
+ */
+export const P1_GATEWAY_VERSION = "f34.1"
+
+/** Milliseconds since `start` on the process's monotonic clock (audit F34, R7: phase timings, independent of the call's clock). */
+const since = (start: number): number => Math.max(0, Math.round((performance.now() - start) * 1000) / 1000)
 
 /**
  * An HTTP operation's effect marker as P1 records it (audit F09): `markerRef` is `idempotency_effects/{id}` and
@@ -184,6 +201,11 @@ export const p1TestSeam: {
   unqueued?: "all" | "commit"
   /** Audit F16 review round (R3a): replaces the built system message's text, so a test can show the send-time check. */
   systemOverride?: string
+  /**
+   * Audit F34 (R3): replaces the template pin table, so a test can show that a registry text which no longer hashes to its
+   * pin (a text edited without a version bump) is refused and nothing is sent.
+   */
+  templatePins?: Readonly<Record<string, string>>
 } = {}
 
 function seam(): typeof p1TestSeam {
@@ -497,8 +519,11 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
 
   // Both kill switches, the firm's config, the month total and the learned request overhead, fresh on every call and
   // outside the commit transaction (P3-66: no cache, so a switch takes effect on the next call).
+  const callStarted = performance.now()
   const [platformSnap, configSnap, totalSnap, overheadSnap] = await db.getAll(platformConfigRef(), configRef, totalRef, overheadRef())
   const config = configSnap.data()
+  const firstReadsMs = since(callStarted)
+  const maskStarted = performance.now()
 
   // 3. Route (P3-62). 4. The role-separated request (audit F16, spec rulings 1 to 3): the registry's system message for
   // the purpose, then the body as the user's own turn, masked with the party names and its envelope tag look-alikes
@@ -525,29 +550,108 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   const bodyTokens = requestTokenCeiling(messages)
   const firstLookOverhead = reservationOverheadTokens(model, learnedOverheadOf(overheadSnap.data(), model))
   const worstCase = firstLookOverhead === null ? null : costMicroUsd(model, bodyTokens + firstLookOverhead, MAX_OUTPUT_TOKENS)
+  // Audit F34 (spec ruling R3): the registered template the system message is, by its pinned hash, and the hash of the
+  // masked messages as they would be sent; never their text.
+  const template = promptTemplateOf(built.system, t.templatePins)
+  const hashOfPrompt = promptHash(messages)
+  const maskMs = since(maskStarted)
+
+  // Audit F34 (R6): each verdict the refusal below reaches, as a fixed token, for the decision record.
+  const verdicts = {
+    killSwitch: {
+      platform: killSwitchBlocks(platformSnap.get("killSwitch"), model) ? ("blocks" as const) : ("clear" as const),
+      firm: killSwitchBlocks(config?.killSwitch, model) ? ("blocks" as const) : ("clear" as const),
+    },
+    // Null until the refusal reaches the check (a kill switch refuses first).
+    systemVerified: null as boolean | null,
+    policy: providerAllowedFor(PROVIDER_ID, classification),
+    minimised: null as boolean | null,
+    firstLook: "not_reached" as "fits" | "exhausted" | "not_set" | "unpriced" | "not_reached",
+  }
 
   /** Steps 2 and 5 to 7, in order; the first refusal wins. */
   const refusal = (): BlockReason | null => {
-    if (killSwitchBlocks(platformSnap.get("killSwitch"), model)) return "kill_switch_platform"
-    if (killSwitchBlocks(config?.killSwitch, model)) return "kill_switch_firm"
-    // 4a. Review round (R3a): the system message is exactly the registry text its record names, or nothing is sent.
-    if (!verifySystemMessage(messages, built.system)) return "system_unverified"
-    const policy = providerAllowedFor(PROVIDER_ID, classification)
+    if (verdicts.killSwitch.platform === "blocks") return "kill_switch_platform"
+    if (verdicts.killSwitch.firm === "blocks") return "kill_switch_firm"
+    // 4a. Review round (R3a): the system message is exactly the registry text its record names, or nothing is sent; and
+    // (audit F34, R3) that text is a registered template whose hash is pinned, so an edit without a version bump sends nothing.
+    verdicts.systemVerified = verifySystemMessage(messages, built.system) && template !== null
+    if (!verdicts.systemVerified) return "system_unverified"
+    const policy = verdicts.policy
     if (!policy.allowed) return "policy_denied"
     // Every user message that would be sent (audit F16) and the purpose; the verified system message is platform text.
-    if (policy.requirements && !assertMinimised({ messages, metadata: { purpose: outbound.purpose } }, partyNames)) return "not_minimised"
-    if (worstCase === null) return "model_unpriced"
+    if (policy.requirements) {
+      verdicts.minimised = assertMinimised({ messages, metadata: { purpose: outbound.purpose } }, partyNames)
+      if (!verdicts.minimised) return "not_minimised"
+    }
+    if (worstCase === null) {
+      verdicts.firstLook = "unpriced"
+      return "model_unpriced"
+    }
     const budget = budgetOf(config)
-    if (budget === null) return "budget_not_set"
+    if (budget === null) {
+      verdicts.firstLook = "not_set"
+      return "budget_not_set"
+    }
     // A first look on the pre-call read (F07): the worst case must fit beside what is spent and held. The
     // reservation transaction (step 8b) decides again on the figures it reads.
-    if (spentOf(totalSnap.data()) + reservedOf(totalSnap.data()) + worstCase > budget) return "budget_exhausted"
+    if (spentOf(totalSnap.data()) + reservedOf(totalSnap.data()) + worstCase > budget) {
+      verdicts.firstLook = "exhausted"
+      return "budget_exhausted"
+    }
+    verdicts.firstLook = "fits"
     return null
   }
   let blockReason = refusal()
   const transport = blockReason === null ? activeTransport() : null
   // 8. Credentials.
   if (blockReason === null && transport === null) blockReason = "no_credentials"
+  const credentials = transport !== null ? "present" : verdicts.firstLook === "fits" ? "absent" : "not_checked"
+
+  // Audit F34 (R2): what the decision record needs from before dispatch, also kept on the reservation as its seed, so the
+  // lease reconciler can write the record of a call that never commits. No text: ids, hashes, tokens and counts.
+  const retrievalContext = req.retrieval === undefined ? { state: "none", anchors: [] } : { state: "supplied", anchors: anchorsOf(req.retrieval.anchors) }
+  const operationId = typeof req.operation?.fields.operationId === "string" ? req.operation.fields.operationId : null
+  const promptRecord = {
+    templateId: template?.templateId ?? null,
+    templateVersion: template?.templateVersion ?? null,
+    templateSha256: template?.templateSha256 ?? null,
+    agentInstructionsSha256: template?.agentInstructionsSha256 ?? null,
+    hash: hashOfPrompt,
+    hashAlgorithm: PROMPT_HASH_ALGORITHM,
+    messageCount: messages.length,
+  }
+  const transportId = transport === null ? null : (transport.id ?? "unidentified")
+  const decisionsRecord = (reservationVerdict: string, attemptRecord: string) => ({
+    killSwitch: verdicts.killSwitch,
+    systemVerified: verdicts.systemVerified,
+    route: {
+      classification,
+      rank: classificationRank(classification),
+      provider: PROVIDER_ID,
+      allowed: verdicts.policy.allowed,
+      minimisationRequired: verdicts.policy.allowed && verdicts.policy.requirements !== undefined,
+      minimised: verdicts.minimised,
+    },
+    mask: {
+      redactionCounts: outbound.redactionCounts,
+      residualCounts: outbound.residualCounts ?? null,
+      partyNames: Array.isArray(partyNames) ? partyNames.length : 0,
+    },
+    budget: { firstLook: verdicts.firstLook, worstCaseMicroUsd: worstCase, reservation: reservationVerdict },
+    credentials,
+    attemptRecord,
+  })
+  const seedOf = () => ({
+    recordVersion: DECISION_RECORD_VERSION,
+    operationId,
+    startedAtMs: startMs,
+    prompt: promptRecord,
+    model: { configured: model, provider: PROVIDER_ID, transport: transportId, gatewayVersion: P1_GATEWAY_VERSION },
+    retrieval: { context: retrievalContext },
+    decisions: decisionsRecord("reserved", "not_attempted"),
+    phases: { firstReadsMs, maskMs },
+  })
 
   // 8a. The caller's pre-call deadline (re-audit R3-D2): when the work before this point (the caller's own reads and
   // this call's first reads) ran past the allowance the caller gives, nothing is reserved or sent, and nothing is
@@ -561,6 +665,16 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   // attempt, F08), and holds the worst case. No reservation, no provider call (a failure is reservation_failed).
   const resRef = reservationRef(usageRef.id)
   let reservation: CommitArgs["reservation"] = null
+  // Audit F34 (R6, R7): the reservation's and the attempt record's verdicts, and each phase's time once it runs.
+  let reservationVerdict = "not_attempted"
+  let attemptRecord = "not_attempted"
+  const phases: Record<"reserveMs" | "attemptRecordMs" | "transportMs" | "attemptOutcomeMs" | "traceMs", number | null> = {
+    reserveMs: null,
+    attemptRecordMs: null,
+    transportMs: null,
+    attemptOutcomeMs: null,
+    traceMs: null,
+  }
   if (blockReason === null) {
     await t.beforeReserve?.()
     const reserveArgs: ReserveArgs = {
@@ -581,18 +695,24 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
         classification,
         traceId,
         ...(typeof req.idempotencyDoc === "string" && req.idempotencyDoc !== "" ? { idempotencyDoc: req.idempotencyDoc } : {}),
+        // Audit F34 (R2): the decision record's seed, for the lease reconciler.
+        decisionSeed: seedOf(),
       },
     }
+    const reserveStarted = performance.now()
     try {
       const decision = await reserve(db, reserveArgs)
       if (decision === "reserved") reservation = { ref: resRef, state: "released", mustBeLive: false }
       else blockReason = decision
+      reservationVerdict = decision
     } catch (err) {
       blockReason = "reservation_failed"
+      reservationVerdict = "failed"
       // A reservation that landed unseen is released by this call's commit, or else by the reconciler.
       reservation = { ref: resRef, state: "released", mustBeLive: false }
       logger.warn("p1.reservation_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
     }
+    phases.reserveMs = since(reserveStarted)
   }
   if (reservation !== null && blockReason === null && t.crashAt === "reserved") throw simulatedCrash()
 
@@ -601,12 +721,16 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   // operation the same transaction creates the operation's effect marker (audit F09): one dispatch per operation.
   const operation = req.operation ? { operation: req.operation, usageLogId: usageRef.id, traceId } : undefined
   if (reservation !== null && blockReason === null) {
+    const markStarted = performance.now()
     try {
       await markAttempt(db, resRef, t, operation)
+      attemptRecord = "recorded"
     } catch (err) {
       blockReason = "reservation_failed"
+      attemptRecord = "failed"
       logger.warn("p1.attempt_record_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
     }
+    phases.attemptRecordMs = since(markStarted)
   }
 
   let outcome: P1Outcome = "blocked"
@@ -623,8 +747,10 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   if (blockReason === null && transport !== null) {
     dispatched = true
     // 9. The transport call, then the response mask (P3-68).
+    const sendStarted = performance.now()
     try {
       const res = await transport.send({ model, messages, maxTokens: MAX_OUTPUT_TOKENS })
+      phases.transportMs = since(sendStarted)
       // A response came back without text: billed like the Gateway's own gateway_no_text, on the usage it reported.
       if (typeof res?.text !== "string") {
         throw new P1TransportError("gateway_no_text", {
@@ -675,6 +801,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       }
       logger.warn("p1.transport_failed", { firmId, usageLogId: usageRef.id, traceId, code: transportCode(err) })
     }
+    if (phases.transportMs === null) phases.transportMs = since(sendStarted)
   }
   // Audit F17 (ruling 6, R6a): the masked answer goes to the caller now, so its own work on it (grounding) runs beside
   // steps 9b to 11 instead of after them. Outside the transport's try: a hook that throws is never a transport failure.
@@ -702,10 +829,21 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       classification,
       outbound,
     }
+    const outcomeStarted = performance.now()
     await recordAttemptOutcomeRetrying(
       db,
       resRef,
-      { result: outcome, inputTokens, outputTokens, tokensEstimated, costMicroUsd: cost, ...providerIds, ...(modelReported === null ? {} : { modelReported }) },
+      {
+        result: outcome,
+        inputTokens,
+        outputTokens,
+        tokensEstimated,
+        costMicroUsd: cost,
+        ...providerIds,
+        ...(modelReported === null ? {} : { modelReported }),
+        // Audit F34 (R2, R7): the transport's time, for a decision record the lease reconciler writes.
+        ...(phases.transportMs === null ? {} : { transportMs: phases.transportMs }),
+      },
       operation ? { operation: operation.operation, traceId, receipt } : undefined
     ).catch((err: unknown) => {
       logger.warn("p1.attempt_outcome_failed", { firmId, usageLogId: usageRef.id, code: errorCode(err) })
@@ -721,15 +859,19 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
         })
       }
     })
+    phases.attemptOutcomeMs = since(outcomeStarted)
     reservation = { ref: resRef, state: settledState(true, outcome, cost), mustBeLive: true }
   }
   if (dispatched && t.crashAt === "recorded") throw simulatedCrash()
 
-  // 10. Trace (P3-67): fail-open; the masked text rides along only where buildTrace allows it.
+  // 10. Trace (P3-67): fail-open; the masked text rides along only where buildTrace allows it (ranks 0 and 1, audit F34
+  // R10), and the ids and hashes that join it to the decision record at every rank.
+  const traceStarted = performance.now()
+  const endMs = Math.max(startMs, Math.floor(now()))
   const status = await exportTrace({
     traceId,
     startMs,
-    endMs: Math.max(startMs, Math.floor(now())),
+    endMs,
     taskType,
     classification,
     outcome,
@@ -745,7 +887,12 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     maskedBody: outcome === "blocked" ? null : outbound.body,
     system: outcome === "blocked" ? null : built.system,
     maskedResponse: text ?? null,
+    promptHash: hashOfPrompt,
+    promptTemplateId: promptRecord.templateId,
+    promptTemplateVersion: promptRecord.templateVersion,
+    modelReported,
   })
+  phases.traceMs = since(traceStarted)
   if (status === "failed") logger.warn("p1.trace_export_failed", { firmId, usageLogId: usageRef.id, traceId })
 
   // 11. One transaction: the usage row, the month total, any threshold alerts, the audit row and the event.
@@ -772,11 +919,53 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     monthKey,
     trace: { id: traceId, status },
   }
+  // Audit F34 (R1, R2): the decision record, staged in the commit transaction beside the usage row it explains. No text.
+  const decision: Record<string, unknown> = {
+    recordVersion: DECISION_RECORD_VERSION,
+    traceId,
+    usageLogId: usageRef.id,
+    firmId,
+    actorId: req.actorId,
+    matterId: req.matterId ?? null,
+    jobId: req.jobId ?? null,
+    taskType,
+    classification,
+    operationId,
+    outcome,
+    blockReason,
+    startedAtMs: startMs,
+    endedAtMs: endMs,
+    prompt: promptRecord,
+    model: {
+      configured: model,
+      reported: modelReported,
+      revisionStatus: modelReported === null ? "unreported" : "reported",
+      provider: PROVIDER_ID,
+      transport: transportId,
+      gatewayVersion: P1_GATEWAY_VERSION,
+      responseId: providerIds.responseId ?? null,
+      requestId: providerIds.requestId ?? null,
+    },
+    retrieval: { context: retrievalContext },
+    decisions: decisionsRecord(reservationVerdict, attemptRecord),
+    phases: { firstReadsMs, maskMs, ...phases, settleStartedAtMs: Date.now() },
+    cost: {
+      inputTokens,
+      outputTokens,
+      tokensEstimated,
+      costMicroUsd: cost,
+      monthKey,
+      spendRecord: `ai_usage_months/${firmId}_${monthKey}`,
+      reservation: reservationVerdict === "not_attempted" ? null : `ai_reservations/${usageRef.id}`,
+    },
+    export: exportFields(exportAfterCall(status, endMs)),
+    settledBy: "gateway",
+  }
   let staged: StageResult = { ...NOTHING_STAGED, crossings: [] }
   let accounting: P1Accounting = "pending"
   try {
     await t.beforeCommit?.()
-    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, nowMs: Math.floor(now()) })
+    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, decision, nowMs: Math.floor(now()) })
     accounting = "settled"
   } catch (err) {
     // The result is still returned (P3-63) and the log keeps the record; the reservation, when there is one, keeps
@@ -832,6 +1021,8 @@ export type ReserveArgs = {
     classification: Classification
     traceId: string
     idempotencyDoc?: string
+    /** Audit F34 (R2): the decision record's seed, everything known before dispatch; never text. */
+    decisionSeed?: Record<string, unknown>
     /**
      * FA-D3C-002 (Codex P2 on PR #118): an embedding call's verified service caller and the corpus's F27 operation id,
      * kept on the reservation so a row the lease reconciler writes still joins the corpus's receipt. Absent on every
@@ -1017,6 +1208,8 @@ export type AttemptOutcome = {
    * reconciler can carry it into a usage row it rebuilds from this attempt. Absent when none was reported.
    */
   modelReported?: string
+  /** Audit F34 (R2, R7): how long the transport call took, in milliseconds. */
+  transportMs?: number
 }
 type ReceiptArgs = { operation: P1Operation; traceId: string; receipt: P1Receipt }
 
@@ -1073,6 +1266,7 @@ async function recordAttemptOutcome(db: Firestore, ref: DocumentReference, r: At
           ...(r.responseId === undefined ? {} : { "providerAttempt.responseId": r.responseId }),
           ...(r.requestId === undefined ? {} : { "providerAttempt.requestId": r.requestId }),
           ...(r.modelReported === undefined ? {} : { "providerAttempt.modelReported": r.modelReported }),
+          ...(r.transportMs === undefined ? {} : { "providerAttempt.transportMs": r.transportMs }),
         })
       },
       { maxAttempts: 3 }
@@ -1114,6 +1308,11 @@ export type CommitArgs = {
   reservation: { ref: DocumentReference; state: ClosedState; mustBeLive: boolean } | null
   /** Who settles the reservation; the reconciler's own transaction passes "reconciler". */
   settledBy?: "gateway" | "reconciler"
+  /**
+   * Audit F34 (R1, R2): the attempt's decision record, merged into `p1_decisions/{usageLogId}` in the same transaction
+   * as the usage row, with `settledAt` the commit's own time. Absent: no record is written.
+   */
+  decision?: Record<string, unknown> | null
   /** The deciding clock, for the times of the alerts this decision raises (audit F43); `Date.now()` when absent. */
   nowMs?: number
 }
@@ -1301,6 +1500,9 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
   const now = FieldValue.serverTimestamp()
   const inc = (n: number) => FieldValue.increment(n)
   tx.create(usageRef, { ...r, createdAt: now })
+  // Audit F34 (R1, R2): the decision record commits with the usage row; merged, so a publisher's or a reconciler's fields
+  // written first are kept.
+  if (a.decision) tx.set(db.collection(DECISIONS_COLLECTION).doc(usageRef.id), { ...a.decision, settledAt: now }, { merge: true })
   // Spend and tokens move by the record's own figures, by one rule for every outcome: an ok call and a billed
   // failure add their charge (I1); a blocked call and an unbilled failure add 0, so only their `calls` counter moves.
   // A settled reservation's hold leaves `reservedMicroUsd` in the same write (F07).

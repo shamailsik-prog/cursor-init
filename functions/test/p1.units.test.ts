@@ -327,14 +327,17 @@ describe("P1 Opik configuration (P3-67)", () => {
   })
 })
 
-describe("P1 Opik trace payload (P3-67)", () => {
+// Audit F34 (spec ruling R10) changed P3-67's content rule: masked text rides only at ranks 0 and 1 (it was 0 to 3), and
+// the metadata carries the decision record's version. The default record below is therefore `internal` (it was
+// `confidential`), and the rank tests say 0 to 1.
+describe("P1 Opik trace payload (P3-67, audit F34 R10)", () => {
   const T0 = Date.parse("2026-10-11T10:00:00.000Z")
   const record = (over: Partial<TraceRecord> = {}): TraceRecord => ({
     traceId: "0199c3a0-0000-7000-8000-000000000001",
     startMs: T0,
     endMs: T0 + 1500,
     taskType: "committee",
-    classification: "confidential",
+    classification: "internal",
     outcome: "ok",
     blockReason: null,
     model: OPUS,
@@ -350,7 +353,7 @@ describe("P1 Opik trace payload (P3-67)", () => {
     ...over,
   })
 
-  it("carries masked input and output at rank 2, with the full metadata", () => {
+  it("carries masked input and output at rank 1, with the full metadata", () => {
     const t = buildTrace(record(), "sikander-p1")
     expect(t).toEqual({
       id: "0199c3a0-0000-7000-8000-000000000001",
@@ -361,7 +364,7 @@ describe("P1 Opik trace payload (P3-67)", () => {
       input: { prompt: "MASKED BODY" },
       output: { text: "MASKED RESPONSE" },
       metadata: {
-        classification: "confidential",
+        classification: "internal",
         taskType: "committee",
         model: OPUS,
         provider: "ai-gateway",
@@ -373,22 +376,25 @@ describe("P1 Opik trace payload (P3-67)", () => {
         firmId: "firm-1",
         matterId: "matter-1",
         usageLogId: "usage-1",
+        decisionRecordVersion: "f34.1",
       },
-      tags: ["confidential", "ok"],
+      tags: ["internal", "ok"],
     })
   })
 
-  it("carries content at ranks 0 to 3 and metadata only at rank 4", () => {
-    for (const c of ["public", "internal", "confidential", "privileged"] as const) {
+  it("carries content at ranks 0 and 1 and metadata only at ranks 2 to 4", () => {
+    for (const c of ["public", "internal"] as const) {
       const t = buildTrace(record({ classification: c }), "p")
       expect(t.input, c).toEqual({ prompt: "MASKED BODY" })
       expect(t.output, c).toEqual({ text: "MASKED RESPONSE" })
     }
-    const t = buildTrace(record({ classification: "privileged-restricted" }), "p")
-    expect("input" in t).toBe(false)
-    expect("output" in t).toBe(false)
-    expect((t.metadata as { classification: string }).classification).toBe("privileged-restricted")
-    expect(t.tags).toEqual(["privileged-restricted", "ok"])
+    for (const c of ["confidential", "privileged", "privileged-restricted"] as const) {
+      const t = buildTrace(record({ classification: c }), "p")
+      expect("input" in t, c).toBe(false)
+      expect("output" in t, c).toBe(false)
+      expect((t.metadata as { classification: string }).classification, c).toBe(c)
+      expect(t.tags, c).toEqual([c, "ok"])
+    }
   })
 
   it("carries no content for a blocked call, at any rank, and records the reason", () => {
@@ -421,7 +427,7 @@ describe("P1 Opik trace payload (P3-67)", () => {
     expect(t.error_info).toEqual({ exception_type: "transport_error", traceback: "" })
     expect(t.input).toEqual({ prompt: "MASKED BODY" })
     expect("output" in t).toBe(false)
-    expect(t.tags).toEqual(["confidential", "failed"])
+    expect(t.tags).toEqual(["internal", "failed"])
     expect("error_info" in buildTrace(record(), "p")).toBe(false)
   })
 

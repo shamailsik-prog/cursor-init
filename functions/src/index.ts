@@ -19,6 +19,9 @@ export { d1ConflictReindexTick } from "./p2/functions"
 export { d1ConflictClientWritten, d1ConflictPartyWritten, d1ConflictIndexChunkWritten } from "./d1/conflict/registryTriggers"
 // Audit F07, F08: the P1 lease reconciler, every minute; settles or releases AI spend reservations whose lease lapsed.
 export { p1ReservationReconciler } from "./p1/reconciler"
+// Audit F34: the trace export reconciler, every 5 minutes; retries the Opik exports a call left pending on its decision
+// record, fenced by a lease, and records `exported` or, after the last attempt, `failed`.
+export { p1TraceExportReconciler } from "./p1/traceExport"
 // FA-D3C-002: the corpus service's paid embeddings go through P1 here (kill switches, reservation, ledger, provider
 // policy, mask). Not a tenant entry point: IAM-private, OIDC-verified service caller, the firm fixed by the deployment.
 export { p1CorpusEmbedding } from "./p1/corpusEmbedding"

@@ -1,13 +1,23 @@
 import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { classificationRank, type Classification } from "@/platform/p1/types"
-import { TRANSPORT_ERROR, type P1Outcome } from "./types"
+import { DECISION_RECORD_VERSION } from "./decisionRecord"
+import { TRANSPORT_ERROR, type UsageOutcome } from "./types"
 
 /**
  * Self-hosted Opik tracing over its REST batch endpoint (spec P3-67). Export is fail-open: it never throws and
- * never fails the call; the caller records the returned status on the usage row.
+ * never fails the call; the caller records the returned status on the usage row and on the decision record, where a
+ * failure stays `pending` until the export reconciler retries it (audit F34, spec ruling R11, traceExport.ts).
  */
 
 export const OPIK_TIMEOUT_MS = 2000
+
+/**
+ * The highest classification rank whose masked text may ride in a trace (audit F34, spec ruling R10): 1, so `public` and
+ * `internal` only. Confidential (2), privileged (3) and privileged-restricted (4) calls export ids, hashes and metrics
+ * only. This supersedes P3-67's ranks 0 to 3: masking removes identifiers, not the substance of a confidential or
+ * privileged question, and the trace store is a second system with its own access.
+ */
+export const TRACE_TEXT_MAX_RANK = 1
 const DEFAULT_PROJECT = "sikander-p1"
 
 export type OpikConfig =
@@ -64,7 +74,8 @@ export type TraceRecord = {
   endMs: number
   taskType: string
   classification: Classification
-  outcome: P1Outcome
+  /** A call's outcome, or `reconciled` for a trace the export reconciler rebuilds from a reconciled decision record (audit F34). */
+  outcome: UsageOutcome
   blockReason: string | null
   model: string
   provider: string
@@ -82,12 +93,21 @@ export type TraceRecord = {
    */
   system?: SystemRecord | null
   maskedResponse: string | null
+  /**
+   * Audit F34 (R10): ids and hashes that join the trace to the decision record, at every rank: the prompt hash (never the
+   * text), the registered template, and the model the provider reported. Absent on a record built before F34.
+   */
+  promptHash?: string | null
+  promptTemplateId?: string | null
+  promptTemplateVersion?: string | null
+  modelReported?: string | null
 }
 
 /**
  * One Opik trace. The masked request (`{ system, prompt }` with the system policy's id and version, or `{ prompt }`
- * without a system message) and the masked response ride along only at ranks 0 to 3 and never on a blocked call; rank 4
- * and blocked calls are metadata only. An unknown classification label throws (fails closed).
+ * without a system message) and the masked response ride along only at ranks 0 and 1 (TRACE_TEXT_MAX_RANK, audit F34
+ * R10) and never on a blocked call; ranks 2 to 4 and blocked calls are metadata only: ids, hashes and metrics. An unknown
+ * classification label throws (fails closed).
  */
 export function buildTrace(r: TraceRecord, project: string): Record<string, unknown> {
   const trace: Record<string, unknown> = {
@@ -109,10 +129,16 @@ export function buildTrace(r: TraceRecord, project: string): Record<string, unkn
       firmId: r.firmId,
       matterId: r.matterId,
       usageLogId: r.usageLogId,
+      // Audit F34 (R10): ids and hashes only, never text.
+      decisionRecordVersion: DECISION_RECORD_VERSION,
+      ...(r.promptHash === undefined ? {} : { promptHash: r.promptHash }),
+      ...(r.promptTemplateId === undefined ? {} : { promptTemplateId: r.promptTemplateId }),
+      ...(r.promptTemplateVersion === undefined ? {} : { promptTemplateVersion: r.promptTemplateVersion }),
+      ...(r.modelReported === undefined ? {} : { modelReported: r.modelReported }),
     },
     tags: [r.classification, r.outcome],
   }
-  if (classificationRank(r.classification) <= 3 && r.outcome !== "blocked") {
+  if (classificationRank(r.classification) <= TRACE_TEXT_MAX_RANK && r.outcome !== "blocked") {
     if (typeof r.maskedBody === "string") trace.input = r.system ? { system: { ...r.system }, prompt: r.maskedBody } : { prompt: r.maskedBody }
     if (typeof r.maskedResponse === "string") trace.output = { text: r.maskedResponse }
   }

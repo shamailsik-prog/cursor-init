@@ -79,6 +79,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)",
   p1CorpusEmbedding: "service endpoint, no tenant caller: IAM-private and OIDC-verified for the corpus service account only; spends the one firm its deployment names (P1_CORPUS_FIRM_ID), never a firm the request names, and reads or returns no firm data (FA-D3C-002)",
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
+  p1TraceExportReconciler: "scheduler, no caller; re-exports each pending P1 decision record's metadata-only trace by its own id and records the outcome on that record only (audit F34)",
   alertEscalator: "scheduler, no caller; escalates each open alert within its own firm (its partners, its founding partner) and delivers pages (audit F43)",
   alertChecker: "scheduler, no caller; derives queue, saga and AI-spend alerts from each firm's own rows, one alert per firm (audit F43)",
 }

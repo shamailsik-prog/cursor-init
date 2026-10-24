@@ -82,6 +82,18 @@ resource "google_monitoring_alert_policy" "functions_errors" {
     }
   }
   conditions {
+    display_name = "p1.trace_export_abandoned"
+    condition_matched_log {
+      filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="p1.trace_export_abandoned"'
+    }
+  }
+  conditions {
+    display_name = "p1.trace_export_reconcile_failed"
+    condition_matched_log {
+      filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="p1.trace_export_reconcile_failed"'
+    }
+  }
+  conditions {
     display_name = "autoconfirm.backlog_stale"
     condition_matched_log {
       filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="autoconfirm.backlog_stale"'

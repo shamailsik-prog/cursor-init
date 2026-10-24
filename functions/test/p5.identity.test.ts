@@ -1107,7 +1107,7 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 describe("index exports", () => {
   it("U-1: deploys only the HTTP api (and the health probe) as HTTP functions, plus the job runtime's non-HTTP functions, in asia-south1 — no onCall callables", async () => {
     const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
-    expect(Object.keys(mod).sort()).toEqual(["alertChecker", "alertEscalator", "api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1CorpusEmbedding", "p1ReservationReconciler"])
+    expect(Object.keys(mod).sort()).toEqual(["alertChecker", "alertEscalator", "api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1CorpusEmbedding", "p1ReservationReconciler", "p1TraceExportReconciler"])
     for (const name of Object.keys(mod)) {
       expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
     }
@@ -1119,6 +1119,6 @@ describe("index exports", () => {
     expect((mod.p1CorpusEmbedding?.__endpoint?.httpsTrigger as { invoker?: unknown } | undefined)?.invoker).toEqual(["private"])
     expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
     expect(mod.p1CorpusEmbedding?.__endpoint?.region).toEqual(["asia-south1"])
-    for (const name of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper", "ocrLegacySweep", "d1AutoConfirmTick", "d1ConflictReindexTick", "d1ConflictClientWritten", "d1ConflictPartyWritten", "d1ConflictIndexChunkWritten", "p1ReservationReconciler", "auditOutboxReconciler", "alertEscalator", "alertChecker"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
+    for (const name of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper", "ocrLegacySweep", "d1AutoConfirmTick", "d1ConflictReindexTick", "d1ConflictClientWritten", "d1ConflictPartyWritten", "d1ConflictIndexChunkWritten", "p1ReservationReconciler", "auditOutboxReconciler", "p1TraceExportReconciler", "alertEscalator", "alertChecker"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
   })
 })
