@@ -122,6 +122,9 @@ def test_p1_policy_admits_a_google_serverless_https_url(url):
     ("https://evilrun.app", fetch_policy.HOST_NOT_ALLOWED),
     ("https://a.run.app.evil.example", fetch_policy.HOST_NOT_ALLOWED),
     ("https://cloudfunctions.net/x", fetch_policy.HOST_NOT_ALLOWED),
+    # The bare suffix (no label before it) is named as a host the policy refuses, not left to the generic host check.
+    ("https://.run.app", fetch_policy.HOST_NOT_ALLOWED),
+    ("https://.cloudfunctions.net/x", fetch_policy.HOST_NOT_ALLOWED),
     ("https://35.190.1.2/p1", fetch_policy.HOST_NOT_ALLOWED),
     ("https://user:pass@p1corpusembedding-abc123-el.a.run.app", fetch_policy.USERINFO),
     ("https://p1corpusembedding-abc123-el.a.run.app/?x=1", fetch_policy.AMBIGUOUS),

@@ -22,36 +22,36 @@
 - [x] This plan.
 
 ### Task 2: FA-D3C-001 (R1-R3)
-- [ ] RED: `corpus_service/tests/test_fa_d3c_runtime_boundary.py` (browser half) fails on main.
-- [ ] Remove `playwright` (requirements.txt), the Chromium install (Dockerfile), `PLAYWRIGHT_*` and `PlaywrightTimeoutError` (config.py); update the comments that name them (requirements-test.txt, tests/e2e/Dockerfile, README source policy).
-- [ ] Empty `fa_d3c_001_scraper` in `ci_gates/g0_guard_allowlist.json`.
-- [ ] GREEN: T1 browser half, G-0 [2], F31 import contract.
+- [x] RED: `corpus_service/tests/test_fa_d3c_runtime_boundary.py` (browser half) fails on main.
+- [x] Remove `playwright` (requirements.txt), the Chromium install (Dockerfile), `PLAYWRIGHT_*` and `PlaywrightTimeoutError` (config.py); update the comments that name them (requirements-test.txt, tests/e2e/Dockerfile, README source policy).
+- [x] Empty `fa_d3c_001_scraper` in `ci_gates/g0_guard_allowlist.json`.
+- [x] GREEN: T1 browser half, G-0 [2], F31 import contract.
 
 ### Task 3: Functions side of FA-D3C-002 (R5, R9-R12)
-- [ ] RED: T5 `fa-d3c-service-auth.test.ts`, T6 `fa-d3c-embedding-transport.test.ts`, T7 `fa-d3c-embedding.emu.test.ts` fail (no modules).
-- [ ] gateway.ts: export `reserve`, `markAttempt`, `recordAttemptOutcomeRetrying`, `commit`; optional output ceiling on `reserve`; `LedgerTaskType` in types.ts.
-- [ ] costTable.ts: `openai/text-embedding-3-small` price entry.
-- [ ] `serviceAuth.ts`, `embeddingTransport.ts`, `embedding.ts`, `corpusEmbedding.ts`; export `p1CorpusEmbedding` from index.ts.
-- [ ] Deploy manifest entry, alert policies for new ERROR lines, terraform re-render; pinned export lists in tests.
-- [ ] GREEN: T5-T7; P1 suites; typecheck; eslint; G-1, G-2, deploy-contract gate.
+- [x] RED: T5 `fa-d3c-service-auth.test.ts`, T6 `fa-d3c-embedding-transport.test.ts`, T7 `fa-d3c-embedding.emu.test.ts` fail (no modules).
+- [x] gateway.ts: export `reserve`, `markAttempt`, `recordAttemptOutcomeRetrying`, `commit`; optional output ceiling on `reserve`; `LedgerTaskType` in types.ts.
+- [x] costTable.ts: `openai/text-embedding-3-small` price entry.
+- [x] `serviceAuth.ts`, `embeddingTransport.ts`, `embedding.ts`, `corpusEmbedding.ts`; export `p1CorpusEmbedding` from index.ts.
+- [x] Deploy manifest entry, alert policies for new ERROR lines, terraform re-render; pinned export lists in tests.
+- [x] GREEN: T5-T7; P1 suites; typecheck; eslint; G-1, G-2, deploy-contract gate.
 
 ### Task 4: corpus side of FA-D3C-002 (R13-R16)
-- [ ] RED: T4 `test_fa_d3c_p1_client.py`, T1 provider half.
-- [ ] `fetch_policy.p1_fetcher`; `scraper/p1_client.py`; config `P1_EMBEDDING_URL`, `P1_ID_TOKEN_FILE`; delete `OPENAI_API_KEY`.
-- [ ] `embeddings.py` seam: client from `p1_client`, `operation_id=op`, `P1Refused` handling (`_refused`), skip reason.
-- [ ] requirements.txt without `openai`; F31 alias table; compose, `.env.example`, `app.env`, `tests/e2e/lib.sh`.
-- [ ] Empty `fa_d3c_002_provider`; drop the corpus exemption in `check_next_ai_egress.py`; flip its test row.
-- [ ] F27/F28 stand-ins move to the seam.
-- [ ] GREEN: T1, T4, the corpus suite, F27/F28, F31 import contract, runtime smoke.
+- [x] RED: T4 `test_fa_d3c_p1_client.py`, T1 provider half.
+- [x] `fetch_policy.p1_fetcher`; `scraper/p1_client.py`; config `P1_EMBEDDING_URL`, `P1_ID_TOKEN_FILE`; delete `OPENAI_API_KEY`.
+- [x] `embeddings.py` seam: client from `p1_client`, `operation_id=op`, `P1Refused` handling (`_refused`), skip reason.
+- [x] requirements.txt without `openai`; F31 alias table; compose, `.env.example`, `app.env`, `tests/e2e/lib.sh`.
+- [x] Empty `fa_d3c_002_provider`; drop the corpus exemption in `check_next_ai_egress.py`; flip its test row.
+- [x] F27/F28 stand-ins move to the seam.
+- [x] GREEN: T1, T4, the corpus suite, F27/F28, F31 import contract, runtime smoke.
 
 ### Task 5: end-to-end (R17)
-- [ ] Harness entry `functions/test/harness/fa-d3c-p1-emulator-entry.ts`; runner `corpus_service/tests/e2e/p1_embedding_e2e.sh`; test `test_fa_d3c_p1_embedding_e2e.py`.
-- [ ] RED on main's corpus code with the tripwire; GREEN on the branch.
-- [ ] CI job modelled on `authority-f05`.
+- [x] Harness entry `functions/test/harness/fa-d3c-p1-emulator-entry.ts`; runner `corpus_service/tests/e2e/p1_embedding_e2e.sh`; test `test_fa_d3c_p1_embedding_e2e.py`.
+- [x] RED on main's corpus code with the tripwire; GREEN on the branch.
+- [x] CI job modelled on `authority-f05`.
 
 ### Task 6: mutation, gates, PR body
-- [ ] At least 10 mutants on the added logic; record killed or survived.
-- [ ] G-0, G-1, G-2, deploy contract, claim gate on the PR body, gitleaks.
+- [x] At least 10 mutants on the added logic; record killed or survived.
+- [x] G-0, G-1, G-2, deploy contract, claim gate on the PR body, gitleaks.
 
 ## RED/GREEN ledger
 
@@ -59,11 +59,14 @@ Filled in as each test runs. Counts are exact; NOT RUN means not run.
 
 | Test | RED (main) | GREEN (branch) |
 |---|---|---|
-| T1 corpus runtime boundary guard | | |
-| T2 G-0 [2]/[3] empty allowlists | | |
-| T3 G-0 [19] corpus row | | |
-| T4 P1 client unit | | |
-| T5 service auth unit | | |
-| T6 embedding transport unit | | |
-| T7 callP1Embedding + handler (emulator) | | |
-| T8 e2e corpus to P1 (Functions emulator, real PG) | | |
+| T1 corpus runtime boundary guard | 10 failed, 7 passed (main's tree) | 17 passed |
+| T2 G-0 [2]/[3] empty allowlists | FAIL on main's tree: [2] Dockerfile Playwright install, requirements `playwright`; [3] requirements `openai`, `embeddings.py` imports `openai` | G-0 PASSED |
+| T3 G-0 [19] corpus row | 3 failed, 1 passed (main's gate) | 260 passed (f18 gate + G-0 guard test files) |
+| T4 P1 client unit | collection error on main (`scraper.p1_client` absent) | 59 passed |
+| T5 service auth unit | module load failure (no `serviceAuth.ts`) | 46 passed |
+| T6 embedding transport unit | module load failure (no `embeddingTransport.ts`) | 21 passed |
+| T7 callP1Embedding + handler (emulator) | module load failure (no `embedding.ts` / `corpusEmbedding.ts`) | 38 passed |
+| T7b seam on real PG (`test_fa_d3c_embedding_seam_db.py`) | 5 failed (4 ImportError `scraper.p1_client`, 1 no `P1_EMBEDDING_URL`) | 5 passed |
+| T8 e2e corpus to P1 (Functions emulator, real PG) | 5 failed by assertion: the tripwire received the direct `/v1/embeddings` requests with the corpus key; nothing reached P1 | 5 passed |
+
+Neighbours on the branch: full corpus suite 1449 passed, 5 skipped (the T8 e2e, run in its own job), 157 subtests (main: 1370 passed); then 2 rows added to T4 for mutant M23 (59 passed). F27/F28/F21 suites 313 passed. Functions P1 and export-pin suites 366 passed; f09/f15/f16/f17 neighbours 222 passed; G-1 10 passed; G-2 PASS (438 tested, 0 allowed); F31 runtime smoke all checks passed. Mutants: 25 of 25 killed (M7 and M23 survived first; a test was added for each and both were then killed).
