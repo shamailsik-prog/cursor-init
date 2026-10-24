@@ -27,6 +27,8 @@ import * as p1Ops from "../src/p1/ops"
 import * as draftOps from "../src/d4/drafts"
 import * as doctypeOps from "../src/d4/doctypeOps"
 import * as gateOps from "../src/d4/gateOps"
+import * as alertOps from "../src/alerts/ops"
+import { alertIdFor } from "../src/alerts/model"
 import { enqueueJob } from "../src/p2/enqueue"
 import { F02_NEXT_AUTHORITY_ROUTES } from "../src/http/f02NextAuthority"
 import { ROUTES, createRouter, type Route } from "../src/http/router"
@@ -78,6 +80,8 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   p1CorpusEmbedding: "service endpoint, no tenant caller: IAM-private and OIDC-verified for the corpus service account only; spends the one firm its deployment names (P1_CORPUS_FIRM_ID), never a firm the request names, and reads or returns no firm data (FA-D3C-002)",
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
   p1TraceExportReconciler: "scheduler, no caller; re-exports each pending P1 decision record's metadata-only trace by its own id and records the outcome on that record only (audit F34)",
+  alertEscalator: "scheduler, no caller; escalates each open alert within its own firm (its partners, its founding partner) and delivers pages (audit F43)",
+  alertChecker: "scheduler, no caller; derives queue, saga and AI-spend alerts from each firm's own rows, one alert per firm (audit F43)",
 }
 
 /**
@@ -124,6 +128,12 @@ const PROBES: Record<string, Probe> = {
   getJob: { data: (a) => ({ jobId: a.deadJobId }), target: true },
   retryFailedJob: { data: (a) => ({ jobId: a.deadJobId, note: "G2 probe requeue note, long enough" }), target: true },
   cancelJob: { data: (a) => ({ jobId: a.queuedJobId, note: "G2 probe cancel note, long enough" }), target: true },
+  // Audit F43: the partner worklist (firm-bound, no target), the partners' acknowledge and resolve aimed at firm A's
+  // alert (already escalated to the partners, so only the firm boundary can refuse), and the operator's firmless route.
+  listAlerts: { data: () => ({}), target: false },
+  acknowledgeAlert: { data: (a) => ({ alertId: a.alertId }), target: true },
+  resolveAlert: { data: (a) => ({ alertId: a.alertId }), target: true },
+  operatorAlertAction: { data: (a) => ({ alertId: a.alertId, action: "resolve" }), target: false, firmless: true },
   // P3-60, P3-70..P3-72: the five P1 routes. committeeBrain names firm A's matter; the rest take no target. The platform
   // kill switch is firmless (platformAdmin claim), like recordGatePass: no firm-B role holds the claim.
   committeeBrain: { data: (a) => ({ matterId: a.matterId, body: "G2 probe: draft a reply to the notice." }), target: true },
@@ -185,7 +195,7 @@ function isF02AuthorityRoute(route: Route): boolean {
   )
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps, alertOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -200,7 +210,7 @@ const OTHER_EXPORTS = Object.keys(index)
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string; deadJobId: string; queuedJobId: string; draftId: string }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string; deadJobId: string; queuedJobId: string; draftId: string; alertId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -264,12 +274,15 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   const gateResult = (await adminDb().collection("draft_gate_results").doc(`${a.draftId}_1`).get()).data()
   const gateResultRows = (await adminDb().collection("draft_gate_results").where("firmId", "==", a.firmId).count().get()).data().count
   const gateOverrideRows = (await adminDb().collection("draft_gate_overrides").where("firmId", "==", a.firmId).count().get()).data().count
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows, gateResult: { ...gateResult }, gateResultRows, gateOverrideRows } }
+  // Audit F43: a cross-firm acknowledge, resolve or operator action that wrote anything fails "unchanged".
+  const alert = (await adminDb().collection("ops_alerts").doc(a.alertId).get()).data()
+  const alertState = { state: alert?.state, level: alert?.level, actions: alert?.actions, escalateAt: alert?.escalateAt?.toMillis?.(), updatedAt: alert?.updatedAt?.toMillis?.() }
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows, gateResult: { ...gateResult }, gateResultRows, gateOverrideRows }, alert: alertState }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", G2_RESULT_ID, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, a.alertId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", G2_RESULT_ID, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -324,6 +337,40 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     const deadJobId = (await enqueueOne()).jobId
     const queuedJobId = (await enqueueOne()).jobId
     await adminDb().collection("jobs").doc(deadJobId).update({ status: "dead_lettered", lastError: { code: "diag_failure", message: "Diagnostic failure (planned)." }, nextAttemptAt: null })
+    // Audit F43: firm A's dead-letter alert, already escalated to the partners (level 1), so a firm-A partner could act
+    // on it and only the firm boundary refuses a firm-B partner.
+    const alertId = alertIdFor("job.dead_lettered", firmA, `job:${deadJobId}`)
+    const seen = Timestamp.now()
+    await adminDb()
+      .collection("ops_alerts")
+      .doc(alertId)
+      .set({
+        schemaVersion: 1,
+        condition: "job.dead_lettered",
+        firmId: firmA,
+        subjectKey: `job:${deadJobId}`,
+        ref: `jobs/${deadJobId}`,
+        detail: { jobType: "platform.diagnostic", code: "diag_failure", attempts: 4 },
+        baseSeverity: "high",
+        severity: "critical",
+        state: "open",
+        level: 1,
+        ownerRole: "partner",
+        episode: 1,
+        count: 1,
+        totalCount: 1,
+        firstSeenAt: seen,
+        lastSeenAt: seen,
+        escalateAt: Timestamp.fromMillis(seen.toMillis() + 15 * 60_000),
+        escalations: [{ level: 1, ownerRole: "partner", severity: "critical", at: seen }],
+        actions: [],
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        resolvedAt: null,
+        resolvedBy: null,
+        createdAt: seen,
+        updatedAt: seen,
+      })
     // P4-4: a firm-A draft with its version 1, written as createDraft writes them, for the draft probes to aim at.
     const draftId = uniq("g2draftA")
     const bodyA = "G2 ALPHA DRAFT BODY"
@@ -374,6 +421,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       })
     A = {
       firmId: firmA,
+      alertId,
       draftId,
       clientId,
       matterId,
@@ -463,6 +511,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d1/entity/listAliases", { entityId: A.entityId }, "G2 Alpha Entity"],
       ["/api/platform/jobs/getJob", { jobId: A.deadJobId }, A.deadJobId],
       ["/api/platform/jobs/listJobs", { matterId: A.matterId }, A.deadJobId],
+      ["/api/platform/alerts/listAlerts", {}, A.alertId],
       ["/api/platform/brain/getAiUsage", { month: "2026-10" }, "killSwitch"],
       ["/api/d4/drafting/getDraft", { draftId: A.draftId }, "G2 ALPHA DRAFT BODY"],
       ["/api/d4/drafting/listDrafts", { matterId: A.matterId }, "G2 Alpha Draft Title"],
