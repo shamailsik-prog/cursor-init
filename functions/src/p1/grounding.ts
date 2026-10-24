@@ -47,9 +47,11 @@ import { logger } from "firebase-functions"
 import { parseCommitteeAnswer, type AuthorityKind, type CommitteeAnswer } from "@/platform/p1/committeeAnswer"
 import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { UNRECOGNISED_PREFIX, extractCitations, normaliseCitation } from "@/services/d4-2/citations"
+import type { TreatmentFact } from "@/services/d4-2/citationVerdict"
 import type { AuthorityStore } from "../d4/authority"
 import { budgetedStore, lookUpCitation, verdictOfJudgment, type CitationLookup } from "../d4/gate"
 import { errorCode } from "../log"
+import { authorityFactsSha256, type RetrievalAnchor } from "./decisionRecord"
 import { authorityMentions, normaliseProse, unboundMentions, type VerifiedSpan } from "./proseAuthority"
 
 /**
@@ -113,7 +115,13 @@ export type Grounding = {
 }
 
 export type GroundInput = { text: string | undefined; policy: GroundingPolicy | null; partyNames: readonly string[] }
-export type GroundOptions = { budgetMs?: number; now?: () => number }
+/**
+ * `anchors` (audit F34, spec ruling R5): when given, a successful run appends one retrieval anchor per judgment it found
+ * in the corpus: `judgment:<id>`, the canonical citation as masked, its status, and the SHA-256 of the facts the verdict
+ * read (the judgment id, its bench and its treatments; null when the treatments could not be listed). Nothing is appended
+ * when the run fails.
+ */
+export type GroundOptions = { budgetMs?: number; now?: () => number; anchors?: RetrievalAnchor[] }
 
 /**
  * True unless the answer is grounded (ruling 3): advisory content needs a lawyer's check before it is relied on.
@@ -180,7 +188,20 @@ export async function groundAnswer(input: GroundInput, store: AuthorityStore, op
 }
 
 async function ground(input: GroundInput, answer: CommitteeAnswer | null, authority: AuthorityStore, options: GroundOptions): Promise<Grounding> {
-  const store = budgetedStore(authority, options.budgetMs ?? GROUNDING_BUDGET_MS, options.now ?? Date.now)
+  // Audit F34 (R5): the treatments the store listed, by judgment, so each verdict's facts can be hashed. Recorded under
+  // the budget wrapper, so a lookup the budget cut off is never hashed (its verdict is UNAVAILABLE).
+  const treatmentsRead = new Map<string, TreatmentFact[]>()
+  const recording: AuthorityStore = {
+    findJudgment: (canonical) => authority.findJudgment(canonical),
+    listTreatments: async (judgmentId) => {
+      const facts = await authority.listTreatments(judgmentId)
+      treatmentsRead.set(judgmentId, [...facts])
+      return facts
+    },
+    getSectionAsAt: (sectionId, asAtDate, jurisdiction) => authority.getSectionAsAt(sectionId, asAtDate, jurisdiction),
+  }
+  const factsHashes = new Map<string, string | null>()
+  const store = budgetedStore(recording, options.budgetMs ?? GROUNDING_BUDGET_MS, options.now ?? Date.now)
   const partyNames = [...input.partyNames]
   const mask = (s: string): string => maskOutboundPII(s, { partyNames }).masked
   const lookups = new Map<string, CitationLookup | null>()
@@ -251,6 +272,9 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
         if (verdict === undefined) {
           verdict = await verdictOfJudgment(lookup, store)
           verdicts.set(lookup.judgmentId, verdict)
+          // Audit F34 (R5): what this verdict read, hashed now; null when the treatments could not be listed.
+          const read = treatmentsRead.get(lookup.judgmentId)
+          factsHashes.set(lookup.judgmentId, verdict.treatmentsUnavailable || read === undefined ? null : authorityFactsSha256(lookup.judgmentId, lookup.benchType, read))
         }
         status = verdict.treatmentsUnavailable
           ? "UNAVAILABLE"
@@ -366,6 +390,14 @@ async function ground(input: GroundInput, answer: CommitteeAnswer | null, author
   else if ([...statuses].some((s) => DEFINITE_FAILURES.has(s))) status = supported > 0 ? "partially_grounded" : "ungrounded"
   else if (statuses.has("UNAVAILABLE") || omitted.size > 0) status = "unverifiable"
   else status = claims.length > 0 && supported === claims.length ? "grounded" : "partially_grounded"
+
+  // Audit F34 (R5): one anchor per judgment found in the corpus, in the order the citations were recorded.
+  if (options.anchors !== undefined) {
+    for (const c of list) {
+      if (c.judgmentId === null) continue
+      options.anchors.push({ sourceId: `judgment:${c.judgmentId}`, ref: c.ref, status: c.status, factsSha256: factsHashes.get(c.judgmentId) ?? null })
+    }
+  }
 
   return {
     status,

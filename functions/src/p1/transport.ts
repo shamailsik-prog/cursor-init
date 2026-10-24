@@ -31,8 +31,16 @@ export type P1Message = { role: "system" | "user" | "assistant"; content: string
  * (platform/p1/outboundPrompt.ts). A transport sends them as given; it never receives or sends a flattened body.
  */
 export type P1Transport = {
+  /**
+   * Audit F34 (spec ruling R4): which transport this is, recorded on every decision record beside the model
+   * (GATEWAY_TRANSPORT_ID for the Gateway). A transport without one (a test double) is recorded `unidentified`.
+   */
+  id?: string
   send(req: { model: string; messages: P1Message[]; maxTokens: number }): Promise<P1TransportReply>
 }
+
+/** The Gateway transport's id on decision records (audit F34, R4): the Vercel AI Gateway's OpenAI-compatible chat endpoint. */
+export const GATEWAY_TRANSPORT_ID = "ai-gateway-chat-completions"
 
 /**
  * The response headers that may carry the Gateway's request id, in the order read. Which one the Vercel AI Gateway
@@ -131,6 +139,7 @@ const timedOut = () => new P1TransportError("gateway_timeout", { billable: true 
 
 export function gatewayTransport(apiKey: string, url: string = GATEWAY_URL, opts?: { timeoutMs?: number }): P1Transport {
   return {
+    id: GATEWAY_TRANSPORT_ID,
     async send(req) {
       let res: Response
       try {

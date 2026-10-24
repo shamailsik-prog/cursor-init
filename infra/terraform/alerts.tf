@@ -28,6 +28,18 @@ resource "google_monitoring_alert_policy" "functions_errors" {
     }
   }
   conditions {
+    display_name = "p1.corpus_embedding_not_configured"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.corpus_embedding_not_configured"'
+    }
+  }
+  conditions {
+    display_name = "p1.corpus_embedding_failed"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.corpus_embedding_failed"'
+    }
+  }
+  conditions {
     display_name = "p1.receipt_record_failed"
     condition_matched_log {
       filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.receipt_record_failed"'
@@ -67,6 +79,18 @@ resource "google_monitoring_alert_policy" "functions_errors" {
     display_name = "p1.reconcile_pass_failed"
     condition_matched_log {
       filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.reconcile_pass_failed"'
+    }
+  }
+  conditions {
+    display_name = "p1.trace_export_abandoned"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.trace_export_abandoned"'
+    }
+  }
+  conditions {
+    display_name = "p1.trace_export_reconcile_failed"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="p1.trace_export_reconcile_failed"'
     }
   }
   conditions {

@@ -6,9 +6,10 @@ A real ``celery worker --pool=prefork`` subprocess runs the production Celery ap
 twice, then ``python -m scraper.migrate``), as F28's prefork harness does (test_f28_fu_prefork_e2e.py):
 kombu's filesystem transport and Celery's file backend stand in for Redis, and tasks are sent by name
 with ``send_task``, as beat sends them. The production engine (pool_size 20) is the one the children
-use. The OpenAI package is the one stand-in, installed by the worker's app module before the pool
-forks: each request appends one line (the child's pid and the row it is for) to a file and answers a
-1536-number vector; no network, and the configured key is a plain label, not key-shaped. On this
+use. The provider client is the one stand-in, installed by the worker's app module before the pool
+forks at ``scraper.p1_client.embedding_client`` (since FA-D3C-002 the batch's provider is the P1 gateway):
+each request appends one line (the child's pid and the row it is for) to a file and answers a
+1536-number vector; no network, no key. On this
 branch the app module also shortens the 0.6 s pause between requests (``embeddings.PACE_SECONDS``);
 on main that attribute does not exist and setting it changes nothing.
 
@@ -54,7 +55,7 @@ embeddings.PACE_SECONDS = float(os.environ.get("F27_PACE", "0.6"))
 
 
 class _Embeddings:
-    async def create(self, model, input):
+    async def create(self, model, input, dimensions, operation_id):
         with open(ROOT + "/provider_calls.jsonl", "a") as f:  # one line per request, flushed on close
             f.write(json.dumps({"pid": os.getpid(), "model": model, "input": input}) + "\\n")
         if LATENCY:
@@ -65,14 +66,10 @@ class _Embeddings:
         )
 
 
-class AsyncOpenAI:
-    def __init__(self, api_key):
-        self.embeddings = _Embeddings()
+from scraper import p1_client
 
-
-_provider = types.ModuleType("openai")
-_provider.AsyncOpenAI = AsyncOpenAI
-sys.modules["openai"] = _provider
+_client = types.SimpleNamespace(embeddings=_Embeddings())
+p1_client.embedding_client = lambda: _client
 '''
 
 
@@ -105,7 +102,6 @@ def prefork_worker(corpus_db, tmp_path, *, concurrency, env=None):
     worker_env = {
         **os.environ, "F27_FS_ROOT": str(root), "DATABASE_URL": corpus_db.url,
         "REDIS_URL": "redis://127.0.0.1:1/0", "ENVIRONMENT": "development",
-        "OPENAI_API_KEY": "f27-local-stand-in",
         "PYTHONPATH": os.pathsep.join([str(tmp_path), str(CORPUS)]), **(env or {}),
     }
     sender = Celery("f27-sender", broker="filesystem://", backend=f"file://{root}/results", set_as_current=False)

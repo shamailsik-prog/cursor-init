@@ -8,7 +8,10 @@ Governing build prompt: `FINAL_CORPUS_SERVICE_PROMPT_2.md` (supersedes withdrawn
 
 ## Source policy (FINAL_2)
 
-1. Public government portals — polite HTTP / Playwright, robots.txt respected.
+1. Public government portals — polite HTTPS through the F25 fetch boundary, robots.txt respected.
+   No headless browser: FA-D3C-001 removed Playwright from this runtime (OR-4, L17.12, Layer 18 W-6),
+   and `tests/test_fa_d3c_runtime_boundary.py` and Gate G-0 [2] fail if one returns. A source that ever
+   needs a rendered page belongs in the separate corpus repository (L17.12 step 65), never in this image.
 2. Open non-governmental sites — full provenance, `review` trust until verified.
 3. Subscription databases (e.g. PakistanLawSite) — **licensed API** or **import
    folder only**. Login-form scraping is disabled (`ALLOW_LOGIN_SCRAPING=false`,
@@ -474,6 +477,49 @@ Spec: `docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md`.
 `tests/test_f27_embedding_prefork_e2e.py` (a real prefork worker: two children at once, a child
 killed after the provider answered) and `tests/test_f27_embedding_rules.py` (no database).
 
+### Embeddings through P1 (FA-D3C-002)
+
+Spec: `docs/superpowers/specs/2026-10-24-d3c-corpus-runtime-boundary-design.md` (R4, R13-R16). This service
+holds no provider key and no provider SDK. Every embedding request goes to P1's `p1CorpusEmbedding` Cloud
+Function (`scraper/p1_client.py`), which applies the kill switches, the budget reservation, the P1 ledger
+row, the provider policy and the outbound mask, and calls the provider. The F27 batch above is unchanged
+except at the provider call.
+
+- **Configuration.** `P1_EMBEDDING_URL` is the function's https URL. The F25 boundary admits only a Google
+  serverless host (`*.run.app`, `*.cloudfunctions.net`) on 443 (`fetch_policy.p1_policy`). Empty means
+  embeddings are off and the batch is skipped (`reason: no_p1_embedding_url`). `P1_ID_TOKEN_FILE`
+  (default `/run/secrets/p1_id_token`) holds the corpus service account's Google-signed OIDC ID token for
+  that audience. It is read on every call and never logged. The deployment keeps it current, for
+  example with a sidecar or timer running `gcloud auth print-identity-token --audiences=$P1_EMBEDDING_URL`
+  under the corpus service account. In compose, add it to `worker-embed` in `docker-compose.override.yml`:
+
+  ```yaml
+  services:
+    worker-embed:
+      secrets: [p1_id_token]
+  secrets:
+    p1_id_token:
+      file: ${P1_ID_TOKEN_PATH:?P1_ID_TOKEN_PATH_required}
+  ```
+- **P1 refuses (R14).** A `blocked` answer (kill switch, budget, policy, credentials, concurrency), a 401,
+  403, 429 or 503, a missing token or a P1 URL the boundary refuses: no provider request was made, so
+  nothing is charged. The batch stops, the refused row's `started` receipt becomes `failed`
+  (`p1_refused`), and every claimed row goes back to `pending` with its attempts unchanged. The batch
+  summary says `reason: p1_refused:<code>`. The next beat tick tries again, so a held kill switch costs one
+  `blocked` row in P1's ledger every 5 minutes and no queue state.
+- **P1 fails (R14).** P1 answers `failed` (the provider failed and may have billed the call), cannot be
+  reached, times out, or answers another error: that is a failed attempt, charged under R8 exactly as a
+  provider failure was before.
+- **What P1 records.** One `ai_usage_logs` row per call, with `taskType: embedding`, the verified `caller`
+  and this row's `corpusOperationId`, against the budget of the firm the Functions deployment names
+  (`P1_CORPUS_FIRM_ID`). See `functions/src/p1/README.md`, "Corpus embeddings".
+
+**Tests.** `tests/test_fa_d3c_p1_client.py` (the client and the boundary policy, no network),
+`tests/test_fa_d3c_embedding_seam_db.py` (the refusal and failure semantics on real Postgres),
+`tests/test_fa_d3c_runtime_boundary.py` (no browser, provider SDK, key or host in this runtime) and
+`tests/test_fa_d3c_p1_embedding_e2e.py`, run by `tests/e2e/p1_embedding_e2e.sh`. That last one is the
+beat task against real Postgres and the real `p1CorpusEmbedding` in the Functions emulator.
+
 ## Quick start (no Docker)
 
 ```bash
@@ -502,7 +548,7 @@ docker compose up -d --build
 
 **Secrets and who gets them.** `.env` holds the store credentials (`POSTGRES_USER/PASSWORD`,
 `APP_DB_USER/PASSWORD`, `MIGRATE_DB_USER/PASSWORD`, `REDIS_APP_USER/PASSWORD`) and the app
-secrets (`ENCRYPTION_KEY`, `ADMIN_API_KEY`, `SECRET_KEY`, optional `OPENAI_API_KEY`); see
+secrets (`ENCRYPTION_KEY`, `ADMIN_API_KEY`, `SECRET_KEY`; no provider key since FA-D3C-002); see
 `.env.example`. Compose reads `.env` **only** to fill the `${VAR}` references in
 `docker-compose.yml`; no service uses it as an `env_file`, and `.dockerignore` keeps it out of the
 image. Each container gets only what it uses:

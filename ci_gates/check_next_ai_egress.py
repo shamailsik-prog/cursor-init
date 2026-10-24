@@ -6,10 +6,11 @@ No paid AI call may leave the Next or eve runtime except through the Cloud Funct
 docs/superpowers/specs/2026-10-18-f18-legacy-ai-path-closed-design.md, ruling R9.
 
 Scope of (a)-(d): every file the G-0 walker scans (g0_guard_common.iter_scan_files: tests/, ci_gates/, generated
-trees and the eve cache are skipped), except
-  - functions/       the control plane itself (which code there may hold a provider SDK is G-0 [3]'s rule), and
-  - corpus_service/  the embedding worker (the F27 lane; FA-D3C-002 is allowlisted under G-0 [3]).
-Rule (e) uses the same walker and exempts only functions/.
+trees and the eve cache are skipped), except functions/, the control plane itself (which code there may hold a
+provider SDK is G-0 [3]'s rule). corpus_service/ is in scope since FA-D3C-002 (spec
+docs/superpowers/specs/2026-10-24-d3c-corpus-runtime-boundary-design.md, R16): its embeddings go through P1's
+p1CorpusEmbedding, so no corpus deploy surface may hand a provider key either. Rule (e) uses the same walker and exempts
+only functions/.
 
 It fails on any of:
   (a) JS/TS importing the `ai` SDK, any `@ai-sdk/*` package other than `@ai-sdk/provider` (types and error classes, no
@@ -93,7 +94,7 @@ from g0_guard_common import (  # noqa: E402
     rel_posix,
 )
 
-# Rules (a)-(d) skip functions/ and corpus_service/. Rule (e) skips only functions/.
+# Rules (a)-(e) skip only functions/ (FA-D3C-002 ended corpus_service/'s exemption from (a)-(d)).
 FUNCTIONS_PREFIX = "functions/"
 KEY_GUARD_FILE = "platform/p1/providerKeyGuard.ts"
 
@@ -512,9 +513,6 @@ def findings_for(p: pathlib.Path) -> list[str]:
     model = agent_model_findings(rel, p)
     text = read_text(p) if file_kind(p) == "js" else None
     paid = [] if text is None else functions_import_findings(rel, text)
-    # corpus_service stays exempt from (a)-(d) (the F27 lane). Rule (e) still applies.
-    if rel.startswith("corpus_service/"):
-        return model + paid
     kind = deploy_kind(rel)
     if kind is not None:
         body = text if text is not None else read_text(p)

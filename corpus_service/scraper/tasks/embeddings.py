@@ -41,6 +41,7 @@ from typing import Any, List, Optional, Tuple
 from celery import shared_task
 from sqlalchemy import func, select, text, update
 
+from scraper import p1_client
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster, EmbeddingAttempt, StatutesMaster
 from scraper.tasks import job_record, outcomes
@@ -79,6 +80,7 @@ LEASE_EXPIRED = "lease_expired"
 MALFORMED_RESPONSE = "malformed_response"
 OPERATION_IN_FLIGHT = "operation_in_flight"
 STORE_FAILED = "store_failed"
+P1_REFUSED = "p1_refused"  # FA-D3C-002 R14: the receipt of a request P1 refused before any provider call
 
 LEASE_EXPIRED_TEXT = (
     "lease expired: the batch that held this row ended without giving it back; cause unknown"
@@ -625,12 +627,18 @@ class _Batch:
         started = time.monotonic()
         self.counts.provider_calls += 1
         try:
-            response = await self.client.embeddings.create(model=row.embedding_model, input=value)
+            # FA-D3C-002: the request goes through P1 (scraper/p1_client.py), never to a provider directly.
+            response = await self.client.embeddings.create(
+                model=row.embedding_model, input=value, dimensions=row.embedding_dimensions, operation_id=op,
+            )
         except Exception as exc:
             if outcomes.is_interruption(exc):
                 raise  # F28 R26: the batch's time limit, not this item's failure
             if outcomes.is_database_error(exc):
                 raise  # F28 R4 (the provider client never raises one; kept for symmetry)
+            if isinstance(exc, p1_client.P1Refused):
+                await self._refused(row, receipt, exc)
+                raise  # FA-D3C-002 R14: the batch stops; process_embedding_queue reports it
             await self._failed(row, receipt, exc, tokens=None, answered=False)
             return True
         tokens = _tokens(response)
@@ -649,6 +657,18 @@ class _Batch:
         self.held = receipt
         await self._store(row, op, vector, receipt, tokens, started, reconciled=False)
         return True
+
+    async def _refused(self, row, receipt, refused: "p1_client.P1Refused") -> None:
+        """FA-D3C-002 R14: P1 refused before any provider request (a kill switch, the budget, the policy, no credentials,
+        the caller not admitted). That is not an attempt, so the row is not charged (R8 charges attempts): its `started`
+        receipt is closed `failed` (`p1_refused`, not answered, no tokens), the request leaves `provider_calls`, and the
+        row stops being the row in flight, so R10's give-back returns it to `pending` with its attempts unchanged, like
+        every other row this batch claimed."""
+        logger.warning("FA-D3C-002: P1 refused the embedding of row %s (%s); the batch stops", row.id, refused.reason)
+        await self.db.execute(text(FAIL_RECEIPT_SQL), {"id": receipt, "error_type": P1_REFUSED, "tokens": None, "answered": False})
+        await self.db.commit()
+        self.counts.provider_calls -= 1
+        self.current = None
 
     async def _failed(self, row, receipt, error, *, tokens: Optional[int], answered: bool) -> None:
         error_type = outcomes.error_key(error)
@@ -837,14 +857,20 @@ class _Batch:
 
 
 async def process_embedding_queue(counts=None):
-    from scraper.config import settings
     counts = counts if counts is not None else BatchCounts()
-    if not settings.OPENAI_API_KEY:
-        logger.info("No OPENAI_API_KEY, skip embeddings")
-        return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "no_openai_api_key"}
-    import openai
-    client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    await _Batch(client, counts).run()
+    # FA-D3C-002 (R13, R14): every paid embedding goes through the P1 gateway; the corpus holds no provider key or SDK.
+    try:
+        client = p1_client.embedding_client()
+        if client is None:
+            logger.info("No P1_EMBEDDING_URL, skip embeddings")
+            return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "no_p1_embedding_url"}
+        await _Batch(client, counts).run()
+    except p1_client.P1Refused as refused:
+        # No provider request was made for the refused row; it and every other claimed row are back in the queue.
+        logger.warning("FA-D3C-002: P1 refused the embedding batch (%s)", refused.reason)
+        tally = counts.tally
+        outcome = outcomes.OUTCOME_SKIPPED if tally.attempted == 0 else tally.result().outcome
+        return {**counts.summary(outcome), "reason": f"p1_refused:{refused.reason}"}
     tally = counts.tally
     if tally.all_failed:
         raise outcomes.BatchFailed(errors=tally.errors)
