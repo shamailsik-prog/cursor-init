@@ -117,6 +117,11 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
   ids.ai_usage_logs_exported = exported
   ids.ai_usage_logs_disabled = await put("ai_usage_logs", { matterId, model: "m", costMicroUsd: 3, trace: { id: `trace-${tag}-2`, status: "disabled" }, createdAt: Timestamp.now() })
   ids.ai_usage_logs = exported
+  // F34's decision records (p1_decisions/{usageLogId}): one exported trace, one still pending (the reconciler may yet
+  // export it), one abandoned (never exported).
+  ids.p1_decisions_exported = await put("p1_decisions", { matterId, traceId: `trace-${tag}-3`, classification: "internal", export: { state: "exported", attempts: 1 }, settledAt: Timestamp.now() })
+  ids.p1_decisions_pending = await put("p1_decisions", { matterId, traceId: `trace-${tag}-4`, classification: "internal", export: { state: "pending", attempts: 1 }, settledAt: Timestamp.now() })
+  ids.p1_decisions_failed = await put("p1_decisions", { matterId, traceId: `trace-${tag}-5`, classification: "internal", export: { state: "failed", attempts: 5 }, settledAt: Timestamp.now() })
   return ids
 }
 
@@ -260,10 +265,10 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(ack("firestore:audit_log")).toMatchObject({ outcome: "not_applicable" })
     expect(ack("firestore:idempotency_effects")).toMatchObject({ outcome: "expiry" })
     expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 2 })
-    expect(ack("external:opik")).toMatchObject({ outcome: "external_requested", count: 1 })
+    expect(ack("external:opik")).toMatchObject({ outcome: "external_requested", count: 3 })
     expect(ack("backup:firestore")).toMatchObject({ outcome: "expiry" })
     expect(ack("postgres:corpus_embeddings")).toMatchObject({ outcome: "not_applicable" })
-    expect(ack("firestore:p1_decisions")).toMatchObject({ outcome: "anonymised", count: 0 })
+    expect(ack("firestore:p1_decisions")).toMatchObject({ outcome: "anonymised", count: 3 })
     for (const a of view.acks.filter((x) => x.outcome === "purged" && (x.count ?? 0) > 0)) expect(a.idsSha256).toMatch(/^[0-9a-f]{64}$/)
     const windowEnd = Date.parse(String(ack("backup:firestore").detail.windowEndsAt))
     expect(windowEnd - Date.now()).toBeGreaterThan(97 * 86_400_000)
@@ -275,13 +280,20 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     // Anonymised: the spend rows stay, without the matter.
     const usage = (await adminDb().collection("ai_usage_logs").doc(ids.ai_usage_logs_exported).get()).data()
     expect(usage).toMatchObject({ matterId: null, costMicroUsd: 5 })
+    // Anonymised: F34's decision records stay (they hold no text), without the matter; their export state is F34's.
+    for (const k of ["p1_decisions_exported", "p1_decisions_pending", "p1_decisions_failed"]) {
+      expect((await adminDb().collection("p1_decisions").doc(ids[k]).get()).data(), k).toMatchObject({ firmId: f.firmId, matterId: null, anonymisedBy: requestId })
+    }
+    expect((await adminDb().collection("p1_decisions").doc(keep.p1_decisions_exported).get()).get("matterId")).toBe(f.otherMatterId)
+    expect((await adminDb().collection("p1_decisions").doc(foreign.p1_decisions_exported).get()).get("matterId")).toBe(f.matterId)
     // Retained: the conflict register.
     expect(await exists("matter_parties", ids.matter_parties)).toBe(true)
-    // The vault objects are tombstoned for the lifecycle, and the Opik request lists the exported trace only.
+    // The vault objects are tombstoned for the lifecycle. The Opik request lists every trace of the matter that was
+    // exported (by the call, or by F34's reconciler) or may still be (pending); never a disabled or abandoned one.
     const vault = await adminDb().collection("vault_object_tombstones").where("requestId", "==", requestId).get()
     expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/m-d1/v1`, `fs://${f.firmId}/documents/m-d1/v2`])
     const external = (await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()
-    expect(external).toMatchObject({ processor: "opik", traceIds: ["trace-m-1"], count: 1, status: "pending_operator" })
+    expect(external).toMatchObject({ processor: "opik", traceIds: ["trace-m-1", "trace-m-3", "trace-m-4"], count: 3, status: "pending_operator" })
     // The tombstone survives with the finish stamped.
     const tomb = (await adminDb().collection("matter_tombstones").doc(f.matterId).get()).data()
     expect(tomb).toMatchObject({ firmId: f.firmId, requestId, membersRevoked: 4 })

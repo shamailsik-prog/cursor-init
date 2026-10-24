@@ -174,6 +174,26 @@ class Planted(unittest.TestCase):
                 self.inventory = saved
                 self.save()
 
+    def test_a_trace_export_store_names_field_keyed_sources_with_their_exported_states(self) -> None:
+        good = {"source": "firestore:documents", "idField": "traceId", "statusField": "export.state", "exportedValues": ["exported", "pending"]}
+        opik = {"id": "external:opik", "kind": "external", "name": "opik", "profile": "third_party_trace", "key": {"kind": "traceExport", "sources": [good]}}
+        self.inventory["stores"].append(opik)
+        self.save()
+        self.assertEqual(self.messages(), [])
+        cases = [
+            ({"sources": []}, "key.sources must list at least one source"),
+            ({"sources": [{**good, "source": "firestore:matters"}]}, "key.sources[0].source must name a field-keyed firestore store"),
+            ({"sources": [{**good, "source": "firestore:nope"}]}, "key.sources[0].source must name a field-keyed firestore store"),
+            ({"sources": [{**good, "idField": ""}]}, "key.sources[0].idField is required"),
+            ({"sources": [good, {**good, "exportedValues": []}]}, "key.sources[1].exportedValues must list the exported states"),
+        ]
+        for patch, expected in cases:
+            with self.subTest(expected=expected):
+                opik["key"] = {"kind": "traceExport", **patch}
+                self.save()
+                msgs = self.messages()
+                self.assertTrue(any(expected in m for m in msgs), (expected, msgs))
+
     def test_a_duplicate_store_and_a_profile_without_an_answer_fail(self) -> None:
         self.inventory["stores"].append(copy.deepcopy(self.inventory["stores"][0]))
         self.inventory["profiles"]["matter_record"]["deleter"] = " "

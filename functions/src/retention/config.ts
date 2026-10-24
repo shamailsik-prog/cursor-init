@@ -37,8 +37,14 @@ export type StoreKey =
   | { kind: "none" }
   | { kind: "ttl"; windowHours: number }
   | { kind: "objects"; via: string; pathField: string }
-  | { kind: "traceExport"; source: string; idField: string; statusField: string; exportedValue: string }
+  | { kind: "traceExport"; sources: TraceSource[] }
   | { kind: "backup"; windowDays: number; config: string }
+
+/**
+ * Where a processor's copies are recorded: a field-keyed Firestore store whose rows carry the copy's id (`idField`)
+ * and its export state (`statusField`); a row in one of `exportedValues` has (or may yet have) a copy there.
+ */
+export type TraceSource = { source: string; idField: string; statusField: string; exportedValues: string[] }
 
 export type InventoryStore = {
   id: string

@@ -2,7 +2,7 @@
 
 Date: 2026-10-24. Branch: `claude/remediate-f42`. Finding: `docs/audit/2026-10-13-forensic-audit.md`, "### F42" (HIGH,
 P0). Dependencies named by the audit: firm retention decisions, F03 (document vault), F19 (corpus contract). Related:
-F33 (backups, merged), F34 (decision records, in flight on `claude/remediate-f34`), F43 (durable alerts, in flight on
+F33 (backups, merged), F34 (decision records, merged in #121 and merged into this branch), F43 (durable alerts, in flight on
 `claude/remediate-f43`).
 
 ## 1. The finding, restated against the current code
@@ -82,9 +82,22 @@ matter's rows are found (`docId`, `field` with the field name, `none`, `ttl`, `o
 - an entry is malformed, names an unknown profile or retention class, duplicates a store, or is stale (in no source),
   unless it is `pending` on a named finding.
 
-`p1_decisions` (F34) is registered as `pending: "F34"`: the gate accepts it absent today and present once F34 lands,
-and the saga already processes it (a query of an absent collection finds nothing). Reason: the brief; a rules match
-block and a code literal are the two ways a collection enters this tree, and both are cheap to scan exactly.
+`p1_decisions` (F34) was first registered as `pending: "F34"` (the gate accepted it absent, and notes it once present).
+F34 has landed (#121, merged into this branch): the record is one server-only row per P1 attempt,
+`p1_decisions/{usageLogId}`, keyed by `traceId`, `firmId` and `matterId`, holding hashes and verdicts and no text. It
+is now inventoried for real: class `ai_record` (as the usage rows it mirrors), key field `matterId`, anonymised on
+deletion by nulling `matterId` (the record stays for spend and reproducibility, without the matter), aged by
+`settledAt`. Reason: the brief and the coordinator's ruling (the saga must purge or anonymise a deleted matter's
+decision records and acknowledge them); a rules match block and a code literal are the two ways a collection enters
+this tree, and both are cheap to scan exactly.
+
+**R7a. Opik copies come from every row that records an export.** F34's trace record carries `matterId`, and F34's
+reconciler re-exports a trace whose call-time export failed, recording the result on the decision record only. So
+the Opik store (`external:opik`) names two sources: usage rows whose `trace.status` is `exported`, and decision
+records whose `export.state` is `exported` or `pending` (a pending one may still be exported, before or after the
+saga anonymises it; `failed` and `disabled` never reach Opik). The prepare job reads both before any purge job
+anonymises them. F34's export state machine is left untouched (its lane): a reconciler run that claimed a record
+before the anonymisation may export a trace that still names the matter; its id is already in the request.
 
 **R4. Who may delete: two partners.** The retention actions (`retention.request_deletion`,
 `retention.approve_deletion`, `retention.read`, `retention.hold.place`, `retention.hold.release`) are firm
@@ -130,7 +143,7 @@ choke points every read already passes, so no route needs its own check.
 and the worker check in R6 never refuses them):
 
 - `retention.matter.prepare`: writes the acknowledgements that need no Firestore purge (retained, not applicable,
-  expiry, external, lock), records the Opik deletion request (trace ids of exported traces, R8), then enqueues
+  expiry, external, lock), records the Opik deletion request (trace ids of exported or pending traces, R7a), then enqueues
   `retention.store.purge` jobs for the stores whose action is `purge` or `anonymise`, at most 12 stores per job.
 - `retention.store.purge`: for each of its stores, deletes (or anonymises) the matter's rows in fenced chunks of up
   to 200, then, in one fenced step, re-queries the store (rows written since are purged first) and writes the store's
@@ -149,12 +162,12 @@ brief's "fenced P2 saga", modelled on the un-merge saga (`functions/src/d1/entit
 | Store kind | Treatment | Acknowledgement |
 | --- | --- | --- |
 | Firestore, matter-keyed, action `purge` | rows deleted | `purged`, count, SHA-256 of sorted ids |
-| Firestore, matter-keyed, action `anonymise` | the store's `anonymise` fields set (for P1 spend rows: `matterId` to null) | `anonymised`, count, hash |
+| Firestore, matter-keyed, action `anonymise` | the store's `anonymise` fields set (for P1 spend rows and F34 decision records: `matterId` to null) | `anonymised`, count, hash |
 | Firestore, action `retain` | nothing | `retained` with the class |
 | Firestore or Postgres with no matter key | nothing | `not_applicable` |
 | Operational TTL stores | expire under their TTL | `expiry`, window end |
 | F03 vault objects | a `vault_object_tombstones` row per object written in the same transaction that deletes its document row; deletion after the lock by an R2 lifecycle rule that honours legal holds (NOT DEMONSTRATED) | `lock_pending`, object count, latest lock end |
-| Opik traces | a `deletion_external_requests` row with the exported trace ids, for the operator to send (NOT DEMONSTRATED) | `external_requested` (or `not_applicable` when none was exported) |
+| Opik traces | a `deletion_external_requests` row with the trace ids from usage rows and decision records (R7a), for the operator to send (NOT DEMONSTRATED) | `external_requested` (or `not_applicable` when none was exported) |
 | F33 backups | expire under the backup retention | `expiry`, window end = approval + the longest configured backup retention (Firestore 14 weeks) |
 | Public corpus (Postgres, vectors) | out of scope: public law, no client data | `not_applicable` |
 
@@ -263,17 +276,18 @@ hold a tombstone; the mechanism is Firestore-mode only.
   refuses (legal hold) and deletes nothing; a matter hold blocks and records the refusal; a hold placed mid-saga halts
   it; a crash mid-saga resumes idempotently; the same partner cannot approve; a non-partner cannot request; the trail
   holds no content; the tombstone alone (memberships intact) refuses reads, lists and the matter's queued P2 job; a
-  row that lands after its store's purge is purged before the acknowledgement.
+  row that lands after its store's purge is purged before the acknowledgement; F34 decision records of the matter are
+  anonymised and acknowledged, and the Opik request lists their exported and pending traces (not the abandoned one).
 - `functions/test/f42-retention-apply.e2e.emu.test.ts`: the default policy deletes nothing; a test policy deletes
   old rows and keeps held ones; the watch raises the alert once; a request that falls overdue behind a full page of
-  already-alerted ones is still alerted.
+  already-alerted ones is still alerted; an old F34 decision record is anonymised by its `settledAt`, a young one kept.
 - `tests/f42-tombstone-next.e2e.firestore.test.ts`: the Next routes through the production authority path refuse or
   omit the tombstoned matter; a revoked member no longer finds the matter in search; the repositories return null.
 - `ci_gates/test_check_data_inventory.py`: an uninventoried collection, object prefix or table fails; a stale entry
   fails; a pending entry passes absent and present; malformed entries fail; the real tree passes.
 - `functions/test/f42-retention.units.test.ts`: the policy, inventory, store-key (shared with the Python gate) and
   acknowledgement logic.
-- Mutation: `functions/test/f42-mutants.json` (24 mutants over the tombstone check, acknowledgement completeness, legal
+- Mutation: `functions/test/f42-mutants.json` (27 mutants over the tombstone check, acknowledgement completeness, legal
   hold, authorisation and the inventory gate), run by `functions/scripts/f42-mutants.mjs` after a passing baseline.
 - Neighbour lists updated for the new routes and exports: the F09 effect-marker guard registers
   `functions/src/retention/ops.ts`, whose four `once` POST routes pass its static check with no write outside their

@@ -126,6 +126,28 @@
     "why": "a page of already-alerted halted requests must not hide a new overdue one from the unacknowledged-deletion alert"
   },
   {
+    "id": "A5-opik-reads-first-source-only",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/saga.ts",
+    "old": "  for (const src of k.sources) {\n",
+    "new": "  for (const src of k.sources.slice(0, 1)) {\n",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the Opik request must list the traces F34's decision records exported, not only the usage rows'"
+  },
+  {
+    "id": "A6-pending-export-not-requested",
+    "area": "acknowledgement",
+    "file": "infra/retention/inventory.json",
+    "old": "\"exportedValues\": [\"exported\", \"pending\"]",
+    "new": "\"exportedValues\": [\"exported\"]",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a decision record whose export is still pending may yet be exported: its trace id belongs in the request"
+  },
+  {
     "id": "H1-matter-hold-ignored",
     "area": "legal hold",
     "file": "functions/src/retention/config.ts",
@@ -274,5 +296,17 @@
     ],
     "runner": "python",
     "why": "a collection named through a (db, \"x\") helper call must be found"
+  },
+  {
+    "id": "G5-trace-source-not-field-keyed",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": " or (src.get(\"key\") or {}).get(\"kind\") != \"field\":",
+    "new": ":",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "an external store's sources must be field-keyed Firestore stores, or the saga cannot find the matter's copies"
   }
 ]

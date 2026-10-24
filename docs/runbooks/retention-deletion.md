@@ -31,8 +31,9 @@ Acknowledgement outcomes: `purged`, `anonymised` (the matter row keeps its id an
 P1 spend rows keep their cost), `retained` (conflict register, audit trail), `not_applicable` (no matter key),
 `expiry` (TTL stores and F33 backups: `detail.windowEndsAt`), `lock_pending` (vault objects: a
 `vault_object_tombstones` row each, deletion after the COMPLIANCE lock by a lifecycle rule that is **NOT DEMONSTRATED**),
-`external_requested` (Opik: `deletion_external_requests/{requestId}_opik` lists the exported trace ids for the
-operator; the Opik deletion call is **NOT DEMONSTRATED**).
+`external_requested` (Opik: `deletion_external_requests/{requestId}_opik` lists the trace ids for the operator: every
+usage row whose call exported its trace, and every F34 decision record whose export is `exported` or still `pending`,
+read before the purge jobs anonymise those rows; the Opik deletion call is **NOT DEMONSTRATED**).
 
 ## Legal holds
 
@@ -73,8 +74,9 @@ class's stores that declare an `ageField`, sparing rows of matters under a hold,
 
 A new Firestore collection, object key prefix (`${firmId}/<segment>/`) or Postgres table fails G-0 step 21 until it is
 in `infra/retention/inventory.json` with a profile (classification, retention class, who deletes, how deletion is
-acknowledged) and a key. A store another finding is adding may be registered with `"pending": "Fxx"` (F34's
-`p1_decisions` is).
+acknowledged) and a key. A store another finding is adding may be registered with `"pending": "Fxx"`; the gate prints
+a note once it lands, and the flag is then dropped (F34's `p1_decisions` was registered so and is now inventoried for
+real: class `ai_record`, anonymised on deletion by nulling `matterId`, aged by `settledAt`).
 
 ## Residuals
 

@@ -145,16 +145,23 @@ const enqueue = () => import("../p2/enqueue")
 // prepare
 // ---------------------------------------------------------------------------------------------------------------------
 
+/**
+ * The processor's copies of the matter: every id, across the store's sources, whose row is in an exported state (for
+ * Opik: the usage row's call-time export, and F34's decision record, which its reconciler may still export). Read in
+ * the prepare job, before any purge job anonymises the rows that hold the ids.
+ */
 async function exportedTraceIds(firmId: string, matterId: string, store: InventoryStore): Promise<string[]> {
   const k = store.key
   if (k.kind !== "traceExport") return []
-  const source = storeByKey(storeKey(k.source))
-  if (!source || source.key.kind !== "field") return []
-  const snap = await adminDb().collection(source.name).where("firmId", "==", firmId).where(source.key.field, "==", matterId).get()
   const ids = new Set<string>()
-  for (const d of snap.docs) {
-    const id = d.get(k.idField)
-    if (typeof id === "string" && id !== "" && d.get(k.statusField) === k.exportedValue) ids.add(id)
+  for (const src of k.sources) {
+    const source = storeByKey(storeKey(src.source))
+    if (!source || source.key.kind !== "field") throw new JobError("store_unknown", { permanent: true })
+    const snap = await adminDb().collection(source.name).where("firmId", "==", firmId).where(source.key.field, "==", matterId).get()
+    for (const d of snap.docs) {
+      const id = d.get(src.idField)
+      if (typeof id === "string" && id !== "" && src.exportedValues.includes(d.get(src.statusField))) ids.add(id)
+    }
   }
   return [...ids].sort()
 }

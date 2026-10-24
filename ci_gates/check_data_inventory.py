@@ -280,12 +280,22 @@ def check_inventory(root: Path, inventory: dict, policy: dict) -> list[Finding]:
             if not via or via.get("kind") != "firestore" or not isinstance(key.get("pathField"), str):
                 out.append(_fail("inventory", f"{label}: key.via must name a firestore store and key.pathField a field"))
         if kk == "traceExport":
-            src = by_id.get(key.get("source"))
-            if not src or src.get("kind") != "firestore":
-                out.append(_fail("inventory", f"{label}: key.source must name a firestore store"))
-            for field in ("idField", "statusField", "exportedValue"):
-                if not isinstance(key.get(field), str) or not key[field]:
-                    out.append(_fail("inventory", f"{label}: key.{field} is required"))
+            sources = key.get("sources")
+            if not isinstance(sources, list) or not sources:
+                out.append(_fail("inventory", f"{label}: key.sources must list at least one source"))
+                sources = []
+            for i, ts in enumerate(sources):
+                ts = ts if isinstance(ts, dict) else {}
+                src = by_id.get(ts.get("source"))
+                # The saga finds the copies by the matter: the source must be a field-keyed Firestore store.
+                if not src or src.get("kind") != "firestore" or (src.get("key") or {}).get("kind") != "field":
+                    out.append(_fail("inventory", f"{label}: key.sources[{i}].source must name a field-keyed firestore store"))
+                for field in ("idField", "statusField"):
+                    if not isinstance(ts.get(field), str) or not ts[field]:
+                        out.append(_fail("inventory", f"{label}: key.sources[{i}].{field} is required"))
+                values = ts.get("exportedValues")
+                if not isinstance(values, list) or not values or not all(isinstance(v, str) and v for v in values):
+                    out.append(_fail("inventory", f"{label}: key.sources[{i}].exportedValues must list the exported states"))
         if kk == "backup":
             window = key.get("windowDays")
             if not (isinstance(window, int) and window > 0):

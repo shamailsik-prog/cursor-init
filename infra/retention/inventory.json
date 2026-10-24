@@ -366,7 +366,7 @@
     {"id": "firestore:workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardships", "kind": "firestore", "name": "workflow_ops_alert_waiver_expiry_dispute_adjudication_slo_stewardships", "profile": "legacy_matter_ops", "key": {"kind": "field", "field": "matterId"}},
     {"id": "firestore:workflow_ops_alert_waiver_expiry_dispute_adjudications", "kind": "firestore", "name": "workflow_ops_alert_waiver_expiry_dispute_adjudications", "profile": "legacy_matter_ops", "key": {"kind": "field", "field": "matterId"}},
     {"id": "firestore:workflow_ops_alert_waiver_expiry_disputes", "kind": "firestore", "name": "workflow_ops_alert_waiver_expiry_disputes", "profile": "legacy_matter_ops", "key": {"kind": "field", "field": "matterId"}},
-    {"id": "firestore:p1_decisions", "kind": "firestore", "name": "p1_decisions", "profile": "ai_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}, "pending": "F34"},
+    {"id": "firestore:p1_decisions", "kind": "firestore", "name": "p1_decisions", "profile": "ai_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}, "ageField": {"field": "settledAt", "type": "timestamp"}},
     {"id": "objects:documents", "kind": "objectPrefix", "name": "documents", "profile": "vault_object", "key": {"kind": "objects", "via": "firestore:documents", "pathField": "storagePath"}, "lockConfig": "infra/backup/document-vault.json"},
     {"id": "postgres:case_law_master", "kind": "postgres", "name": "case_law_master", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:citation", "kind": "postgres", "name": "citation", "profile": "public_corpus", "key": {"kind": "none"}},
@@ -403,7 +403,7 @@
     {"id": "postgres:statutes_master", "kind": "postgres", "name": "statutes_master", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:statutes_staging", "kind": "postgres", "name": "statutes_staging", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:treatment", "kind": "postgres", "name": "treatment", "profile": "public_corpus", "key": {"kind": "none"}},
-    {"id": "external:opik", "kind": "external", "name": "opik", "profile": "third_party_trace", "key": {"kind": "traceExport", "source": "firestore:ai_usage_logs", "idField": "trace.id", "statusField": "trace.status", "exportedValue": "exported"}},
+    {"id": "external:opik", "kind": "external", "name": "opik", "profile": "third_party_trace", "key": {"kind": "traceExport", "sources": [{"source": "firestore:ai_usage_logs", "idField": "trace.id", "statusField": "trace.status", "exportedValues": ["exported"]}, {"source": "firestore:p1_decisions", "idField": "traceId", "statusField": "export.state", "exportedValues": ["exported", "pending"]}]}},
     {"id": "backup:firestore", "kind": "backup", "name": "firestore", "profile": "backup", "key": {"kind": "backup", "windowDays": 98, "config": "infra/backup/firestore-backup.json"}},
     {"id": "backup:postgres", "kind": "backup", "name": "postgres", "profile": "backup", "key": {"kind": "backup", "windowDays": 14, "config": "infra/backup/postgres-backup.json"}}
   ]

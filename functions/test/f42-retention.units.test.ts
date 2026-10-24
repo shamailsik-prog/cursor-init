@@ -74,8 +74,9 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(treatmentOf(store({ kind: "backup", windowDays: 98, config: "x" }), "purge")).toBe("expiry")
     expect(treatmentOf(store({ kind: "objects", via: "firestore:documents", pathField: "storagePath" }), "lock")).toBe("lock")
     expect(treatmentOf(store({ kind: "objects", via: "firestore:documents", pathField: "storagePath" }), "retain")).toBe("retained")
-    expect(treatmentOf(store({ kind: "traceExport", source: "s", idField: "i", statusField: "s", exportedValue: "e" }), "external")).toBe("external")
-    expect(treatmentOf(store({ kind: "traceExport", source: "s", idField: "i", statusField: "s", exportedValue: "e" }), "retain")).toBe("retained")
+    const trace = { kind: "traceExport" as const, sources: [{ source: "s", idField: "i", statusField: "s", exportedValues: ["e"] }] }
+    expect(treatmentOf(store(trace), "external")).toBe("external")
+    expect(treatmentOf(store(trace), "retain")).toBe("retained")
     expect(treatmentOf(store({ kind: "field", field: "matterId" }), "purge")).toBe("purge")
     expect(treatmentOf(store({ kind: "field", field: "matterId" }), "anonymise")).toBe("anonymise")
     for (const misfit of ["retain", "expiry", "external", "lock"] as const) expect(treatmentOf(store({ kind: "docId" }), misfit)).toBe("retained")
