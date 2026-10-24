@@ -20,13 +20,27 @@
 
 ## Tasks
 
-- [ ] **T1 RED tests.** `functions/test/f34-fu-r1.e2e.emu.test.ts` (R1-001, R1-002, R1-006, R1-007, R1-009, R1-010 through the real router and the embedding handler), `tests/f34-p1-transport-import-gate.test.ts` and new cases in `tests/g0-gate-e2e.test.ts` (R1-003), `tests/f34-prompt-template-pins.test.ts` (R1-004), units in `functions/test/f34-decision-units.test.ts` (R1-005, R1-009, R1-011), `tests/f34-eve-usage.test.ts` (R1-008). Run them against a `git archive` of `origin/main` with the tests copied in; record the failures below.
-- [ ] **T2 R15.** `buildTrace`: hash only at rank <= 1 and not blocked; `modelReported` recognised or `"unrecognised"`.
-- [ ] **T3 R16.** `embedding.ts`: verdicts, seed in the reserve args, the record staged in the commit for every outcome, `transportMs` on the attempt; `reconciledDecision` carries `caller` and `corpusOperationId`; the embedding transport's `id`.
-- [ ] **T4 R17.** `ci_gates/check_p1_transport_imports.py`, G-0 [21]; the call-site test runs the gate.
-- [ ] **T5 LOWs.** R18 (RELEASED, literal history keys), R21 (`attemptRecord: "recorded"`, `fromSeed`), R22 (eve bridge), R23 (`disabledReason`, `p1.opik_misconfigured`, manifest, alerts.tf), R25 (`MASK_POLICY_VERSION`); `DECISION_RECORD_VERSION` `"f34.2"`.
-- [ ] **T6 Verification.** Typechecks, eslint on touched files, the F34 and FA-D3C suites and neighbours, the full Functions suite, G-0, G-1, G-2, G-4 Phase 3d (with its exact-name list), deploy contract, claim gate, gitleaks; at least 12 mutants.
+- [x] **T1 RED tests.** `functions/test/f34-fu-r1.e2e.emu.test.ts` (R1-001, R1-002, R1-006, R1-007, R1-009, R1-010 through the real router and the embedding handler), `tests/f34-p1-transport-import-gate.test.ts` and new cases in `tests/g0-gate-e2e.test.ts` (R1-003), `tests/f34-prompt-template-pins.test.ts` (R1-004), units in `functions/test/f34-decision-units.test.ts` (R1-005, R1-009, R1-011), `tests/f34-eve-usage.test.ts` (R1-008). Run them against a `git archive` of `origin/main` with the tests copied in; record the failures below.
+- [x] **T2 R15.** `buildTrace`: hash only at rank <= 1 and not blocked; `modelReported` recognised or `"unrecognised"`.
+- [x] **T3 R16.** `embedding.ts`: verdicts, seed in the reserve args, the record staged in the commit for every outcome, `transportMs` on the attempt; `reconciledDecision` carries `caller` and `corpusOperationId`; the embedding transport's `id`.
+- [x] **T4 R17.** `ci_gates/check_p1_transport_imports.py`, G-0 [21]; the call-site test runs the gate.
+- [x] **T5 LOWs.** R18 (RELEASED, literal history keys), R21 (`attemptRecord: "recorded"`, `fromSeed`), R22 (eve bridge), R23 (`disabledReason`, `p1.opik_misconfigured`, manifest, alerts.tf), R25 (`MASK_POLICY_VERSION`); `DECISION_RECORD_VERSION` `"f34.2"`.
+- [x] **T6 Verification.** Typechecks, eslint on touched files, the F34 and FA-D3C suites and neighbours, the full Functions suite, G-0, G-1, G-2, G-4 Phase 3d (with its exact-name list), deploy contract, claim gate, gitleaks; at least 12 mutants.
 
 ## RED/GREEN ledger
 
-Filled in from the runs; evidence in `/tmp/claude-0/-home-user/7c93b457-ba66-5c9c-b05b-44e0b66b7f92/scratchpad/evidence-f34-fu.txt`.
+Filled in from the runs; evidence in `/tmp/claude-0/-home-user/7c93b457-ba66-5c9c-b05b-44e0b66b7f92/scratchpad/evidence-f34-fu.txt`. RED is the final version of each test run against a `git archive` of `origin/main` 0d9af65 (F43 #120 and FA-D5-003 #124 landed) with the branch's tests copied in, on a fresh private emulator. GREEN is the branch after merging that main.
+
+| Test file | RED (main 0d9af65 + the tests) | GREEN (branch) |
+| --- | --- | --- |
+| `functions/test/f34-fu-r1.e2e.emu.test.ts` | 16 of 24 fail. R1-001: 8 of 10 (the privileged dictionary attack, the not_minimised name attack, ranks 2 to 4, a blocked call, the re-export, the model name; ranks 0 and 1 pass as they should). R1-002: 5 of 5 (no embedding record anywhere). R1-007, R1-009, R1-011: 3 of 3. Pass on main by design: R1-006 (characterises residual 10) and the five R1-010 mutant-killing tests | 24 of 24 pass |
+| `functions/test/f34-decision-trace.e2e.emu.test.ts` (changed expectations) | 3 of 10 fail (record version; ranks 2 and 3 still export the hash) | 10 of 10 pass |
+| `functions/test/f34-decision-units.test.ts` | 10 of 27 fail | 27 of 27 pass |
+| `functions/test/p1.units.test.ts` (one changed expectation) | 1 of 39 fails | 39 of 39 pass |
+| `functions/test/f34-template-callsites.test.ts` | 1 fails (no G-0 [21] gate); 4 pass | 5 of 5 pass |
+| `tests/f34-p1-transport-import-gate.test.ts` | 29 of 29 fail (the gate does not exist) | 29 of 29 pass |
+| `tests/g0-gate-e2e.test.ts` | 3 of 24 fail: both auditor shapes pass main's G-0; the control lacks check [21] | 24 of 24 pass |
+| `tests/f34-eve-usage.test.ts` | 1 of 9 fails (a send that threw reports none_sent) | 9 of 9 pass |
+| `tests/f34-prompt-template-pins.test.ts` | 6 of 6 pass; mutant M25 (the auditor's T5: a bump that drops f17.1) survives main's 4 pin tests | 6 of 6 pass; M25 killed (3 fail) |
+
+Mutation (`scratchpad/f34-fu/mutate.py`, each mutant applied alone in a copy of the branch, the files restored and checked by SHA-256): 30 mutants, 25 on the new code, the gate and the export rule (M01 to M25) and the auditor's five survivors (A02, A08, A14, A15, A17). All 30 are killed. M15 (inline `type` specifiers skipped by the gate) survived the first test set; the inline-type case was added and kills it.
