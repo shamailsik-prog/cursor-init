@@ -68,4 +68,11 @@ describe("deploy contract violations (R6)", () => {
     const { isDeployedRuntime } = await import("../src/deployConfig")
     expect(isDeployedRuntime()).toBe(false)
   })
+
+  it("refuses to load when K_SERVICE is set without an ingress setting (no NODE_ENV)", async () => {
+    vi.stubEnv("K_SERVICE", "api")
+    const { logger } = await import("firebase-functions")
+    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    await expect(import("../src/deployConfig")).rejects.toMatchObject({ name: "DeployContractError" })
+  })
 })

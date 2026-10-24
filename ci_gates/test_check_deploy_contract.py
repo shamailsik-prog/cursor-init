@@ -147,8 +147,82 @@ class BundleTier(unittest.TestCase):
     def test_compare_endpoints_wrong_max_instances(self) -> None:
         manifest = gate.load_manifest(ROOT)
         endpoints = {"api": {"maxInstances": 999, "region": ["asia-south1"]}}
-        hits = gate.compare_endpoints(manifest, endpoints, "production")
+        hits = gate.compare_endpoints(manifest, endpoints, "production", {})
         self.assertTrue(any(f.check == "endpoints" for f in hits))
+
+    def test_compare_endpoints_firestore_document_path(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        endpoints = {
+            "onJobCreated": {
+                "region": ["asia-south1"],
+                "eventTrigger": {
+                    "eventFilterPathPatterns": {"document": "client/{jobId}"},
+                    "retry": True,
+                },
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "production", {})
+        self.assertTrue(any("document" in f.message for f in hits))
+
+    def test_compare_endpoints_schedule_frequency(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        endpoints = {
+            "jobSweeper": {
+                "region": ["asia-south1"],
+                "scheduleTrigger": {"schedule": "every 24 hours"},
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "production", {})
+        self.assertTrue(any("schedule" in f.message for f in hits))
+
+    def test_compare_endpoints_queue_rate_limits(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        endpoints = {
+            "jobWorker": {
+                "region": ["asia-south1"],
+                "taskQueueTrigger": {"rateLimits": {"maxConcurrentDispatches": 10, "maxDispatchesPerSecond": 500}},
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "production", {})
+        self.assertTrue(any("maxDispatchesPerSecond" in f.message for f in hits))
+
+
+class EnvFileParsing(unittest.TestCase):
+    def test_parse_dotenv_last_wins(self) -> None:
+        parsed = gate.parse_dotenv("SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\nSIKANDER_INGRESS_SETTINGS=ALLOW_ALL\n")
+        self.assertEqual(parsed["SIKANDER_INGRESS_SETTINGS"], "ALLOW_ALL")
+
+    def test_check_env_file_ignores_commented_values(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        text = "# SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\nSIKANDER_INGRESS_SETTINGS=ALLOW_ALL\nTRUSTED_PROXY_HOPS=0\n"
+        hits = gate.check_env_file(manifest, "staging", text)
+        self.assertTrue(hits)
+
+    def test_bundle_requires_env_file(self) -> None:
+        with self.assertRaises(SystemExit):
+            gate.main(["--bundle", "--profile", "staging"])
+
+
+class FirebaseJson(unittest.TestCase):
+    def test_missing_indexes_key_fails(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            shutil.copytree(ROOT / "infra", root / "infra")
+            shutil.copy2(ROOT / "firebase.json", root / "firebase.json")
+            shutil.copy2(ROOT / "firestore.indexes.json", root / "firestore.indexes.json")
+            shutil.copytree(ROOT / "functions/src", root / "functions/src")
+            shutil.copytree(ROOT / "app", root / "app")
+            shutil.copy2(ROOT / "firestore.rules", root / "firestore.rules")
+            shutil.copy2(ROOT / "docs/deploy/RELEASE_RUNBOOK.md", root / "docs/deploy/RELEASE_RUNBOOK.md")
+            data = json.loads((root / "firebase.json").read_text())
+            data["firestore"].pop("indexes", None)
+            (root / "firebase.json").write_text(json.dumps(data, indent=2) + "\n")
+            manifest = gate.load_manifest(root)
+            hits = gate.run_static(root, manifest)
+            self.assertTrue(any(f.check == "firebase-json" and "indexes" in f.message for f in hits))
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

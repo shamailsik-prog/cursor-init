@@ -25,12 +25,10 @@ describe("health contract report (F32 R9)", () => {
     const res = mockRes()
     await handler({} as never, res as never)
     expect(res.status).toHaveBeenCalledWith(200)
-    const body = res.json.mock.calls[0]?.[0] as { status: string; region: string; contract: Record<string, Verdict> }
+    const body = res.json.mock.calls[0]?.[0] as { status: string; region: string; contract?: Record<string, Verdict> }
     expect(body.status).toBe("ok")
     expect(body.region).toBe("asia-south1")
-    for (const v of Object.values(body.contract)) expect(["ok", "violated", "unknown"]).toContain(v)
-    expect(Object.values(body.contract).every((v) => v === "ok")).toBe(true)
-    expect(JSON.stringify(body)).not.toMatch(/iam\.gserviceaccount|locationId/)
+    expect(body).not.toHaveProperty("contract")
   })
 
   it("responds 503 unhealthy when any contract check is violated", async () => {
@@ -44,12 +42,11 @@ describe("health contract report (F32 R9)", () => {
     const res = mockRes()
     await handler({} as never, res as never)
     expect(res.status).toHaveBeenCalledWith(503)
-    const body = res.json.mock.calls[0]?.[0] as { status: string; contract: Record<string, Verdict> }
+    const body = res.json.mock.calls[0]?.[0] as { status: string }
     expect(body.status).toBe("unhealthy")
-    expect(body.contract.database_location).toBe("violated")
   })
 
-  it("treats unknown metadata as non-failing", async () => {
+  it("treats unknown metadata as non-failing when not deployed", async () => {
     const { createHealthHandler } = await import("../src/health")
     const handler = createHealthHandler({
       env: {},
@@ -60,9 +57,45 @@ describe("health contract report (F32 R9)", () => {
     const res = mockRes()
     await handler({} as never, res as never)
     expect(res.status).toHaveBeenCalledWith(200)
-    const body = res.json.mock.calls[0]?.[0] as { contract: Record<string, Verdict> }
-    expect(body.contract.region).toBe("unknown")
-    expect(body.contract.runtime_identity).toBe("unknown")
+    const body = res.json.mock.calls[0]?.[0] as { status: string }
+    expect(body.status).toBe("ok")
+    expect(body).not.toHaveProperty("contract")
+  })
+
+  it("responds 503 when deployed but region, database or identity cannot be verified", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1" },
+      deployed: true,
+      metadata: async () => ({}),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+    const body = res.json.mock.calls[0]?.[0] as { status: string; contract?: unknown }
+    expect(body.status).toBe("unhealthy")
+    expect(body).not.toHaveProperty("contract")
+  })
+
+  it("rejects a service account that only substring-matches the runtime identity", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: {
+        SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+        TRUSTED_PROXY_HOPS: "1",
+        FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+      },
+      deployed: true,
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "evil-sikander-functions@attacker-proj.iam.gserviceaccount.com",
+      }),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
   })
 
   it("caches the metadata probe for five minutes", async () => {
@@ -94,8 +127,8 @@ describe("health contract report (F32 R9)", () => {
     const p = handler({} as never, res as never)
     await vi.advanceTimersByTimeAsync(600)
     await p
-    const body = res.json.mock.calls[0]?.[0] as { contract: Record<string, Verdict> }
-    expect(body.contract.region).toBe("unknown")
+    const body = res.json.mock.calls[0]?.[0] as { status: string }
+    expect(body.status).toBe("ok")
     vi.useRealTimers()
   })
 })
