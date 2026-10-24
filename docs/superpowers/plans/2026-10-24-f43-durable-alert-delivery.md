@@ -19,13 +19,25 @@ Spec: `docs/superpowers/specs/2026-10-24-f43-durable-alert-delivery-design.md`. 
 8. **Mutation**: at least 10 hand mutants, each one exact edit, run against its targeted file; table below.
 9. Docs: P2 README (O-41 closed, dead-letter runbook points at the alert routes), P1 README alerts paragraph, this ledger, the PR body.
 
+## Progress
+
+- [x] Spec and plan (6395e7b).
+- [x] Tests first: 25 tests in four files (3d24564), all 25 failing on `origin/main` f39d007 for behavioural reasons.
+- [x] Implementation (63f7fc0): `functions/src/alerts/`, worker, sweeper, gateway, P5 table, routes, exports, rules, indexes, manifest, Terraform, export-list and G-2 tests.
+- [x] One unit failure on the first GREEN run was a real defect: a NUL-joined id is ambiguous; the id now hashes a JSON array.
+- [x] Docs: spec rulings updated with the implementation decisions; P1 and P2 READMEs; `functions/src/alerts/README.md` runbook.
+
 ## RED/GREEN ledger
 
-Filled in as the runs happen (exact counts; main = `origin/main` f39d007 export with the branch's test files copied in).
+Exact counts; main = `origin/main` f39d007 export with the branch's test files copied in; emulators on the builder's private ports.
 
 | Suite | main | branch |
 | --- | --- | --- |
-| (filled in below) | | |
+| `f43-alerts.unit.test.ts` | 6/6 FAIL (5: module missing; 1: an associate's `alert.read` is allowed, fail open) | 6/6 PASS |
+| `f43-alerts-p2.e2e.emu.test.ts` | 8/8 FAIL (no `ops_alerts` document after each fault; checker missing) | 8/8 PASS |
+| `f43-alerts-p1.e2e.emu.test.ts` | 5/5 FAIL (no alert; checker missing) | 5/5 PASS |
+| `f43-alerts-escalation.e2e.emu.test.ts` | 6/6 FAIL (the dead letter raises no alert; no routes, no escalator) | 6/6 PASS |
+| Total | 25/25 FAIL | 25/25 PASS |
 
 ## Mutation ledger
 

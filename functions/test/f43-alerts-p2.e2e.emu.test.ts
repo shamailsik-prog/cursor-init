@@ -27,6 +27,19 @@ import { FakeClock, diagSpec, enqueueAt, newFirm, readJob, sweepOrigins, testDep
  */
 
 const nextOrigin = sweepOrigins(1000)
+/** Cleanup scans every collection of the shared emulator; under load that can exceed the 10 s hook default. */
+const CLEANUP_TIMEOUT_MS = 120_000
+
+/**
+ * Deletes the firm's job rows first, with one targeted query: rows dated a thousand years back would be due in every
+ * other sweeper suite's sweep, so they must not outlive the test even if the generic cleanup after them fails.
+ */
+async function dropJobs(firmId: string): Promise<void> {
+  const snap = await jobsRef().where("firmId", "==", firmId).select().get()
+  const batch = adminDb().batch()
+  for (const d of snap.docs) batch.delete(d.ref)
+  if (snap.size > 0) await batch.commit()
+}
 
 /** Loaded through a computed specifier, so this file runs (and fails on behaviour) on a tree without the module. */
 const CHECKER = ["..", "src", "alerts", "checker"].join("/")
@@ -76,8 +89,9 @@ describe.skipIf(!EMULATORS)("audit F43: P2 faults raise durable alerts (e2e)", (
   afterEach(async () => {
     delete jobWorkerTestSeam.beforeCommit
     delete jobRuntime.deps
+    await dropJobs(firmId)
     await deleteFirmData([firmId], uids.splice(0))
-  })
+  }, CLEANUP_TIMEOUT_MS)
 
   it("the audit scenario: dispatch stays broken, the job never dead-letters, and the third sweeper re-dispatch raises one job.dispatch_stalled alert", async () => {
     const queue = new BrokenQueue()
@@ -277,7 +291,7 @@ describe.skipIf(!EMULATORS)("audit F43: a stuck un-merge saga raises saga.age (e
 
   afterEach(async () => {
     await deleteFirmData([firmId], uids.splice(0))
-  })
+  }, CLEANUP_TIMEOUT_MS)
 
   it("an un-merge whose jobs never run is in progress for 60 minutes: one saga.age alert names the merge event", async () => {
     firmId = uniq("firm")

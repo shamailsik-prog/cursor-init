@@ -22,6 +22,8 @@ import { FakeClock, diagSpec, enqueueAt, readJob, sweepOrigins, testDeps } from 
 
 const nextOrigin = sweepOrigins(800)
 const MIN = 60_000
+/** Cleanup scans every collection of the shared emulator; under load that can exceed the 10 s hook default. */
+const CLEANUP_TIMEOUT_MS = 120_000
 
 type OpsModule = { alertOpsTestSeam: { now?: () => number } }
 const OPS = ["..", "src", "alerts", "ops"].join("/")
@@ -104,8 +106,15 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
       (m: OpsModule) => delete m.alertOpsTestSeam.now,
       () => undefined
     )
+    // Job rows first, with one targeted query: rows dated centuries back must not outlive the test (other suites' sweeps).
+    const jobs = await adminDb().collection("jobs").where("firmId", "==", firmId).select().get()
+    if (jobs.size > 0) {
+      const batch = adminDb().batch()
+      for (const d of jobs.docs) batch.delete(d.ref)
+      await batch.commit()
+    }
     await deleteFirmData([firmId, otherFirmId], uids.splice(0))
-  })
+  }, CLEANUP_TIMEOUT_MS)
 
   /** A real dead letter at `at`: a diagnostic job whose handler fails permanently, through the real worker. */
   async function deadLetter(at = T0): Promise<{ alert: Alert; jobId: string }> {

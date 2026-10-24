@@ -28,6 +28,8 @@ const OPUS = "anthropic/claude-opus-5.5"
 const BUDGET = 1_000_000_000
 /** The stub reply's charge: 1,000 tokens in, 500 out. */
 const REPLY_COST = costMicroUsd(OPUS, 1000, 500)!
+/** Cleanup scans every collection of the shared emulator; under load that can exceed the 10 s hook default. */
+const CLEANUP_TIMEOUT_MS = 120_000
 
 const CHECKER = ["..", "src", "alerts", "checker"].join("/")
 type CheckerModule = { runAlertChecker: (o: { now: () => number; passes?: string[] }) => Promise<{ raised: string[] }> }
@@ -88,7 +90,7 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
     resetSeam()
     await platformConfigRef().delete()
     await deleteFirmData([firmId])
-  })
+  }, CLEANUP_TIMEOUT_MS)
 
   it("a failed reservation and a failed attempt record are one ai.reservation_failed alert for the firm, counted, with one page", async () => {
     await seedFirm()

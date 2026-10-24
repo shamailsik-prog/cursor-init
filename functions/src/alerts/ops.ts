@@ -163,28 +163,34 @@ async function transition(alertId: string, act: Act, actor: Actor, firmId: strin
 
 const nowOf = (session: Session): number => session.now ?? Date.now()
 
-function firmTransition(act: Act): FirmOperation<AlertView> {
-  return {
-    auth: "firm",
-    kind: "general",
-    action: act === "acknowledge" ? "alert.acknowledge" : "alert.resolve",
-    target: "ops_alerts",
-    run: async (session, data, audit) => {
-      const { caller } = session
-      audit.firmId = caller.firmId
-      audit.target = `firms/${caller.firmId}`
-      await requirePermission(caller, "alert.ack")
-      const alertId = parseAlertId(data)
-      audit.target = `ops_alerts/${alertId}`
-      return transition(alertId, act, { uid: caller.uid, role: "partner" }, caller.firmId, nowOf(session), audit)
-    },
-  }
+/** A partner's acknowledge or resolve: `alert.ack` (the shared table), then the transition in the caller's firm. */
+async function partnerTransition(session: Session, data: Data, audit: CallAudit, act: Act): Promise<AlertView> {
+  const { caller } = session
+  audit.firmId = caller.firmId
+  audit.target = `firms/${caller.firmId}`
+  await requirePermission(caller, "alert.ack")
+  const alertId = parseAlertId(data)
+  audit.target = `ops_alerts/${alertId}`
+  return transition(alertId, act, { uid: caller.uid, role: "partner" }, caller.firmId, nowOf(session), audit)
 }
 
 /** acknowledgeAlert({ alertId }) → the alert's view: stops its escalation. */
-export const acknowledgeAlertOp = firmTransition("acknowledge")
+export const acknowledgeAlertOp: FirmOperation<AlertView> = {
+  auth: "firm",
+  kind: "general",
+  action: "alert.acknowledge",
+  target: "ops_alerts",
+  run: async (session, data, audit) => partnerTransition(session, data, audit, "acknowledge"),
+}
+
 /** resolveAlert({ alertId }) → the alert's view: closes it; a later raise reopens it as a new episode. */
-export const resolveAlertOp = firmTransition("resolve")
+export const resolveAlertOp: FirmOperation<AlertView> = {
+  auth: "firm",
+  kind: "general",
+  action: "alert.resolve",
+  target: "ops_alerts",
+  run: async (session, data, audit) => partnerTransition(session, data, audit, "resolve"),
+}
 
 /**
  * operatorAlertAction({ alertId, action: "acknowledge" | "resolve" }) → the alert's view. The named operator's route:
