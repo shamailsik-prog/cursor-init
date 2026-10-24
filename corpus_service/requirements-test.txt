@@ -1,6 +1,7 @@
 # Minimal, pinned set for the corpus_service pytest suite in CI (Gate G-0 workflow, job
-# "corpus-service"). requirements.txt is the service's runtime set; it pulls in Playwright,
-# WeasyPrint and others the tests never import. This file never stands in for it: audit F31's
+# "corpus-service"). requirements.txt is the service's runtime set; it pulls in WeasyPrint,
+# ReportLab, pytesseract and others the tests never import (it holds no headless browser, FA-D3C-001, and no
+# provider SDK, FA-D3C-002). This file never stands in for it: audit F31's
 # tests/test_f31_import_contract.py requires every runtime import to be declared in
 # requirements.txt, and job "corpus-runtime" runs tests/e2e/runtime_smoke.sh in a venv built from
 # requirements.txt alone. Celery/kombu/redis are here because tests/test_store_tls_config.py

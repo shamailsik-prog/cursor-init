@@ -1,10 +1,4 @@
 {
-  "fa_d3c_001_scraper": [
-    "corpus_service/requirements.txt:playwright",
-    "corpus_service/Dockerfile:playwright_install"
-  ],
-  "fa_d3c_002_provider": [
-    "corpus_service/requirements.txt:openai",
-    "corpus_service/scraper/tasks/embeddings.py:openai"
-  ]
+  "fa_d3c_001_scraper": [],
+  "fa_d3c_002_provider": []
 }

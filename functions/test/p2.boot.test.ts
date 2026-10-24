@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler", "p1TraceExportReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1CorpusEmbedding", "p1ReservationReconciler", "p1TraceExportReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",

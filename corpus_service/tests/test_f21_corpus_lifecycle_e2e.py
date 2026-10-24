@@ -139,7 +139,7 @@ def install_offline_sources(monkeypatch):
         return await real_sleep(0, result)
 
     monkeypatch.setattr(asyncio, "sleep", _no_wait)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("P1_EMBEDDING_URL", raising=False)  # FA-D3C-002: embeddings go through P1; none here
 
 
 # ---------------------------------------------------------------------------------------------

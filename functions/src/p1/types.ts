@@ -3,6 +3,13 @@
 /** The one task type this phase (P3-62). */
 export type TaskType = "committee"
 
+/**
+ * FA-D3C-002: the task types the P1 ledger records (the reservation, the usage row, the event): the routed chat task,
+ * and `embedding`, the corpus service's embedding call (`callP1Embedding`, embedding.ts). `TaskType` stays the chat
+ * routing key of `TASK_MODEL`, which Gate G-0 [17] binds to the committee evaluation record.
+ */
+export type LedgerTaskType = TaskType | "embedding"
+
 /** Why a call was refused before any provider call: a fixed set, never free text (P3-61). */
 export type BlockReason =
   | "kill_switch_platform"

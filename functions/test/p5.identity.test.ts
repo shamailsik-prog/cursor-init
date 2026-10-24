@@ -1107,14 +1107,18 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 describe("index exports", () => {
   it("U-1: deploys only the HTTP api (and the health probe) as HTTP functions, plus the job runtime's non-HTTP functions, in asia-south1 — no onCall callables", async () => {
     const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
-    expect(Object.keys(mod).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler", "p1TraceExportReconciler"])
+    expect(Object.keys(mod).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1CorpusEmbedding", "p1ReservationReconciler", "p1TraceExportReconciler"])
     for (const name of Object.keys(mod)) {
       expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
     }
-    // The HTTP entry points are exactly api and health; the job runtime (P3-5, P3-8) is a Firestore
-    // trigger, a Cloud Tasks queue and a schedule, none of them an HTTP endpoint.
-    expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual(["api", "health"])
+    // The HTTP entry points are api, health and p1CorpusEmbedding; the job runtime (P3-5, P3-8) is a Firestore
+    // trigger, a Cloud Tasks queue and a schedule, none of them an HTTP endpoint. The api is still the only entry point to
+    // the P5 operations (E-37): p1CorpusEmbedding (FA-D3C-002) is no tenant operation but the corpus service's IAM-private,
+    // OIDC-verified way to P1, with no user, no firm header and the firm fixed by the deployment.
+    expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual(["api", "health", "p1CorpusEmbedding"])
+    expect((mod.p1CorpusEmbedding?.__endpoint?.httpsTrigger as { invoker?: unknown } | undefined)?.invoker).toEqual(["private"])
     expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
+    expect(mod.p1CorpusEmbedding?.__endpoint?.region).toEqual(["asia-south1"])
     for (const name of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper", "ocrLegacySweep", "d1AutoConfirmTick", "d1ConflictReindexTick", "d1ConflictClientWritten", "d1ConflictPartyWritten", "d1ConflictIndexChunkWritten", "p1ReservationReconciler", "auditOutboxReconciler"]) expect([name, mod[name]?.__endpoint?.region]).toEqual([name, ["asia-south1"]])
   })
 })
