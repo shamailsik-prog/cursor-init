@@ -38,18 +38,31 @@ const PARTNER = caller("f32-ttl-partner", FIRM, "partner")
 const OTHER_FIRM_PARTNER = caller("f32-ttl-other-partner", OTHER_FIRM, "partner")
 const ASSOCIATE = caller("f32-ttl-assoc", FIRM, "associate")
 
+type ActorKey = "unauthenticated" | "crossFirmPartner" | "nonPartner" | "sameFirmPartner"
+
 let testEnv: RulesTestEnvironment
 
-async function as(caller: Caller) {
-  return testEnv.authenticatedContext(caller.uid, caller.claims).firestore()
+async function dbFor(actor: ActorKey) {
+  switch (actor) {
+    case "unauthenticated":
+      return testEnv.unauthenticatedContext().firestore()
+    case "crossFirmPartner":
+      return testEnv.authenticatedContext(OTHER_FIRM_PARTNER.uid, OTHER_FIRM_PARTNER.claims).firestore()
+    case "nonPartner":
+      return testEnv.authenticatedContext(ASSOCIATE.uid, ASSOCIATE.claims).firestore()
+    case "sameFirmPartner":
+      return testEnv.authenticatedContext(PARTNER.uid, PARTNER.claims).firestore()
+  }
 }
 
-async function seedCollection(name: string) {
+async function seedDoc(collectionName: string, docId: string, expiresAt: Date) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const admin = ctx.firestore()
-    await setDoc(doc(admin, name, "seed"), { firmId: FIRM, expiresAt: new Date() })
+    await setDoc(doc(admin, collectionName, docId), { firmId: FIRM, expiresAt })
   })
 }
+
+const ACTORS: ActorKey[] = ["unauthenticated", "crossFirmPartner", "nonPartner", "sameFirmPartner"]
 
 describe("F32 TTL collections are server-only (rules emulator)", () => {
   beforeAll(async () => {
@@ -65,41 +78,35 @@ describe("F32 TTL collections are server-only (rules emulator)", () => {
 
   for (const name of TTL_COLLECTIONS) {
     describe(name, () => {
-      it("denies same-firm partner get, list and create", async () => {
-        await seedCollection(name)
-        const db = await as(PARTNER)
-        await assertFails(getDoc(doc(db, name, "seed")))
-        await assertFails(getDocs(collection(db, name)))
-        await assertFails(setDoc(doc(db, name, "forged"), { firmId: FIRM }))
-      })
+      for (const actor of ACTORS) {
+        it(`denies ${actor} create`, async () => {
+          const db = await dbFor(actor)
+          const docId = `${actor}-create-${name}`
+          await assertFails(setDoc(doc(db, name, docId), { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) }))
+        })
 
-      it("denies unauthenticated get and list", async () => {
-        await seedCollection(name)
-        const db = testEnv.unauthenticatedContext().firestore()
-        await assertFails(getDoc(doc(db, name, "seed")))
-        await assertFails(getDocs(collection(db, name)))
-      })
+        it(`denies ${actor} update on seeded doc`, async () => {
+          const docId = `${actor}-update-${name}`
+          await seedDoc(name, docId, new Date(Date.now() + 86_400_000))
+          const db = await dbFor(actor)
+          await assertFails(updateDoc(doc(db, name, docId), { firmId: FIRM }))
+        })
 
-      it("denies cross-firm partner get and list", async () => {
-        await seedCollection(name)
-        const db = await as(OTHER_FIRM_PARTNER)
-        await assertFails(getDoc(doc(db, name, "seed")))
-        await assertFails(getDocs(collection(db, name)))
-      })
+        it(`denies ${actor} delete on seeded doc`, async () => {
+          const docId = `${actor}-delete-${name}`
+          await seedDoc(name, docId, new Date(Date.now() + 86_400_000))
+          const db = await dbFor(actor)
+          await assertFails(deleteDoc(doc(db, name, docId)))
+        })
 
-      it("denies non-partner role get and list", async () => {
-        await seedCollection(name)
-        const db = await as(ASSOCIATE)
-        await assertFails(getDoc(doc(db, name, "seed")))
-        await assertFails(getDocs(collection(db, name)))
-      })
-
-      it("denies partner update and delete", async () => {
-        await seedCollection(name)
-        const db = await as(PARTNER)
-        await assertFails(updateDoc(doc(db, name, "seed"), { firmId: FIRM }))
-        await assertFails(deleteDoc(doc(db, name, "seed")))
-      })
+        it(`denies ${actor} get and list on unexpired doc`, async () => {
+          const docId = `${actor}-live-read-${name}`
+          await seedDoc(name, docId, new Date(Date.now() + 7 * 86_400_000))
+          const db = await dbFor(actor)
+          await assertFails(getDoc(doc(db, name, docId)))
+          await assertFails(getDocs(collection(db, name)))
+        })
+      }
     })
   }
 })

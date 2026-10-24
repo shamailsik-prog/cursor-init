@@ -21,6 +21,7 @@ describe("health contract report (F32 R9)", () => {
         SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
         TRUSTED_PROXY_HOPS: "1",
         FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        SIKANDER_DEPLOY_PROFILE: "staging",
         GCLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
@@ -110,6 +111,28 @@ describe("health contract report (F32 R9)", () => {
     expect(res.status).toHaveBeenCalledWith(503)
   })
 
+  it("rejects staging profile when runtime GCP project is production", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: {
+        SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+        TRUSTED_PROXY_HOPS: "1",
+        FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        SIKANDER_DEPLOY_PROFILE: "staging",
+        GCLOUD_PROJECT: "sikander-legal-os-prod",
+      },
+      deployed: true,
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@sikander-legal-os-prod.iam.gserviceaccount.com",
+      }),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+  })
+
   it("accepts production runtime SA when GOOGLE_CLOUD_PROJECT is the prod project", async () => {
     const { createHealthHandler } = await import("../src/health")
     const prodProject = "sikander-legal-os-prod"
@@ -118,6 +141,7 @@ describe("health contract report (F32 R9)", () => {
         SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
         TRUSTED_PROXY_HOPS: "1",
         FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        SIKANDER_DEPLOY_PROFILE: "production",
         GOOGLE_CLOUD_PROJECT: prodProject,
       },
       deployed: true,
