@@ -41,7 +41,6 @@ FIRST_PARTY = frozenset({"scraper"})
 # Audit F26: PIL (pillow) and pdfplumber left this table when the pinned test set gained the PDF
 # parser stack; their installed metadata maps them now.
 ALIASES: Dict[str, Tuple[str, str]] = {
-    "openai": ("openai", "runtime-only (tasks/embeddings.py); not in the pinned test set"),
     "pytesseract": ("pytesseract", "runtime-only (parsers/pdf_extractor.py); not in the pinned test set"),
     "reportlab": ("reportlab", "runtime-only (parsers/pdf_writer.py); not in the pinned test set"),
 }

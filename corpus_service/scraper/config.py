@@ -212,9 +212,20 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------------
-    # OpenAI
+    # Embeddings, through the P1 gateway (FA-D3C-002)
     # ---------------------------------------------------------------------
-    OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key for embeddings")
+    # The corpus holds no provider key or SDK. Every paid embedding goes to P1's p1CorpusEmbedding Cloud Function
+    # (scraper/p1_client.py), which applies the kill switches, the budget, the P1 ledger, the provider policy and the
+    # outbound mask. An empty URL turns embeddings off: the batch is skipped, as it was with no key.
+    P1_EMBEDDING_URL: str = Field(
+        default="",
+        description="https URL of P1's p1CorpusEmbedding function (a Google serverless host on 443); empty disables embeddings",
+    )
+    P1_ID_TOKEN_FILE: str = Field(
+        default="/run/secrets/p1_id_token",
+        description="File holding the corpus service account's current Google-signed OIDC ID token, audience P1_EMBEDDING_URL; "
+        "the deployment keeps it current. Read on every call, never logged.",
+    )
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", description="OpenAI embedding model name")
     OPENAI_EMBEDDING_DIMENSIONS: int = Field(default=1536, ge=256, le=3072)
     EMBEDDING_BATCH_SIZE: int = Field(default=50, ge=1, le=500, description="Number of texts per embedding API call")
@@ -640,7 +651,7 @@ class Settings(BaseSettings):
     def model_dump_safe(self) -> Dict[str, str | int | float | bool | List[str]]:
         """Return dict for logging with secrets redacted."""
         data = self.model_dump()
-        for key in ["PLS_PASS", "PLS_PASS_B", "ENCRYPTION_KEY", "ADMIN_API_KEY", "OPENAI_API_KEY", "SECRET_KEY"]:
+        for key in ["PLS_PASS", "PLS_PASS_B", "ENCRYPTION_KEY", "ADMIN_API_KEY", "SECRET_KEY"]:
             if key in data and data[key]:
                 val = str(data[key])
                 data[key] = val[:4] + "***REDACTED***" + val[-2:] if len(val) > 6 else "***REDACTED***"

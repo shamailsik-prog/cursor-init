@@ -19,7 +19,6 @@ import contextlib
 import logging
 import signal
 import socket
-import sys
 import time
 
 import httpx
@@ -226,14 +225,16 @@ def test_r26_an_interrupted_embedding_batch_is_recorded_and_its_item_is_untouche
     assert_migrated(corpus_db.migrate(), corpus_db)
     statute_id = _queue_one_statute()
     install_provider(monkeypatch, fail=False)
-    provider = sys.modules["openai"]  # install_provider's in-process stand-in, not the SDK
+    from scraper import p1_client
 
-    async def slow_create(self, model, input):
+    provider = p1_client.embedding_client()  # install_provider's in-process stand-in (FA-D3C-002: the P1 seam)
+
+    async def slow_create(self, model, input, dimensions, operation_id):
         signal.setitimer(signal.ITIMER_REAL, 0.3)  # the soft limit lands while this call awaits
         await REAL_SLEEP(3)
         raise AssertionError("the time limit should have cut this call off")
 
-    monkeypatch.setattr(type(provider.AsyncOpenAI(api_key="x").embeddings), "create", slow_create)
+    monkeypatch.setattr(type(provider.embeddings), "create", slow_create)
 
     with soft_limit_on_sigalrm():
         result = fire("process-embeddings")

@@ -8,9 +8,10 @@ by the real ``python -m scraper.migrate`` (the ``corpus_db`` fixture), with the 
 twice first, as CI applies it to the server's own database. The two cases that need separate processes
 (two worker children at once, a child killed) are test_f27_embedding_prefork_e2e.py.
 
-The OpenAI package is the one stand-in: an in-process module whose ``AsyncOpenAI`` counts every call
-per queued row (no network, and the configured key is a plain label, not key-shaped). Time passing is
-simulated by moving the queue's timestamps back, as F28's tests do with ``started_at``.
+The provider client is the one stand-in: an in-process object installed at
+``scraper.p1_client.embedding_client`` (since FA-D3C-002 the batch's provider is the P1 gateway) that counts
+every call per queued row (no network, no key). Time passing is simulated by moving the queue's timestamps
+back, as F28's tests do with ``started_at``.
 
 Spec: docs/superpowers/specs/2026-10-18-f27-leased-embedding-claims-design.md (rulings R1-R16).
 Expected values are written out from the spec, including the operation identity formula (R4), not
@@ -23,7 +24,6 @@ import json
 import logging
 import re
 import signal
-import sys
 import threading
 import types
 import uuid
@@ -31,7 +31,6 @@ import uuid
 from test_f20_trust_policy_db import _threaded, assert_migrated, execute, fetch, run
 from test_f28_source_outcomes_e2e import fire, jobs, no_sleep
 
-PROVIDER_LABEL = "f27-local-stand-in"  # what settings.OPENAI_API_KEY holds here; never sent anywhere
 MODEL = "text-embedding-3-small"
 DIMENSIONS = 1536
 TOKENS = 7
@@ -56,9 +55,10 @@ def vector_for(text):
 
 
 class Provider:
-    """The OpenAI package as an in-process module. ``calls`` holds (row marker, model, thread id) for
-    every request; ``fail`` lists markers whose requests raise; ``latency`` is a real wait inside each
-    request; ``during_call`` is awaited inside a request (to change a record while the call is out)."""
+    """The provider client as an in-process stand-in, installed where the batch gets it: since FA-D3C-002 that is
+    ``scraper.p1_client.embedding_client`` (the P1 gateway), no longer the OpenAI package. ``calls`` holds (row marker,
+    model, thread id) for every request; ``fail`` lists markers whose requests raise; ``latency`` is a real wait inside
+    each request; ``during_call`` is awaited inside a request (to change a record while the call is out)."""
 
     def __init__(self):
         self.calls = []
@@ -68,16 +68,15 @@ class Provider:
         self._lock = threading.Lock()
 
     def install(self, monkeypatch):
-        from scraper import config
+        from scraper import p1_client
 
         provider = self
-        module = types.ModuleType("openai")
 
         class F27ProviderOutage(Exception):
             pass
 
         class _Embeddings:
-            async def create(self, model, input):
+            async def create(self, model, input, dimensions, operation_id):
                 marker = marker_of(input)
                 with provider._lock:
                     provider.calls.append((marker, model, threading.get_ident()))
@@ -92,13 +91,8 @@ class Provider:
                     usage=types.SimpleNamespace(prompt_tokens=TOKENS, total_tokens=TOKENS),
                 )
 
-        class AsyncOpenAI:
-            def __init__(self, api_key):
-                self.embeddings = _Embeddings()
-
-        module.AsyncOpenAI = AsyncOpenAI
-        monkeypatch.setitem(sys.modules, "openai", module)
-        monkeypatch.setattr(config.settings, "OPENAI_API_KEY", PROVIDER_LABEL)
+        client = types.SimpleNamespace(embeddings=_Embeddings())
+        monkeypatch.setattr(p1_client, "embedding_client", lambda: client)
         return self
 
     def per_row(self):

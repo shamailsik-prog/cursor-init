@@ -211,6 +211,69 @@ def test_failover_names_no_browser_exception():
 
 
 # ---------------------------------------------------------------------------------------------
+# FA-D3C-002
+# ---------------------------------------------------------------------------------------------
+def test_no_requirements_file_installs_a_provider_sdk():
+    found = []
+    for path in requirement_files():
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        for name in sorted(parse_requirements(path.read_text(encoding="utf-8"), rel) & PROVIDER_DISTRIBUTIONS):
+            found.append(f"{rel}: {name}")
+    assert found == [], f"FA-D3C-002: a provider SDK in a corpus requirements file: {found}"
+
+
+def test_no_runtime_module_imports_a_provider_sdk():
+    found = [
+        f"{rel}:{line}: {module}"
+        for rel, tree in parsed_runtime()
+        for line, module in imported_modules(tree)
+        if under(module, PROVIDER_MODULES)
+    ]
+    assert found == [], f"FA-D3C-002: a runtime module imports a provider SDK (P1 is the only path): {found}"
+
+
+def test_no_runtime_module_names_a_provider_host():
+    found = [
+        f"{rel}:{line}: {host}"
+        for rel, tree in parsed_runtime()
+        for line, value in string_constants(tree)
+        for host in PROVIDER_HOSTS
+        if host in value.lower()
+    ]
+    assert found == [], f"FA-D3C-002: a provider API host in corpus runtime source: {found}"
+
+
+def test_settings_carry_no_provider_key():
+    found = [name for name in settings_fields() if PROVIDER_KEY_NAME.search(name)]
+    assert found == [], f"FA-D3C-002: a provider key setting in scraper.config.Settings: {found}"
+
+
+@pytest.mark.parametrize("rel", DEPLOY_SURFACES)
+def test_deploy_surface_hands_no_provider_key(rel):
+    path = PROJECT_ROOT / rel
+    assert path.is_file(), f"{rel} is gone: update DEPLOY_SURFACES"
+    found = [
+        f"{rel}:{n}: {m.group(0)}"
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for m in PROVIDER_KEY_NAME.finditer(line)
+    ]
+    assert found == [], f"FA-D3C-002: a corpus deploy surface names a provider key: {found}"
+
+
+def test_no_registered_fetch_policy_admits_a_provider_host():
+    """F25's registry is the only way out of the corpus; no source policy may reach a provider."""
+    from scraper.net import fetch_policy
+
+    found = [
+        f"{name}: {host}"
+        for name, policy in fetch_policy.SOURCE_POLICIES.items()
+        for host in PROVIDER_HOSTS
+        if policy.host_allowed(host)
+    ]
+    assert found == [], f"FA-D3C-002: an F25 source policy admits a provider host: {found}"
+
+
+# ---------------------------------------------------------------------------------------------
 # Positive controls: each reader sees the form it guards against, so the guard cannot rot into a pass.
 # ---------------------------------------------------------------------------------------------
 def test_readers_see_what_they_guard():
