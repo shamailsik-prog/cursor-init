@@ -46,14 +46,10 @@ describe("F32 deploy preflight (FA-F32-001)", () => {
   })
 
   it("rejects when functions/.env.<projectId> is missing", () => {
-    const canonical = path.join(repoRoot, "functions", `.env.${STAGING_PROJECT_ID}`)
-    const had = fs.existsSync(canonical)
-    const backup = had ? fs.readFileSync(canonical, "utf8") : null
-    if (had) fs.unlinkSync(canonical)
-    const result = runPreflight(["--profile", "staging", "--project-id", STAGING_PROJECT_ID])
+    const missingProject = "f32-no-such-deploy-env"
+    const result = runPreflight(["--profile", "staging", "--project-id", missingProject])
     expect(result.status).not.toBe(0)
-    expect(result.out).toMatch(new RegExp(`functions/\\.env\\.${STAGING_PROJECT_ID}`))
-    if (backup !== null) fs.writeFileSync(canonical, backup)
+    expect(result.out).toMatch(new RegExp(`functions/\\.env\\.${missingProject}`))
   })
 
   it("rejects an env file whose effective values are wrong (dotenv last-wins)", () => {
