@@ -35,15 +35,25 @@ const LOW_CLEARANCE = "public"
 const EXPIRED_SEED_ID = "seed"
 
 type Caller = { uid: string; claims: Record<string, unknown> }
-const caller = (uid: string, firmId: string, role: string, clearanceLevel: string = MAX): Caller => ({
+const caller = (
+  uid: string,
+  firmId: string,
+  role: string,
+  clearanceLevel: string = MAX,
+  extra: Record<string, unknown> = {},
+): Caller => ({
   uid,
-  claims: { firmId, role, clearanceLevel },
+  claims: { firmId, role, clearanceLevel, ...extra },
 })
 
 const PARTNER = caller("f32-ttl-partner", FIRM, "partner")
 const OTHER_FIRM_PARTNER = caller("f32-ttl-other-partner", OTHER_FIRM, "partner")
 const ASSOCIATE = caller("f32-ttl-assoc", FIRM, "associate")
 const LOW_CLEARANCE_PARTNER = caller("f32-ttl-low-partner", FIRM, "partner", LOW_CLEARANCE)
+const PLATFORM_ADMIN_PARTNER = caller("f32-ttl-platform-admin", FIRM, "partner", MAX, { platformAdmin: true })
+const WHITELIST_UID = "f32-ttl-whitelist-uid"
+const WHITELISTED_PARTNER = caller(WHITELIST_UID, FIRM, "partner")
+const VICTIM_DOC_ID = "victim"
 
 type ActorKey =
   | "unauthenticated"
@@ -172,4 +182,28 @@ describe("F32 TTL collections are server-only (rules emulator)", () => {
       }
     })
   }
+
+  describe("mutant bypass killers (R116-001)", () => {
+    for (const name of TTL_COLLECTIONS) {
+      it(`denies platformAdmin partner read of doc ${VICTIM_DOC_ID} on ${name}`, async () => {
+        await seedDoc(name, VICTIM_DOC_ID, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
+        const db = testEnv.authenticatedContext(PLATFORM_ADMIN_PARTNER.uid, PLATFORM_ADMIN_PARTNER.claims).firestore()
+        await assertFails(getDoc(doc(db, name, VICTIM_DOC_ID)))
+        await assertFails(getDocs(query(collection(db, name), limit(1))))
+      })
+
+      it(`denies whitelisted uid read of doc ${VICTIM_DOC_ID} on ${name}`, async () => {
+        await seedDoc(name, VICTIM_DOC_ID, { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) })
+        const db = testEnv.authenticatedContext(WHITELISTED_PARTNER.uid, WHITELISTED_PARTNER.claims).firestore()
+        await assertFails(getDoc(doc(db, name, VICTIM_DOC_ID)))
+      })
+
+      it(`denies platformAdmin create on ${name} doc ${VICTIM_DOC_ID}`, async () => {
+        const db = testEnv.authenticatedContext(PLATFORM_ADMIN_PARTNER.uid, PLATFORM_ADMIN_PARTNER.claims).firestore()
+        await assertFails(
+          setDoc(doc(db, name, VICTIM_DOC_ID), { firmId: FIRM, expiresAt: new Date(Date.now() + 86_400_000) }),
+        )
+      })
+    }
+  })
 })

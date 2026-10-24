@@ -20,4 +20,12 @@ describe("deploy manifest profile binding (F32 R5-004 / R5FU-003)", () => {
     expect(gcpProjectIdForDeployProfile("__proto__")).toBeUndefined()
     expect(gcpProjectIdForDeployProfile("constructor")).toBeUndefined()
   })
+
+  it("keeps the profile map frozen at runtime", () => {
+    expect(Object.isFrozen(DEPLOY_PROFILE_GCP_PROJECT_ID)).toBe(true)
+    expect(() => {
+      ;(DEPLOY_PROFILE_GCP_PROJECT_ID as Record<string, string>).staging = "mutated"
+    }).toThrow()
+    expect(DEPLOY_PROFILE_GCP_PROJECT_ID.staging).toBe("demo-sikander")
+  })
 })
