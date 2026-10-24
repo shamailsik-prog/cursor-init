@@ -233,7 +233,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001: template analytics are 
     }
   })
 
-  it("a compose refuses to write over a row at the firm's own id that is stamped with another firm", async () => {
+  it("a compose and a search refuse (409) to write over a row at the firm's own id that is stamped with another firm", async () => {
     const T = template(4)
     const [a, b] = [await provisionActor(), await provisionActor()]
     const ref = adminDb().collection(COLLECTION).doc(`template:${a.firmId}:${T}`)
@@ -253,10 +253,12 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001: template analytics are 
     }
     await ref.set(foreign)
     const res = await compose(a, T)
-    expect(res.status, JSON.stringify(res.body)).toBeGreaterThanOrEqual(400)
+    expect(res.status, JSON.stringify(res.body)).toBe(409)
+    expect((res.body as { error?: { code?: string } }).error?.code).toBe("template_analytics_refused")
     expect((await ref.get()).data()).toEqual(foreign)
     const searched = await searchTemplates(a, T)
-    expect(searched.status, JSON.stringify(searched.body)).toBeGreaterThanOrEqual(400)
+    expect(searched.status, JSON.stringify(searched.body)).toBe(409)
+    expect((searched.body as { error?: { code?: string } }).error?.code).toBe("template_analytics_refused")
     expect((await ref.get()).data()).toEqual(foreign)
   })
 })

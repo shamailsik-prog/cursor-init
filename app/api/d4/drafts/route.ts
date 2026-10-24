@@ -23,9 +23,7 @@ import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberS
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import {
   buildDraftTemplateAnalyticsRow,
-  draftTemplateAnalyticsId,
-  withTemplateComposed,
-  withTemplateSearchSeen,
+  DraftTemplateAnalyticsRefusedError,
 } from "@/platform/persistence/draftTemplateAnalytics"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
@@ -116,6 +114,14 @@ function buildPreflightInput(
   }
 }
 
+/**
+ * FA-D4-001: the caller firm's own analytics row is stamped with another firm or is not canonical. Nothing was written
+ * to it; the conflict is reported, never resolved by overwriting (a compose's draft is already saved by then).
+ */
+function templateAnalyticsRefused(err: DraftTemplateAnalyticsRefusedError): Response {
+  return NextResponse.json({ error: "template analytics row refused", code: err.code, reason: err.reason }, { status: 409 })
+}
+
 export async function GET(request: Request) {
   return withSession(request, handleGetAuthorised)
 }
@@ -182,10 +188,21 @@ async function handleGet(request: Request) {
       cursor + sliced.length < ranked.length ? String(cursor + sliced.length) : null
     if (query.length > 0) {
       const now = Date.now()
-      for (const entry of sliced) {
-        const next = withTemplateSearchSeen(entry.row, query, { now })
-        await repos.draftTemplateAnalytics.upsert(next)
-        analytics.set(next.templateId, next)
+      // FA-D4-001: each search hit is counted on the caller's own row, in one transaction that re-reads it (never a
+      // blind write of the row listed above, which a concurrent request may have changed).
+      try {
+        for (const entry of sliced) {
+          const next = await repos.draftTemplateAnalytics.record(
+            refreshedActor.firmId,
+            entry.template,
+            { kind: "search", query },
+            { now }
+          )
+          analytics.set(next.templateId, next)
+        }
+      } catch (err) {
+        if (err instanceof DraftTemplateAnalyticsRefusedError) return templateAnalyticsRefused(err)
+        throw err
       }
     }
     return NextResponse.json({
@@ -364,18 +381,18 @@ async function handlePost(request: Request, session: HandlerSession | null) {
       })
       await repos.drafts.create(draft)
       const template = listTemplateCatalog("").find((item) => item.id === draft.templateId)
-      const analyticsId = draftTemplateAnalyticsId(draft.templateId)
-      const existingAnalytics = await repos.draftTemplateAnalytics.get(analyticsId, actor.firmId)
-      const baseAnalytics =
-        existingAnalytics ??
-        buildDraftTemplateAnalyticsRow(actor.firmId, {
+      // FA-D4-001: the compose is counted on the caller firm's own row (`template:{firmId}:{templateId}`), in one
+      // transaction that refuses a row stamped with another firm.
+      const nextAnalytics = await repos.draftTemplateAnalytics.record(
+        actor.firmId,
+        {
           id: draft.templateId,
           name: template?.name ?? draft.templateId,
           posture: template?.posture ?? "unknown",
           category: template?.category ?? "unknown",
-        })
-      const nextAnalytics = withTemplateComposed(baseAnalytics)
-      await repos.draftTemplateAnalytics.upsert(nextAnalytics)
+        },
+        { kind: "compose" }
+      )
       store.draftTemplateAnalytics.set(nextAnalytics.id, nextAnalytics)
       const payload = {
         action: "compose",
@@ -388,6 +405,7 @@ async function handlePost(request: Request, session: HandlerSession | null) {
 
     return NextResponse.json({ error: "unknown action" }, { status: 400 })
   } catch (err) {
+    if (err instanceof DraftTemplateAnalyticsRefusedError) return templateAnalyticsRefused(err)
     if (err instanceof DraftCharsetError) {
       return NextResponse.json(
         { error: err.message, code: err.code, violations: err.violations },

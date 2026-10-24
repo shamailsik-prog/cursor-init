@@ -1699,11 +1699,25 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
       ]),
     },
     draftTemplateAnalytics: {
-      upsert: vi.fn(),
+      // FA-D4-001: `record` replaced the blind `upsert`; this stand-in returns what a search of the listed row records.
+      record: vi.fn(async (firmId: string, template: { id: string; name: string; posture: string; category: string }, change: { kind: string; query?: string }) => ({
+        id: `template:${firmId}:${template.id}`,
+        firmId,
+        templateId: template.id,
+        templateName: template.name,
+        templatePosture: template.posture,
+        templateCategory: template.category,
+        composeCount: template.id === "constitutional_petition_199" ? 2 : 0,
+        templateSearchCount: (template.id === "constitutional_petition_199" ? 5 : 0) + (change.kind === "search" ? 1 : 0),
+        lastComposedAt: null,
+        lastTemplateSearchAt: 13,
+        lastTemplateSearchQuery: change.query ?? null,
+        updatedAt: 13,
+      })),
       get: vi.fn().mockResolvedValue(null),
       listByFirm: vi.fn().mockResolvedValue([
         {
-          id: "template:constitutional_petition_199",
+          id: "template:firmA:constitutional_petition_199",
           firmId: "firmA",
           templateId: "constitutional_petition_199",
           templateName: "Constitutional Petition (Art. 199)",
