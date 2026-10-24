@@ -260,6 +260,14 @@ describe("one ranking for both sources (R6): judgments with several citations", 
 })
 
 describe("FA-D5-003 R1 at the seam (spec R23, R30, R34)", () => {
+  const corpus: Corpus = {
+    embeddingModel: "text-embedding-3-small",
+    embeddingDim: "1536",
+    documents: [],
+    storedVectors: [],
+    vectors: null,
+    verdicts: (ids) => new Map(ids.map((id) => [id, "VERIFIED"])),
+  }
   const vector = (i: number) => {
     const v = new Array<number>(1536).fill(0)
     v[i] = 1

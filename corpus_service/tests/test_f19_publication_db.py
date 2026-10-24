@@ -181,7 +181,7 @@ def test_f19_vocabulary_matches_the_ddl_checks(corpus_db):
 
 
 def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
-    corpus_db.apply_annex_a()  # a fresh database with only Annex A, 001 + 003 + 004 + 005 (no migrate)
+    corpus_db.apply_annex_a()  # a fresh database with only Annex A, 001 + 003 + 004 + 005 + 006 (no migrate)
     relations = {
         r[0] for r in admin_fetch(
             corpus_db,
@@ -190,17 +190,21 @@ def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
         )
     }
     inventory = [r[0] for r in admin_fetch(corpus_db, "SELECT CAST(r AS text) FROM corpus_contract_relations() AS r")]
-    # 003's 29 relations, 004's four authority read views (audit F05) and 005's two research views (audit
-    # FA-D5-003); each of 004 and 005 re-defines the function.
-    assert len(inventory) == 35 and len(set(inventory)) == 35
+    # 003's 29 relations, 004's four authority read views (audit F05), 005's two research views (audit
+    # FA-D5-003) and 006's research term index (five tables, two views; FA-D5-003 R1); each of 004, 005 and 006
+    # re-defines the function.
+    assert len(inventory) == 42 and len(set(inventory)) == 42
     assert {"v_authority_citation", "v_authority_treatment", "v_authority_section_version",
-            "v_authority_pending_adverse", "v_research_judgment", "v_research_embedding"} <= set(inventory)
+            "v_authority_pending_adverse", "v_research_judgment", "v_research_embedding", "v_research_term",
+            "v_research_pending", "research_title_term", "research_citation_term", "research_size",
+            "research_title_pending", "research_citation_pending"} <= set(inventory)
     assert relations == set(inventory)
 
 
 # PR 2b fix round 1 (re-audit D1): 003's corpus_contract_routines() lists every routine 001 and 003
 # define, with public_execute = whether the DDL itself leaves EXECUTE to PUBLIC (only 001's trigger
-# function keeps PostgreSQL's default). Provisioning resets EXECUTE drift on exactly these.
+# function keeps PostgreSQL's default). Provisioning resets EXECUTE drift on exactly these. 006 (FA-D5-003 R1)
+# re-defines it with its trigger function, which nobody but its owner may execute.
 ANNEX_A_ROUTINES = {
     "enforce_monotonic_classification()": True,
     "declassify(uuid,text,text,text)": False,
@@ -214,6 +218,7 @@ ANNEX_A_ROUTINES = {
     "corpus_publication_item_guard()": False,
     "corpus_publication_begin(text,text,text,text)": False,
     "corpus_publication_finish(uuid,jsonb)": False,
+    "research_terms_mark_pending()": False,
 }
 
 
@@ -969,7 +974,7 @@ def test_f19_migrate_as_owner_succeeds_after_annex_a_and_leaves_it_with_the_supe
         "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
         "WHERE c.oid IN (SELECT r FROM corpus_contract_relations() AS r)",
     )
-    assert len(owners) == 35  # 003's 29, 004's four authority read views (F05) and 005's two research views (FA-D5-003)
+    assert len(owners) == 42  # 003's 29, 004's four authority views (F05), 005's two research views (FA-D5-003), 006's seven (R1)
     assert {row[1] for row in owners} == {admin_user}
     app_tables = admin_fetch(corpus_db, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'scraper_staging'")
     assert app_tables == [(owner,)]

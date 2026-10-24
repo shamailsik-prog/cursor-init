@@ -208,8 +208,8 @@ writer_membership() {
 }
 expect_out "re-running 20-provision-roles.sh on the running stack succeeds (prints ready)" 'ready in legal_scraper' provision
 annex_a_checks "after re-provisioning"
-# The grants 001/003/004/005 make to corpus_writer, corpus_reader, corpus_declassify, corpus_authority_reader (004,
-# #51 R1 D-3) and corpus_research_reader (005, FA-D5-003), as initialised (object:grantee:privilege:grantor). Every
+# The grants 001/003/004/005/006 make to corpus_writer, corpus_reader, corpus_declassify, corpus_authority_reader (004,
+# #51 R1 D-3) and corpus_research_reader (005, FA-D5-003; 006, its R1 term index), as initialised (object:grantee:privilege:grantor). Every
 # reset below (REVOKE ... CASCADE included, #50 round 2) must leave exactly these.
 ddl_role_grants() {
   as_superuser_local "select coalesce(string_agg(x, ',' order by x collate \"C\"), 'none') from (
@@ -228,7 +228,8 @@ for want in 'corpus_publication_begin\(text,text,text,text\):corpus_writer:EXECU
             'declassify\(uuid,text,text,text\):corpus_declassify:EXECUTE:' 'v_judgment:corpus_reader:SELECT:' \
             'judgment:corpus_writer:INSERT:' 'v_authority_citation:corpus_authority_reader:SELECT:' \
             'corpus_metadata:corpus_authority_reader:SELECT:' 'v_research_judgment:corpus_research_reader:SELECT:' \
-            'v_authority_citation:corpus_research_reader:SELECT:'; do
+            'v_authority_citation:corpus_research_reader:SELECT:' 'v_research_term:corpus_research_reader:SELECT:' \
+            'research_title_term:corpus_writer:INSERT:' 'research_size:corpus_writer:INSERT:'; do
   expect_out "control: the DDL's own grants are read ($want)" "$want" printf '%s' "$DDL_ROLE_GRANTS"
 done
 # FA-DATA-003 (005): corpus_reader holds nothing on the unfiltered provenance view or the embeddings table.

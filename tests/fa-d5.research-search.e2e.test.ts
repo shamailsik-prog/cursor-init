@@ -301,20 +301,24 @@ describe("hostile queries get a clean 400 (e)", () => {
     expect(res.text).not.toContain("zqxmarker")
   })
 
-  it("a corpus whose live model changed while embeddings exist refuses the search (wrong embedding model): 400", async () => {
+  // FA-D5-003-R1-002 (spec R30): a corpus caught mid-migration is the corpus's state, not the caller's error. The search
+  // still refuses (G1-10), as 503 corpus_unavailable (reason `inconsistent`), never stored, so the same key retries. Was
+  // a 400 carrying "search refuses: ..." (the in-memory searchCorpus still throws that, gate_g1 G1-10).
+  it("a corpus whose live model changed while embeddings exist refuses the search (wrong embedding model): 503 corpus_unavailable", async () => {
     // corpus_metadata lives in the corpus database (Annex A) and is changed there, out of band (G1-10).
     getRuntimeStore().corpusMetadata.embedding_model = "text-embedding-3-large"
     const res = await research("associate_a", "bail")
-    expect(res.status).toBe(400)
-    expect(errorOf(res)).toBe("search refuses: embedding_model mismatch")
+    expect(res.status).toBe(503)
+    expect((res.body as { code?: string }).code).toBe("corpus_unavailable")
+    expect(errorOf(res)).toBe("research corpus unavailable")
     expect(hitsOf(res)).toEqual([])
   })
 
-  it("a stored vector of the wrong dimension refuses the search: 400", async () => {
+  it("a stored vector of the wrong dimension refuses the search: 503 corpus_unavailable (R1-002)", async () => {
     getRuntimeStore().embeddings.push({ entityId: "j-2099-bail-03", model: LIVE_MODEL, vector: [0.1, 0.2, 0.3] })
     const res = await research("associate_a", "bail")
-    expect(res.status).toBe(400)
-    expect(errorOf(res)).toBe("search refuses: embedding_dim mismatch")
+    expect(res.status).toBe(503)
+    expect((res.body as { code?: string }).code).toBe("corpus_unavailable")
   })
 })
 

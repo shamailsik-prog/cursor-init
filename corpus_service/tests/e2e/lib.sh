@@ -194,7 +194,7 @@ annex_a_checks() {
   local p=$1 roles="(values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)"
   expect_out "$p: server is PostgreSQL 16 (pgvector/pgvector:pg16)" '^16$' \
     as_superuser_local "select current_setting('server_version_num')::int / 10000"
-  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 35 relations, 004's four and 005's two views included)" '^35$' \
+  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 42 relations, 004's four, 005's two and 006's seven included)" '^42$' \
     as_superuser_local "select count(*) from public.corpus_contract_relations()"
   # Audit F05 (004), independent of the inventory function: the authority views exist, belong to the bootstrap
   # superuser, and neither application role, corpus_clients nor PUBLIC holds any privilege on them.

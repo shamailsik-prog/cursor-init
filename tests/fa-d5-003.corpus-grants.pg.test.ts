@@ -9,7 +9,7 @@
  * The corpus is published by the F19 CLI as a corpus_writer member; states a publication cannot produce are forced by the
  * superuser (F05 spec ruling 2). Spec: docs/superpowers/specs/2026-10-24-fa-d5-003-research-corpus-reader-design.md.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import pg from "pg"
@@ -56,7 +56,7 @@ type ReaderModule = {
     opts?: {
       maxPending?: number
       maxCited?: number
-      maxSignatures?: number
+      maxGroups?: number
       maxSemantic?: number
       statementTimeoutMs?: number
       sessionOptions?: string
@@ -270,7 +270,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         v_research_embedding: "judgment_id:uuid,model:text,embedding:vector",
         v_research_judgment: "judgment_id:uuid,case_title:text,bench_type:text",
         v_research_pending: "judgment_id:uuid",
-        v_research_term: "judgment_id:uuid,term:text",
+        v_research_term: "judgment_id:uuid,term:text,size:int4",
       })
       for (const view of ["v_research_judgment", "v_research_embedding", "v_research_term", "v_research_pending"]) {
         const p = await db.admin.query(
@@ -297,13 +297,13 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(readable.rows[0].names).toBe(AUTHORITY_READABLE.join(","))
     })
 
-    it("the inventory lists the research views and 006's term index (41 relations, 13 routines), so provisioning keeps them with the superuser", async () => {
+    it("the inventory lists the research views and 006's term index (42 relations, 13 routines), so provisioning keeps them with the superuser", async () => {
       const inv = await db.admin.query("SELECT count(*)::int AS n, bool_and(r::text <> '') AS ok, array_agg(r::text ORDER BY r::text) AS names FROM corpus_contract_relations() r")
-      expect(inv.rows[0].n).toBe(41)
+      expect(inv.rows[0].n).toBe(42)
       expect(inv.rows[0].names).toEqual(
         expect.arrayContaining([
           "v_research_judgment", "v_research_embedding", "v_research_term", "v_research_pending", "research_title_term",
-          "research_citation_term", "research_title_pending", "research_citation_pending",
+          "research_citation_term", "research_size", "research_title_pending", "research_citation_pending",
         ])
       )
       const routines = await db.admin.query("SELECT count(*)::int AS n, array_agg(routine::text) AS names FROM corpus_contract_routines()")
@@ -322,12 +322,13 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
                 has_any_column_privilege('corpus_reader', c.oid, 'SELECT') AS corpus_reader,
                 has_any_column_privilege('corpus_authority_reader', c.oid, 'SELECT') AS gate_reader,
                 has_any_column_privilege('public', c.oid, 'SELECT') AS everyone
-           FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'research\\_%' ORDER BY 1`
+           FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname LIKE 'research\\_%' ORDER BY 1`
       )
       const deny = { research: false, corpus_reader: false, gate_reader: false, everyone: false, w_update: false }
       expect(p.rows).toEqual([
         { relname: "research_citation_pending", w_select: true, w_insert: false, w_delete: true, ...deny },
         { relname: "research_citation_term", w_select: true, w_insert: true, w_delete: true, ...deny },
+        { relname: "research_size", w_select: true, w_insert: true, w_delete: true, ...deny },
         { relname: "research_title_pending", w_select: true, w_insert: false, w_delete: true, ...deny },
         { relname: "research_title_term", w_select: true, w_insert: true, w_delete: true, ...deny },
       ])
@@ -335,6 +336,33 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
   })
 
   describe("the research views show published rows only", () => {
+    it("006's views copy 004's visibility rule verbatim, for judgments and for citations (spec R20)", () => {
+      const ddl = (file: string) => readFileSync(path.join(process.cwd(), "postgres", "ddl", file), "utf8").replace(/\s+/g, " ")
+      const v004 = ddl("004_authority_read_views.sql")
+      const v006 = ddl("006_research_terms.sql")
+      // 004's citation view states the citation's rule, then its judgment's, and ends.
+      const view = v004.slice(v004.indexOf("CREATE OR REPLACE VIEW public.v_authority_citation"))
+      const jAt = view.indexOf("AND j.review_status = 'promoted'")
+      const cRule = view.slice(view.indexOf("c.review_status = 'promoted'"), jAt).trim()
+      const jRule = view.slice(jAt + "AND ".length, view.indexOf(";"))
+      const starts = (needle: string) => {
+        const out: number[] = []
+        for (let i = v006.indexOf(needle); i >= 0; i = v006.indexOf(needle, i + 1)) out.push(i)
+        return out
+      }
+      const copies = (rule: string, head: string) => starts(head).map((i) => v006.slice(i, i + rule.length) === rule)
+      const jHead = "j.review_status = 'promoted'"
+      const cHead = "c.review_status = 'promoted' AND EXISTS (SELECT 1 FROM public.corpus_publication pub WHERE pub.id = c.publication_id"
+      const c2Rule = cRule.replace(/\bc\./g, "c2.")
+      const c2Head = cHead.replace(/\bc\./g, "c2.")
+      expect(jRule.startsWith(jHead) && cRule.startsWith(cHead)).toBe(true)
+      // v_research_term (title and citation branches) and v_research_pending (both branches): four judgment rules, two
+      // citation rules; the size of a judgment with a hidden citation counts its visible citations by the same rule.
+      expect(copies(jRule, jHead)).toEqual([true, true, true, true])
+      expect(copies(cRule, cHead)).toEqual([true, true])
+      expect(copies(c2Rule, c2Head)).toEqual([true, true])
+    })
+
     it("v_research_judgment lists exactly the published, public, benched, provenance-complete judgments", async () => {
       const shown = await asLogin(db.researchUrl, async (c) =>
         (await c.query("SELECT judgment_id::text AS id, case_title, bench_type FROM v_research_judgment")).rows
@@ -436,10 +464,11 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         titleTerms: await sqlstate(c.query("SELECT count(*) FROM research_title_term")),
         citationTerms: await sqlstate(c.query("SELECT count(*) FROM research_citation_term")),
         pending: await sqlstate(c.query("SELECT count(*) FROM research_title_pending")),
+        sizes: await sqlstate(c.query("SELECT count(*) FROM research_size")),
       }))
       expect(states).toEqual({
         judgment: "42501", embeddings: "42501", provenance: "42501", v_judgment: "42501", sections: "42501", write: "42501",
-        titleTerms: "42501", citationTerms: "42501", pending: "42501",
+        titleTerms: "42501", citationTerms: "42501", pending: "42501", sizes: "42501",
       })
     })
   })
@@ -662,8 +691,8 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         ["pending at the bound", { maxPending: 2 }, { text: "bail" }, "answered"],
         ["R4a candidates over the bound", { maxCited: 0 }, { text: "PLD 2099 SC 3202" }, "row_cap"],
         ["R4a candidates at the bound", { maxCited: 1 }, { text: "PLD 2099 SC 3202" }, "answered"],
-        ["signature groups over the bound", { maxSignatures: 1 }, { text: "bail 497 crpc" }, "row_cap"],
-        ["signature groups at the bound, another query", { maxSignatures: 1 }, { text: "khula" }, "answered"],
+        ["signature groups over the bound", { maxGroups: 1 }, { text: "bail 497 crpc" }, "row_cap"],
+        ["signature groups at the bound, another query", { maxGroups: 1 }, { text: "khula" }, "answered"],
         ["semantic candidates over the bound", { maxSemantic: 2 }, { embedding: hot(0) }, "row_cap"],
         ["semantic candidates within the bound", { maxSemantic: 100 }, { embedding: hot(0) }, "answered"],
       ]

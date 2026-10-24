@@ -7,6 +7,7 @@ corpus publication (postgres/ddl/003_corpus_publication.sql):
     corpus_publication_begin  -> advisory lock, audit row, transaction-scoped grant (idempotent per
                                  batch_key and content hash; a reused key with other content is refused)
     one SAVEPOINT per item    -> plan, write the contract rows (publication_id set), write the audit
+    research term index       -> the terms of the judgments and citations it wrote (FA-D5-003 R1, research_index.py)
     corpus_publication_finish -> counts recomputed and checked, grant removed, corpus_metadata refreshed
 
 Decisions (spec §5 and the plan's D-rulings):
@@ -51,6 +52,7 @@ from scraper.publication.batch import (
     entity_sha256,
 )
 from scraper.publication.citations import CitationError, CitationParts, build_canonical, is_canonical, parse_parts, ts_court
+from scraper.publication.research_index import index_research_terms, research_index_present
 from scraper.trust import publication_decision
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,8 @@ logger = logging.getLogger(__name__)
 
 class PublicationError(Exception):
     """A publication that cannot proceed. ``code`` is one of: transaction_required, superuser_session,
-    not_corpus_writer, batch_key_reused, publication_state. The caller must roll back."""
+    not_corpus_writer, batch_key_reused, publication_state, and for the term index research_index_missing (006 not
+    applied). The caller must roll back."""
 
     def __init__(self, code: str):
         super().__init__(code)
@@ -759,6 +762,11 @@ async def publish_batch(conn: AsyncConnection, batch: PublicationBatch, actor_id
             await run.item(item.item_key, "statute_section", lambda item=item: _publish_history(run, item))
         else:
             await run.item(item.item_key, "treatment", lambda item=item: _publish_treatment(run, item))
+
+    # FA-D5-003 R1 (spec R21): the research term index of what this publication wrote, in its own transaction. A text
+    # the fold cannot reproduce exactly stays pending; the application folds that judgment itself.
+    if run.judgment_by_item and await research_index_present(conn):
+        await index_research_terms(conn, judgment_ids=run.judgment_by_item.values())
 
     tally = Counter(o.decision for o in run.outcomes)
     counts = {"items": len({o.item_key for o in run.outcomes}), **{k: tally.get(k, 0) for k in COUNT_KEYS[1:]}}

@@ -40,6 +40,9 @@
 # v_research_* views (in the inventory, so the name guard covers v_research_% as well), and takes
 # v_source_provenance and corpus_embeddings back from corpus_reader. This script refuses to run without
 # 005's role, grants it USAGE on schema public like the other Annex A roles, and leaves its grants alone.
+# 006 (audit FA-D5-003 R1) adds the research term index: four research_% tables, two v_research_% views and one
+# trigger function, all in the inventory (the name guard covers research_% too). This script refuses to run without it.
+# corpus_writer maintains the index under 006's grants, which are left alone like the rest of the DDL's.
 # Because the runtime role can SET ROLE corpus_writer, whatever corpus_writer holds the runtime role can
 # reach: 001 creates corpus_writer with no privileged attribute and no membership, but leaves a role that
 # already exists as it is, so every run resets corpus_writer to NOSUPERUSER NOCREATEDB NOCREATEROLE
@@ -149,6 +152,11 @@ BEGIN
      OR pg_catalog.to_regclass('public.v_research_judgment') IS NULL THEN
     RAISE EXCEPTION 'Annex A 005 is not applied (no corpus_research_reader or v_research_judgment): run 15-apply-annex-a.sh first';
   END IF;
+  -- 006 creates the research term index and its two views (FA-D5-003 R1).
+  IF pg_catalog.to_regclass('public.v_research_term') IS NULL OR pg_catalog.to_regclass('public.research_title_term') IS NULL
+     OR pg_catalog.to_regclass('public.research_size') IS NULL THEN
+    RAISE EXCEPTION 'Annex A 006 is not applied (no research term index): run 15-apply-annex-a.sh first';
+  END IF;
 END
 $$;
 -- F05 plan D20: every Annex A view is in the inventory, or nothing below runs.
@@ -162,7 +170,7 @@ BEGIN
    WHERE c.relnamespace = 'public'::regnamespace
      AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
      AND c.oid NOT IN (SELECT a::oid FROM public.corpus_contract_relations() a)
-     AND (c.relname LIKE 'v\_authority\_%' OR c.relname LIKE 'v\_research\_%'
+     AND (c.relname LIKE 'v\_authority\_%' OR c.relname LIKE 'v\_research\_%' OR c.relname LIKE 'research\_%'
           OR (c.relkind IN ('v', 'm') AND EXISTS (
                 SELECT FROM pg_rewrite rw
                   JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = rw.oid
@@ -170,7 +178,7 @@ BEGIN
                    AND d.refclassid = 'pg_class'::regclass AND d.refobjid <> c.oid
                    AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a))));
   IF missing IS NOT NULL THEN
-    RAISE EXCEPTION 'an Annex A view is missing from corpus_contract_relations(): % (re-apply 004 and 005 with 15-apply-annex-a.sh)', missing;
+    RAISE EXCEPTION 'an Annex A view is missing from corpus_contract_relations(): % (re-apply 004, 005 and 006 with 15-apply-annex-a.sh)', missing;
   END IF;
 END
 $$;

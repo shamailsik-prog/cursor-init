@@ -219,4 +219,45 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003 R1-001: Postgres research equals the 
     expect(got.items).toHaveLength(50)
     expect(got).toEqual(want)
   }, SLOW)
+
+  it("sizes stay exact: a promoted citation that is not visible, and citation writes after the index ran (spec R20, R24)", async () => {
+    const a = db.admin
+    const query = { text: "bail", k: 50 }
+    const top = (JSON.parse(await outcome(searchResearch(truthSource(truth), query))) as { items: Array<{ entityId: string }> }).items.map((i) => i.entityId)
+    expect(top).toHaveLength(50)
+    const pub = (await a.query("SELECT id::text AS id FROM corpus_publication WHERE finished_at IS NOT NULL ORDER BY seq DESC LIMIT 1")).rows[0].id as string
+    const broken = (
+      await a.query(
+        `INSERT INTO source_provenance (source_name, source_url, fetched_at, content_hash, extraction_method)
+         VALUES ('fa-d5-003-parity', 'https://fa-d5-003.example.invalid/broken', '2099-06-07T08:09:10Z', '', 'manual') RETURNING id::text AS id`
+      )
+    ).rows[0].id as string
+    // The 20 smallest bail judgments get a promoted citation research cannot see: 10 with incomplete provenance, 10
+    // with none. The index counts promoted citations, so their stored sizes grow by the new terms; their visible
+    // documents do not, so they must keep their places.
+    for (let i = 0; i < 20; i += 1) {
+      await a.query(
+        `INSERT INTO citation (judgment_id, citation_text, source_id, review_status, publication_id) VALUES ($1, $2, $3, 'promoted', $4)`,
+        [top[i], `2099 ZQH ${5000 + i}`, i < 10 ? broken : null, pub]
+      )
+    }
+    await db.indexTerms()
+    const stored = (await a.query("SELECT count(*)::int AS n FROM research_size s JOIN citation c ON c.judgment_id = s.judgment_id WHERE c.citation_text LIKE '2099 ZQH %'")).rows[0].n
+    expect(stored).toBe(20)
+    truth = await loadTruthCorpus(db.admin, true)
+    const hidden: Query[] = [query, { text: "bail appeal", k: 50 }, { text: "zqh" }, { text: "2099 ZQH 5003" }, { text: "bail 2099", k: 50 }]
+    expect((await compare(hidden, "hidden-citation")).diffs).toEqual([])
+    // Citation writes after the index ran: a deleted citation, a citation moved to another judgment and a quarantined
+    // one each mark their judgments pending, which research then folds itself.
+    const visible = (await a.query("SELECT citation_text, judgment_id::text AS j FROM v_authority_citation WHERE judgment_id = ANY($1::uuid[]) ORDER BY 1", [top.slice(20, 26)])).rows as Array<{ citation_text: string; j: string }>
+    expect(visible.length).toBeGreaterThanOrEqual(3)
+    await a.query("DELETE FROM citation WHERE citation_text = $1", [visible[0].citation_text])
+    await a.query("UPDATE citation SET judgment_id = $2 WHERE citation_text = $1", [visible[1].citation_text, top[30]])
+    await a.query("UPDATE citation SET review_status = 'quarantined' WHERE citation_text = $1", [visible[2].citation_text])
+    const pendingNow = (await a.query("SELECT count(*)::int AS n FROM research_title_pending")).rows[0].n as number
+    expect(pendingNow).toBeGreaterThanOrEqual(3)
+    truth = await loadTruthCorpus(db.admin, true)
+    const written: Query[] = [query, { text: "bail appeal", k: 50 }, { text: visible[1].citation_text }, { text: visible[0].citation_text }]
+    expect((await compare(written, "citation-writes")).diffs).toEqual([])
+  }, SLOW)
 })

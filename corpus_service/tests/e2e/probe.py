@@ -191,8 +191,9 @@ async def db_migrate():
 
 
 # ---- audit F19, PR 2b: the Annex A corpus contract in the compose stack ---------------------------
-# corpus_contract_relations() as 005 defines it (003's 29 relations, the four authority read views of audit
-# F05 and the two research views of audit FA-D5-003). Neither application role may execute that function
+# corpus_contract_relations() as 006 defines it (003's 29 relations, the four authority read views of audit
+# F05, the two research views of audit FA-D5-003 and the research term index of its R1 follow-up: five tables, two
+# views). Neither application role may execute that function
 # (EXECUTE is revoked from PUBLIC), so the probe carries the list; store_security_e2e.sh checks the same
 # properties against the function itself, as the superuser, and the v_authority_* views by name as well.
 ANNEX_A_RELATIONS = (
@@ -204,6 +205,8 @@ ANNEX_A_RELATIONS = (
     "corpus_publication", "corpus_publication_item", "corpus_publication_grant",
     "v_authority_citation", "v_authority_treatment", "v_authority_section_version", "v_authority_pending_adverse",
     "v_research_judgment", "v_research_embedding",
+    "research_title_term", "research_citation_term", "research_size", "research_title_pending", "research_citation_pending",
+    "v_research_term", "v_research_pending",
 )
 ANY_TABLE_PRIVILEGE = "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
 ANY_COLUMN_PRIVILEGE = "SELECT,INSERT,UPDATE,REFERENCES"

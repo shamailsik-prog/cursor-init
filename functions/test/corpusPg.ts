@@ -26,6 +26,8 @@ export const ANNEX_A_DDL: readonly string[] = [
   "003_corpus_publication.sql",
   "004_authority_read_views.sql",
   "005_research_reader.sql",
+  // FA-D5-003 R1: the research term index (it re-defines 005's inventory; the gate reader's grants are unchanged).
+  "006_research_terms.sql",
 ]
 
 export const REPO_ROOT = path.resolve(__dirname, "..", "..")

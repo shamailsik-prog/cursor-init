@@ -45,6 +45,7 @@ ANNEX_A_DDL = (
     "003_corpus_publication.sql",
     "004_authority_read_views.sql",
     "005_research_reader.sql",
+    "006_research_terms.sql",
 )
 # The application's own (ORM) tables: the runtime role's DML grant covers exactly these, never Annex A
 # (mirrors PR 2b's provisioning, where the migration role's default privileges grant it on every table
