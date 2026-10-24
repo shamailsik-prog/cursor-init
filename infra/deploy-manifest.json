@@ -2,6 +2,7 @@
   "manifestVersion": 1,
   "project": {
     "region": "asia-south1",
+    "gcpProjectId": "demo-sikander",
     "database": {
       "location": "asia-south1"
     }
@@ -218,6 +219,7 @@
       "function": "jobWorker",
       "maxConcurrentDispatches": 10,
       "maxDispatchesPerSecond": 5,
+      "retryConfig": { "maxAttempts": 3, "minBackoffSeconds": 10, "maxBackoffSeconds": 60 },
       "oidcServiceAccount": "sikander-functions@"
     }
   ],
@@ -264,6 +266,7 @@
   "environments": {
     "local": { "env": {} },
     "staging": {
+      "gcpProjectId": "demo-sikander",
       "env": {
         "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
         "TRUSTED_PROXY_HOPS": "1"
@@ -286,8 +289,8 @@
   "runbook": {
     "orderedSteps": [
       "terraform apply stage 1",
-      "write functions/.env from print-env",
-      "bash scripts/deploy-preflight.sh",
+      "write functions/.env.<projectId> ingress and proxy settings",
+      "bash scripts/deploy-preflight.sh --project-id",
       "firebase deploy",
       "terraform apply stage 2",
       "set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel"

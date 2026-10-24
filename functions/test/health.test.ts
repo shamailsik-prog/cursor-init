@@ -19,7 +19,10 @@ describe("health contract report (F32 R9)", () => {
     const handler = createHealthHandler({
       env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1", FIREBASE_CONFIG: '{"locationId":"asia-south1"}' },
       deployed: true,
-      metadata: async () => ({ region: "asia-south1", serviceAccount: "sikander-functions@demo.iam.gserviceaccount.com" }),
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
+      }),
       now: () => 0,
     })
     const res = mockRes()
@@ -36,7 +39,10 @@ describe("health contract report (F32 R9)", () => {
     const handler = createHealthHandler({
       env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1", FIREBASE_CONFIG: '{"locationId":"us-central1"}' },
       deployed: true,
-      metadata: async () => ({ region: "asia-south1", serviceAccount: "sikander-functions@demo.iam.gserviceaccount.com" }),
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
+      }),
       now: () => 0,
     })
     const res = mockRes()

@@ -5,8 +5,8 @@ Operators run this before promoting Functions to staging or production. Live dep
 ## Ordered steps
 
 1. **terraform apply stage 1** — `infra/terraform`: APIs, service accounts, IAM, Firestore database import, alert policies. Use `-var project_id=PROJECT_ID -var oncall_email=you@example.com`.
-2. **write functions/.env from print-env** — `python3 ci_gates/check_deploy_contract.py --print-env production > functions/.env.PROJECT_ID`
-3. **bash scripts/deploy-preflight.sh** — builds the bundle and runs the static and bundle deploy-contract gate with `--profile` and `--env-file`.
+2. **write functions/.env.<projectId> ingress and proxy settings** — edit the deploy env file Firebase reads at deploy time (`functions/.env.PROJECT_ID`). Set `SIKANDER_INGRESS_SETTINGS` and `TRUSTED_PROXY_HOPS` to the values your environment policy requires (staging/production use GCLB ingress with at least one trusted proxy hop). Do not generate this file from the manifest; it must reflect what you will deploy.
+3. **bash scripts/deploy-preflight.sh --project-id PROJECT_ID** — builds the bundle and runs the static and bundle deploy-contract gate against `functions/.env.PROJECT_ID`.
 4. **firebase deploy** — after preflight passes.
 5. **terraform apply stage 2** — load balancer front end after the `api` Cloud Run service exists.
 6. **set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel** — the external HTTPS URL of the load balancer, never a `run.app` or `cloudfunctions.net` URL once ingress is restricted.

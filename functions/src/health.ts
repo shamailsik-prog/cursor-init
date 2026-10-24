@@ -2,7 +2,7 @@ import { onRequest } from "firebase-functions/v2/https"
 import type { Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
 import { deployContractViolations, INGRESS_SETTINGS, isDeployedRuntime, type Ingress } from "./deployConfig"
-import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT } from "./runtimeOptions"
+import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT_EMAIL } from "./runtimeOptions"
 
 export { REGION } from "./runtimeOptions"
 
@@ -21,10 +21,6 @@ const METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instanc
 const METADATA_TTL_MS = 300_000
 const METADATA_TIMEOUT_MS = 500
 const DEPLOYED_API_INGRESS: Ingress = "ALLOW_INTERNAL_AND_GCLB"
-const RUNTIME_SA_RE = new RegExp(
-  `^${RUNTIME_SERVICE_ACCOUNT.replace("@", "\\@")}[a-z0-9-]+\\.iam\\.gserviceaccount\\.com$`
-)
-
 type Metadata = { region?: string; serviceAccount?: string }
 
 let metadataCache: { at: number; value: Metadata | null } | null = null
@@ -98,7 +94,7 @@ export async function contractReport(deps?: {
   const identityVerdict: Verdict =
     meta.serviceAccount === undefined
       ? "unknown"
-      : RUNTIME_SA_RE.test(meta.serviceAccount)
+      : meta.serviceAccount === RUNTIME_SERVICE_ACCOUNT_EMAIL
         ? "ok"
         : "violated"
 

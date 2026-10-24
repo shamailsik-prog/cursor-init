@@ -75,6 +75,8 @@ def _check_manifest_shape(manifest: dict) -> list[Finding]:
         out.append(_fail("manifest", "project.region must be asia-south1"))
     if manifest.get("project", {}).get("database", {}).get("location") != "asia-south1":
         out.append(_fail("manifest", "database.location must be asia-south1"))
+    if not manifest.get("project", {}).get("gcpProjectId"):
+        out.append(_fail("manifest", "project.gcpProjectId is required"))
     return out
 
 
@@ -147,6 +149,36 @@ def _check_ttl_writers(root: Path, manifest: dict) -> list[Finding]:
     return out
 
 
+ALLOW_STMT_RE = re.compile(r"allow\s+([^;:]+?)\s*:\s*if\s+([^;{]+)", re.S)
+CLIENT_READ_ACTIONS = frozenset({"read", "get", "list"})
+
+
+def manifest_gcp_project_id(manifest: dict) -> str:
+    pid = manifest.get("project", {}).get("gcpProjectId")
+    if not isinstance(pid, str) or not pid:
+        raise SystemExit("FAIL [manifest] project.gcpProjectId is required")
+    return pid
+
+
+def runtime_service_account_email(manifest: dict) -> str:
+    local = manifest.get("identities", {}).get("runtime", {}).get("email", "sikander-functions@")
+    return f"{local}{manifest_gcp_project_id(manifest)}.iam.gserviceaccount.com"
+
+
+def resolve_deploy_env_file(root: Path, project_id: str) -> Path:
+    return root / "functions" / f".env.{project_id}"
+
+
+def ttl_match_allows_client_read(body: str) -> bool:
+    cleaned = re.sub(r"//[^\n]*", "", body)
+    for match in ALLOW_STMT_RE.finditer(cleaned):
+        actions = {part.strip() for part in match.group(1).split(",")}
+        condition = match.group(2).strip()
+        if actions & CLIENT_READ_ACTIONS and condition != "false":
+            return True
+    return False
+
+
 def _check_rules_ttl(root: Path, manifest: dict) -> list[Finding]:
     out: list[Finding] = []
     rules = (root / "firestore.rules").read_text(encoding="utf-8")
@@ -156,8 +188,7 @@ def _check_rules_ttl(root: Path, manifest: dict) -> list[Finding]:
         if not m:
             out.append(_fail("rules", f"no firestore rules match for TTL collection {cg}"))
             continue
-        body = m.group(1)
-        if re.search(r"allow\s+read", body) and "if false" not in body:
+        if ttl_match_allows_client_read(m.group(1)):
             out.append(_fail("rules", f"TTL collection {cg} must not be client-readable"))
     return out
 
@@ -270,6 +301,11 @@ def _check_runbook(root: Path, manifest: dict) -> list[Finding]:
     if "firebase deploy" in text and "deploy-preflight" in text:
         if text.find("firebase deploy") < text.find("deploy-preflight"):
             out.append(_fail("runbook", "firebase deploy must follow deploy-preflight"))
+    if "print-env" in text:
+        out.append(_fail("runbook", "must not generate functions/.env from manifest print-env"))
+    for step in steps:
+        if "print-env" in step.lower():
+            out.append(_fail("runbook", "manifest runbook must not derive functions/.env from print-env"))
     return out
 
 
@@ -324,7 +360,10 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
             out.append(_fail("endpoints", f"{name} concurrency mismatch"))
         if ep.get("minInstances") != spec.get("minInstances"):
             out.append(_fail("endpoints", f"{name} minInstances mismatch"))
-        if ep.get("serviceAccountEmail") != spec.get("serviceAccount"):
+        expected_sa = spec.get("serviceAccount")
+        if isinstance(expected_sa, str) and expected_sa.endswith("@") and ".iam.gserviceaccount.com" not in expected_sa:
+            expected_sa = runtime_service_account_email(manifest)
+        if ep.get("serviceAccountEmail") not in (expected_sa, spec.get("serviceAccount")):
             out.append(_fail("endpoints", f"{name} service account mismatch"))
         ingress = spec.get("ingress")
         if ingress == "env:SIKANDER_INGRESS_SETTINGS":
@@ -357,17 +396,37 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
                 out.append(_fail("endpoints", f"{name} schedule must not set retryConfig"))
         if name in queue_by_fn:
             qspec = queue_by_fn[name]
-            rl = (ep.get("taskQueueTrigger") or {}).get("rateLimits") or {}
+            tqt = ep.get("taskQueueTrigger") or {}
+            rl = tqt.get("rateLimits") or {}
             if rl.get("maxConcurrentDispatches") != qspec.get("maxConcurrentDispatches"):
                 out.append(_fail("endpoints", f"{name} maxConcurrentDispatches mismatch"))
             if rl.get("maxDispatchesPerSecond") != qspec.get("maxDispatchesPerSecond"):
                 out.append(_fail("endpoints", f"{name} maxDispatchesPerSecond mismatch"))
+            want_retry = qspec.get("retryConfig")
+            if want_retry is not None:
+                got_retry = tqt.get("retryConfig") or {}
+                for key in ("maxAttempts", "minBackoffSeconds", "maxBackoffSeconds"):
+                    if got_retry.get(key) != want_retry.get(key):
+                        out.append(_fail("endpoints", f"{name} task queue retryConfig mismatch"))
+                        break
         if name == "jobWorker":
             inv = (ep.get("taskQueueTrigger") or {}).get("invoker")
             if inv != spec.get("invoker"):
                 out.append(_fail("endpoints", "jobWorker invoker mismatch"))
     for extra in set(endpoints) - set(by_name):
         out.append(_fail("endpoints", f"unexpected export in bundle: {extra}"))
+    return out
+
+
+def check_canonical_deploy_env_path(root: Path, manifest: dict, profile: str, env_file: str) -> list[Finding]:
+    out: list[Finding] = []
+    env_cfg = manifest.get("environments", {}).get(profile, {})
+    project_id = env_cfg.get("gcpProjectId") or manifest_gcp_project_id(manifest)
+    expected = resolve_deploy_env_file(root, project_id).resolve()
+    given = Path(env_file).resolve()
+    if given != expected:
+        rel = expected.relative_to(root)
+        out.append(_fail("env-file", f"env file must be {rel.as_posix()} (firebase deploy path for project {project_id})"))
     return out
 
 
@@ -416,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         env_text = Path(args.env_file).read_text(encoding="utf-8")
         bundle_env = parse_dotenv(env_text)
+        findings.extend(check_canonical_deploy_env_path(root, manifest, args.profile, args.env_file))
         findings.extend(check_env_file(manifest, args.profile, env_text))
         findings.extend(compare_endpoints(manifest, load_endpoints_dump(root, bundle_env), args.profile, bundle_env))
     if findings:
