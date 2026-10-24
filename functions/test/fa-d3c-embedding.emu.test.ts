@@ -205,6 +205,21 @@ describe.skipIf(!EMULATORS)("FA-D3C-002 callP1Embedding: refusals send nothing a
     expect((await callP1Embedding(request(edge), at)).outcome).toBe("ok")
   })
 
+  it("the first refusal wins (P3-61 order): a kill switch is reported before missing credentials, and nothing is reserved", async () => {
+    setP1EmbeddingTransportForTests(null)
+    vi.stubEnv("AI_GATEWAY_API_KEY", "")
+    let reserving = 0
+    p1EmbeddingTestSeam.beforeReserve = async () => {
+      reserving += 1
+    }
+    const firm = await seedFirm({ monthlyBudgetMicroUsd: 1_000_000, killSwitch: { disableAll: true, disabledModels: [], reason: "x", setBy: "u", setAt: T } })
+    expect(await callP1Embedding(request(firm), at)).toMatchObject({ outcome: "blocked", blockReason: "kill_switch_firm" })
+    await platformConfigRef().set({ killSwitch: { disableAll: false, disabledModels: [MODEL], reason: "x", setBy: "platform", setAt: T } })
+    expect(await callP1Embedding(request(await seedFirm()), at)).toMatchObject({ outcome: "blocked", blockReason: "kill_switch_platform" })
+    expect(await callP1Embedding(request(await seedFirm(null)), { now: () => T })).toMatchObject({ blockReason: "kill_switch_platform" })
+    expect(reserving).toBe(0)
+  })
+
   it("no_credentials: no transport is configured", async () => {
     const firmId = await seedFirm()
     setP1EmbeddingTransportForTests(null)
