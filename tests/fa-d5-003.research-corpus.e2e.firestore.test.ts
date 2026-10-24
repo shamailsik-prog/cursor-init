@@ -310,11 +310,11 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003: /research reads the published Annex 
          SELECT 'judgment', $1, 'text-embedding-3-large', 0, embedding FROM corpus_embeddings WHERE entity_id = $1 AND model = $2`,
         [J["j-bail-03"], LIVE_MODEL]
       )
-      // The core's PublicError ("search refuses: embedding_model mismatch") is a 400; the Functions router keeps only
-      // its public code. A refusal, not an empty list and not a 503.
+      // The core's PublicError ("search refuses: embedding_model mismatch") is a 400 REQUEST_FAILED; the Functions router
+      // answers a 400 whose code it cannot carry as `invalid_request`. A refusal, not an empty list and not a 503.
       const refused = await research(clerk, "bail 497")
       expect(refused.authority).toBe("functions")
-      expect([refused.status, codeOf(refused), hitsOf(refused)]).toEqual([400, "request_failed", []])
+      expect([refused.status, codeOf(refused), hitsOf(refused)]).toEqual([400, "invalid_request", []])
     } finally {
       await db.admin.query("DELETE FROM corpus_embeddings WHERE model = 'text-embedding-3-large'")
     }

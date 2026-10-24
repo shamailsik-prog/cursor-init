@@ -321,9 +321,9 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
     it("v_research_embedding shows a visible judgment's vector under rank 0 only: not a hidden judgment's, a restricted rank's or a section's", async () => {
       await db.admin.query(
         `INSERT INTO corpus_embeddings (entity_type, entity_id, model, classification_rank, embedding)
-         SELECT 'judgment', $1, 'fa-d5-003-ranked', 1, embedding FROM corpus_embeddings WHERE entity_id = $1 AND model = $3
+         SELECT 'judgment', $1::uuid, 'fa-d5-003-ranked', 1, embedding FROM corpus_embeddings WHERE entity_id = $1::uuid AND model = $3::text
          UNION ALL
-         SELECT 'statute_section_version', $2, $3, 0, embedding FROM corpus_embeddings WHERE entity_id = $2 AND model = $3`,
+         SELECT 'statute_section_version', $2::uuid, $3::text, 0, embedding FROM corpus_embeddings WHERE entity_id = $2::uuid AND model = $3::text`,
         [J["j-bail-04"], J["j-bail-05"], LIVE_MODEL]
       )
       try {

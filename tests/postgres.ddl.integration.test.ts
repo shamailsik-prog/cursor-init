@@ -1027,9 +1027,10 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     ]);
     const naturalKey = await admin.query("SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'treatment_natural_key'");
     expect(naturalKey.rows[0].n).toBe(1);
-    // 29 relations from 003, and 004's four v_authority_* views (F05, plan D13): the chain ends with 004.
+    // 29 relations from 003, 004's four v_authority_* views (F05, plan D13) and 005's two v_research_* views
+    // (FA-D5-003): the chain ends with 005.
     const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
-    expect(inventory.rows[0].n).toBe(33);
+    expect(inventory.rows[0].n).toBe(35);
     const reader = roleClient("corpus_reader", "reader");
     await reader.connect();
     const readable = await reader.query("SELECT count(*)::int AS n FROM v_judgment");
@@ -1643,7 +1644,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       [section],
     )).rows);
 
-  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (33) while corpus_contract_routines() still lists 12", async () => {
+  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (35 with 005's two) while corpus_contract_routines() still lists 12", async () => {
     const views = await admin.query(
       `SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname LIKE 'v\\_authority\\_%' ORDER BY 1`,
@@ -1695,7 +1696,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
                OR has_any_column_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,REFERENCES'))`,
     );
     expect(writesAnywhere.rows[0].n).toBe(0);
-    // 001's grants are unchanged (FA-DATA-003 stays its own finding): corpus_reader still reads v_judgment.
+    // corpus_reader still reads v_judgment (G-0); 005 takes back only its two unfiltered grants (FA-DATA-003, PG-DDL-33).
     const legacy = await admin.query("SELECT has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT') AS v_judgment");
     expect(legacy.rows[0]).toEqual({ v_judgment: true });
     const columns = await admin.query(
@@ -1712,7 +1713,8 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     const inventory = await admin.query(
       "SELECT count(*)::int AS n, count(*) FILTER (WHERE a::text LIKE 'v\\_authority\\_%')::int AS views FROM corpus_contract_relations() a",
     );
-    expect(inventory.rows[0]).toEqual({ n: 33, views: 4 });
+    // 35 since 005 (two v_research_* views); still four v_authority_* views.
+    expect(inventory.rows[0]).toEqual({ n: 35, views: 4 });
     const routines = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_routines()");
     expect(routines.rows[0].n).toBe(12);
   });
@@ -2059,13 +2061,13 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     expect(await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_pending_adverse WHERE treated_judgment_id IS NULL")).rows[0].n)).toBe(0);
   });
 
-  it("PG-DDL-32 004: the DDL chain re-applies cleanly twice and the inventory is 33 after each full pass (D13)", async () => {
+  it("PG-DDL-32 004/005: the DDL chain re-applies cleanly twice and the inventory is 35 after each full pass (D13)", async () => {
     for (let pass = 1; pass <= 2; pass += 1) {
       for (const file of ddlFiles()) {
         await admin.query(fs.readFileSync(path.join(DDL_DIR, file), "utf8"));
       }
       const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
-      expect(inventory.rows[0].n, `pass ${pass}`).toBe(33);
+      expect(inventory.rows[0].n, `pass ${pass}`).toBe(35);
       const options = await admin.query(
         "SELECT count(*)::int AS n FROM pg_class WHERE relname LIKE 'v\\_authority\\_%' AND reloptions = ARRAY['security_barrier=true']",
       );

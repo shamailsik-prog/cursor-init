@@ -68,7 +68,7 @@ describe("Gate G-1 forensic spine", () => {
     expect(ocrJobsFor(store, a.docId)).toHaveLength(1)
   })
 
-  it("G1-2 WhatsApp /matters as clerk with two memberships -> two matters; client number -> own matters; client /research -> denied", () => {
+  it("G1-2 WhatsApp /matters as clerk with two memberships -> two matters; client number -> own matters; client /research -> denied", async () => {
     const store = newStore()
     seedUser(store, {
       id: "clerk1",
@@ -100,15 +100,16 @@ describe("Gate G-1 forensic spine", () => {
     addMember(store, m2.id, "clerk1", "firmA")
     addMember(store, m1.id, "client1", "firmA")
 
-    const clerkMatters = handleWhatsApp(store, "clerk1", "/matters")
+    // handleWhatsApp is async since FA-D5-003 (it reads the research corpus through a source); the assertions are unchanged.
+    const clerkMatters = await handleWhatsApp(store, "clerk1", "/matters")
     expect(clerkMatters.denied).toBeFalsy()
     expect(clerkMatters.matters).toHaveLength(2)
 
-    const clientMatters = handleWhatsApp(store, "client1", "/matters")
+    const clientMatters = await handleWhatsApp(store, "client1", "/matters")
     expect(clientMatters.matters).toHaveLength(1)
     expect(clientMatters.matters?.[0]?.id).toBe(m1.id)
 
-    const research = handleWhatsApp(store, "client1", "/research PPC 302")
+    const research = await handleWhatsApp(store, "client1", "/research PPC 302")
     expect(research.denied).toBe(true)
     expect(research.ok).toBe(false)
   })

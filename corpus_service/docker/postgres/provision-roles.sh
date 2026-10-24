@@ -27,8 +27,8 @@
 # every Annex A routine any grant to those three roles, and to PUBLIC wherever the DDL itself keeps
 # EXECUTE from PUBLIC (all but 001's trigger function enforce_monotonic_classification(), which keeps
 # PostgreSQL's default and cannot be called directly). The grants the DDL makes to corpus_reader,
-# corpus_writer, corpus_declassify and corpus_authority_reader (004, the draft gate's reader role) are
-# left alone. APP_DB_USER is a member of corpus_writer WITH
+# corpus_writer, corpus_declassify, corpus_authority_reader (004, the draft gate's reader role) and
+# corpus_research_reader (005, the research reader role) are left alone. APP_DB_USER is a member of corpus_writer WITH
 # INHERIT FALSE, SET TRUE (D14): it holds none of corpus_writer's rights until scraper.publication
 # switches to it (SET LOCAL ROLE) for one audited publication. MIGRATE_DB_USER gets no corpus_* role.
 # 004 (audit F05) adds four authority read views and re-defines the inventory with them. Before changing
@@ -36,12 +36,16 @@
 # relation named v_authority_%, or a view or materialized view whose rewrite rule depends on an
 # inventory relation. That is the state re-applying 003 alone after 004 leaves; the ownership move
 # below would otherwise hand those views to the migration role, which could redefine them.
+# 005 (audit FA-D5-003, FA-DATA-003) adds the research reader role corpus_research_reader, its two
+# v_research_* views (in the inventory, so the name guard covers v_research_% as well), and takes
+# v_source_provenance and corpus_embeddings back from corpus_reader. This script refuses to run without
+# 005's role, grants it USAGE on schema public like the other Annex A roles, and leaves its grants alone.
 # Because the runtime role can SET ROLE corpus_writer, whatever corpus_writer holds the runtime role can
 # reach: 001 creates corpus_writer with no privileged attribute and no membership, but leaves a role that
 # already exists as it is, so every run resets corpus_writer to NOSUPERUSER NOCREATEDB NOCREATEROLE
 # NOREPLICATION NOBYPASSRLS NOINHERIT (001's NOINHERIT) and revokes every membership it holds (Codex P1
-# on #50). corpus_writer, corpus_reader and corpus_authority_reader get USAGE on schema public (revoked
-# from PUBLIC below), which their own grants need; none of them can log in. PostgreSQL 16 or later is required
+# on #50). corpus_writer, corpus_reader, corpus_authority_reader and corpus_research_reader get USAGE on schema
+# public (revoked from PUBLIC below), which their own grants need; none of them can log in. PostgreSQL 16 or later is required
 # (pg_auth_members.inherit_option / set_option).
 #
 # It then checks the result in the same transaction and rolls everything back on any surprise:
@@ -59,7 +63,7 @@
 # on (database, schema public, the runtime role's tables and sequences, the Annex A relations, sequences
 # and routines) is CASCADE, so the reset takes the whole chain down instead of failing on it (re-audit
 # L1). It removes only grants that depend on a revoked grant option: the grants the DDL makes to
-# corpus_reader, corpus_writer, corpus_declassify and corpus_authority_reader come from the object owner
+# corpus_reader, corpus_writer, corpus_declassify, corpus_authority_reader and corpus_research_reader come from the object owner
 # and are untouched. The
 # bootstrap superuser's default privileges are reset as well (re-audit L2): in schema public, globally
 # and in any other schema, none of them may hand a future object to either application role or
@@ -139,6 +143,12 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'corpus_authority_reader') THEN
     RAISE EXCEPTION 'Annex A 004 is not applied (no corpus_authority_reader): run 15-apply-annex-a.sh first';
   END IF;
+  -- 005 creates the research reader role and its views, and narrows corpus_reader (FA-D5-003, FA-DATA-003). Roles
+  -- are cluster-wide, so the view (per database) is checked as well.
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'corpus_research_reader')
+     OR pg_catalog.to_regclass('public.v_research_judgment') IS NULL THEN
+    RAISE EXCEPTION 'Annex A 005 is not applied (no corpus_research_reader or v_research_judgment): run 15-apply-annex-a.sh first';
+  END IF;
 END
 $$;
 -- F05 plan D20: every Annex A view is in the inventory, or nothing below runs.
@@ -152,7 +162,7 @@ BEGIN
    WHERE c.relnamespace = 'public'::regnamespace
      AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
      AND c.oid NOT IN (SELECT a::oid FROM public.corpus_contract_relations() a)
-     AND (c.relname LIKE 'v\_authority\_%'
+     AND (c.relname LIKE 'v\_authority\_%' OR c.relname LIKE 'v\_research\_%'
           OR (c.relkind IN ('v', 'm') AND EXISTS (
                 SELECT FROM pg_rewrite rw
                   JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = rw.oid
@@ -160,7 +170,7 @@ BEGIN
                    AND d.refclassid = 'pg_class'::regclass AND d.refobjid <> c.oid
                    AND d.refobjid IN (SELECT a::oid FROM public.corpus_contract_relations() a))));
   IF missing IS NOT NULL THEN
-    RAISE EXCEPTION 'an Annex A view is missing from corpus_contract_relations(): % (re-apply 004 with 15-apply-annex-a.sh)', missing;
+    RAISE EXCEPTION 'an Annex A view is missing from corpus_contract_relations(): % (re-apply 004 and 005 with 15-apply-annex-a.sh)', missing;
   END IF;
 END
 $$;
@@ -213,9 +223,10 @@ REVOKE ALL ON SCHEMA public FROM :"app_user", :"mig_user" CASCADE;
 GRANT USAGE ON SCHEMA public TO corpus_clients;
 GRANT CREATE ON SCHEMA public TO :"mig_user";
 -- The Annex A roles' own grants (003: corpus_writer's DML and publication functions, 001: the
--- reader's v_* views, 004: the draft gate reader's v_authority_* views and corpus_metadata) need the
--- schema too, now that PUBLIC no longer has it.
-GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader, corpus_authority_reader;
+-- reader's v_* views, 004: the draft gate reader's v_authority_* views and corpus_metadata, 005: the
+-- research reader's v_research_* views, three v_authority_* views and corpus_metadata) need the schema
+-- too, now that PUBLIC no longer has it.
+GRANT USAGE ON SCHEMA public TO corpus_writer, corpus_reader, corpus_authority_reader, corpus_research_reader;
 
 -- Application objects belong to the migration role (pre-F30 installs created them as the
 -- superuser). Extension members, sequences owned by a table column, and the Annex A relations (owned
