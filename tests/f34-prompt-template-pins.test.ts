@@ -26,8 +26,16 @@ const PINNED: Readonly<Record<string, string>> = {
   "ops-audit@f17.1": "8ebfb430733e62f284300fd7b62615d40befe48ec619fc0d187a9d3dd4f4219b",
 }
 
+/**
+ * Audit F34 re-audit R1-004 (spec ruling R18): every registry version ever released, append-only. A version bump adds the
+ * new version here once it ships and never removes one: each released `id@version` must keep resolving to the text that
+ * was sent and keep its pin in both tables, so a bump cannot silently drop a released version (as re-keying the history
+ * by the current version would drop f17.1).
+ */
+const RELEASED = ["f16.1", "f17.1"] as const
+
 describe("audit F34 R3: the template pin table", () => {
-  const registry = SYSTEM_POLICY_IDS.flatMap((id) => [SYSTEM_POLICY_VERSION, "f16.1"].map((version) => `${id}@${version}`)).sort()
+  const registry = SYSTEM_POLICY_IDS.flatMap((id) => [...new Set<string>([...RELEASED, SYSTEM_POLICY_VERSION])].map((version) => `${id}@${version}`)).sort()
 
   it("pins every registry entry, current and historical, and nothing else", () => {
     expect(Object.keys(PROMPT_TEMPLATE_PINS).sort()).toEqual(registry)
@@ -47,6 +55,26 @@ describe("audit F34 R3: the template pin table", () => {
     const edited = { ...PROMPT_TEMPLATE_PINS, [`committee-brain@${SYSTEM_POLICY_VERSION}`]: sha256(`${SYSTEM_POLICIES["committee-brain"].text}\n`) }
     expect(promptTemplateOf({ policyId: "committee-brain", version: SYSTEM_POLICY_VERSION }, edited)).toBeNull()
     expect(promptTemplateOf({ policyId: "committee-brain", version: SYSTEM_POLICY_VERSION })).not.toBeNull()
+  })
+
+  it("every released version still resolves, and keeps its pin in both tables (R1-004)", () => {
+    for (const version of RELEASED) {
+      for (const id of SYSTEM_POLICY_IDS) {
+        const key = `${id}@${version}`
+        const text = systemPolicyText(id, version)
+        expect(text, `${key} resolves`).not.toBeNull()
+        expect(PROMPT_TEMPLATE_PINS[key], key).toBe(PINNED[key])
+        expect(sha256(text!), key).toBe(PINNED[key])
+        expect(promptTemplateOf({ policyId: id, version }), key).toMatchObject({ templateId: id, templateVersion: version, templateSha256: PINNED[key] })
+      }
+    }
+  })
+
+  it("the current version is pinned and resolves (a bump adds its pins and its history entry)", () => {
+    for (const id of SYSTEM_POLICY_IDS) {
+      expect(systemPolicyText(id, SYSTEM_POLICY_VERSION), id).toBe(SYSTEM_POLICIES[id].text)
+      expect(PINNED[`${id}@${SYSTEM_POLICY_VERSION}`], id).toBe(sha256(SYSTEM_POLICIES[id].text))
+    }
   })
 
   it("the pin table cannot be changed at run time", () => {

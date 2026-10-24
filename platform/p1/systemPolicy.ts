@@ -103,11 +103,13 @@ export function systemPolicyFor(purpose: string): SystemPolicy {
 
 /**
  * Every registry version a stored record may name, with its texts (review round, R4a): f16.1 (audit F16) and the
- * current f17.1 (audit F17). A later version adds its entry and keeps these.
+ * current f17.1 (audit F17). A later version adds its entry and keeps these. Keyed by literal versions (audit F34
+ * re-audit R1-004, spec ruling R18), never by SYSTEM_POLICY_VERSION: a bump must add its own key and freeze the f17.1 texts
+ * under theirs, or the released f17.1 would silently stop resolving (tests/f34-prompt-template-pins.test.ts, RELEASED).
  */
 const SYSTEM_POLICY_HISTORY: Readonly<Record<string, Readonly<Record<SystemPolicyId, SystemPolicy>>>> = Object.freeze({
   "f16.1": F16_1_POLICIES,
-  [SYSTEM_POLICY_VERSION]: SYSTEM_POLICIES,
+  "f17.1": SYSTEM_POLICIES,
 })
 
 /** The registry text a record names (`policyId` at `version`, own keys only), or null when the registry has no such policy. */
