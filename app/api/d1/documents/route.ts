@@ -368,7 +368,17 @@ async function handlePost(request: Request) {
       await rollbackFailedIngest(store, repos, write.docId, write.reused)
       throw persistErr
     }
-    const doc = (await repos.documents.get(write.docId, actor.firmId)) ?? inMemoryDoc
+    let doc: DocumentRecord | null
+    try {
+      doc = (await repos.documents.get(write.docId, actor.firmId)) ?? inMemoryDoc
+    } catch (err) {
+      // FA-F13-026: never fall back to the in-process row when Firestore refuses the stored shape.
+      if (err instanceof DocumentMalformedError) {
+        store.documents.delete(write.docId)
+        return NextResponse.json({ error: "document write failed" }, { status: 500 })
+      }
+      throw err
+    }
     if (!doc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }

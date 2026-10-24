@@ -493,12 +493,19 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
       // A row that exists but is malformed throws DocumentMalformedError (Codex P1 on #99): a caller must never mistake
       // it for an absent row and fall back to a cached copy.
+      // FA-F13-026: firmId's type is checked before the firm gate (same order as reportingIndex.get, FA-F13-020).
+      // getById compares `firmId !== firm` first, so a non-string or blank firmId came back as null (absence) and
+      // routes fell back to a stale in-process cache.
       async get(id, firmId) {
-        const row = await getById<DocumentRecord>(db, "documents", id, firmId)
-        if (!row) return null
-        const doc = readDocumentRecord(id, row)
-        if (!doc) throw new DocumentMalformedError(id)
-        return doc
+        const firm = requireCallerFirmId(firmId, "documents.get")
+        const snap = await getDoc(doc(db, "documents", id))
+        if (!snap.exists()) return null
+        const data = (snap.data() ?? {}) as Record<string, unknown>
+        if (typeof data.firmId !== "string" || data.firmId.trim() === "") throw new DocumentMalformedError(id)
+        if (data.firmId !== firm) return null
+        const parsed = readDocumentRecord(id, data)
+        if (!parsed) throw new DocumentMalformedError(id)
+        return parsed
       },
       // Codex P2 on #99: the stored row and the merged result are both validated, in one transaction, BEFORE the write,
       // so a refused update leaves storage unchanged.
