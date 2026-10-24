@@ -16,8 +16,17 @@ import path from "node:path"
 import pg from "pg"
 import { resetCorpusAuthorityStoreForTests } from "../src/d4/authority"
 
-/** The Annex A DDL in its load-bearing order (plan D13): 004 re-defines the inventory 003 created. */
-export const ANNEX_A_DDL: readonly string[] = ["001_corpus_contract.sql", "003_corpus_publication.sql", "004_authority_read_views.sql"]
+/**
+ * The Annex A DDL in its load-bearing order (plan D13): 004 re-defines the inventory 003 created, and 005 (audit
+ * FA-D5-003, FA-DATA-003: the research reader, corpus_reader narrowed) re-defines 004's. The gate reader's grants are
+ * unchanged by 005.
+ */
+export const ANNEX_A_DDL: readonly string[] = [
+  "001_corpus_contract.sql",
+  "003_corpus_publication.sql",
+  "004_authority_read_views.sql",
+  "005_research_reader.sql",
+]
 
 export const REPO_ROOT = path.resolve(__dirname, "..", "..")
 const DDL_DIR = path.join(REPO_ROOT, "postgres", "ddl")

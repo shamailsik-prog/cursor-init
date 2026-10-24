@@ -10,6 +10,7 @@ Operators run this before promoting Functions to staging or production. Live dep
 4. **firebase deploy** — after preflight passes.
 5. **terraform apply stage 2** — load balancer front end after the `api` Cloud Run service exists.
 6. **set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel** — the external HTTPS URL of the load balancer, never a `run.app` or `cloudfunctions.net` URL once ingress is restricted.
+7. **set the research corpus reader secrets on Vercel** — audit FA-D5-003 (`infra/deploy-manifest.json` `next.corpusResearch`). On the firm's corpus database, after `15-apply-annex-a.sh` has applied 005 and `20-provision-roles.sh` has run, create a login that is a member of `corpus_research_reader` and `corpus_clients` only (`corpus_service/README.md`, "The research reader login"). On Vercel set `SIKANDER_CORPUS_RESEARCH_READER_URL` (its DSN, `sslmode=verify-full`), `SIKANDER_CORPUS_RESEARCH_READER_CA` (the PEM CA) and `SIKANDER_CORPUS_MAX_STALENESS_HOURS`; leave `SIKANDER_RESEARCH_CORPUS` unset. Without them WhatsApp `/research` answers 503 `corpus_unavailable`.
 
 ## Contract alerts
 

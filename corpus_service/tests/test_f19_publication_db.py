@@ -181,7 +181,7 @@ def test_f19_vocabulary_matches_the_ddl_checks(corpus_db):
 
 
 def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
-    corpus_db.apply_annex_a()  # a fresh database with only Annex A, 001 + 003 + 004 (no migrate)
+    corpus_db.apply_annex_a()  # a fresh database with only Annex A, 001 + 003 + 004 + 005 (no migrate)
     relations = {
         r[0] for r in admin_fetch(
             corpus_db,
@@ -190,10 +190,11 @@ def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
         )
     }
     inventory = [r[0] for r in admin_fetch(corpus_db, "SELECT CAST(r AS text) FROM corpus_contract_relations() AS r")]
-    # 003's 29 relations and 004's four authority read views (audit F05; 004 re-defines the function).
-    assert len(inventory) == 33 and len(set(inventory)) == 33
+    # 003's 29 relations, 004's four authority read views (audit F05) and 005's two research views (audit
+    # FA-D5-003); each of 004 and 005 re-defines the function.
+    assert len(inventory) == 35 and len(set(inventory)) == 35
     assert {"v_authority_citation", "v_authority_treatment", "v_authority_section_version",
-            "v_authority_pending_adverse"} <= set(inventory)
+            "v_authority_pending_adverse", "v_research_judgment", "v_research_embedding"} <= set(inventory)
     assert relations == set(inventory)
 
 
@@ -239,7 +240,8 @@ def test_f19_contract_routines_list_every_annex_a_function_and_who_may_execute_i
     grants = admin_fetch(
         corpus_db,
         "SELECT CAST(r.routine AS text), g.n FROM corpus_contract_routines() r "
-        "CROSS JOIN (VALUES ('corpus_writer'), ('corpus_reader'), ('corpus_declassify'), ('corpus_authority_reader')) AS g(n) "
+        "CROSS JOIN (VALUES ('corpus_writer'), ('corpus_reader'), ('corpus_declassify'), ('corpus_authority_reader'), "
+        "('corpus_research_reader')) AS g(n) "
         "WHERE NOT r.public_execute AND has_function_privilege(g.n, r.routine, 'EXECUTE')",
     )
     assert sorted(grants) == [
@@ -967,7 +969,7 @@ def test_f19_migrate_as_owner_succeeds_after_annex_a_and_leaves_it_with_the_supe
         "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
         "WHERE c.oid IN (SELECT r FROM corpus_contract_relations() AS r)",
     )
-    assert len(owners) == 33  # 003's 29 and 004's four authority read views (audit F05)
+    assert len(owners) == 35  # 003's 29, 004's four authority read views (F05) and 005's two research views (FA-D5-003)
     assert {row[1] for row in owners} == {admin_user}
     app_tables = admin_fetch(corpus_db, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'scraper_staging'")
     assert app_tables == [(owner,)]

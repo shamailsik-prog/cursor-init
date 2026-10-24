@@ -265,6 +265,9 @@ describe.each(MODES)("G-2 cross-firm isolation, %s persistence", (mode) => {
     vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
     vi.stubEnv("FIREBASE_PROJECT_ID", "demo-sikander")
     vi.stubEnv("SIKANDER_PERSISTENCE_MODE", mode)
+    // FA-D5-003 (spec R13, R15): `/research` reads the in-app read model only when explicitly selected. G-2 checks that
+    // the channel returns no firm-A data, whatever corpus it reads.
+    vi.stubEnv("SIKANDER_RESEARCH_CORPUS", "memory")
     resetSessionStateForTests()
     resetRuntimeStoreForTests()
     installVerifier()

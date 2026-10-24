@@ -1027,9 +1027,10 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     ]);
     const naturalKey = await admin.query("SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'treatment_natural_key'");
     expect(naturalKey.rows[0].n).toBe(1);
-    // 29 relations from 003, and 004's four v_authority_* views (F05, plan D13): the chain ends with 004.
+    // 29 relations from 003, 004's four v_authority_* views (F05, plan D13) and 005's two v_research_* views
+    // (FA-D5-003): the chain ends with 005.
     const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
-    expect(inventory.rows[0].n).toBe(33);
+    expect(inventory.rows[0].n).toBe(35);
     const reader = roleClient("corpus_reader", "reader");
     await reader.connect();
     const readable = await reader.query("SELECT count(*)::int AS n FROM v_judgment");
@@ -1643,7 +1644,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       [section],
     )).rows);
 
-  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (33) while corpus_contract_routines() still lists 12", async () => {
+  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (35 with 005's two) while corpus_contract_routines() still lists 12", async () => {
     const views = await admin.query(
       `SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname LIKE 'v\\_authority\\_%' ORDER BY 1`,
@@ -1695,7 +1696,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
                OR has_any_column_privilege('corpus_authority_reader', c.oid, 'INSERT,UPDATE,REFERENCES'))`,
     );
     expect(writesAnywhere.rows[0].n).toBe(0);
-    // 001's grants are unchanged (FA-DATA-003 stays its own finding): corpus_reader still reads v_judgment.
+    // corpus_reader still reads v_judgment (G-0); 005 takes back only its two unfiltered grants (FA-DATA-003, PG-DDL-33).
     const legacy = await admin.query("SELECT has_table_privilege('corpus_reader', 'public.v_judgment', 'SELECT') AS v_judgment");
     expect(legacy.rows[0]).toEqual({ v_judgment: true });
     const columns = await admin.query(
@@ -1712,7 +1713,8 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     const inventory = await admin.query(
       "SELECT count(*)::int AS n, count(*) FILTER (WHERE a::text LIKE 'v\\_authority\\_%')::int AS views FROM corpus_contract_relations() a",
     );
-    expect(inventory.rows[0]).toEqual({ n: 33, views: 4 });
+    // 35 since 005 (two v_research_* views); still four v_authority_* views.
+    expect(inventory.rows[0]).toEqual({ n: 35, views: 4 });
     const routines = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_routines()");
     expect(routines.rows[0].n).toBe(12);
   });
@@ -2059,19 +2061,52 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     expect(await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_pending_adverse WHERE treated_judgment_id IS NULL")).rows[0].n)).toBe(0);
   });
 
-  it("PG-DDL-32 004: the DDL chain re-applies cleanly twice and the inventory is 33 after each full pass (D13)", async () => {
+  it("PG-DDL-32 004/005: the DDL chain re-applies cleanly twice and the inventory is 35 after each full pass (D13)", async () => {
     for (let pass = 1; pass <= 2; pass += 1) {
       for (const file of ddlFiles()) {
         await admin.query(fs.readFileSync(path.join(DDL_DIR, file), "utf8"));
       }
       const inventory = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_relations()");
-      expect(inventory.rows[0].n, `pass ${pass}`).toBe(33);
+      expect(inventory.rows[0].n, `pass ${pass}`).toBe(35);
       const options = await admin.query(
         "SELECT count(*)::int AS n FROM pg_class WHERE relname LIKE 'v\\_authority\\_%' AND reloptions = ARRAY['security_barrier=true']",
       );
       expect(options.rows[0].n, `pass ${pass}`).toBe(4);
       const readable = await asReader(async (r) => (await r.query("SELECT count(*)::int AS n FROM v_authority_citation")).rows[0].n);
       expect(readable, `pass ${pass}`).toBeGreaterThan(0);
+    }
+  });
+
+  // ---- FA-DATA-003 and FA-D5-003 (005_research_reader.sql) ------------------------------------------------------
+  it("PG-DDL-33 005: corpus_reader reads neither unfiltered provenance nor the embeddings table, keeps the nine promoted-only views (G-0), and corpus_research_reader reads exactly its six relations", async () => {
+    const readable = async (role: string) =>
+      (await admin.query(
+        `SELECT string_agg(c.relname, ',' ORDER BY c.relname) AS names,
+                bool_or(has_table_privilege($1, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                        OR has_any_column_privilege($1, c.oid, 'INSERT,UPDATE,REFERENCES')) AS writes
+           FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            AND has_any_column_privilege($1, c.oid, 'SELECT')`,
+        [role],
+      )).rows[0];
+    expect(await readable("corpus_reader")).toEqual({
+      names: "corpus_metadata,v_citation,v_court,v_instrument,v_judge,v_judgment,v_statute,v_statute_section,v_statute_section_version,v_treatment",
+      writes: false,
+    });
+    const research = await admin.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'corpus_research_reader'");
+    expect(research.rows[0].n).toBe(1);
+    expect(await readable("corpus_research_reader")).toEqual({
+      names: "corpus_metadata,v_authority_citation,v_authority_pending_adverse,v_authority_treatment,v_research_embedding,v_research_judgment",
+      writes: false,
+    });
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    try {
+      await expectSqlState(reader.query("SELECT count(*) FROM v_source_provenance"), "42501");
+      await expectSqlState(reader.query("SELECT count(*) FROM corpus_embeddings"), "42501");
+      expect((await reader.query("SELECT count(*)::int AS n FROM v_judgment")).rows[0].n).toBeGreaterThanOrEqual(0);
+    } finally {
+      await reader.end();
     }
   });
 });

@@ -36,6 +36,10 @@ class PlantedMismatch(unittest.TestCase):
             "app/api/p1/committee-brain/route.ts",
             "app/api/d1/documents/route.ts",
             "docs/deploy/RELEASE_RUNBOOK.md",
+            "postgres/ddl/005_research_reader.sql",
+            "corpus_service/docker/postgres/provision-roles.sh",
+            "services/d5-1/researchCorpus.ts",
+            "platform/corpus/pgResearchCorpus.ts",
         ):
             src = ROOT / rel
             dst = self.root / rel
@@ -116,6 +120,46 @@ class PlantedMismatch(unittest.TestCase):
             p.write_text(p.read_text().replace("export const maxDuration = 130", "export const maxDuration = 60"))
 
         self.assert_check("next", m)
+
+    def _corpus_research(self, edit) -> None:
+        p = self.root / "infra/deploy-manifest.json"
+        data = json.loads(p.read_text())
+        edit(data["next"])
+        p.write_text(json.dumps(data, indent=2) + "\n")
+
+    def test_planted_tree_has_no_corpus_research_finding(self) -> None:
+        self.assertEqual([f for f in self.findings(lambda: None) if f.check == "next-corpus"], [])
+
+    def test_corpus_research_block_missing(self) -> None:
+        self.assert_check("next-corpus", lambda: self._corpus_research(lambda n: n.pop("corpusResearch")))
+
+    def test_corpus_research_memory_source(self) -> None:
+        self.assert_check("next-corpus", lambda: self._corpus_research(lambda n: n["corpusResearch"].update(source="memory")))
+
+    def test_corpus_research_secret_value_instead_of_name(self) -> None:
+        def m() -> None:
+            self._corpus_research(lambda n: n["corpusResearch"]["secrets"].update(url="postgres://reader:x@corpus.example.invalid/db"))
+
+        self.assert_check("next-corpus", m)
+
+    def test_corpus_research_code_reads_another_name(self) -> None:
+        def m() -> None:
+            p = self.root / "services/d5-1/researchCorpus.ts"
+            p.write_text(p.read_text().replace('"SIKANDER_CORPUS_RESEARCH_READER_URL"', '"SIKANDER_CORPUS_READER_URL"'))
+
+        self.assert_check("next-corpus", m)
+
+    def test_corpus_research_role_not_created_by_the_migration(self) -> None:
+        self.assert_check("next-corpus", lambda: self._corpus_research(lambda n: n["corpusResearch"].update(role="corpus_reader")))
+
+    def test_corpus_research_secret_in_functions_env(self) -> None:
+        def m() -> None:
+            p = self.root / "infra/deploy-manifest.json"
+            data = json.loads(p.read_text())
+            data["environments"]["staging"]["env"]["SIKANDER_CORPUS_RESEARCH_READER_URL"] = "set-on-vercel"
+            p.write_text(json.dumps(data, indent=2) + "\n")
+
+        self.assert_check("next-corpus", m)
 
     def test_primitive_iam_role(self) -> None:
         def m() -> None:
