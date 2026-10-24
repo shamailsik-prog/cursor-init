@@ -90,6 +90,24 @@ Each ruling records the decision and the reason (owner's standing instruction).
 
 **R17. The end-to-end proof runs through the real path.** `corpus_service/tests/test_fa_d3c_p1_embedding_e2e.py`, driven by `corpus_service/tests/e2e/p1_embedding_e2e.sh`, uses the real beat task, real Postgres, the real F25 boundary and the real `p1CorpusEmbedding` HTTP function in the Functions emulator. The test bundle (`functions/test/harness/fa-d3c-p1-emulator-entry.ts`) is the real export with two test seams set: a deterministic fake embedding transport that records each call in Firestore, and a test OIDC key set. The corpus reaches the emulator through a local TLS front, because the boundary allows https only, using F25's own test hooks. RED on main: the corpus code from `origin/main`, the real `openai` SDK (installed into a scratch `--target` directory) and `OPENAI_BASE_URL` pointing at a recording tripwire; the tripwire receives the direct requests and the P1 ledger stays empty. A CI job modelled on `authority-f05` runs the script.
 
+**R18. A service endpoint beside the `api` (U-1, E-37, E-48(a)).** U-1 (final pre-merge audit, 7 Oct 2026; Phase 1 rulings row 17) dropped the `onCall` exports, because callables took the firm from the body and had no Idempotency-Key, and made the HTTP `api` the §4.1 channel. E-37 records it: "The HTTP `api` is the only entry point to the P5 operations." E-48(a) puts P1's user operations on that `api` as routes. `p1CorpusEmbedding` is a separate HTTP function and stays one, because it is neither a P5 operation nor a P1 user operation:
+
+- **No user and no tenant request.** Its one caller is the corpus service account in another cloud project (L17.12 step 65), with a Google-signed OIDC ID token. The `api` admits Firebase user tokens, and each route needs `X-Firm-Id` and an Idempotency-Key and is rate-limited per user. A firmless service route on it would be a third E-37 exception and would put a service credential through the tenant router's auth.
+- **No firm from the request.** The firm is the deployment's (`P1_CORPUS_FIRM_ID`, R6). That closes U-1's own reason for dropping callables, which took the firm from the body.
+- **Locked down by deployment, not by the `api`'s gate.** It is IAM-private (`invoker: "private"`, no public binding), verifies its caller in code (R9), and has `ALLOW_ALL` ingress because the caller is in another project. The `api`'s ingress is GCLB-only in the staging and production profiles, so the corpus could not reach a route on it.
+- **No idempotency lease.** It takes no Idempotency-Key. Its only lease is the P1 reservation's, which outlives its own 90 s timeout by 60 s (`corpusEmbedding.ts` checks this at import).
+
+So it is the in-process `callP1Embedding` (the `internalAICaller` pattern of P3-60) reached across a project boundary, not a client entry point. U-1 holds: there is no `onCall` export, and the `api` is still the only entry point to the P5 operations. The pins enforce this rather than loosen it.
+
+- `functions/test/http.test.ts` now asserts:
+  - no export has a callable trigger;
+  - the HTTP exports other than `health` are exactly `api` and `p1CorpusEmbedding`, by name;
+  - `api` keeps the 120 s timeout that its idempotency lease outlives;
+  - `p1CorpusEmbedding` is IAM-private with `ALLOW_ALL` ingress and its own 90 s timeout, matching the F32 manifest entry, and no `api` route serves it.
+- `p5.identity.test.ts`, `p2.boot.test.ts`, `runtime-options.test.ts` and `g2.cross-firm.test.ts` pin the same export list.
+
+Any further HTTP export fails those pins. Cost if wrong: a second HTTP function to deploy and monitor (manifest entry, two alert policies), against a third firmless route on the tenant router.
+
 ## 4. Adversarial check
 
 - **"Removing Playwright breaks a future JS-only court portal."** That is true, and it is the point: a browser in this repository is what OR-4 fails. R2 says where one would go.
@@ -120,7 +138,7 @@ The F27 and F28 suites keep their assertions; their provider stand-in moves from
 - **The firm's budget.** Corpus embeddings count against the firm's monthly P1 budget, kill switch and live-reservation limit, and appear in `getAiUsage` (calls, tokens, micro-USD).
 - **Vectors.** Masked identifiers in published text change those vectors slightly (R8). The model and dimensions are unchanged, so existing vectors stay comparable.
 - **Image.** The corpus image no longer carries Chromium (about 150 MB less), Playwright or the OpenAI SDK.
-- **Tests.** The provider stand-in in `test_f27_embedding_claims_e2e.py`, `test_f27_embedding_prefork_e2e.py`, `test_f28_source_outcomes_e2e.py` and `test_f28_fu_e2e.py` is installed at `p1_client.embedding_client` instead of `sys.modules["openai"]`, and accepts `operation_id`. The pinned export lists in `functions/test/p2.boot.test.ts`, `p5.identity.test.ts`, `runtime-options.test.ts` and `g2.cross-firm.test.ts` gain `p1CorpusEmbedding`. The F18 gate test's corpus row now expects findings.
+- **Tests.** The provider stand-in in `test_f27_embedding_claims_e2e.py`, `test_f27_embedding_prefork_e2e.py`, `test_f28_source_outcomes_e2e.py` and `test_f28_fu_e2e.py` is installed at `p1_client.embedding_client` instead of `sys.modules["openai"]`, and accepts `operation_id`. The pinned export lists in `functions/test/p2.boot.test.ts`, `p5.identity.test.ts`, `runtime-options.test.ts`, `g2.cross-firm.test.ts` and `http.test.ts` gain `p1CorpusEmbedding`; `http.test.ts`'s U-1 pin also names it and asserts what makes it no P5 entry point (R18). The F18 gate test's corpus row now expects findings.
 
 ## 7. Not in scope
 

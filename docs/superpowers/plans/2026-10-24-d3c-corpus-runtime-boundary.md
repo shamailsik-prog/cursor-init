@@ -4,7 +4,7 @@
 
 **Goal:** the corpus runtime installs no headless browser, and every paid embedding call from `corpus_service` goes through P1 (kill switch, reservation and settlement, P1 ledger row, provider policy, outbound mask), with a guard against either returning.
 
-**Architecture:** see the spec, `docs/superpowers/specs/2026-10-24-d3c-corpus-runtime-boundary-design.md` (rulings R1-R17). The Functions side gets `callP1Embedding` (P1 pipeline on gateway.ts's shared ledger code), an embedding transport, an OIDC service-caller verifier and the `p1CorpusEmbedding` HTTP function. The corpus side gets `scraper/p1_client.py` and a P1 fetcher in the F25 boundary; `embeddings.py` changes only at the provider-call seam.
+**Architecture:** see the spec, `docs/superpowers/specs/2026-10-24-d3c-corpus-runtime-boundary-design.md` (rulings R1-R18). The Functions side gets `callP1Embedding` (P1 pipeline on gateway.ts's shared ledger code), an embedding transport, an OIDC service-caller verifier and the `p1CorpusEmbedding` HTTP function. The corpus side gets `scraper/p1_client.py` and a P1 fetcher in the F25 boundary; `embeddings.py` changes only at the provider-call seam.
 
 **Tech stack:** TypeScript (Functions, vitest, Firestore emulator, Functions emulator), Python 3.12 (corpus, pytest, real PostgreSQL 16 + pgvector), the G-0 Python guards.
 
@@ -18,7 +18,7 @@
 ## Tasks
 
 ### Task 1: spec and plan
-- [x] Spec with rulings R1-R17, adversarial check, residuals.
+- [x] Spec with rulings R1-R18, adversarial check, residuals.
 - [x] This plan.
 
 ### Task 2: FA-D3C-001 (R1-R3)
@@ -73,3 +73,12 @@ Filled in as each test runs. Counts are exact; NOT RUN means not run.
 Neighbours on the branch: full corpus suite 1449 passed, 5 skipped (the T8 e2e, run in its own job), 157 subtests (main: 1370 passed); then 2 rows added to T4 for mutant M23 (59 passed). F27/F28/F21 suites 313 passed. Functions P1 and export-pin suites 366 passed; f09/f15/f16/f17 neighbours 222 passed; G-1 10 passed; G-2 PASS (438 tested, 0 allowed); F31 runtime smoke all checks passed. Mutants: 25 of 25 killed (M7 and M23 survived first; a test was added for each and both were then killed).
 
 Codex P2 on PR #118 (thread 4367413145): an embedding reservation now carries `caller` and `corpusOperationId`, and the lease reconciler copies them into the row it writes when the reservation holds them (a chat reservation has neither, so its row is unchanged). T7c above; mutants M26-M32 (drop either field from the reservation, drop either from the reconciled row, write a null caller on every row, take the caller from the actor, take the operation id from the trace id): 7 of 7 killed. Reconciler suites (f07-f08 35, f17-reconcile 6, f09-atomic-idempotency 43) and the P1, ledger, D3C and neighbour Functions suites: 786 passed in 26 files; T8 e2e 5 passed; D3C and F25 corpus suites 487 passed, 5 skipped (T8, run separately).
+
+CI follow-up on PR #118 (Cloud Functions job at 2798794, `functions/test/http.test.ts:242`, 2643 passed, 1 failed): the U-1 pin expected the HTTP exports other than `health` to be exactly `["api"]`, and this branch's `p1CorpusEmbedding` made them `["api", "p1CorpusEmbedding"]`. Spec R18 rules on it: the function stays separate, because it is a service endpoint and not a P5 operation. The pin is tightened, not loosened:
+- no export has a callable trigger;
+- the HTTP exports are exactly `api` and `p1CorpusEmbedding`, by name;
+- `api` keeps its 120 s timeout under the idempotency lease;
+- `p1CorpusEmbedding` is IAM-private, has `ALLOW_ALL` ingress and its own 90 s timeout, matches its F32 manifest entry, and no `api` route serves it.
+
+Mutants M33-M36 (public invoker, no pinned timeout, a further HTTP export, a public invoker in the manifest): 4 of 4 killed. This lane had not run `http.test.ts` before; the whole Functions suite has now been run the way CI runs it.
+Whole Functions suite, the way CI runs it (vitest under Auth + Firestore emulators, private ports, CI=true), in two runs because the first stopped at its 60-minute limit on a loaded machine: run 1, 67 files, 2274 passed; run 2, the other 36 files, 370 passed and 1 skipped (f17-eval-live, a live-key test). Total 2644 passed, 1 skipped, 0 failed tests, across all 103 collected files. In run 1, `fa-d3c-embedding.emu.test.ts` was marked failed with all 41 of its tests passing: a file-level error, whose detail was lost when the run stopped before its summary. Run alone, the file passed, 41 of 41 in 22.5 s.
