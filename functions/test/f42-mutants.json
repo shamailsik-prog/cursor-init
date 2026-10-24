@@ -93,7 +93,7 @@
     "why": "the Next documents.get (F13's direct read) must read a tombstoned matter's document as absent"
   },
   {
-    "id": "A1-complete-on-any",
+    "id": "A1-finish-on-any-ack",
     "area": "acknowledgement",
     "file": "functions/src/retention/acks.ts",
     "old": "return expected.every((key) =>",
