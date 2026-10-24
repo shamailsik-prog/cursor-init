@@ -77,9 +77,19 @@ export function extractMatchBlocks(rules: string): RulesMatchBlock[] {
   return blocks
 }
 
+function isPlainVariableSegment(segment: string): boolean {
+  return /^\{[^{}=]+\}$/.test(segment)
+}
+
+export function pathIsAllPlainVariableSegments(path: string): boolean {
+  const segments = path.split("/").filter(Boolean)
+  return segments.length > 0 && segments.every((seg) => isPlainVariableSegment(seg))
+}
+
 /** True when a rules path could apply to documents in this collection group. */
 export function matchPathAppliesToCollectionGroup(path: string, collectionGroup: string): boolean {
   if (path.includes("{document=**}")) return true
+  if (pathIsAllPlainVariableSegments(path)) return true
   const segments = path.split("/").filter(Boolean)
   for (const seg of segments) {
     if (seg === collectionGroup) return true
