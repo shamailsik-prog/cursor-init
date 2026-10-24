@@ -36,8 +36,12 @@ Exact counts; main = `origin/main` f39d007 export with the branch's test files c
 | `f43-alerts.unit.test.ts` | 6/6 FAIL (5: module missing; 1: an associate's `alert.read` is allowed, fail open) | 6/6 PASS |
 | `f43-alerts-p2.e2e.emu.test.ts` | 8/8 FAIL (no `ops_alerts` document after each fault; checker missing) | 8/8 PASS |
 | `f43-alerts-p1.e2e.emu.test.ts` | 5/5 FAIL (no alert; checker missing) | 5/5 PASS |
-| `f43-alerts-escalation.e2e.emu.test.ts` | 6/6 FAIL (the dead letter raises no alert; no routes, no escalator) | 6/6 PASS |
-| Total | 25/25 FAIL | 25/25 PASS |
+| `f43-alerts-escalation.e2e.emu.test.ts` | 7/7 FAIL (the dead letter raises no alert; no routes, no escalator) | 7/7 PASS |
+| Total | 26/26 FAIL | 26/26 PASS |
+
+The seventh escalation test (a claimed page is delivered once; a lapsed claim again) was added after mutant M16 survived. On main, run cold, the escalation file's first test first failed in its setup hook (minting five Auth users took more than the 10 s hook default); rerun alone with a 60 s setup timeout it fails on the assertion (no alert). On the branch the same cold run showed that test's body at 14.07 s against the 15 s default, so the escalation tests, the saga test and the setup hook carry explicit 60 s timeouts (timing only; no assertion changed).
+
+Full functions suite at 73a10ff on a fresh emulator (`firebase emulators:exec`, `CI=true`, `--no-cache`): 103 files passed, 1 skipped (`f37-fu-trigger-pipeline`, Functions-emulator only, as on main); 2,562 tests passed, 1 skipped, 0 failed. An earlier full run on a persistent emulator failed 10 sweeper tests on rows left by an earlier run of that suite; `origin/main` failed the same file on the same emulator (16), and both pass on a fresh one.
 
 ## Mutation ledger
 

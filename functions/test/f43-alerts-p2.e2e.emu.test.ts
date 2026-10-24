@@ -29,6 +29,8 @@ import { FakeClock, diagSpec, enqueueAt, newFirm, readJob, sweepOrigins, testDep
 const nextOrigin = sweepOrigins(1000)
 /** Cleanup scans every collection of the shared emulator; under load that can exceed the 10 s hook default. */
 const CLEANUP_TIMEOUT_MS = 120_000
+/** The saga test registers clients and drives three authenticated routes; 15 s is tight on a cold or loaded emulator. */
+const E2E_TIMEOUT_MS = 60_000
 
 /**
  * Deletes the firm's job rows first, with one targeted query: rows dated a thousand years back would be due in every
@@ -293,7 +295,7 @@ describe.skipIf(!EMULATORS)("audit F43: a stuck un-merge saga raises saga.age (e
     await deleteFirmData([firmId], uids.splice(0))
   }, CLEANUP_TIMEOUT_MS)
 
-  it("an un-merge whose jobs never run is in progress for 60 minutes: one saga.age alert names the merge event", async () => {
+  it("an un-merge whose jobs never run is in progress for 60 minutes: one saga.age alert names the merge event", { timeout: E2E_TIMEOUT_MS }, async () => {
     firmId = uniq("firm")
     await adminDb().collection("firms").doc(firmId).set({ name: "F", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS" })
     const claims = (role: string) => ({ firmId, role, clearanceLevel: "privileged-restricted" })

@@ -22,8 +22,14 @@ import { FakeClock, diagSpec, enqueueAt, readJob, sweepOrigins, testDeps } from 
 
 const nextOrigin = sweepOrigins(800)
 const MIN = 60_000
-/** Cleanup scans every collection of the shared emulator; under load that can exceed the 10 s hook default. */
+/**
+ * Hook timeouts. Cleanup scans every collection of the shared emulator, and setup mints five Auth-emulator users (on a
+ * cold emulator the first round trips are slow); under load either can exceed the 10 s hook default.
+ */
 const CLEANUP_TIMEOUT_MS = 120_000
+const SETUP_TIMEOUT_MS = 60_000
+/** Each test drives several authenticated HTTP calls and escalator runs; on a cold or loaded emulator 15 s is too tight. */
+const E2E_TIMEOUT_MS = 60_000
 
 type OpsModule = { alertOpsTestSeam: { now?: () => number } }
 const OPS = ["..", "src", "alerts", "ops"].join("/")
@@ -98,7 +104,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     uids.push(operator.uid)
     delivered = []
     notifier = { deliver: async (n) => void delivered.push(n) }
-  })
+  }, SETUP_TIMEOUT_MS)
 
   afterEach(async () => {
     delete jobRuntime.deps
@@ -126,7 +132,8 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     return { alert: alerts[0], jobId }
   }
 
-  it("a missed deadline escalates exactly once per step: operator, then the firm's partners, then the founding partner, then nothing", async () => {
+  // Eight escalator runs (two concurrent) and their reads: 14 s measured on a cold emulator.
+  it("a missed deadline escalates exactly once per step: operator, then the firm's partners, then the founding partner, then nothing", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     expect(alert).toMatchObject({ level: 0, ownerRole: "operator", severity: "high", state: "open" })
     expect(millis(alert.escalateAt)).toBe(T0 + 30 * MIN)
@@ -175,7 +182,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     ])
   })
 
-  it("a page whose delivery fails stays pending and the next run delivers it", async () => {
+  it("a page whose delivery fails stays pending and the next run delivers it", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     const { runAlertEscalator } = await escalatorModule()
     let fail = true
@@ -187,7 +194,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect((await runAlertEscalator({ now: () => T0 + 3 * MIN, notifier: flaky })).delivered).toEqual([])
   })
 
-  it("a page another run has claimed is not delivered twice; a claim that lapsed (its run died) is delivered again", async () => {
+  it("a page another run has claimed is not delivered twice; a claim that lapsed (its run died) is delivered again", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     const pageId = `${alert.id}_e1_l0`
     const { runAlertEscalator } = await escalatorModule()
@@ -215,7 +222,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(delivered.map((n) => n.id)).toEqual([pageId, pageId])
   })
 
-  it("the operator acknowledges at level 0: escalation stops, the action is recorded and audited", async () => {
+  it("the operator acknowledges at level 0: escalation stops, the action is recorded and audited", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     clock.set(T0 + MIN)
     await useOperatorClock(clock)
@@ -232,7 +239,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(await alertDoc(alert.id)).toMatchObject({ level: 0, state: "acknowledged" })
   })
 
-  it("the owning role: a partner may not act at level 0, may once it reaches the partners; an associate, another firm and a non-operator are refused", async () => {
+  it("the owning role: a partner may not act at level 0, may once it reaches the partners; an associate, another firm and a non-operator are refused", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     const ack = viaApi("acknowledgeAlert", route())
     const list = viaApi<{ items: Array<Record<string, unknown>>; nextCursor: string | null }>("listAlerts", route())
@@ -258,7 +265,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(await alertDoc(alert.id)).toMatchObject({ level: 1, state: "acknowledged" })
   })
 
-  it("resolve closes the alert; a recurrence reopens it as a new episode at level 0 with a fresh page", async () => {
+  it("resolve closes the alert; a recurrence reopens it as a new episode at level 0 with a fresh page", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert, jobId } = await deadLetter()
     const { runAlertEscalator } = await escalatorModule()
     await runAlertEscalator({ now: () => T0 + 30 * MIN, notifier })
@@ -284,7 +291,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect((await pagesOf(alert.id)).map((p) => p.id).sort()).toEqual([`${alert.id}_e1_l0`, `${alert.id}_e1_l1`, `${alert.id}_e2_l0`])
   })
 
-  it("the worklist pages newest first and filters by state", async () => {
+  it("the worklist pages newest first and filters by state", { timeout: E2E_TIMEOUT_MS }, async () => {
     const first = (await deadLetter(T0)).alert
     const second = (await deadLetter(T0 + MIN)).alert
     const list = viaApi<{ items: Array<Record<string, unknown>>; nextCursor: string | null }>("listAlerts", route())
