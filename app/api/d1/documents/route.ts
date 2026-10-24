@@ -5,7 +5,10 @@ import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession, type SessionRouteOptions } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_DOCUMENTS } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
+import { DocumentMalformedError } from "@/platform/d1/documentRecord"
 import {
   beginIdempotentRequest,
   IdempotencyError,
@@ -31,6 +34,7 @@ import {
   getImmutableDocumentObject,
 } from "@/platform/documents/documentObjectStore"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
+import { summarizeOcrJobs, type OcrJobLike } from "@/services/d1-6/ocrStatus"
 import { rollbackDocumentIngest, uploadDocument } from "@/services/d1-6/uploadDocument"
 import { canReadDocument, canUseLooseVault } from "@/platform/p5/documentAccess"
 
@@ -97,7 +101,7 @@ function canViewDocument(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: DOCUMENTS_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: DOCUMENTS_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -123,8 +127,19 @@ async function handleGet(request: Request) {
   await syncFirmMatters(store, repos, user.firmId)
 
   if (docId) {
-    const doc =
-      (await repos.documents.get(docId, user.firmId)) ?? store.documents.get(docId) ?? null
+    let stored: Awaited<ReturnType<typeof repos.documents.get>>
+    try {
+      stored = await repos.documents.get(docId, user.firmId)
+    } catch (err) {
+      // FA-F13-004 (Codex P1 on #99): a stored row that fails validation denies the read, and this process's cached
+      // copy (possibly at a stale, lower label) is dropped, never served in its place.
+      if (err instanceof DocumentMalformedError) {
+        store.documents.delete(docId)
+        return NextResponse.json({ error: "unknown document" }, { status: 404 })
+      }
+      throw err
+    }
+    const doc = stored ?? store.documents.get(docId) ?? null
     if (!doc || doc.firmId !== user.firmId) {
       return NextResponse.json({ error: "unknown document" }, { status: 404 })
     }
@@ -158,20 +173,26 @@ async function handleGet(request: Request) {
 
   const firmDocs = await repos.documents.listByFirm(user.firmId)
   const firmJobs = await repos.jobs.listByFirm(user.firmId)
-  const ocrJobCounts = new Map<string, number>()
+  const ocrByDocument = new Map<string, OcrJobLike[]>()
   for (const job of firmJobs) {
     if (job.jobType !== "ocr") continue
-    ocrJobCounts.set(job.documentId, (ocrJobCounts.get(job.documentId) ?? 0) + 1)
+    const rows = ocrByDocument.get(job.documentId) ?? []
+    rows.push(job)
+    ocrByDocument.set(job.documentId, rows)
   }
   const visible = firmDocs
     .filter((doc) => (matterId ? doc.matterId === matterId : true))
     .filter((doc) => canViewDocument(store, userId, doc))
     .sort((a, b) => a.id.localeCompare(b.id))
 
-  const items = visible.slice(cursor, cursor + limit).map((doc) => ({
-    ...doc,
-    ocrJobs: ocrJobCounts.get(doc.id) ?? 0,
-  }))
+  const items = visible.slice(cursor, cursor + limit).map((doc) => {
+    const summary = summarizeOcrJobs(ocrByDocument.get(doc.id) ?? [])
+    return {
+      ...doc,
+      ocrJobs: summary.ocrJobs,
+      ocrStatus: summary.ocrStatus,
+    }
+  })
   const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
 
   return NextResponse.json({
@@ -194,9 +215,13 @@ const uploadBodyLimits: SessionRouteOptions = {
   },
 }
 
+const handleGetAuthorised = withF02Authority(F02_DOCUMENTS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
+  return withSession(request, handlePostAuthorised, { ...uploadBodyLimits, surface: DOCUMENTS_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_DOCUMENTS, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

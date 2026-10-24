@@ -5,6 +5,8 @@ import { REPORTING_SURFACE } from "./surface"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody, selectView } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_REPORTING } from "@/platform/authority/f02Routes"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import {
   beginIdempotentRequest,
@@ -25,6 +27,7 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import {
   buildClientSearchIndexRow,
   buildMatterSearchIndexRow,
+  SearchIndexMalformedError,
 } from "@/platform/persistence/matterClientSearchIndex"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
 import { syncFirmMatters } from "@/platform/persistence/memberSync"
@@ -253,7 +256,7 @@ type RecomputeMatterReportRelevanceBody = {
 type Body = RecordMatterReportExportBody | RecomputeMatterReportRelevanceBody
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: REPORTING_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: REPORTING_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -301,13 +304,32 @@ async function handleGet(request: Request) {
     const terms = normalizeTerms(getQuery(REPORTING_SURFACE, url, "q"))
     const clients = await repos.entities.listByFirm(refreshedActor.firmId)
     for (const matter of matters) {
-      await repos.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
+      try {
+        await repos.reportingIndex.upsert(buildMatterSearchIndexRow(matter))
+      } catch (err) {
+        // A malformed stored row is denied. The search does not republish over it and does not fail the whole firm.
+        if (!(err instanceof SearchIndexMalformedError)) throw err
+      }
     }
     for (const entity of clients) {
-      await repos.reportingIndex.upsert(buildClientSearchIndexRow(entity))
+      try {
+        await repos.reportingIndex.upsert(buildClientSearchIndexRow(entity))
+      } catch (err) {
+        if (!(err instanceof SearchIndexMalformedError)) throw err
+      }
     }
 
-    const all = (await repos.reportingIndex.listByFirm(refreshedActor.firmId))
+    const indexed = await repos.reportingIndex.listByFirm(refreshedActor.firmId)
+    // FA-F13-004 (reporting-index slice): rows the validator omitted are not absent data. Drop this process's cached
+    // copy of each one so a later read cannot serve it in place of the refused row.
+    const liveIds = new Set(indexed.map((row) => row.id))
+    for (const id of [...store.matterClientSearchIndex.keys()]) {
+      const cached = store.matterClientSearchIndex.get(id)
+      if (cached && cached.firmId === refreshedActor.firmId && !liveIds.has(id)) {
+        store.matterClientSearchIndex.delete(id)
+      }
+    }
+    const all = indexed
       .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
@@ -391,9 +413,13 @@ async function handleGet(request: Request) {
   })
 }
 
+const handleGetAuthorised = withF02Authority(F02_REPORTING, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePost, { surface: REPORTING_SURFACE })
+  return withSession(request, handlePostAuthorised, { surface: REPORTING_SURFACE })
 }
+
+const handlePostAuthorised = withF02Authority(F02_REPORTING, "POST", handlePost)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()

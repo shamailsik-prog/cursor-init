@@ -6418,6 +6418,9 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         listByMatter: vi.fn().mockResolvedValue([]),
       },
   })),
+  // F02 reads these before a domain call. This fixture is the memory-mode repository path.
+  isFirestoreInjectedForTests: () => false,
+  resolvePersistenceMode: () => "memory" as const,
 }))
 
 /**

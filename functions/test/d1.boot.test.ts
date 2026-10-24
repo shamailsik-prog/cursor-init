@@ -31,6 +31,14 @@ const D1_PATHS = [
   "/api/d1/entity/unmergeEntity",
 ]
 
+/** Audit F02: each Next domain path is registered twice (GET and POST). */
+const F02_D1_PATHS = [
+  "/api/d1/matters",
+  "/api/d1/documents",
+  "/api/d1/document-workflow",
+  "/api/d1/reporting",
+]
+
 describe("boot with every layer flag off (G-4)", () => {
   const saved: Record<string, string | undefined> = {}
   beforeEach(() => {
@@ -57,6 +65,9 @@ describe("boot with every layer flag off (G-4)", () => {
     expect(() => createRouter(ROUTES)).not.toThrow()
     const paths = ROUTES.map((r) => r.path)
     for (const p of D1_PATHS) expect(paths).toContain(p)
-    expect(paths.filter((p) => p.startsWith("/api/d1/"))).toHaveLength(D1_PATHS.length)
+    for (const p of F02_D1_PATHS) expect(paths).toContain(p)
+    expect(paths.filter((p) => p.startsWith("/api/d1/")).sort()).toEqual(
+      [...D1_PATHS, ...F02_D1_PATHS, ...F02_D1_PATHS].sort(),
+    )
   })
 })

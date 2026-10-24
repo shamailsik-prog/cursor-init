@@ -74,8 +74,8 @@ describe("P2 engine units", () => {
   it("canonicalJson sorts keys recursively", () =>
     expect(canonicalJson({ b: 1, a: { d: [1, { f: 1, e: 2 }], c: null } })).toBe('{"a":{"c":null,"d":[1,{"e":2,"f":1}]},"b":1}'))
 
-  it("the registry holds platform.diagnostic, the two 3b un-merge saga types, auto-confirm and the F37 name index reconciliation only; handlerFor prefers production over the test seam", () => {
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex"])
+  it("the registry holds platform.diagnostic, the two 3b un-merge saga types, auto-confirm, the F37 name index reconciliation and the F04 OCR worker; handlerFor prefers production over the test seam", () => {
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr"])
     expect(handlerFor("platform.diagnostic")).toBe(diagnosticHandler)
     expect(handlerFor("test.saga")).toBeUndefined()
     const fake = { ...diagnosticHandler, jobType: "test.saga", saga: true }

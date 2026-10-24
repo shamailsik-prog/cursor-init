@@ -374,6 +374,35 @@ describe("POST/GET /api/d1/documents", () => {
     expect(two.nextCursor).toBeNull()
   })
 
+  it("lists a new OCR job as queued and a completed one as done", async () => {
+    const matterId = seedMatter("internal")
+    const res = await post(
+      {
+        action: "ingest",
+        actorId: "partner_a",
+        firmId: "firmA",
+        matterId,
+        contentBase64: b64("%PDF-ocr-status%"),
+        sourceChannel: "web",
+        classification: "internal",
+      },
+      "b7c1e2a4-6d58-4f0a-9c31-0a6e5d4b8f17"
+    )
+    expect(res.status).toBe(200)
+    const created = (await res.json()) as { result: { doc: { id: string } } }
+    const listed = await get(new URLSearchParams({ userId: "partner_a", matterId }))
+    expect(listed.status).toBe(200)
+    const page = (await listed.json()) as { items: Array<{ id: string; ocrJobs: number; ocrStatus: string }> }
+    expect(page.items.find((item) => item.id === created.result.doc.id)).toMatchObject({ ocrJobs: 1, ocrStatus: "queued" })
+
+    const job = getRuntimeStore().jobs.find((entry) => entry.documentId === created.result.doc.id && entry.jobType === "ocr")
+    expect(job).toBeTruthy()
+    job!.ocrStatus = "done"
+    const again = await get(new URLSearchParams({ userId: "partner_a", matterId }))
+    const done = (await again.json()) as { items: Array<{ id: string; ocrStatus: string }> }
+    expect(done.items.find((item) => item.id === created.result.doc.id)?.ocrStatus).toBe("done")
+  })
+
   it("writes audit entries for ingest actions", async () => {
     const matterId = seedMatter("internal")
     const res = await post(
