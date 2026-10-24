@@ -121,8 +121,13 @@ const SECTIONS_SQL = `SELECT version_no, effective_from::text AS effective_from,
 //   sequence, and the planner may test a qual before relkind = 'S', so a CASE fixes the order.
 // - It must be able to SELECT (the table or any column) no relation in schema public except READABLE: no Annex A
 //   base table, no 001 v_* view, and nothing else there either, however granted (directly, by role, or to PUBLIC).
+// - FA-D5-003-R1-003 (its spec R31, the research reader's rule kept equal): the write and read tests cover every schema
+//   but pg_catalog, information_schema, the TOAST schemas and other sessions' temporary schemas, not only public; and no
+//   membership of the login, or of a role it is a member of, may be held WITH ADMIN OPTION (it could hand the role on).
 // A database without 004 has no corpus_authority_reader: pg_has_role raises 42704, which is schema_missing.
 const READABLE = ["v_authority_citation", "v_authority_treatment", "v_authority_section_version", "v_authority_pending_adverse", "corpus_metadata"]
+const CHECKED_NAMESPACE = `n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%'
+                  AND NOT pg_catalog.pg_is_other_temp_schema(n.oid)`
 const ROLE_SQL = `SELECT pg_has_role('corpus_authority_reader', 'USAGE') AS reader,
        EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
                 WHERE pg_has_role(current_user, r.oid, 'MEMBER')
@@ -130,16 +135,18 @@ const ROLE_SQL = `SELECT pg_has_role('corpus_authority_reader', 'USAGE') AS read
        EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
                 WHERE r.rolname NOT IN (current_user, 'corpus_authority_reader', 'corpus_clients')
                   AND pg_has_role(current_user, r.oid, 'MEMBER')) AS other_role,
-       EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-                WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+       EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                WHERE m.admin_option AND pg_has_role(current_user, m.member, 'MEMBER')) AS admin,
+       EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE ${CHECKED_NAMESPACE} AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                        OR has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES')))
-         OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-                     WHERE c.relnamespace = 'public'::regnamespace
+         OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                     WHERE ${CHECKED_NAMESPACE}
                        AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'USAGE,UPDATE') ELSE false END) AS writes,
-       EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-                WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-                  AND c.relname <> ALL ($1::text[])
+       EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE ${CHECKED_NAMESPACE} AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND NOT (c.relnamespace = 'public'::regnamespace AND c.relname = ANY ($1::text[]))
                   AND has_any_column_privilege(c.oid, 'SELECT')) AS reads_more,
        current_setting('transaction_read_only') AS read_only`
 const METADATA_SQL = `SELECT (SELECT value FROM public.corpus_metadata WHERE key = 'publication_contract') AS contract,
@@ -370,13 +377,14 @@ export class PgAuthorityStore implements AuthorityStore {
     const at = this.now()
     if (this.stateCheckedAt !== null && at - this.stateCheckedAt < STATE_TTL_MS) return
     const role = (await this.run(ROLE_SQL, [READABLE])).rows[0] as
-      | { reader: unknown; elevated: unknown; other_role: unknown; writes: unknown; reads_more: unknown; read_only: unknown }
+      | { reader: unknown; elevated: unknown; other_role: unknown; admin: unknown; writes: unknown; reads_more: unknown; read_only: unknown }
       | undefined
     if (
       !role ||
       role.reader !== true ||
       role.elevated !== false ||
       role.other_role !== false ||
+      role.admin !== false ||
       role.writes !== false ||
       role.reads_more !== false ||
       role.read_only !== "on"
