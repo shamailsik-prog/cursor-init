@@ -31,15 +31,22 @@ function deployedGcpProjectId(env: Record<string, string | undefined>): string |
   return undefined
 }
 
-function expectedGcpProjectId(env: Record<string, string | undefined>): string | undefined {
+function expectedGcpProjectId(env: Record<string, string | undefined>, deployed: boolean): string | undefined {
   const profile = env.SIKANDER_DEPLOY_PROFILE?.trim()
+  if (deployed) {
+    if (!profile) return undefined
+    return gcpProjectIdForDeployProfile(profile)
+  }
   const fromProfile = gcpProjectIdForDeployProfile(profile)
   if (fromProfile) return fromProfile
   return deployedGcpProjectId(env)
 }
 
-function expectedRuntimeServiceAccountEmail(env: Record<string, string | undefined>): string | undefined {
-  const projectId = expectedGcpProjectId(env)
+function expectedRuntimeServiceAccountEmail(
+  env: Record<string, string | undefined>,
+  deployed: boolean,
+): string | undefined {
+  const projectId = expectedGcpProjectId(env, deployed)
   if (!projectId) return undefined
   return `${RUNTIME_SERVICE_ACCOUNT}${projectId}.iam.gserviceaccount.com`
 }
@@ -125,7 +132,7 @@ export async function contractReport(deps?: {
   const regionVerdict: Verdict = meta.region ? (meta.region === REGION ? "ok" : "violated") : "unknown"
   const dbVerdict: Verdict = locationId ? (locationId === REGION ? "ok" : "violated") : "unknown"
   const profileBind = runtimeProjectMatchesDeployProfile(env)
-  const expectedSa = expectedRuntimeServiceAccountEmail(env)
+  const expectedSa = expectedRuntimeServiceAccountEmail(env, deployed)
   let identityVerdict: Verdict =
     meta.serviceAccount === undefined || expectedSa === undefined
       ? "unknown"
@@ -133,7 +140,9 @@ export async function contractReport(deps?: {
         ? "ok"
         : "violated"
   if (profileBind === "violated") identityVerdict = "violated"
-  else if (deployed && env.SIKANDER_DEPLOY_PROFILE?.trim() && profileBind === "unknown") {
+  else if (deployed && !env.SIKANDER_DEPLOY_PROFILE?.trim()) {
+    identityVerdict = "unknown"
+  } else if (deployed && env.SIKANDER_DEPLOY_PROFILE?.trim() && profileBind === "unknown") {
     identityVerdict = "unknown"
   }
 

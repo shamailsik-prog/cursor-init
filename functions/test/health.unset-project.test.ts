@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { legacyExpectedGcpProjectId } from "../src/healthLegacyGcpProject"
 
 function mockRes() {
   const res = { status: vi.fn(), json: vi.fn() }
@@ -6,13 +7,13 @@ function mockRes() {
   return res
 }
 
-describe("health runtime identity without GCP project (R5-005)", () => {
+describe("health runtime identity without GCP project (R116-004)", () => {
   afterEach(() => {
     vi.resetModules()
     vi.restoreAllMocks()
   })
 
-  it("responds 503 when deployed with no derivable GCP project id", async () => {
+  it("responds 503 when deployed with profile but no runtime GCP project id", async () => {
     const { createHealthHandler } = await import("../src/health")
     const handler = createHealthHandler({
       env: {
@@ -21,6 +22,30 @@ describe("health runtime identity without GCP project (R5-005)", () => {
         FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
         SIKANDER_DEPLOY_PROFILE: "staging",
       },
+      deployed: true,
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
+      }),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+  })
+
+  it("responds 503 when deployed without SIKANDER_DEPLOY_PROFILE even if GCLOUD_PROJECT is set", async () => {
+    const env = {
+      SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+      TRUSTED_PROXY_HOPS: "1",
+      FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+      GCLOUD_PROJECT: "demo-sikander",
+    }
+    expect(legacyExpectedGcpProjectId(env)).toBe("demo-sikander")
+
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env,
       deployed: true,
       metadata: async () => ({
         region: "asia-south1",
