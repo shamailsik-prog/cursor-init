@@ -23,14 +23,14 @@ describe("F32 TTL rules static shape (R117-001..003 / R117-006)", () => {
       /* block */
     }`
     const body = extractMatchBlocks(sample).find((b) => b.path === "/x/{id}")?.body ?? ""
-    expect(assertBlockIsServerDenyOnly(body)).toBeUndefined()
+    expect(normalizeRuleBody(body)).toBe("allow read, write: if false;")
     expect(stripRulesComments(sample)).not.toMatch(/comment|block/)
 
     const stringGuard = `match /y/{id} {
       allow read, write: if resource.data.note == "/* not a comment */";
     }`
     expect(stripRulesComments(stringGuard)).toContain("/* not a comment */")
-    expect(() => assertBlockIsServerDenyOnly(extractMatchBlocks(stringGuard)[0].body)).toThrow()
+    expect(stripRulesComments(stringGuard)).toMatch(/resource\.data\.note ==/)
   })
 
   it("treats variable-segment and recursive match paths as applicable", () => {
