@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -14,14 +15,13 @@ import { validateR2LockRules } from "../objects/protection"
 import type { ObjectVersionInfo } from "../objects/s3"
 import type { VersionedObjectAccess } from "../objects/s3"
 
-const ENC_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 let objectRoot: string
 
 beforeEach(() => {
   objectRoot = mkdtempSync(join(tmpdir(), "f33-restore-objects-"))
   process.env.SIKANDER_DOCUMENT_OBJECT_ROOT = objectRoot
   process.env.SIKANDER_DOCUMENT_OBJECT_BACKEND = "fs"
-  process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY = ENC_KEY
+  process.env.SIKANDER_DOCUMENT_OBJECT_ENCRYPTION_KEY = randomBytes(32).toString("hex")
 })
 
 afterEach(() => {
@@ -75,6 +75,7 @@ describe("restoreObjects", () => {
     const source: VersionedObjectAccess = {
       listVersions: async () => [{ key: "k", versionId: "v1" }],
       getVersion: async () => corrupt,
+      put: async () => {},
     }
     let putCalled = false
     const target: VersionedObjectAccess = {
