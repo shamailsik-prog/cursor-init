@@ -260,4 +260,24 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003 R1-001: Postgres research equals the 
     const written: Query[] = [query, { text: "bail appeal", k: 50 }, { text: visible[1].citation_text }, { text: visible[0].citation_text }]
     expect((await compare(written, "citation-writes")).diffs).toEqual([])
   }, SLOW)
+
+  it("R4a puts the cited authority first even when 60 judgments outscore it on keywords, whether the key's numbers are query terms or not (spec R24b)", async () => {
+    // 60 judgments hold three rare words the target lacks, so on keywords alone all 60 outrank it; R4a must still find it,
+    // through the signature groups (numbers that are query terms) and through the index (a number glued to the reporter).
+    for (let i = 0; i < 60; i += 1) await plantJudgment(`Zqrfour zqrfive zqrsix appeal ${i}`)
+    const target = await plantJudgment("Zqrtarget custody", { citation: "2099 YLR 888888" })
+    await db.indexTerms()
+    truth = await loadTruthCorpus(db.admin, true)
+    const queries: Query[] = [
+      { text: "zqrfour zqrfive zqrsix 2099 YLR 888888" },
+      { text: "zqrfour zqrfive zqrsix 2099 YLR 888888", k: 1 },
+      { text: "zqrfour zqrfive zqrsix 2099YLR 888888" },
+      { text: "zqrfour zqrfive zqrsix 2099YLR 888888", k: 1 },
+    ]
+    expect((await compare(queries, "r4a-outside-k")).diffs).toEqual([])
+    for (const q of queries) {
+      const got = JSON.parse(await outcome(searchResearch(pgSource, q))) as { items: Array<{ entityId: string; score: number; citation: string | null }> }
+      expect(got.items[0], q.text).toMatchObject({ entityId: target, score: 1, citation: "2099 YLR 888888" })
+    }
+  }, SLOW)
 })
