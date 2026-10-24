@@ -25,7 +25,7 @@ def render(manifest: dict) -> dict[str, str]:
     )
     alerts = manifest.get("alerts", {}).get("policies", [])
     alert_conditions = "\n".join(
-        f'  conditions {{\n    display_name = "{a["event"]}"\n    condition_matched_log {{\n      filter = \'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="{a["event"]}"\'\n    }}\n  }}'
+        f'  conditions {{\n    display_name = "{a["event"]}"\n    condition_matched_log {{\n      filter = \'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="{a["event"]}"\'\n    }}\n  }}'
         for a in alerts
     )
     files = {

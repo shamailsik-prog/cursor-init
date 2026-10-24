@@ -6,6 +6,8 @@ import { PROMPT_HASH_ALGORITHM, promptHash, promptTemplateOf } from "@/platform/
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
+import { prepareAlerts, stageAlert } from "../alerts/raise"
+import { p1CommitSpecs } from "../alerts/specs"
 import { isContentionAbort } from "../d1/contention"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { errorCode } from "../log"
@@ -963,7 +965,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   let accounting: P1Accounting = "pending"
   try {
     await t.beforeCommit?.()
-    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, decision })
+    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, decision, nowMs: Math.floor(now()) })
     accounting = "settled"
   } catch (err) {
     // The result is still returned (P3-63) and the log keeps the record; the reservation, when there is one, keeps
@@ -1311,6 +1313,8 @@ export type CommitArgs = {
    * as the usage row, with `settledAt` the commit's own time. Absent: no record is written.
    */
   decision?: Record<string, unknown> | null
+  /** The deciding clock, for the times of the alerts this decision raises (audit F43); `Date.now()` when absent. */
+  nowMs?: number
 }
 
 /**
@@ -1482,6 +1486,15 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     }
     if (counted > learnedOverheadOf((await tx.get(overheadRef())).data(), r.model)) learnedOverhead = { model: r.model, inputTokens: counted, exceededInputTokens }
   }
+  // Audit F43 (spec R8, R9): the alerts this decision raises (budget crossings, a kill-switch or reservation refusal),
+  // read with the transaction's other reads and written with its writes, so they commit if and only if it does.
+  const opsAlerts = await prepareAlerts(
+    tx,
+    p1CommitSpecs(
+      { firmId: r.firmId, monthKey: r.monthKey, model: r.model, blockReason: r.blockReason, usageLogId: usageRef.id },
+      crossed.map((threshold) => ({ threshold, budgetMicroUsd: budget!, spentMicroUsd: after }))
+    )
+  )
   if (a.failCommit) throw new Error("p1TestSeam.failCommit")
 
   const now = FieldValue.serverTimestamp()
@@ -1608,5 +1621,6 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
     })
     return crossing
   })
+  for (const alert of opsAlerts) stageAlert(tx, alert, a.nowMs ?? Date.now())
   return { crossings, exceeded, learnedOverhead, anomaly }
 }

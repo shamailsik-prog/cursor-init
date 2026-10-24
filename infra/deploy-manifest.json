@@ -240,6 +240,38 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "every 1 minutes"
+    },
+    {
+      "name": "alertEscalator",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 1 minutes",
+      "why": {
+        "maxInstances": "Audit F43: one escalator at a time; each step is also fenced in its own transaction"
+      }
+    },
+    {
+      "name": "alertChecker",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 5 minutes",
+      "why": {
+        "schedule": "Audit F43: thresholds are 15 to 60 minutes; a 5-minute scan reads at most 2,500 rows per run"
+      }
     }
   ],
   "firebase": {
@@ -298,7 +330,10 @@
       { "event": "audit.outbox_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "audit.outbox_row_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "audit.outbox_reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
-      { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" }
+      { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "ops_alert.notified", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/notifier.ts"], "runbook": "functions/src/alerts/README.md" },
+      { "event": "ops_alert.raise_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/raise.ts"], "runbook": "functions/src/alerts/README.md" },
+      { "event": "ops_alert.pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/escalator.ts", "functions/src/alerts/checker.ts", "functions/src/alerts/notifier.ts"], "runbook": "functions/src/alerts/README.md" }
     ],
     "exemptions": [
       { "event": "p1.provider_key_in_next_runtime", "reason": "Next runtime; external delivery F43", "delivery": "external" }

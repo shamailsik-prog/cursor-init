@@ -1,6 +1,9 @@
 import { Timestamp, type DocumentReference, type Query, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
+import { DISPATCH_STALL_REDISPATCHES, JOB_WAIT_ALERT_MS } from "../alerts/model"
+import { raiseAlertBestEffort } from "../alerts/raise"
+import { dispatchStalledSpec, type StallGroup } from "../alerts/specs"
 import { logFailure } from "../log"
 import {
   DISPATCH_GRACE_MS,
@@ -87,9 +90,19 @@ import { stageFailure } from "./worker"
  *
  * Each query runs on its own: a failed query is logged and the sweep goes on to the next one, so
  * a fault in one query (an index still building, a transient store error) never skips the others.
+ *
+ * Stalled dispatch (audit F43, spec R8; P2 README O-41). A re-dispatch that brings a row's `redispatches` to
+ * `DISPATCH_STALL_REDISPATCHES` (3) or more, or that finds it waiting `JOB_WAIT_ALERT_MS` (15 min) or more, is a
+ * dispatch that is not reaching the worker: the queue refuses it, or accepts it and never delivers. Such rows are
+ * collected during the sweep, and after it each firm and job type gets one `job.dispatch_stalled` raise in a
+ * transaction of its own: one alert document per queue, not one write per stalled row on a shared document (which,
+ * with every job stalled, would contend with the sweep's own transactions). The rows' `redispatches` and
+ * `nextAttemptAt` are the durable state; a raise that fails is logged `ops_alert.raise_failed` and derived again at
+ * the row's next re-dispatch.
  */
 
-export type SweepResult = { dispatched: string[]; deadLettered: string[] }
+/** `stalled`: the job ids whose re-dispatch in this sweep showed a stalled dispatch (audit F43). */
+export type SweepResult = { dispatched: string[]; deadLettered: string[]; stalled: string[] }
 
 const at = (ms: number) => Timestamp.fromMillis(ms)
 const millis = (t: unknown): number | null => (t instanceof Timestamp ? t.toMillis() : null)
@@ -121,14 +134,22 @@ function expiredLease(row: JobRow | undefined, now: number): row is JobRow {
   return expires !== null && expires <= now
 }
 
-type RowAction = { kind: "none" } | { kind: "dispatch"; seq: number } | { kind: "dead_letter"; row: JobRow }
+/** A re-dispatch that shows a stalled dispatch (audit F43): the row's firm and type, its count and how long it has waited. */
+type Stall = { jobId: string; firmId: string; jobType: string; redispatches: number; waitedMs: number }
 
-/** Stages the re-dispatch bookkeeping: `dispatchSeq + 1`, `dispatchedAt = now`, `redispatches + 1`, `sweepAt = now + backoff`. */
-function stageRedispatch(tx: Transaction, ref: DocumentReference, row: JobRow, now: number): RowAction {
+type RowAction = { kind: "none" } | { kind: "dispatch"; seq: number; stall: Stall | null } | { kind: "dead_letter"; row: JobRow }
+
+/**
+ * Stages the re-dispatch bookkeeping: `dispatchSeq + 1`, `dispatchedAt = now`, `redispatches + 1`, `sweepAt = now + backoff`.
+ * `dueMs` is when the row became due (`nextAttemptAt`, or the expired lease's end for query B).
+ */
+function stageRedispatch(tx: Transaction, ref: DocumentReference, row: JobRow, now: number, dueMs: number | null): RowAction {
   const seq = row.dispatchSeq + 1
   const redispatches = redispatchesOf(row) + 1
   stageJobUpdate(tx, ref, { dispatchSeq: seq, dispatchedAt: at(now), redispatches, sweepAt: at(now + backoffMs(redispatches)), updatedAt: at(now) })
-  return { kind: "dispatch", seq }
+  const waitedMs = dueMs === null ? 0 : Math.max(0, now - dueMs)
+  const stalled = redispatches >= DISPATCH_STALL_REDISPATCHES || waitedMs >= JOB_WAIT_ALERT_MS
+  return { kind: "dispatch", seq, stall: stalled ? { jobId: ref.id, firmId: row.firmId, jobType: row.jobType, redispatches, waitedMs } : null }
 }
 
 async function sweepLostDispatch(ref: DocumentReference, deps: JobDeps): Promise<RowAction> {
@@ -137,7 +158,7 @@ async function sweepLostDispatch(ref: DocumentReference, deps: JobDeps): Promise
     const snap = await tx.get(ref)
     const row = snap.exists ? (snap.data() as JobRow) : undefined
     if (!lostDispatch(row, now)) return { kind: "none" }
-    return stageRedispatch(tx, ref, row, now)
+    return stageRedispatch(tx, ref, row, now, millis(row.nextAttemptAt))
   })
 }
 
@@ -148,17 +169,18 @@ async function sweepExpiredLease(ref: DocumentReference, deps: JobDeps): Promise
     const row = snap.exists ? (snap.data() as JobRow) : undefined
     if (!expiredLease(row, now)) return { kind: "none" }
     if (row.attempts >= MAX_ATTEMPTS) {
-      // The attempt that lost its lease was the round's last: dead-letter (P3-7 events, audit; alert after commit).
-      stageFailure(tx, ref, row, sanitizeError(new JobError("lease_expired", { permanent: true })), now)
+      // The attempt that lost its lease was the round's last: dead-letter (P3-7 events, audit, and the durable
+      // job.dead_lettered alert in this transaction: audit F43; the log line after commit).
+      await stageFailure(tx, ref, row, sanitizeError(new JobError("lease_expired", { permanent: true })), now)
       return { kind: "dead_letter", row }
     }
     if (!redispatchable(row, now)) return { kind: "none" }
-    return stageRedispatch(tx, ref, row, now)
+    return stageRedispatch(tx, ref, row, now, row.lease === null ? null : millis(row.lease.expiresAt))
   })
 }
 
 /** Runs one row's transaction, then its after-commit dispatch or alert. A failure is logged and the sweep goes on. */
-async function settle(ref: DocumentReference, step: (ref: DocumentReference) => Promise<RowAction>, deps: JobDeps, out: SweepResult): Promise<void> {
+async function settle(ref: DocumentReference, step: (ref: DocumentReference) => Promise<RowAction>, deps: JobDeps, out: SweepResult, stalls: Stall[]): Promise<void> {
   let action: RowAction
   try {
     action = await step(ref)
@@ -167,6 +189,11 @@ async function settle(ref: DocumentReference, step: (ref: DocumentReference) => 
     return
   }
   if (action.kind === "dispatch") {
+    // Recorded whether or not this dispatch succeeds: a queue that accepts tasks and never delivers them stalls too.
+    if (action.stall !== null) {
+      stalls.push(action.stall)
+      out.stalled.push(ref.id)
+    }
     try {
       await deps.dispatcher.dispatch({ jobId: ref.id, seq: action.seq })
       out.dispatched.push(ref.id)
@@ -202,8 +229,8 @@ export const sweepTestSeam: {
 
 const actedOn = (out: SweepResult): number => out.dispatched.length + out.deadLettered.length
 
-/** One sweep's shared state: its deps, what it acted on, the rows it settled, and whether its budget is spent. */
-type SweepRun = { deps: JobDeps; out: SweepResult; settled: Set<string>; spent: () => boolean }
+/** One sweep's shared state: its deps, what it acted on, the rows it settled, the stalls it saw, and whether its budget is spent. */
+type SweepRun = { deps: JobDeps; out: SweepResult; settled: Set<string>; stalls: Stall[]; spent: () => boolean }
 
 /**
  * Runs one query in pages (P3-36) and settles each row it returns that this sweep has not yet
@@ -241,7 +268,7 @@ async function sweepQuery(
       if (settled.has(doc.ref.path)) continue
       settled.add(doc.ref.path)
       if (!qualifies(doc.data() as JobRow, deps.clock())) continue
-      await settle(doc.ref, step, deps, out)
+      await settle(doc.ref, step, deps, out, run.stalls)
     }
     if (docs.length < SWEEP_LIMIT || actedOn(out) === before) return "done"
     after = docs[docs.length - 1]
@@ -251,25 +278,56 @@ async function sweepQuery(
 
 /**
  * One sweep at `deps.clock()`: query B, then A, then A' (skew), within `SWEEP_BUDGET_MS` of real
- * time. Returns the job ids it re-dispatched and dead-lettered.
+ * time, then the stalled-dispatch raises (audit F43). Returns the job ids it re-dispatched,
+ * dead-lettered and saw stalled.
  */
 export async function sweep(deps: JobDeps): Promise<SweepResult> {
-  const out: SweepResult = { dispatched: [], deadLettered: [] }
+  const out: SweepResult = { dispatched: [], deadLettered: [], stalled: [] }
   const wallClock = sweepTestSeam.wallClock ?? Date.now
   const started = wallClock()
-  const run: SweepRun = { deps, out, settled: new Set<string>(), spent: () => wallClock() - started >= SWEEP_BUDGET_MS }
-  const stop = (): SweepResult => {
+  const run: SweepRun = { deps, out, settled: new Set<string>(), stalls: [], spent: () => wallClock() - started >= SWEEP_BUDGET_MS }
+  if ((await sweepQueries(run)) === "spent") {
     logger.warn("job.sweep_budget_spent", { dispatched: out.dispatched.length, deadLettered: out.deadLettered.length })
-    return out
   }
+  await raiseStalls(run.stalls, deps, () => wallClock() - started < SWEEP_BUDGET_MS + STALL_RAISE_GRACE_MS)
+  return out
+}
+
+async function sweepQueries(run: SweepRun): Promise<"done" | "spent"> {
+  const { deps } = run
   const due = at(deps.clock())
   const expired = jobsRef().where("status", "==", "running").where("sweepAt", "<=", due).orderBy("sweepAt").limit(SWEEP_LIMIT)
-  if ((await sweepQuery("B", expired, expiredLease, (ref) => sweepExpiredLease(ref, deps), run)) === "spent") return stop()
+  if ((await sweepQuery("B", expired, expiredLease, (ref) => sweepExpiredLease(ref, deps), run)) === "spent") return "spent"
   const waiting = () => jobsRef().where("status", "in", ["queued", "failed"])
   const lost = waiting().where("sweepAt", "<=", due).orderBy("sweepAt").limit(SWEEP_LIMIT)
-  if ((await sweepQuery("A", lost, lostDispatch, (ref) => sweepLostDispatch(ref, deps), run)) === "spent") return stop()
+  if ((await sweepQuery("A", lost, lostDispatch, (ref) => sweepLostDispatch(ref, deps), run)) === "spent") return "spent"
   // A fresh read, after query A: a bound from the sweep's start would return the rows A just re-dispatched at the cap.
   const skewed = waiting().where("sweepAt", ">", at(deps.clock() + MAX_REDISPATCH_BACKOFF_MS)).orderBy("sweepAt").limit(SWEEP_LIMIT)
-  if ((await sweepQuery("skew", skewed, lostDispatch, (ref) => sweepLostDispatch(ref, deps), run)) === "spent") return stop()
-  return out
+  return sweepQuery("skew", skewed, lostDispatch, (ref) => sweepLostDispatch(ref, deps), run)
+}
+
+/** At most this many stalled-dispatch raises per sweep (one per firm and job type); the rest wait for a later sweep. */
+const MAX_STALL_RAISES = 20
+/** The raises may run this long past the sweep's budget (still 5 s or more inside the 45 s timeout: 30 + 5 + one 5 s raise). */
+const STALL_RAISE_GRACE_MS = 5_000
+
+/** One `job.dispatch_stalled` raise per firm and job type the sweep saw stalled (audit F43, spec R8). */
+async function raiseStalls(stalls: readonly Stall[], deps: JobDeps, inTime: () => boolean): Promise<void> {
+  const groups = new Map<string, StallGroup>()
+  for (const s of stalls) {
+    const key = `${s.firmId}\0${s.jobType}`
+    const g = groups.get(key)
+    if (!g) {
+      groups.set(key, { firmId: s.firmId, jobType: s.jobType, jobs: 1, maxRedispatches: s.redispatches, oldestWaitMs: s.waitedMs, latestJobId: s.jobId })
+      continue
+    }
+    g.jobs += 1
+    g.maxRedispatches = Math.max(g.maxRedispatches, s.redispatches)
+    g.oldestWaitMs = Math.max(g.oldestWaitMs, s.waitedMs)
+    g.latestJobId = s.jobId
+  }
+  for (const g of [...groups.values()].slice(0, MAX_STALL_RAISES)) {
+    if (!inTime()) return
+    await raiseAlertBestEffort(dispatchStalledSpec(g), deps.clock())
+  }
 }
