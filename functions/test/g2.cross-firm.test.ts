@@ -599,7 +599,9 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
   const bUid = (role: Role) => `g2-b-${role}`
   let env: RulesTestEnvironment
 
-  const docIdFor = (name: string) => (name === "firms" ? FIRM_A : name === "matters" ? MATTER_A : "g2-a-doc")
+  // FA-D4-001: a draft_template_analytics get needs the firm-qualified id template:{firmId}:{templateId}.
+  const docIdFor = (name: string) =>
+    name === "firms" ? FIRM_A : name === "matters" ? MATTER_A : name === "draft_template_analytics" ? `template:${FIRM_A}:g2_template` : "g2-a-doc"
   const seedFor = (name: string) => ({
     firmId: FIRM_A,
     classification: "public",
@@ -612,6 +614,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     // FA-F04-003: ocr_texts reads the named document's current label. The documents row is
     // seeded at this same id, firm A, classification public.
     ...(name === "ocr_texts" ? { documentId: "g2-a-doc" } : {}),
+    ...(name === "draft_template_analytics" ? { templateId: "g2_template" } : {}),
   })
 
   beforeAll(async () => {

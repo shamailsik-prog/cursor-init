@@ -20,6 +20,7 @@ import { type Classification } from "@/platform/p1/types"
 import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
 import type { WorkflowStatus } from "@/platform/spine/store"
+import { DocumentMalformedError } from "@/platform/d1/documentRecord"
 import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildWorkflowEventActivityRow } from "@/platform/persistence/workflowOpsActivity"
@@ -298,7 +299,17 @@ async function handlePost(request: Request) {
       await persistWorkflowEventsSince(repos, store, priorEvents, "workflow_review_decision")
       const updatedDoc = store.documents.get(parsed.documentId)
       if (updatedDoc) {
-        const persistedDoc = await repos.documents.get(updatedDoc.id, actor.firmId)
+        let persistedDoc: DocumentRecord | null
+        try {
+          persistedDoc = await repos.documents.get(updatedDoc.id, actor.firmId)
+        } catch (err) {
+          // FA-F13-026: a malformed stored row is not absence; do not recreate from the cache.
+          if (err instanceof DocumentMalformedError) {
+            store.documents.delete(updatedDoc.id)
+            throw new PublicError("unknown document")
+          }
+          throw err
+        }
         if (persistedDoc) {
           await repos.documents.update(updatedDoc.id, actor.firmId, {
             classification: updatedDoc.classification,

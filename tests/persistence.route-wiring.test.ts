@@ -1698,12 +1698,33 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
         },
       ]),
     },
-    draftTemplateAnalytics: {
-      upsert: vi.fn(),
+    draftTemplateAnalytics: (() => {
+      // FA-D4-001: `record` (compose) and `recordSearchHits` (one search page) replaced the blind `upsert`; these
+      // stand-ins return what the real writers would record for the listed row.
+      type T = { id: string; name: string; posture: string; category: string }
+      const recorded = (firmId: string, template: T, change: { kind: string; query?: string }) => ({
+        id: `template:${firmId}:${template.id}`,
+        firmId,
+        templateId: template.id,
+        templateName: template.name,
+        templatePosture: template.posture,
+        templateCategory: template.category,
+        composeCount: (template.id === "constitutional_petition_199" ? 2 : 0) + (change.kind === "compose" ? 1 : 0),
+        templateSearchCount: (template.id === "constitutional_petition_199" ? 5 : 0) + (change.kind === "search" ? 1 : 0),
+        lastComposedAt: null,
+        lastTemplateSearchAt: 13,
+        lastTemplateSearchQuery: change.query ?? null,
+        updatedAt: 13,
+      })
+      return {
+        record: vi.fn(async (firmId: string, template: T, change: { kind: string; query?: string }) => recorded(firmId, template, change)),
+        recordSearchHits: vi.fn(async (firmId: string, templates: T[], query: string) =>
+          templates.map((template) => recorded(firmId, template, { kind: "search", query }))
+        ),
       get: vi.fn().mockResolvedValue(null),
       listByFirm: vi.fn().mockResolvedValue([
         {
-          id: "template:constitutional_petition_199",
+          id: "template:firmA:constitutional_petition_199",
           firmId: "firmA",
           templateId: "constitutional_petition_199",
           templateName: "Constitutional Petition (Art. 199)",
@@ -1717,7 +1738,8 @@ vi.mock("@/platform/persistence/runtimeRepositories", () => ({
           updatedAt: 12,
         },
       ]),
-    },
+      }
+    })(),
     matterReportExportAnalytics: {
       upsert: vi.fn(),
       get: vi.fn().mockResolvedValue(null),

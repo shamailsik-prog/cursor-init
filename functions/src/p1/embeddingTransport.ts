@@ -54,7 +54,17 @@ export type P1EmbeddingReply = {
   model?: string
 }
 
-export type P1EmbeddingTransport = { embed(req: { model: string; input: string }): Promise<P1EmbeddingReply> }
+export type P1EmbeddingTransport = {
+  /**
+   * Audit F34 re-audit R1-002 (spec ruling R16): which transport this is, on the embedding's decision record
+   * (EMBEDDING_TRANSPORT_ID for the Gateway). A transport without one (a test double) is recorded `unidentified`.
+   */
+  id?: string
+  embed(req: { model: string; input: string }): Promise<P1EmbeddingReply>
+}
+
+/** The Gateway embedding transport's id on decision records (R16): the Vercel AI Gateway's embeddings endpoint. */
+export const EMBEDDING_TRANSPORT_ID = "ai-gateway-embeddings"
 
 type GatewayBody = {
   data?: unknown
@@ -82,6 +92,7 @@ function isAbort(err: unknown): boolean {
 
 export function gatewayEmbeddingTransport(apiKey: string, url: string = EMBEDDINGS_URL, opts?: { timeoutMs?: number }): P1EmbeddingTransport {
   return {
+    id: EMBEDDING_TRANSPORT_ID,
     async embed(req) {
       let res: Response
       try {

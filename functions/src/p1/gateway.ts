@@ -1,6 +1,6 @@
 import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
-import { maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { MASK_POLICY_VERSION, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { buildOutbound, residualCountsOfMessages, verifySystemMessage, type OutboundMessage, type SystemRecord } from "@/platform/p1/outboundPrompt"
 import { PROMPT_HASH_ALGORITHM, promptHash, promptTemplateOf } from "@/platform/p1/promptTemplates"
 import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolicy"
@@ -32,7 +32,7 @@ import {
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
 import { DECISIONS_COLLECTION, DECISION_RECORD_VERSION, anchorsOf, exportAfterCall, exportFields, type RetrievalAnchor } from "./decisionRecord"
 import { monthKeyPkt } from "./month"
-import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
+import { OPIK_TIMEOUT_MS, exportTrace, opikConfig, opikDisabledReason } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type LedgerTaskType, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
 import { uuidv7 } from "./uuidv7"
@@ -637,6 +637,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       redactionCounts: outbound.redactionCounts,
       residualCounts: outbound.residualCounts ?? null,
       partyNames: Array.isArray(partyNames) ? partyNames.length : 0,
+      // Re-audit R1-011 (R25): which mask produced these counts.
+      policyVersion: MASK_POLICY_VERSION,
     },
     budget: { firstLook: verdicts.firstLook, worstCaseMicroUsd: worstCase, reservation: reservationVerdict },
     credentials,
@@ -868,6 +870,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   // R10), and the ids and hashes that join it to the decision record at every rank.
   const traceStarted = performance.now()
   const endMs = Math.max(startMs, Math.floor(now()))
+  // Re-audit R1-009 (R23): read once, so the record can say why a disabled export was disabled.
+  const opik = opikConfig()
   const status = await exportTrace({
     traceId,
     startMs,
@@ -891,7 +895,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     promptTemplateId: promptRecord.templateId,
     promptTemplateVersion: promptRecord.templateVersion,
     modelReported,
-  })
+  }, opik)
   phases.traceMs = since(traceStarted)
   if (status === "failed") logger.warn("p1.trace_export_failed", { firmId, usageLogId: usageRef.id, traceId })
 
@@ -958,7 +962,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       spendRecord: `ai_usage_months/${firmId}_${monthKey}`,
       reservation: reservationVerdict === "not_attempted" ? null : `ai_reservations/${usageRef.id}`,
     },
-    export: exportFields(exportAfterCall(status, endMs)),
+    export: exportFields(exportAfterCall(status, endMs, opikDisabledReason(opik))),
     settledBy: "gateway",
   }
   let staged: StageResult = { ...NOTHING_STAGED, crossings: [] }

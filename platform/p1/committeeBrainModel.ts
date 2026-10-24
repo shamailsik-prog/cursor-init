@@ -33,12 +33,25 @@ import { PROVIDER_KEY_IN_RUNTIME_REASON, checkProviderKeys } from "@/platform/p1
  * reports real usage, or says it was not reported and why. A call refused before P1 or blocked by P1 sent nothing, so its
  * usage is zero (`none_sent`); in every deployment the bridge is blocked (audit F18: no provider transport in Next or eve),
  * so that is what production reports. An answered call reports the transport's counts when it gave both (`reported`);
- * otherwise every count stays undefined and the status says `usage_unreported` with the reason. The status rides in
+ * otherwise every count stays undefined and the status says `usage_unreported` with the reason. A call the transport
+ * received and then failed on is `usage_unreported` with `transport_failed_after_send` (re-audit R1-008, ruling R22), never
+ * `none_sent`: it may have been billed. The status rides in
  * `usage.raw` and in `providerMetadata.sikander`, on the result and on the stream's finish part.
  */
 type UsageReport = { usage: LanguageModelV3Usage; providerMetadata: SharedV3ProviderMetadata }
 
 export const USAGE_UNREPORTED_REASON = "transport_reported_no_usage"
+/** Audit F34 re-audit R1-008 (R22): the request was sent and the transport then threw, so what was billed is unknown. */
+export const SENT_THEN_FAILED_REASON = "transport_failed_after_send"
+
+const unreported = (reason: string): UsageReport => ({
+  usage: {
+    inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+    raw: { status: "usage_unreported", reason },
+  },
+  providerMetadata: { sikander: { usageStatus: "usage_unreported", usageReason: reason } },
+})
 
 const noneSent = (): UsageReport => ({
   usage: {
@@ -50,6 +63,8 @@ const noneSent = (): UsageReport => ({
 })
 
 function usageOf(result: OutboundResponse): UsageReport {
+  // A request the transport received and then failed on may have been billed: unknown, never zero (R22).
+  if (result.blocked && result.sent === true) return unreported(SENT_THEN_FAILED_REASON)
   if (result.blocked) return noneSent()
   if (result.usage !== undefined) {
     return {
@@ -61,14 +76,7 @@ function usageOf(result: OutboundResponse): UsageReport {
       providerMetadata: { sikander: { usageStatus: "reported" } },
     }
   }
-  return {
-    usage: {
-      inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: undefined, text: undefined, reasoning: undefined },
-      raw: { status: "usage_unreported", reason: USAGE_UNREPORTED_REASON },
-    },
-    providerMetadata: { sikander: { usageStatus: "usage_unreported", usageReason: USAGE_UNREPORTED_REASON } },
-  }
+  return unreported(USAGE_UNREPORTED_REASON)
 }
 
 function blockedAssistantText(reason: string): string {

@@ -1,5 +1,11 @@
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
-import { canonicalDocumentForCreate, partitionFirmDocuments, type DroppedDocument } from "@/platform/d1/documentRecord"
+import {
+  canonicalDocumentForCreate,
+  DocumentMalformedError,
+  partitionFirmDocuments,
+  readDocumentRecord,
+  type DroppedDocument,
+} from "@/platform/d1/documentRecord"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -173,6 +179,15 @@ import type {
 } from "@/platform/spine/store"
 import { storedUserRecord } from "@/platform/spine/store"
 import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
+import {
+  draftTemplateAnalyticsId,
+  draftTemplateAnalyticsSearchHitIds,
+  nextDraftTemplateAnalyticsRow,
+  nextDraftTemplateAnalyticsSearchRows,
+  readDraftTemplateAnalyticsRow,
+  type DraftTemplateAnalyticsChange,
+} from "@/platform/persistence/draftTemplateAnalytics"
+import type { TemplateSummary } from "@/services/d4-1/drafts"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
@@ -712,9 +727,37 @@ export type MatterClientSearchIndexRepository = {
   listByFirm(firmId: string): Promise<MatterClientSearchIndexRow[]>
 }
 
+/**
+ * FA-D4-001: rows are keyed `template:{firmId}:{templateId}` (platform/persistence/draftTemplateAnalytics.ts). There is
+ * no blind upsert: `record` is the only writer, and it reads, refuses and writes the caller's own row in one transaction.
+ */
 export type DraftTemplateAnalyticsRepository = {
-  upsert(row: DraftTemplateAnalyticsRow): Promise<void>
+  /**
+   * One compose or template search of `template` by `firmId`, in one transaction: reads `template:{firmId}:{template.id}`,
+   * throws DraftTemplateAnalyticsRefusedError when the stored row is another firm's or not canonical, otherwise writes
+   * and returns the next row (nextDraftTemplateAnalyticsRow).
+   */
+  record(
+    firmId: string,
+    template: TemplateSummary,
+    change: DraftTemplateAnalyticsChange,
+    opts?: { now?: number }
+  ): Promise<DraftTemplateAnalyticsRow>
+  /**
+   * One template-search page, all or nothing (PR #126, Codex P2): in ONE transaction, reads every hit's row of the
+   * caller's firm, refuses the whole page if any is another firm's or malformed (DraftTemplateAnalyticsRefusedError,
+   * nothing written), otherwise counts each hit once and returns the rows in page order. At most
+   * DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS templates, none repeated.
+   */
+  recordSearchHits(
+    firmId: string,
+    templates: readonly TemplateSummary[],
+    query: string,
+    opts?: { now?: number }
+  ): Promise<DraftTemplateAnalyticsRow[]>
+  /** The canonical row of the caller's firm at `id`; null for another firm's row, a legacy id or a malformed row. */
   get(id: string, firmId: string): Promise<DraftTemplateAnalyticsRow | null>
+  /** The caller's canonical rows; legacy and malformed rows are left out. */
   listByFirm(firmId: string): Promise<DraftTemplateAnalyticsRow[]>
 }
 
@@ -2019,8 +2062,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const doc = canonicalDocumentForCreate(row)
         store.documents.set(doc.id, doc)
       },
+      // FA-F13-026: same contract as the Firestore adapter (firmId type before the firm gate).
       async get(id, firmId) {
-        return firmScoped(store.documents.get(id), firmId)
+        const stored = store.documents.get(id) as { firmId?: unknown } | undefined
+        if (!stored) return null
+        if (typeof stored.firmId !== "string" || stored.firmId.trim() === "") throw new DocumentMalformedError(id)
+        if (stored.firmId !== firmId) return null
+        const doc = readDocumentRecord(id, stored)
+        if (!doc) throw new DocumentMalformedError(id)
+        return doc
       },
       async update(id, firmId, patch) {
         const current = firmScoped(store.documents.get(id), firmId)
@@ -3238,14 +3288,38 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
     },
     draftTemplateAnalytics: {
-      async upsert(row) {
-        store.draftTemplateAnalytics.set(row.id, row)
+      // FA-D4-001: read, decide and write with no await in between, so the memory store is as atomic as the
+      // Firestore transaction.
+      async record(firmId, template, change, opts) {
+        const id = draftTemplateAnalyticsId(requireCallerFirmId(firmId, "draftTemplateAnalytics.record"), template.id)
+        const next = nextDraftTemplateAnalyticsRow(firmId, template, store.draftTemplateAnalytics.get(id) ?? null, change, opts)
+        store.draftTemplateAnalytics.set(id, next)
+        return next
+      },
+      async recordSearchHits(firmId, templates, query, opts) {
+        const firm = requireCallerFirmId(firmId, "draftTemplateAnalytics.recordSearchHits")
+        const ids = draftTemplateAnalyticsSearchHitIds(firm, templates)
+        // Every next row is computed (and any refusal thrown) before the first one is stored.
+        const next = nextDraftTemplateAnalyticsSearchRows(
+          firm,
+          templates,
+          ids.map((id) => store.draftTemplateAnalytics.get(id) ?? null),
+          query,
+          opts
+        )
+        next.forEach((row, i) => store.draftTemplateAnalytics.set(ids[i] as string, row))
+        return next
       },
       async get(id, firmId) {
-        return firmScoped(store.draftTemplateAnalytics.get(id), firmId)
+        const row = firmScoped(store.draftTemplateAnalytics.get(id), requireCallerFirmId(firmId, "draftTemplateAnalytics.get"))
+        return row ? readDraftTemplateAnalyticsRow(id, row) : null
       },
       async listByFirm(firmId) {
-        return [...store.draftTemplateAnalytics.values()].filter((row) => row.firmId === firmId)
+        const firm = requireCallerFirmId(firmId, "draftTemplateAnalytics.listByFirm")
+        return [...store.draftTemplateAnalytics.entries()]
+          .filter(([, row]) => row.firmId === firm)
+          .map(([id, row]) => readDraftTemplateAnalyticsRow(id, row))
+          .filter((row): row is DraftTemplateAnalyticsRow => row !== null)
       },
     },
     matterReportExportAnalytics: {

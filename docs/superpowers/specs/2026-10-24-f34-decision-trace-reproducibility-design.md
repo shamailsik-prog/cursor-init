@@ -110,3 +110,95 @@ No P1 output feeds a human approval step today: committee outputs are advisory o
 7. The mask has no version constant; its effect is recorded as counts by kind (R6).
 8. The eve bridge is blocked everywhere; the `reported` and `usage_unreported` branches run only with a test transport (R12).
 9. Live Opik behaviour (a re-posted trace id), the deployed scheduler and index, and alert delivery: NOT DEMONSTRATED.
+
+## 5. R1 follow-up: the independent re-audit FAIL 6/10 at e37b115
+
+Date: 2026-10-24. Base: `origin/main` 3c8ccb9 (F34 merged as #121, `cdd4425`; FA-D3C #118, `38dbcd7`). Branch: `claude/remediate-f34-fu`. Plan: `docs/superpowers/plans/2026-10-24-f34-fu-r1-followups.md`.
+Status: rulings R15 to R25 are the builder's, under the owner's standing autonomy instruction. Sections 1 to 4 stand except where a ruling here names what it supersedes. R25 closes section 4's residual 7; R20 adds residual 10.
+
+The re-audit found three MEDIUMs (FA-F34-R1-001 to -003), eight LOWs (-004 to -011) and two INFOs (-012, -013: recorded, nothing to change). Each MEDIUM has an end-to-end test that fails on main and passes here.
+
+### R15 (FA-F34-R1-001). No prompt hash leaves the process unless the text may
+- *Finding.* At ranks 2 to 4 the trace metadata carried `promptHash`, a bare SHA-256 over the public system text and the masked body. The auditor recovered a privileged settlement figure by enumeration in under a second. On a refused `not_minimised` call, whose masked body still holds the name the mask missed, a ten-name list identified the person. R10's promise (nothing at ranks 2 to 4 lets restricted text be recovered) did not hold.
+- *Ruling.* `buildTrace` exports `promptHash` only when the trace may carry the masked text itself: rank at most `TRACE_TEXT_MAX_RANK` and an outcome other than `blocked`. Every other trace (ranks 2 to 4, and every blocked call at any rank) carries ids, the template id and version, metrics and `decisionRecordVersion`, and no hash of anything the caller wrote. The rule lives in `buildTrace`, so the export reconciler's re-export (`traceRecordOf`) obeys it too. `traceId` and `usageLogId` already join a trace to its record; the join never needed the hash.
+- *The server-only record keeps a bare SHA-256* (`sha256/p1-messages-v1`; for an embedding `sha256/p1-embedding-input-v1`, R16). Reasons:
+  1. The record is server-only (`firestore.rules` denies every role). The masked body it hashes is stored in clear in `committee_outputs.outbound.body`, which cleared members of the matter can read. The hash discloses nothing a reader of the record cannot already read. An embedding's input lives in the corpus row the corpus itself holds.
+  2. The reconstruction re-derives the hash from the output row with no secret (R13 `promptHashMatchesOutput`). An HMAC would put a key in the operator CLI and make every old record's check depend on key retention and rotation.
+  3. A Secret Manager key path is live infrastructure this repository cannot demonstrate.
+- *Steelman for an HMAC:* a Firestore export (F33) or a leaked admin credential lets an attacker enumerate. *Answer:* the same export holds the output rows' masked bodies in clear, so the hash adds no exposure; the auditor rated the record's bare hash acceptable. *Devil's advocate:* a later change could make the output body unreadable and leave the hash as the only trace of the text. *Answer:* then that change must move the record to a keyed hash (follow-up).
+- *Tests.* `functions/test/f34-fu-r1.e2e.emu.test.ts`, through `committeeBrain` on the real router: a privileged answer and a refused `not_minimised` call export no `promptHash`, and a dictionary attack over every 64-hex value in the exported payload recovers nothing; the rule at every rank and for a blocked call; a re-exported privileged record carries no hash. Units: the rule in `buildTrace` at each rank and outcome.
+
+### R16 (FA-F34-R1-002). The embedding path writes its decision record
+- *Finding.* `callP1Embedding` (FA-D3C, #118) wrote no `p1_decisions` record. A successful embedding whose export failed was never retried, a kill-switch block left no record, and a call that died after dispatch got a lease-reconciler record with `seedMissing: true` and `prompt: null`, which was then re-exported.
+- *Ruling.* `callP1Embedding` records its verdicts as `callP1` does and stages its decision record in its own commit (the shared `commit`'s `decision` argument) for every outcome: `ok`, `failed` and every block (`kill_switch_platform`, `kill_switch_firm`, `policy_denied`, `not_minimised`, `model_unpriced`, `budget_not_set`, `budget_exhausted`, `no_credentials`, `reservation_failed` and the reservation's own refusals). The record holds:
+  - `prompt`: `templateId`, `templateVersion`, `templateSha256` and `agentInstructionsSha256` null (an embedding has no template); `hash`, the SHA-256 of the masked input as sent; `hashAlgorithm: "sha256/p1-embedding-input-v1"`; `messageCount: 1`;
+  - `model`: configured, reported (with `revisionStatus`), provider, `transport` (the embedding transport's `id`: `ai-gateway-embeddings` for the Gateway, `unidentified` for a transport without one, null when none was reached), `gatewayVersion`, and the provider's request id;
+  - `decisions`, `phases` and `cost` as for a chat call (R6 to R8), with `systemVerified: null` (no system message);
+  - `export: exportFields(exportAfterCall(status, endMs, ...))`;
+  - `caller` and `corpusOperationId` (FA-D3C R7), `operationId: null` (no HTTP operation), `taskType: "embedding"`, `actorId: "system"`.
+- The reservation carries the same `decisionSeed`, and the attempt outcome carries `transportMs`, so the lease reconciler writes a record consistent with the seed. `reconciledDecision` carries `caller` and `corpusOperationId` from the reconciled usage record when it has them; a chat call's record gains neither.
+- *Lane.* FA-D3C's auth (the OIDC caller check), firm (`P1_CORPUS_FIRM_ID`) and money (reservation, settlement, charge) are unchanged. The edits add tracking beside the existing decisions and one argument to the existing commit. The embedding transport gains an optional `id` (metadata). The `fa-d3c-*` suites stay green.
+- *Tests* (`functions/test/f34-fu-r1.e2e.emu.test.ts`, through the HTTP handler `p1CorpusEmbedding` with a verified token where the case allows): an ok call whose export failed is `pending`, is retried by the export reconciler and ends `exported`; a kill-switch block and a policy refusal are recorded with their reason; a call that died after dispatch gets a lease-reconciler record whose prompt, model, decisions and corpus ids are the seed's.
+
+### R17 (FA-F34-R1-003). An import rule replaces the call-site regex
+- *Finding.* The R3 call-site test matched two exact code shapes (`transport.send(` and `.send({ model`). `const gw = activeTransport(); await gw?.send({ messages: [...] })` in a new `functions/src` file passed it and G-0, as did a send placed in `platform/p1/` and called from `functions/src`.
+- *Ruling.* `ci_gates/check_p1_transport_imports.py`, G-0 check [21]. It is pure Python, because G-0 runs before `node_modules` exists. It reads the G-0 walker's files except `functions/test/` (tests use the transport seams) and `functions/lib/` (build output). That covers `functions/src`, `platform/` and `services/`, as the audit asked, and the rest of the tree, where F18 [19](e) already refuses any import of a non-pure Functions module.
+  - *Restricted names.* `functions/src/p1/transport`: `activeTransport`, `gatewayTransport`, `P1Transport`, `setP1TransportForTests`. `functions/src/p1/embeddingTransport`: `activeEmbeddingTransport`, `gatewayEmbeddingTransport`, `P1EmbeddingTransport`, `setP1EmbeddingTransportForTests`. Every other export (`modelId`, `plainId`, `P1TransportError`, the constants and the reply types) stays importable.
+  - *Grants.* `functions/src/p1/gateway.ts` and `functions/src/p1/evalSet.ts` may import the transport's restricted names, the test seam excepted; `functions/src/p1/embedding.ts` the embedding transport's, the test seam excepted. `functions/src/cli/committeeEval.ts` may import `gatewayTransport` and `P1Transport` only, and must hold no `send` token: the operator CLI builds the Gateway transport from the operator's key and hands it to `runLiveEvaluation` (evalSet.ts), which builds every message with `buildOutbound` and is the send site. *Why a grant and not a refactor:* moving the construction into evalSet.ts would launder the same capability through an allowlisted module, which an import rule cannot see. An explicit, narrow grant is visible in the gate and in review.
+  - *Forms that fail outside a grant.* A named import or an `export { } from` re-export of a restricted name (type-only included, `as` resolved to the original name). Specifiers resolve by path: relative, the `@/` alias or a bare `functions/...` path, with or without an extension, query or hash. A side-effect `import "…/transport"` binds nothing and passes.
+  - *Forms that fail everywhere, granted files included.* A namespace import, a default import, `export *` and `export * as` of the module; any `import()`, `require()`, `require.resolve()`, `createRequire` loader or vitest/jest `importActual`/`requireActual`/`importMock`/`requireMock` of the module. The names such a binding uses cannot be read, so it passes only in a file granted every restricted name of the module, and no file is: the test seams are granted to none. Under `functions/src`, `platform/` and `services/`, an `import()` or `require()` whose specifier is not exactly one string literal also fails: a variable, a call, a concatenation, or a template literal with a substitution. Nothing in scope has one today.
+  - *Laundering.* A granted file may not export a restricted value, or a value derived from one. Derived means a `const`, `let` or `var` whose same-line initializer uses a restricted value, its `as` alias, a whole-module binding, or an already derived name, traced to a fixpoint and through destructuring. This covers `export { t }`, `export default t`, `export const t = …`, `export =` and `module.exports` / `exports.x =`. The earlier rule, a restricted value name on an `export` line, stays.
+  - *Review round (PR #129, Codex P2s).*
+    - Thread 4368766679: the grant is per name, but whole-module bindings were refused only outside the grants, and a derived value could be re-exported under a new name. A granted file could therefore import `* as transport` and hand on `transport.activeTransport()`, or `gateway.ts` could hand on `setP1TransportForTests` through an alias. *Ruling:* refuse the whole-module binding, which is the stricter and sound option, rather than resolve the members read on it, which a computed member defeats. Also trace derived re-exports as far as a static line-level reading can.
+    - Thread 4368766681: the computed-load regex backtracked over whitespace, so `import( "./x")` read as computed. *Ruling:* `computed_load` now reads the argument token by token on the comment-blanked text, and a literal passes only as the whole specifier (next token `)` or the `,` of import options). The same reading closes a bypass the regex had: `import("./trans" + "port")` passed at a27f100 and is now computed.
+  - The regex test in `functions/test/f34-template-callsites.test.ts` is replaced by a run of the gate on the repository. Its `buildOutbound` check and the run-time pin checks stay.
+- *F18 consistency.* F18 [19](e) refuses any import of a non-pure Functions module from outside `functions/`. Its pure list (`costTable`, `types`, `f02RouterBoundary`) holds no transport module and no grant holder, and its closure test forbids `transport`, `gateway`, `evalSet` and `cli/` in a pure module's closure. The new test holds the two gates to that: no grant holder or transport module is a pure module, and no pure module imports a restricted name.
+- *Tests.* `tests/f34-p1-transport-import-gate.test.ts` plants each shape in a temporary tree and runs the gate. Must-fail: the auditor's two shapes, a namespace import, `require`, `import()`, a computed loader, `export *`, a re-export, a type-only import, the `@/` alias, a comment between tokens, an embedding-transport import outside `embedding.ts`, a granted CLI that sends, a granted file that re-exports. Must-pass: the repository and a non-restricted import. `tests/g0-gate-e2e.test.ts` plants both auditor shapes, and the whole `gate_g0.sh` fails and names the file. The e2e for this finding is G-0 end to end: the gate is static, so the emulator does not apply.
+- *Residual.* In a granted file, three things are not traced: a function that returns a transport and is written over several lines, a derived value whose initializer spans several lines, and a transport stored in an object property. The four grants are reviewed with the gate.
+
+### R18 (FA-F34-R1-004). Released template versions are append-only
+- `tests/f34-prompt-template-pins.test.ts` gains `RELEASED = ["f16.1", "f17.1"]`, append-only: for every released version and every policy id, the registry resolves the text and both pin tables hold its hash. `SYSTEM_POLICY_HISTORY` (`platform/p1/systemPolicy.ts`) is keyed by literal versions, so a version bump cannot re-key the current texts and drop the released `f17.1`.
+
+### R19 (FA-F34-R1-005). The provider's model name is exported only when recognised
+- The trace's `metadata.modelReported` is the reported id when it is the configured model or the configured id without its `provider/` prefix (F17's `modelMatches` rule, kept in step by a unit test), `"unrecognised"` for any other report, and null when none was reported. The server-only record keeps the sanitised id (F17).
+
+### R20 (FA-F34-R1-006). A pre-call deadline exit is a named residual, not a record
+- *Ruling.* No decision record is written when `callP1` throws `P1PreCallDeadlineError`. Reasons:
+  1. The exit comes before any P1 attempt exists: no reservation, no usage row, nothing sent, nothing charged. The record is keyed by the attempt's usage row (R1).
+  2. The exit is taken because the request is out of time. A store write there spends time the request does not have and adds a failure path to a deliberately write-free exit (re-audit R3-D2).
+  3. The HTTP router already records the refusal as a deny audit row with reason `precall_deadline`, and the 503 is retryable, so the retried request makes its own attempt and gets its own record.
+- *Residual 10.* A pre-call deadline exit leaves no decision record; its record is the route's `audit_log` deny row (`reason: "precall_deadline"`). The e2e asserts that row and the absence of a decision record.
+
+### R21 (FA-F34-R1-007). A reconciled record says which verdicts came from the seed
+- When the lease reconciler writes a record and the reservation holds a provider attempt, `decisions.attemptRecord` is `"recorded"` (the attempt exists), and `decisions.fromSeed: true` marks the other verdicts as the pre-dispatch seed's.
+
+### R22 (FA-F34-R1-008). The eve bridge after a send that threw
+- `callCommitteeBrain`'s transport-failure path returns `sent: true`. The bridge then reports `usage_unreported` with the reason `transport_failed_after_send`, never `none_sent`. Its `console.error` logs a fixed code only, never the error, whose message may echo the prompt.
+
+### R23 (FA-F34-R1-009). Opik turned off is told apart from Opik misconfigured
+- The decision record's `export` gains `disabledReason` (`opikConfig().reason`: `unset`, `invalid_url`, `unconfirmed` or `third_party_host`) whenever its state is `disabled`, on the call's record and on a reconciled one.
+- An export requested while `OPIK_BASE_URL` is set but rejected logs `p1.opik_misconfigured` at ERROR with the reason, never the URL. The deploy manifest gains its alert policy, and `infra/terraform/alerts.tf` is re-rendered (`infra/render_terraform.py --write`). #120's v2 `resource.type` has not landed on main, so the current format stands.
+
+### R24 (FA-F34-R1-010). The auditor's surviving mutants get killing tests
+- A02: the record's hash is the hash of the masked messages when masking changed the text.
+- A08: neither the reservation (with its seed) nor the reconstruction holds any 20-character window of the body.
+- A14: the reconstruction finds an attempt by trace id with no decision record (through the usage row, then the reservation).
+- A15: a blocked reconstruction's events are exactly `["ai.call.blocked"]`.
+- A17: a publisher's fields written before the lease reconciler's record survive it.
+
+### R25 (FA-F34-R1-011). The mask has a version
+- `MASK_POLICY_VERSION` (`platform/p1/maskOutboundPII.ts`, `"f34.1"`) is recorded on `decisions.mask.policyVersion` on every record (chat, embedding, seed). A golden test pins the version beside a few masked outputs, so a change in what the mask redacts fails until the version is bumped. Closes residual 7.
+
+### Record format
+- `DECISION_RECORD_VERSION` becomes `"f34.2"`: the record gains `mask.policyVersion`, `export.disabledReason`, `decisions.fromSeed` and, on embedding records, `caller` and `corpusOperationId`. `P1_GATEWAY_VERSION` stays `"f34.1"`: nothing `callP1` decides has changed.
+
+### Changed test expectations
+- `functions/test/f34-decision-trace.e2e.emu.test.ts`: `recordVersion` is `"f34.2"`; the confidential and privileged trace case asserts no `promptHash` (R15).
+- `functions/test/f34-decision-units.test.ts`: `decisionRecordVersion` is `"f34.2"`; the metadata case splits into rank 1 (hash) and rank 4 (no hash).
+- `functions/test/f34-template-callsites.test.ts`: the regex test becomes the gate run (R17).
+- `tests/f34-eve-usage.test.ts` gains the sent-then-threw case (R22).
+
+### Residuals (added)
+10. A pre-call deadline exit leaves no decision record; its record is the route's deny audit row (R20).
+11. In a granted module, the import rule does not catch a multi-line function returning a transport, a derived value with a multi-line initializer, or a transport held in an object property (R17).
+12. INFO R1-012: an export reconciler run that outlives its 60 s lease can post twice; the fence keeps the record right (unchanged). INFO R1-013: process note; G-4 Phase 3d is run before reporting.

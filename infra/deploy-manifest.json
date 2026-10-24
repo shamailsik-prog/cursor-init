@@ -324,6 +324,7 @@
       { "event": "p1.reconcile_pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.trace_export_abandoned", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/traceExport.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.trace_export_reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/traceExport.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.opik_misconfigured", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/opik.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "autoconfirm.backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/d1/entity/autoConfirmJob.ts"], "runbook": "functions/src/p2/README.md" },
       { "event": "job.deadLettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p2/jobEvents.ts"], "runbook": "functions/src/p2/README.md" },
       { "event": "audit.outbox_backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
