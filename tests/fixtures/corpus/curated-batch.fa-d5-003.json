@@ -1,0 +1,558 @@
+{
+  "format": "corpus-publication-batch/1",
+  "batch_key": "curated/fa-d5-003-research-2099",
+  "source_kind": "curated",
+  "items": [
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-01",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/1",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0101010101010101010101010101010101010101010101010101010101010101",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3101"
+        }
+      ],
+      "case_title": "Bail after arrest under section 497 CrPC refused for want of reasonable grounds",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-01; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-02",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/2",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3102"
+        },
+        {
+          "text": "PLD 2099 SC 3202"
+        }
+      ],
+      "case_title": "Post-arrest bail under section 497 CrPC granted on further inquiry",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-02; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-03",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/3",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0303030303030303030303030303030303030303030303030303030303030303",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3103"
+        }
+      ],
+      "case_title": "Bail on statutory delay under the third proviso to section 497",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-03; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-04",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/4",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0404040404040404040404040404040404040404040404040404040404040404",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3104"
+        }
+      ],
+      "case_title": "Bail where the co-accused was released, section 497",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-04; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-05",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/5",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0505050505050505050505050505050505050505050505050505050505050505",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3105"
+        }
+      ],
+      "case_title": "Section 497 bail for a woman accused",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-05; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-06",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/6",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0606060606060606060606060606060606060606060606060606060606060606",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3106"
+        }
+      ],
+      "case_title": "Bail cancellation on misuse of the concession, section 497",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-06; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-07",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/7",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0707070707070707070707070707070707070707070707070707070707070707",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3107"
+        }
+      ],
+      "case_title": "Pre-arrest bail on mala fide grounds",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-07; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-08",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/8",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0808080808080808080808080808080808080808080808080808080808080808",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3108"
+        }
+      ],
+      "case_title": "Bail in a non-bailable offence of cheating",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-08; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-09",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/9",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0909090909090909090909090909090909090909090909090909090909090909",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3109"
+        }
+      ],
+      "case_title": "Bail after charge framed in a murder trial",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-09; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-10",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/10",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3110"
+        }
+      ],
+      "case_title": "Bail granted to a juvenile offender",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-10; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-bail-11",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/11",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3111"
+        }
+      ],
+      "case_title": "Bail and the rule of consistency among co-accused",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-bail-11; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-crpc-12",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/12",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3112"
+        }
+      ],
+      "case_title": "Section 497 CrPC and the meaning of reasonable grounds",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-crpc-12; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-khula-13",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/13",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 CLC 3113"
+        }
+      ],
+      "case_title": "Khula decree in a family suit with dower returned",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-khula-13; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-larger",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/14",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "PLD 2099 SC 3900"
+        }
+      ],
+      "case_title": "Larger bench reference on custody of minors",
+      "bench_type": "Larger Bench",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-larger; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-pending",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/15",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3114"
+        }
+      ],
+      "case_title": "Bail in a narcotics trafficking case under section 497",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-pending; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-review",
+      "trust": {
+        "level": "review",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/16",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "1010101010101010101010101010101010101010101010101010101010101010",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3601"
+        }
+      ],
+      "case_title": "Bail zqreview section 497 hidden",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-review; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-noprov",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/17",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": null,
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3602"
+        }
+      ],
+      "case_title": "Bail zqnoprov section 497 hidden",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-noprov; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-nobench",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/18",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3603"
+        }
+      ],
+      "case_title": "Bail zqnobench section 497 hidden",
+      "bench_type": null,
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-nobench; no real authority."
+    },
+    {
+      "kind": "judgment",
+      "item_key": "j-privileged",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/19",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "1313131313131313131313131313131313131313131313131313131313131313",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "citations": [
+        {
+          "text": "2099 SCMR 3604"
+        }
+      ],
+      "case_title": "Bail zqprivileged section 497 hidden",
+      "bench_type": "DB",
+      "decision_date": "2099-03-01",
+      "full_text": "Synthetic FA-D5-003 fixture judgment j-privileged; no real authority."
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-overruled",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/20",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "1414141414141414141414141414141414141414141414141414141414141414",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-larger"
+      },
+      "treated": {
+        "item_key": "j-bail-01"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.9
+    },
+    {
+      "kind": "treatment",
+      "item_key": "t-pending",
+      "trust": {
+        "level": "trusted",
+        "confidence": 0.95
+      },
+      "provenance": {
+        "source_name": "fa-d5-003-curated-fixture",
+        "source_url": "https://fa-d5-003.example.invalid/authority/21",
+        "raw_storage_key": null,
+        "fetched_at": "2099-03-04T05:06:07Z",
+        "content_hash": "1515151515151515151515151515151515151515151515151515151515151515",
+        "extraction_method": "manual",
+        "extractor_version": "fa-d5-003-fixture-1"
+      },
+      "treating": {
+        "item_key": "j-larger"
+      },
+      "treated": {
+        "item_key": "j-pending"
+      },
+      "treatment": "overruled",
+      "passage_anchor": null,
+      "treating_bench_type": "larger",
+      "confidence": 0.6
+    }
+  ]
+}

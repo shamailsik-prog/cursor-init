@@ -2074,4 +2074,37 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       expect(readable, `pass ${pass}`).toBeGreaterThan(0);
     }
   });
+
+  // ---- FA-DATA-003 and FA-D5-003 (005_research_reader.sql) ------------------------------------------------------
+  it("PG-DDL-33 005: corpus_reader reads neither unfiltered provenance nor the embeddings table, keeps the nine promoted-only views (G-0), and corpus_research_reader reads exactly its six relations", async () => {
+    const readable = async (role: string) =>
+      (await admin.query(
+        `SELECT string_agg(c.relname, ',' ORDER BY c.relname) AS names,
+                bool_or(has_table_privilege($1, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                        OR has_any_column_privilege($1, c.oid, 'INSERT,UPDATE,REFERENCES')) AS writes
+           FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            AND has_any_column_privilege($1, c.oid, 'SELECT')`,
+        [role],
+      )).rows[0];
+    expect(await readable("corpus_reader")).toEqual({
+      names: "corpus_metadata,v_citation,v_court,v_instrument,v_judge,v_judgment,v_statute,v_statute_section,v_statute_section_version,v_treatment",
+      writes: false,
+    });
+    const research = await admin.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'corpus_research_reader'");
+    expect(research.rows[0].n).toBe(1);
+    expect(await readable("corpus_research_reader")).toEqual({
+      names: "corpus_metadata,v_authority_citation,v_authority_pending_adverse,v_authority_treatment,v_research_embedding,v_research_judgment",
+      writes: false,
+    });
+    const reader = roleClient("corpus_reader", "reader");
+    await reader.connect();
+    try {
+      await expectSqlState(reader.query("SELECT count(*) FROM v_source_provenance"), "42501");
+      await expectSqlState(reader.query("SELECT count(*) FROM corpus_embeddings"), "42501");
+      expect((await reader.query("SELECT count(*)::int AS n FROM v_judgment")).rows[0].n).toBeGreaterThanOrEqual(0);
+    } finally {
+      await reader.end();
+    }
+  });
 });
