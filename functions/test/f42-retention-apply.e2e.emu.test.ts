@@ -2,7 +2,7 @@ import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { adminDb } from "../src/admin"
-import { retentionAlertTestSeam } from "../src/retention/alert"
+import { alertIdFor } from "../src/alerts/model"
 import { RETENTION_APPLY_SPEC } from "../src/retention/apply"
 import { retentionTestSeam, type RetentionPolicy } from "../src/retention/config"
 import { runRetentionWatch } from "../src/retention/watch"
@@ -58,7 +58,6 @@ const exists = async (c: string, id: string) => (await adminDb().collection(c).d
 
 afterEach(() => {
   delete retentionTestSeam.policy
-  delete retentionAlertTestSeam.sink
 })
 
 describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-deletion watch", () => {
@@ -112,9 +111,7 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     expect(await exists("committee_outputs", otherIds.oldOutput)).toBe(true)
   })
 
-  it("the watch raises one alert per overdue in-progress request, with ids and counts only", async () => {
-    const raised: Array<{ event: string; fields: Record<string, unknown> }> = []
-    retentionAlertTestSeam.sink = (event, fields) => void raised.push({ event, fields })
+  it("the watch raises one F43 durable alert per overdue in-progress request, with ids and counts only", async () => {
     const firmId = uniq("f42watch")
     const db = adminDb()
     const now = Date.now()
@@ -126,18 +123,33 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     await db.collection("deletion_requests").doc(notDue).set({ ...base, status: "in_progress", ackDeadlineAt: Timestamp.fromMillis(now + DAY) })
     await db.collection("deletion_requests").doc(done).set({ ...base, status: "completed", ackDeadlineAt: Timestamp.fromMillis(now - 1000) })
     await runRetentionWatch(now)
-    const mine = raised.filter((r) => r.fields.firmId === firmId)
-    expect(mine).toEqual([
-      { event: "retention.deletion_unacknowledged", fields: { firmId, requestId: overdue, matterId: base.matterId, expected: 3, acked: 1, missing: 2 } },
-    ])
+    // One F43 alert (ops_alerts, open at level 0, paged once) per overdue request; its subject is the request, never the
+    // matter, and its detail is counts only, so the alert record stays out of matter-deletion scope.
+    const alerts = await db.collection("ops_alerts").where("firmId", "==", firmId).get()
+    expect(alerts.docs.map((d) => d.id)).toEqual([alertIdFor("retention.deletion_unacknowledged", firmId, `deletionRequest:${overdue}`)])
+    expect(alerts.docs[0].data()).toMatchObject({
+      condition: "retention.deletion_unacknowledged",
+      firmId,
+      subjectKey: `deletionRequest:${overdue}`,
+      ref: `deletion_requests/${overdue}`,
+      severity: "high",
+      state: "open",
+      level: 0,
+      count: 1,
+      detail: { expected: 3, acked: 1, missing: 2 },
+    })
+    expect(JSON.stringify(alerts.docs[0].data())).not.toContain(base.matterId)
+    const pages = await db.collection("ops_alert_notifications").where("alertId", "==", alerts.docs[0].id).get()
+    expect(pages.size).toBe(1)
+    // The request's stamp commits with the alert.
     expect((await db.collection("deletion_requests").doc(overdue).get()).get("alertedAt")).toBeInstanceOf(Timestamp)
     await runRetentionWatch(now + 60_000)
-    expect(raised.filter((r) => r.fields.firmId === firmId)).toHaveLength(1)
+    const again = await db.collection("ops_alerts").where("firmId", "==", firmId).get()
+    expect(again.size).toBe(1)
+    expect(again.docs[0].get("count")).toBe(1)
   })
 
   it("a request that falls overdue behind a full page of already-alerted ones is still alerted", async () => {
-    const raised: Array<{ event: string; fields: Record<string, unknown> }> = []
-    retentionAlertTestSeam.sink = (event, fields) => void raised.push({ event, fields })
     const firmId = uniq("f42watchpage")
     const db = adminDb()
     const now = Date.now()
@@ -153,6 +165,6 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     const fresh = uniq("req")
     await db.collection("deletion_requests").doc(fresh).set({ ...base, ackDeadlineAt: Timestamp.fromMillis(now - 1000), alertedAt: null })
     await runRetentionWatch(now)
-    expect(raised.filter((r) => r.fields.requestId === fresh)).toHaveLength(1)
+    expect((await db.collection("ops_alerts").doc(alertIdFor("retention.deletion_unacknowledged", firmId, `deletionRequest:${fresh}`)).get()).exists).toBe(true)
   })
 })

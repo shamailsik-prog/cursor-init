@@ -148,6 +148,17 @@
     "why": "a decision record whose export is still pending may yet be exported: its trace id belongs in the request"
   },
   {
+    "id": "A7-watch-stamps-without-alert",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/watch.ts",
+    "old": "        stageAlert(tx, prepared, nowMs)\n",
+    "new": "",
+    "tests": [
+      "test/f42-retention-apply.e2e.emu.test.ts"
+    ],
+    "why": "the watch must leave an F43 durable alert in the transaction that stamps the request alerted"
+  },
+  {
     "id": "H1-matter-hold-ignored",
     "area": "legal hold",
     "file": "functions/src/retention/config.ts",

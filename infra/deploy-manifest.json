@@ -301,7 +301,7 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "every 15 minutes",
-      "why": { "schedule": "Audit F42: alerts once per deletion request whose stores are not all acknowledged by the deadline" }
+      "why": { "schedule": "Audit F42: raises one F43 durable alert per deletion request whose stores are not all acknowledged by the deadline" }
     }
   ],
   "firebase": {
@@ -363,8 +363,7 @@
       { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "ops_alert.notified", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/notifier.ts"], "runbook": "functions/src/alerts/README.md" },
       { "event": "ops_alert.raise_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/raise.ts"], "runbook": "functions/src/alerts/README.md" },
-      { "event": "ops_alert.pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/escalator.ts", "functions/src/alerts/checker.ts", "functions/src/alerts/notifier.ts"], "runbook": "functions/src/alerts/README.md" },
-      { "event": "retention.deletion_unacknowledged", "level": "ERROR", "surface": "functions", "files": ["functions/src/retention/alert.ts"], "runbook": "docs/runbooks/retention-deletion.md" }
+      { "event": "ops_alert.pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/alerts/escalator.ts", "functions/src/alerts/checker.ts", "functions/src/alerts/notifier.ts"], "runbook": "functions/src/alerts/README.md" }
     ],
     "exemptions": [
       { "event": "p1.provider_key_in_next_runtime", "reason": "Next runtime; external delivery F43", "delivery": "external" }

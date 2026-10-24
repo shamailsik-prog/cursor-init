@@ -1,23 +1,24 @@
-import { logger } from "firebase-functions"
+import type { AlertSpec } from "../alerts/model"
+import { detailInt, detailText } from "../alerts/raise"
+import { safeRef } from "../alerts/specs"
 
 /**
- * Audit F42 (spec R10): the one seam through which the retention code raises an operator alert. Today it writes the
- * ERROR log line that `infra/deploy-manifest.json` registers as a log-based alert policy (fields: ids and counts only).
- * Follow-up FU-3: when audit F43's durable alerts land on main, route this through its `prepareAlert` / `stageAlert`
- * (condition `retention.deletion_unacknowledged`) so the alert has an acknowledgement and an escalation chain.
+ * Audit F42 (spec R10): the unacknowledged-deletion alert, raised through audit F43's durable alerts (`ops_alerts`,
+ * acknowledged and escalated operator, then partner, then firm admin, each level paged once). F43 landed on main before
+ * this branch merged, so the narrow log-line seam the F42 brief allowed is retired: the watch prepares and stages this
+ * alert in the same transaction that stamps the request's `alertedAt`, so the alert commits if and only if the stamp
+ * does.
+ *
+ * The subject is the deletion request, never the matter, and the detail is counts only, so the alert record holds no
+ * matter id and stays out of matter-deletion scope (F43's guard refuses anything but codes, ids and integers).
  */
-
-export type RetentionAlertEvent = "retention.deletion_unacknowledged"
-export type RetentionAlertFields = Record<string, string | number>
-
-/** Test-only capture of raised alerts (the log line is still written). */
-export const retentionAlertTestSeam: { sink?: (event: RetentionAlertEvent, fields: RetentionAlertFields) => void } = {}
-
-export function raiseRetentionAlert(event: RetentionAlertEvent, fields: RetentionAlertFields): void {
-  if (process.env.NODE_ENV !== "production") retentionAlertTestSeam.sink?.(event, fields)
-  switch (event) {
-    case "retention.deletion_unacknowledged":
-      logger.error("retention.deletion_unacknowledged", fields)
-      return
+export function deletionUnacknowledgedSpec(firmId: string, requestId: string, expected: number, acked: number): AlertSpec {
+  return {
+    condition: "retention.deletion_unacknowledged",
+    firmId,
+    subjectKey: `deletionRequest:${detailText(requestId)}`,
+    ref: safeRef("deletion_requests", requestId),
+    severity: "high",
+    detail: { expected: detailInt(expected), acked: detailInt(acked), missing: detailInt(Math.max(0, expected - acked)) },
   }
 }

@@ -46,10 +46,13 @@ read before the purge jobs anonymise those rows; the Opik deletion call is **NOT
 
 ## Alert: retention.deletion_unacknowledged
 
-`retentionDeletionWatch` (every 15 minutes) raises `retention.deletion_unacknowledged` once per `in_progress` request
-whose stores are not all acknowledged by `ackDeadlineAt` (approval + PROPOSED 24 h). Fields: `firmId`, `requestId`,
-`matterId`, `expected`, `acked`, `missing` (ids and counts only). Log-based alert policy: `severity=ERROR` and
-`jsonPayload.message="retention.deletion_unacknowledged"` (`infra/deploy-manifest.json`, `infra/terraform/alerts.tf`).
+`retentionDeletionWatch` (every 15 minutes) raises the F43 durable alert `retention.deletion_unacknowledged` once per
+`in_progress` request whose stores are not all acknowledged by `ackDeadlineAt` (approval + PROPOSED 24 h), in the
+transaction that stamps the request's `alertedAt`. The alert is an `ops_alerts` row: subject
+`deletionRequest:<requestId>`, ref `deletion_requests/<requestId>`, severity `high`, detail `expected`, `acked`,
+`missing` (counts only, no matter id). It pages the operator at once and escalates (partner, then firm admin) if no
+one acknowledges it within F43's window; acknowledge and resolve it through F43's routes
+(`functions/src/alerts/README.md`).
 
 To act on it:
 
@@ -60,8 +63,7 @@ To act on it:
    the matter, `store_unavailable` a Firestore outage) and retry them. Every step is fenced, so a retry resumes and
    never repeats an effect.
 
-F43 follow-up (FU-3): when durable alerts land, `raiseRetentionAlert` (`functions/src/retention/alert.ts`) routes this
-through them, adding acknowledgement and escalation.
+Once every store has acknowledged (or the hold is released and the saga finishes), resolve the alert.
 
 ## Retention execution
 
