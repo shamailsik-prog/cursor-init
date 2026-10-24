@@ -1,5 +1,11 @@
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
-import { canonicalDocumentForCreate, partitionFirmDocuments, type DroppedDocument } from "@/platform/d1/documentRecord"
+import {
+  canonicalDocumentForCreate,
+  DocumentMalformedError,
+  partitionFirmDocuments,
+  readDocumentRecord,
+  type DroppedDocument,
+} from "@/platform/d1/documentRecord"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -2019,8 +2025,15 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const doc = canonicalDocumentForCreate(row)
         store.documents.set(doc.id, doc)
       },
+      // FA-F13-026: same contract as the Firestore adapter (firmId type before the firm gate).
       async get(id, firmId) {
-        return firmScoped(store.documents.get(id), firmId)
+        const stored = store.documents.get(id) as { firmId?: unknown } | undefined
+        if (!stored) return null
+        if (typeof stored.firmId !== "string" || stored.firmId.trim() === "") throw new DocumentMalformedError(id)
+        if (stored.firmId !== firmId) return null
+        const doc = readDocumentRecord(id, stored)
+        if (!doc) throw new DocumentMalformedError(id)
+        return doc
       },
       async update(id, firmId, patch) {
         const current = firmScoped(store.documents.get(id), firmId)
