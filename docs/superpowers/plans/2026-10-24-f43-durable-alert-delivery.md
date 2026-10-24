@@ -41,6 +41,27 @@ Exact counts; main = `origin/main` f39d007 export with the branch's test files c
 
 ## Mutation ledger
 
-| # | Mutant | Target test | Result |
+Hand mutants, one exact edit each, run against their targeted files on the emulator (runner and logs kept in the builder's scratchpad). 18 of 18 killed. M16 survived the first pass: the concurrency assertion did not force two delivery passes onto one claimed page; the test "a page another run has claimed is not delivered twice; a claim that lapsed is delivered again" was added and kills it.
+
+| # | Mutant | Targeted files | Result |
 | --- | --- | --- | --- |
-| (filled in below) | | | |
+| M01 | dedupe key ignores the subject | unit, P2 | killed (2 failed / 14) |
+| M02 | an open alert is re-opened on every raise | P2, P1 | killed (6 / 13) |
+| M03 | a resolved alert is counted, not reopened | escalation | killed (1 / 6) |
+| M04 | stall threshold 3 → 4 re-dispatches | P2 | killed (1 / 8) |
+| M05 | stall comparison `>=` → `>` | P2 | killed (1 / 8) |
+| M06 | queue-age cutoff 1 ms late | P2 | killed (1 / 8) |
+| M07 | escalation takes two levels per step | escalation | killed (3 / 6) |
+| M08 | escalation fence removed (no re-read of level and deadline) | escalation | killed (1 / 6) |
+| M09 | escalation does not raise the severity | escalation | killed (1 / 6) |
+| M10 | owner rule: a partner may act at level 0 | escalation | killed (1 / 6) |
+| M11 | P5 table: an associate may acknowledge | unit, escalation | killed (2 / 12) |
+| M12 | acknowledge leaves the alert open | escalation | killed (2 / 6) |
+| M13 | P1 coupling: alerts raised in their own transaction | P1 | killed (1 / 5) |
+| M14 | P2 coupling: dead-letter alert raised in its own transaction | P2 | killed (1 / 8) |
+| M15 | no alert after a failed commit | P2 | killed (1 / 8) |
+| M16 | delivery claim ignores the page's status | escalation | survived, then killed after the added test (1 / 7) |
+| M17 | saga threshold 60 → 59 minutes | P2 | killed (1 / 8) |
+| M18 | unresolved-reservation cutoff 1 ms early | P1 | killed (1 / 5) |
+
+Known redundancy (recorded, not a defect): the escalation fence has two independent checks (the level the query saw, and the deadline); with the new deadline always computed from now, either one alone stops a second step, so a mutant removing only one survives by design. M08 removes both.

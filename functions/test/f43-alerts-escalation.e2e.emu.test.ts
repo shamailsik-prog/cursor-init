@@ -187,6 +187,34 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect((await runAlertEscalator({ now: () => T0 + 3 * MIN, notifier: flaky })).delivered).toEqual([])
   })
 
+  it("a page another run has claimed is not delivered twice; a claim that lapsed (its run died) is delivered again", async () => {
+    const { alert } = await deadLetter()
+    const pageId = `${alert.id}_e1_l0`
+    const { runAlertEscalator } = await escalatorModule()
+    // The first delivery holds its claim until released, so the second run meets the page while it is claimed.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const holding = {
+      deliver: async (n: Notification) => {
+        delivered.push(n)
+        if (delivered.length === 1) await gate
+      },
+    }
+    const first = runAlertEscalator({ now: () => T0 + MIN, notifier: holding })
+    for (let i = 0; i < 200 && (await pagesOf(alert.id))[0]?.status !== "sending"; i++) await new Promise((r) => setTimeout(r, 25))
+    expect((await pagesOf(alert.id))[0]?.status).toBe("sending")
+    const second = await runAlertEscalator({ now: () => T0 + MIN, notifier: holding })
+    release()
+    expect([(await first).delivered, second.delivered]).toEqual([[pageId], []])
+    expect(delivered.map((n) => n.id)).toEqual([pageId])
+
+    // A run that claimed the page and died: once its claim lapses (2 minutes), the next run delivers it again.
+    await adminDb().collection("ops_alert_notifications").doc(pageId).update({ status: "sending", claimedUntil: Timestamp.fromMillis(T0 + 3 * MIN) })
+    expect((await runAlertEscalator({ now: () => T0 + 3 * MIN - 1, notifier })).delivered).toEqual([])
+    expect((await runAlertEscalator({ now: () => T0 + 3 * MIN, notifier })).delivered).toEqual([pageId])
+    expect(delivered.map((n) => n.id)).toEqual([pageId, pageId])
+  })
+
   it("the operator acknowledges at level 0: escalation stops, the action is recorded and audited", async () => {
     const { alert } = await deadLetter()
     clock.set(T0 + MIN)
