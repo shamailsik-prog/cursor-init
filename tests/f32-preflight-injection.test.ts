@@ -37,12 +37,31 @@ describe("F32 deploy preflight injection (R5-002)", () => {
     fs.rmSync(marker, { force: true })
   })
 
-  it("production deploy-preflight.sh is not exploitable with the same crafted profile", () => {
+  it("heredoc fixture is exploitable via crafted --project-id", () => {
+    const marker = path.join(os.tmpdir(), `f32-preflight-inject-project-${process.pid}`)
+    fs.rmSync(marker, { force: true })
+    const evilProjectId = `demo-sikander"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
+    spawnSync("bash", [VULNERABLE_FIXTURE, "staging", evilProjectId], { cwd: repoRoot })
+    expect(fs.existsSync(marker)).toBe(true)
+    fs.rmSync(marker, { force: true })
+  })
+
+  it("production deploy-preflight.sh is not exploitable with crafted profile", () => {
     const isolatedRoot = cloneWorkspace()
     const marker = path.join(os.tmpdir(), `f32-preflight-inject-safe-${process.pid}`)
     fs.rmSync(marker, { force: true })
     const evilProfile = `staging", "${STAGING_PROJECT_ID}"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
     runPreflight(isolatedRoot, ["--profile", evilProfile, "--project-id", STAGING_PROJECT_ID])
+    expect(fs.existsSync(marker)).toBe(false)
+    fs.rmSync(isolatedRoot, { recursive: true, force: true })
+  })
+
+  it("production deploy-preflight.sh is not exploitable with crafted --project-id", () => {
+    const isolatedRoot = cloneWorkspace()
+    const marker = path.join(os.tmpdir(), `f32-preflight-inject-safe-project-${process.pid}`)
+    fs.rmSync(marker, { force: true })
+    const evilProjectId = `demo-sikander"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
+    runPreflight(isolatedRoot, ["--profile", "staging", "--project-id", evilProjectId])
     expect(fs.existsSync(marker)).toBe(false)
     fs.rmSync(isolatedRoot, { recursive: true, force: true })
   })
