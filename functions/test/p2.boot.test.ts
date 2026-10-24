@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler", "retentionApplyTick", "retentionDeletionWatch"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -84,12 +84,19 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.auditOutboxReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
     expect(index.auditOutboxReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect([index.auditOutboxReconciler.__endpoint.httpsTrigger, index.auditOutboxReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
+    // Audit F42: the daily retention tick (a P2 scheduled job, retried like the other ticks) and the deletion watch.
+    expect(index.retentionApplyTick.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 60, scheduleTrigger: { schedule: "0 1 * * *", timeZone: "Asia/Karachi", retryConfig: { retryCount: 3 } } })
+    expect(index.retentionDeletionWatch.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 120, scheduleTrigger: { schedule: "every 15 minutes" } })
+    expect(index.retentionDeletionWatch.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    for (const n of ["retentionApplyTick", "retentionDeletionWatch"]) {
+      expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
+    }
     // F32: the worker invoker is exactly the runtime service account (not public).
     expect(index.jobWorker.__endpoint.taskQueueTrigger).toMatchObject({ invoker: ["sikander-functions@"] })
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr"])
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr", "retention.matter.prepare", "retention.store.purge", "retention.apply"])
     expect(SUBSCRIBERS).toEqual([])
   })
 

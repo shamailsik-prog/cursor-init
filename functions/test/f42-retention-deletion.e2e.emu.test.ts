@@ -1,11 +1,12 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import inventory from "@/infra/retention/inventory.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
 import { adminDb } from "../src/admin"
 import { ROUTES, createRouter } from "../src/http/router"
 import { retentionTestSeam, storeKey, type RetentionPolicy } from "../src/retention/config"
+import { enqueueJob } from "../src/p2/enqueue"
 import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi, ApiError } from "./api"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -18,6 +19,10 @@ import { FakeClock, testDeps } from "./jobs"
  * through the Functions routes and the F02 authority gate. A legal hold (the shipped policy's, or the matter's own)
  * blocks deletion and is recorded; a crash mid-saga resumes without repeating an effect.
  */
+
+// A whole saga acknowledges about 300 stores through about 20 P2 jobs over the emulator: 5 to 15 s on a quiet
+// machine, more on a loaded one. Each test gets its own budget rather than the 15 s default.
+vi.setConfig({ testTimeout: 120_000 })
 
 type Member = { uid: string; token: string }
 type Firm = { firmId: string; P: Member; Q: Member; A: Member; C: Member; outsider: Member; matterId: string; otherMatterId: string }
@@ -200,6 +205,7 @@ async function f02Get(path: string, f: Firm, m: Member, query: Record<string, st
 afterEach(() => {
   delete retentionTestSeam.policy
   delete retentionTestSeam.afterStep
+  delete retentionTestSeam.beforeAck
 })
 
 describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and acknowledgements", () => {
@@ -313,6 +319,50 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     // The F02 authority gate in front of the Next domain routes.
     expect(await f02Get("/api/d1/documents", f, f.P, { matterId: f.matterId, userId: f.P.uid })).toMatchObject({ status: 403, code: "matter_deleted" })
     expect(await f02Get("/api/d4/drafts", f, f.P, { matterId: f.matterId })).toMatchObject({ status: 403, code: "matter_deleted" })
+  })
+
+  it("the tombstone alone, with every membership intact, refuses the matter's reads and lists, and its queued P2 job", async () => {
+    const f = await newFirm()
+    const { jobId } = await adminDb().runTransaction((tx) =>
+      enqueueJob(tx, { firmId: f.firmId, jobType: "platform.diagnostic", classification: "internal", matterId: f.matterId, payload: { behaviour: "succeed" }, idempotencyKey: uniq("k"), createdBy: f.P.uid }, { now: Date.now() })
+    )
+    await adminDb().collection("matter_tombstones").doc(f.matterId).set({ firmId: f.firmId, matterId: f.matterId, requestId: "direct", classification: "internal", tombstonedAt: Timestamp.now() })
+    expect(await exists("matter_members", `${f.matterId}_${f.A.uid}`)).toBe(true)
+    const err = await apiErrorOf(send(getMatterApi, f, f.A, { matterId: f.matterId }))
+    expect(`${err.status} ${err.code}`).toBe("403 matter_deleted")
+    const listed = await send(listMattersApi, f, f.A, {})
+    expect(JSON.stringify(listed)).not.toContain(f.matterId)
+    expect(await runJobTask({ jobId, seq: 0 }, testDeps(new FakeClock(Date.now())))).toBe("dead_lettered")
+    expect((await adminDb().collection("jobs").doc(jobId).get()).get("lastError.code")).toBe("matter_deleted")
+    // Another firm's tombstone under the same id refuses nothing here.
+    const g = await newFirm()
+    await adminDb().collection("matter_tombstones").doc(g.matterId).set({ firmId: f.firmId, matterId: g.matterId, requestId: "direct", classification: "internal", tombstonedAt: Timestamp.now() })
+    await send(getMatterApi, g, g.A, { matterId: g.matterId })
+  })
+
+  it("a row that lands after a store's purge but before its acknowledgement is purged first, then acknowledged", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await seedStores(f.firmId, f.matterId, "late")
+    let late: string | null = null
+    retentionTestSeam.beforeAck = async (part) => {
+      if (part !== "g0" || late !== null) return
+      late = uniq("late-doc")
+      await adminDb().collection("documents").doc(late).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/late/v1` })
+    }
+    const { requestId } = await requestAndApprove(f)
+    const outcomes = await drain(f.firmId, new FakeClock(Date.now()))
+    expect(late).not.toBeNull()
+    expect(outcomes).toContain("failed")
+    expect(await exists("documents", late!)).toBe(false)
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.status).toBe("completed")
+    const ack = (id: string) => view.acks.find((a) => a.storeId === id)!
+    expect(ack("firestore:documents")).toMatchObject({ outcome: "purged", count: 2 })
+    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 3 })
+    const jobs = await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("jobType", "==", "retention.store.purge").get()
+    const codes = jobs.docs.flatMap((d) => ((d.get("logs") as Array<{ code?: string }>) ?? []).map((l) => l.code))
+    expect(codes).toContain("purge_incomplete")
   })
 
   it("a matter legal hold blocks the request and the approval, and each refusal is recorded; only another partner releases it", async () => {

@@ -15,6 +15,7 @@ import { GET as reportingGet } from "@/app/api/d1/reporting/route"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
+import { createFirestoreRepositories } from "@/platform/persistence/firestoreSpineRepositories"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
@@ -192,6 +193,16 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F42: the Next routes refuse a tomb
     const named = await get(documentsGet, partner, `/api/d1/documents?userId=${partner.uid}&matterId=${deleted}&limit=10&cursor=0`)
     expect(named.status).toBe(403)
     expect(named.body.error).toEqual({ code: "matter_deleted" })
+
+    // The repository every Next route reads through: a row of the tombstoned matter reads as absent, the other matter's do not.
+    const repo = createFirestoreRepositories(adminDb() as never)
+    expect(await repo.matters.get(deleted, partner.firmId)).toBeNull()
+    expect(await repo.documents.get(deletedDoc, partner.firmId)).toBeNull()
+    expect(await repo.reportingIndex.get(`matter:${deleted}`, partner.firmId)).toBeNull()
+    expect(await repo.members.get(deleted, partner.uid, partner.firmId)).toBeNull()
+    expect(await repo.matters.get(kept, partner.firmId)).not.toBeNull()
+    expect(await repo.documents.get(keptDoc, partner.firmId)).not.toBeNull()
+    expect(await repo.reportingIndex.get(`matter:${kept}`, partner.firmId)).not.toBeNull()
   }, TIMEOUT)
 
   it("a revoked member no longer finds the matter in search; the remaining members still do", async () => {

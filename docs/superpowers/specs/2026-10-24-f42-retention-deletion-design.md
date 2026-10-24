@@ -136,8 +136,10 @@ and the worker check in R6 never refuses them):
   acknowledgement. A job that would exceed 45 fenced steps enqueues a continuation of itself for the rest.
 
 Every effect is a `runFenced` step, so a crash resumes after its last committed step and a replay writes nothing
-twice. Each acknowledgement is `deletion_acks/{requestId}_{storeKey}` plus an entry in the request's `acked` map, in
-one transaction; the transaction that records the last expected store finishes the request (`status: "completed"`,
+twice. A store's key is its id with every character outside `[A-Za-z0-9]` as `_`; an id longer than 80 characters
+(some legacy collection names run to 1,500, past Firestore's field-name limit) keeps 48 characters plus `_h` and 24 hex
+characters of its SHA-256 (the gate computes the same key and fails on a collision). Each acknowledgement is
+`deletion_acks/{requestId}_{storeKey}` plus an entry in the request's `acked` map, in one transaction; the transaction that records the last expected store finishes the request (`status: "completed"`,
 `completedAt`) and stamps the tombstone. A store acknowledged twice keeps its first acknowledgement. Reason: the
 brief's "fenced P2 saga", modelled on the un-merge saga (`functions/src/d1/entity/unmergeJobs.ts`).
 
@@ -154,6 +156,13 @@ brief's "fenced P2 saga", modelled on the un-merge saga (`functions/src/d1/entit
 | Opik traces | a `deletion_external_requests` row with the exported trace ids, for the operator to send (NOT DEMONSTRATED) | `external_requested` (or `not_applicable` when none was exported) |
 | F33 backups | expire under the backup retention | `expiry`, window end = approval + the longest configured backup retention (Firestore 14 weeks) |
 | Public corpus (Postgres, vectors) | out of scope: public law, no client data | `not_applicable` |
+
+The matter row itself is **anonymised, not purged**, when its class says so (the proposed value): its `title` is
+cleared and its `caseNumber` nulled, its id, firm, client, label and status stay, and the write bumps the firm's
+registry version. Reason: the conflict screen reads matter rows by client and by opposing party
+(`functions/src/d1/conflict/candidates.ts`), so a purged row would blind future screens; the tombstone keeps every API
+read of it refused. An anonymised row of a field-keyed store must null its key field (config validation and the
+gate), so it leaves the matter's query and the saga never finds it again.
 
 The conflict register (`clients`, `entities`, `entity_*`, `merge_events`, `matter_parties`, `conflict_*`,
 `autoconfirm_deferrals`) and the audit trail (`audit_log`, `audit_outbox`, `audit_dead_letter`, `events`, the

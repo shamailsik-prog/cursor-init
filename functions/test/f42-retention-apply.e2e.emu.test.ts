@@ -75,6 +75,14 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     expect(typeof usage?.matterId).toBe("string")
     const run = (await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-24`).get()).data()
     expect(run).toMatchObject({ firmId, period: "2026-10-24", policyVersion: shippedPolicy.policyVersion, deleted: {}, anonymised: {} })
+    // Periods set but the classes under legal hold (the shipped default for matter content): still nothing.
+    const held = periodPolicy()
+    held.classes.matter_content.legalHold = true
+    held.classes.ai_record.legalHold = true
+    retentionTestSeam.policy = held
+    expect(await runApply(firmId, "2026-10-23")).toBe("done")
+    for (const key of Object.keys(ids)) expect(await exists(key.includes("Output") ? "committee_outputs" : "ai_usage_logs", ids[key]), key).toBe(true)
+    expect((await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-23`).get()).data()).toMatchObject({ deleted: {}, anonymised: {} })
   })
 
   it("a test policy deletes and anonymises rows older than the period, keeps younger rows and spares a held matter", async () => {

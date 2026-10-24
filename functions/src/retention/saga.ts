@@ -407,6 +407,7 @@ async function continueWith(ctx: JobContext<PurgePayload>, req: Request, storeKe
 async function acknowledge(ctx: JobContext<PurgePayload>, req: Request, stores: Array<{ key: string; store: InventoryStore }>, jobId: string): Promise<void> {
   const { firmId } = ctx.job
   const { requestId, part } = ctx.payload
+  if (process.env.NODE_ENV !== "production") await retentionTestSeam.beforeAck?.(part)
   await step(ctx as JobContext<unknown>, `ack-${part}`, async (tx) => {
     await assertNoHold(tx, firmId, req.matterId)
     const acks: AckInput[] = []

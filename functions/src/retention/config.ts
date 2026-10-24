@@ -61,10 +61,16 @@ export type Inventory = {
 export type PlannedStore = { key: string; store: InventoryStore; retentionClass: string; treatment: Treatment }
 
 /**
- * Test seams (never set in production code): `policy` replaces the shipped policy, `afterStep` runs after each
- * committed fenced step of the saga (a throw there stands in for a crash after the commit).
+ * Test seams (never set in production code, and ignored when NODE_ENV is production): `policy` replaces the shipped
+ * policy; `afterStep` runs after each committed fenced step of the saga (a throw there stands in for a crash after the
+ * commit); `beforeAck` runs before a purge job's acknowledgement step (a write there stands in for a row that lands
+ * after the purge).
  */
-export const retentionTestSeam: { policy?: RetentionPolicy; afterStep?: (stepId: string) => Promise<void> } = {}
+export const retentionTestSeam: {
+  policy?: RetentionPolicy
+  afterStep?: (stepId: string) => Promise<void>
+  beforeAck?: (part: string) => Promise<void>
+} = {}
 
 /** The longest store key. Some legacy collection names run to 1,500 characters, past Firestore's field-name limit. */
 export const MAX_STORE_KEY = 80

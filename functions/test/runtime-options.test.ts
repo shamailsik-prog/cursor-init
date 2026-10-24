@@ -55,6 +55,8 @@ describe("F32 runtime options on every export", () => {
       "onEventCreated",
       "onJobCreated",
       "p1ReservationReconciler",
+      "retentionApplyTick",
+      "retentionDeletionWatch",
     ])
 
     for (const name of names) {
