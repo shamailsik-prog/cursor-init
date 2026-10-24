@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onDocumentWritten } from "firebase-functions/v2/firestore"
-import { REGION } from "../../health"
+import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../../runtimeOptions"
 import { adminDb } from "../../admin"
 import { nameIndexGenOf, nextNameIndexGen, registryStateOf, registryVersionRef } from "../registryVersion"
 import { sameKey, screenedKeyOf, stampOf } from "./screenedName"
@@ -168,14 +168,20 @@ export async function nameIndexChunkWritten(
 
 // O-33: a Firestore trigger runs in the database's region (asia-south1, as onJobCreated). `retry: true`: a thrown
 // (transient store) error is redelivered by the platform for up to 7 days; the handlers are safe to repeat.
-export const d1ConflictClientWritten = onDocumentWritten({ document: "clients/{clientId}", region: REGION, retry: true }, (event) =>
+export const d1ConflictClientWritten = onDocumentWritten(
+  { ...RUNTIME_DEFAULTS, document: "clients/{clientId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
+  (event) =>
   registryRowWritten("clients", event.params.clientId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )
 
-export const d1ConflictPartyWritten = onDocumentWritten({ document: "matter_parties/{partyId}", region: REGION, retry: true }, (event) =>
+export const d1ConflictPartyWritten = onDocumentWritten(
+  { ...RUNTIME_DEFAULTS, document: "matter_parties/{partyId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
+  (event) =>
   registryRowWritten("matter_parties", event.params.partyId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )
 
-export const d1ConflictIndexChunkWritten = onDocumentWritten({ document: "conflict_name_index/{chunkId}", region: REGION, retry: true }, (event) =>
+export const d1ConflictIndexChunkWritten = onDocumentWritten(
+  { ...RUNTIME_DEFAULTS, document: "conflict_name_index/{chunkId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
+  (event) =>
   nameIndexChunkWritten(event.params.chunkId, event.data?.before.data(), event.data?.after.data(), Date.now(), event.id)
 )

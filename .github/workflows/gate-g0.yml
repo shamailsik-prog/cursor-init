@@ -230,6 +230,11 @@ jobs:
         run: npm --prefix functions run typecheck
       - name: Functions build
         run: npm --prefix functions run build
+      - name: F32 deploy contract bundle gate
+        run: |
+          set -euo pipefail
+          ENV_FILE="functions/.env.demo-sikander"
+          python3 ci_gates/check_deploy_contract.py --bundle --profile staging --project-id demo-sikander --env-file "$ENV_FILE"
       # test/g2.cross-firm.test.ts is excluded here (functions/vitest.config.ts): it runs once, in the gates job.
       # Under CI a missing emulator env fails the run instead of skipping (functions/test/emu.ts).
       - name: Functions tests (Auth + Firestore emulators)
@@ -282,6 +287,11 @@ jobs:
       - name: Install
         if: ${{ !cancelled() }}
         run: npm ci && npm --prefix functions ci
+      - name: F32 deploy preflight (staging profile)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          bash scripts/deploy-preflight.sh --profile staging --project-id demo-sikander
       - name: Gate F18 eve model AST (G-0 [19] rule f; needs node_modules)
         if: ${{ !cancelled() }}
         run: python3 ci_gates/check_next_ai_egress.py --rule-f-ast-only

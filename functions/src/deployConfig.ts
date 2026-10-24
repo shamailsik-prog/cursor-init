@@ -3,12 +3,6 @@ import { logger } from "firebase-functions"
 /**
  * Deploy-time settings read from the environment (functions/.env.<projectId>),
  * used by `api`.
- *
- * - TRUSTED_PROXY_HOPS: proxies of ours in front of Google's front end that
- *   append to X-Forwarded-For (see clientIp in http/rateLimit.ts). Default 0.
- * - SIKANDER_INGRESS_SETTINGS: the functions' ingress. Default ALLOW_ALL (direct
- *   URLs). Behind a load balancer set ALLOW_INTERNAL_AND_GCLB, so clients cannot
- *   bypass the proxy and choose their own X-Forwarded-For.
  */
 
 type Env = Record<string, string | undefined>
@@ -16,7 +10,32 @@ type Env = Record<string, string | undefined>
 export const INGRESS_VALUES = ["ALLOW_ALL", "ALLOW_INTERNAL_ONLY", "ALLOW_INTERNAL_AND_GCLB"] as const
 export type Ingress = (typeof INGRESS_VALUES)[number]
 
-/** TRUSTED_PROXY_HOPS as a non-negative integer; anything else counts as 0. */
+export type ContractCode =
+  | "ingress_not_set"
+  | "ingress_invalid"
+  | "proxy_hops_invalid"
+  | "proxy_trust_with_open_ingress"
+  | "gclb_ingress_without_trusted_hop"
+
+export const CONTRACT_ALERT = "deploy.contract_violation"
+
+export class DeployContractError extends Error {
+  readonly codes: ContractCode[]
+  constructor(codes: ContractCode[]) {
+    super(`deploy contract violation: ${codes.join(", ")}`)
+    this.name = "DeployContractError"
+    this.codes = codes
+  }
+}
+
+/** Cloud Run / Functions revision (not the emulator). */
+export function isDeployedRuntime(env: Env = process.env): boolean {
+  if ((env.FUNCTIONS_EMULATOR ?? "").trim() === "true") return false
+  if (env.NODE_ENV === "production") return true
+  return Boolean((env.K_SERVICE ?? "").trim() || (env.FUNCTION_TARGET ?? "").trim())
+}
+
+/** TRUSTED_PROXY_HOPS as a non-negative integer; anything else counts as 0 for rate limiting. */
 export function trustedProxyHops(env: Env = process.env): number {
   const raw = env.TRUSTED_PROXY_HOPS ?? ""
   return /^\d+$/.test(raw) ? Number(raw) : 0
@@ -30,18 +49,38 @@ export function ingressSettings(env: Env = process.env): Ingress {
   throw new Error(`SIKANDER_INGRESS_SETTINGS must be one of ${INGRESS_VALUES.join(", ")}`)
 }
 
-/** A warning when proxy hops are trusted but direct traffic is still allowed (the hop key is then spoofable). */
-export function ingressWarning(env: Env = process.env): string | undefined {
-  if (trustedProxyHops(env) > 0 && ingressSettings(env) === "ALLOW_ALL") {
-    return (
-      "TRUSTED_PROXY_HOPS > 0 but SIKANDER_INGRESS_SETTINGS is ALLOW_ALL: direct requests can bypass the proxy " +
-      "and forge the trusted X-Forwarded-For hop; set SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB"
-    )
+export function deployContractViolations(env: Env, ctx: { deployed: boolean }): ContractCode[] {
+  const codes: ContractCode[] = []
+  const hopsRaw = env.TRUSTED_PROXY_HOPS ?? ""
+  let hops = 0
+  if (hopsRaw !== "") {
+    if (!/^(0|[1-9]\d*)$/.test(hopsRaw)) codes.push("proxy_hops_invalid")
+    else hops = Number(hopsRaw)
   }
-  return undefined
+
+  const ingressRaw = env.SIKANDER_INGRESS_SETTINGS
+  let ingress: Ingress = "ALLOW_ALL"
+  if (ingressRaw === undefined || ingressRaw === "") {
+    if (ctx.deployed) codes.push("ingress_not_set")
+  } else if (!(INGRESS_VALUES as readonly string[]).includes(ingressRaw)) {
+    codes.push("ingress_invalid")
+  } else {
+    ingress = ingressRaw as Ingress
+  }
+
+  if (ingress === "ALLOW_ALL" && hops > 0) codes.push("proxy_trust_with_open_ingress")
+  if (ingress === "ALLOW_INTERNAL_AND_GCLB" && hops === 0) codes.push("gclb_ingress_without_trusted_hop")
+  return codes
 }
 
-export const INGRESS_SETTINGS: Ingress = ingressSettings()
+function enforceContractAtLoad(): void {
+  const codes = deployContractViolations(process.env, { deployed: isDeployedRuntime() })
+  if (codes.length > 0) {
+    logger.error(CONTRACT_ALERT, { codes })
+    throw new DeployContractError(codes)
+  }
+}
 
-const warning = ingressWarning()
-if (warning) logger.warn(warning)
+enforceContractAtLoad()
+
+export const INGRESS_SETTINGS: Ingress = ingressSettings()

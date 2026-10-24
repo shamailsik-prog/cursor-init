@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { ingressSettings, ingressWarning, trustedProxyHops } from "../src/deployConfig"
+import { ingressSettings, trustedProxyHops } from "../src/deployConfig"
 import { header } from "../src/http/headers"
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
@@ -27,19 +27,11 @@ describe("deploy config: proxy hops and ingress", () => {
     expect(() => ingressSettings({ SIKANDER_INGRESS_SETTINGS: "allow_all" })).toThrow(/SIKANDER_INGRESS_SETTINGS/)
   })
 
-  it("warns only when proxy hops are trusted but ingress still allows direct traffic", () => {
-    expect(ingressWarning({})).toBeUndefined()
-    expect(ingressWarning({ TRUSTED_PROXY_HOPS: "1", SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB" })).toBeUndefined()
-    expect(ingressWarning({ TRUSTED_PROXY_HOPS: "1" })).toMatch(/ALLOW_INTERNAL_AND_GCLB/)
-  })
-
-  it("the warning is logged when the module loads", async () => {
+  it("refuses proxy hops with open ingress at module load (was a warning on main)", async () => {
     vi.stubEnv("TRUSTED_PROXY_HOPS", "1")
     vi.stubEnv("SIKANDER_INGRESS_SETTINGS", "ALLOW_ALL")
-    const { logger } = await import("firebase-functions")
-    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
-    await import("../src/deployConfig")
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/TRUSTED_PROXY_HOPS/))
+    vi.stubEnv("NODE_ENV", "test")
+    await expect(import("../src/deployConfig")).rejects.toMatchObject({ name: "DeployContractError" })
   })
 
   it("api carries the configured ingress (default ALLOW_ALL)", async () => {
@@ -59,10 +51,15 @@ describe("deploy config: proxy hops and ingress", () => {
     // loaded in a fresh Node process, the way `firebase deploy` discovers the endpoints.
     const cwd = path.resolve(__dirname, "..")
     execFileSync(process.execPath, ["build.mjs"], { cwd, stdio: "ignore" })
+    const env = {
+      ...process.env,
+      SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+      TRUSTED_PROXY_HOPS: "1",
+    }
     const out = execFileSync(
       process.execPath,
       ["-e", "const m=require('./lib/index.js');const r={};for(const k of Object.keys(m)){const e=m[k]&&m[k].__endpoint;if(e)r[k]=e.region??null}console.log(JSON.stringify(r))"],
-      { cwd, encoding: "utf8" }
+      { cwd, encoding: "utf8", env }
     )
     const regions = JSON.parse(out.trim().split("\n").pop() as string) as Record<string, string[] | null>
     expect(Object.keys(regions)).toEqual(expect.arrayContaining(["api", "health", "onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]))

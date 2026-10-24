@@ -84,9 +84,8 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.auditOutboxReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
     expect(index.auditOutboxReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect([index.auditOutboxReconciler.__endpoint.httpsTrigger, index.auditOutboxReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
-    // The worker stays IAM-private (only Cloud Tasks, with OIDC, may invoke it): firebase-functions
-    // does not verify the caller itself, so an invoker set here or globally (e.g. "public") must fail.
-    expect(index.jobWorker.__endpoint.taskQueueTrigger).not.toHaveProperty("invoker")
+    // F32: the worker invoker is exactly the runtime service account (not public).
+    expect(index.jobWorker.__endpoint.taskQueueTrigger).toMatchObject({ invoker: ["sikander-functions@"] })
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }

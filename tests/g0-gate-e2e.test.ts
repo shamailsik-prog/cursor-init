@@ -107,6 +107,16 @@ function buildBaseTree(): string {
     "platform/p1/systemPolicy.ts",
     "functions/src/p1/grounding.ts",
     "docs/evals",
+    // Check [20] (audit F32): deploy manifest, Firebase contract files, Functions sources for exports/alerts/TTL writers.
+    "infra",
+    "firebase.json",
+    "firestore.indexes.json",
+    "docs/deploy",
+    "functions/src",
+    "platform/http",
+    "scripts/deploy-preflight.sh",
+    "app/api/p1/committee-brain/route.ts",
+    "app/api/d1/documents/route.ts",
   ]) {
     copyFromRepo(dir, rel);
   }

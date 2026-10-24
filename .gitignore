@@ -34,6 +34,7 @@ yarn-error.log*
 .env*
 !.env.example
 !functions/.env
+!functions/.env.demo-sikander
 
 # vercel
 .vercel

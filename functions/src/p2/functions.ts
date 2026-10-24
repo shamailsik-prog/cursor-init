@@ -3,7 +3,7 @@ import { logger } from "firebase-functions"
 import { onDocumentCreated } from "firebase-functions/v2/firestore"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { onTaskDispatched } from "firebase-functions/v2/tasks"
-import { REGION } from "../health"
+import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { logFailure } from "../log"
 import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
@@ -67,8 +67,9 @@ export function parseJobTask(data: unknown): JobTask | null {
 // O-33: a Firestore trigger must run in the database's region. This assumes the default database
 // is in asia-south1; if it is not, deploy this trigger in the database's region or drop it, and
 // the sweeper's query A alone dispatches new jobs (within about 90 s).
-export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region: REGION, retry: true }, (event) =>
-  onJobCreatedCore(event.params.jobId, event.data?.data(), runtimeDeps())
+export const onJobCreated = onDocumentCreated(
+  { ...RUNTIME_DEFAULTS, document: "jobs/{jobId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
+  (event) => onJobCreatedCore(event.params.jobId, event.data?.data(), runtimeDeps())
 )
 
 /**
@@ -77,9 +78,12 @@ export const onJobCreated = onDocumentCreated({ document: "jobs/{jobId}", region
  * for a permanent cause, and the deterministic job ids make a redelivery safe. An event whose
  * retries run out is not recovered (open item O-37).
  */
-export const onEventCreated = onDocumentCreated({ document: "events/{eventId}", region: REGION, retry: true }, async (event) => {
-  await fanOutEvent(event.params.eventId, event.data?.data(), runtimeDeps())
-})
+export const onEventCreated = onDocumentCreated(
+  { ...RUNTIME_DEFAULTS, document: "events/{eventId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
+  async (event) => {
+    await fanOutEvent(event.params.eventId, event.data?.data(), runtimeDeps())
+  }
+)
 
 /**
  * The worker queue (P3-5). Every job-level outcome answers 2xx; `runJobTask` throws only when it
@@ -89,10 +93,13 @@ export const onEventCreated = onDocumentCreated({ document: "events/{eventId}", 
  */
 export const jobWorker = onTaskDispatched(
   {
-    region: REGION,
+    ...RUNTIME_DEFAULTS,
+    maxInstances: 10,
     timeoutSeconds: JOB_WORKER_TIMEOUT_SECONDS,
+    ingressSettings: INTERNAL_ONLY,
     retryConfig: { maxAttempts: 3, minBackoffSeconds: 10, maxBackoffSeconds: 60 },
     rateLimits: { maxConcurrentDispatches: 10, maxDispatchesPerSecond: 5 },
+    invoker: ["sikander-functions@"],
   },
   async (req) => {
     const task = parseJobTask(req.data)
@@ -120,18 +127,24 @@ if (!(SWEEP_BUDGET_MS + 10_000 <= SWEEPER_TIMEOUT_SECONDS * 1000)) {
 }
 
 /** The safety net (P3-8): re-dispatches lost dispatches and expired leases every minute. */
-export const jobSweeper = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
-  await sweep(runtimeDeps())
-})
+export const jobSweeper = onSchedule(
+  { ...RUNTIME_DEFAULTS, schedule: "every 1 minutes", maxInstances: 1, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS, ingressSettings: INTERNAL_ONLY },
+  async () => {
+    await sweep(runtimeDeps())
+  }
+)
 
 /**
  * Legacy OCR safety net (FA-F04-007). The create trigger drains a row only when it is written.
  * This sweep picks up older rows that trigger never saw, and rows whose engine retries are
  * exhausted, so a missed handoff does not stay queued. No schedule retry: the next minute is the retry.
  */
-export const ocrLegacySweep = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS }, async () => {
-  await sweepLegacyOcr(runtimeDeps())
-})
+export const ocrLegacySweep = onSchedule(
+  { ...RUNTIME_DEFAULTS, schedule: "every 1 minutes", maxInstances: 1, timeoutSeconds: SWEEPER_TIMEOUT_SECONDS, ingressSettings: INTERNAL_ONLY },
+  async () => {
+    await sweepLegacyOcr(runtimeDeps())
+  }
+)
 
 /** The daily auto-confirm tick (P3-43): enqueues `d1.autoconfirm` for every firm, once per PKT day. */
 export const d1AutoConfirmTick = scheduledJobFunction(AUTO_CONFIRM_SPEC)

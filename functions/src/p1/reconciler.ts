@@ -3,7 +3,7 @@ import { logger } from "firebase-functions"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
-import { REGION } from "../health"
+import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
@@ -369,6 +369,15 @@ export async function reconcileReservations(opts: { now?: () => number } = {}): 
 }
 
 /** The scheduled reconciler (F07, F08): every minute, like the job sweeper. No caller, no tenant input. */
-export const p1ReservationReconciler = onSchedule({ schedule: "every 1 minutes", region: REGION, timeoutSeconds: RECONCILER_TIMEOUT_SECONDS }, async () => {
-  await reconcileReservations()
-})
+export const p1ReservationReconciler = onSchedule(
+  {
+    ...RUNTIME_DEFAULTS,
+    schedule: "every 1 minutes",
+    maxInstances: 1,
+    timeoutSeconds: RECONCILER_TIMEOUT_SECONDS,
+    ingressSettings: INTERNAL_ONLY,
+  },
+  async () => {
+    await reconcileReservations()
+  }
+)
