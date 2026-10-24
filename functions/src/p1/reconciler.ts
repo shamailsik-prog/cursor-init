@@ -10,7 +10,7 @@ import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
 import { modelId } from "./transport"
-import type { P1Outcome, TaskType } from "./types"
+import type { LedgerTaskType, P1Outcome } from "./types"
 
 /**
  * The lease reconciler for P1 reservations (audit F07, F08), run every minute by `p1ReservationReconciler`, the
@@ -112,7 +112,7 @@ type Parsed = {
   actorId: string
   matterId: string | null
   jobId: string | null
-  taskType: TaskType
+  taskType: LedgerTaskType
   model: string
   classification: Classification
   reservedInputTokens: number
@@ -136,7 +136,7 @@ function parseReservation(res: DocumentData): Parsed {
     actorId: nonEmpty(res.actorId) ? res.actorId : "system",
     matterId: nonEmpty(res.matterId) ? res.matterId : null,
     jobId: nonEmpty(res.jobId) ? res.jobId : null,
-    taskType: (nonEmpty(res.taskType) ? res.taskType : "committee") as TaskType,
+    taskType: (nonEmpty(res.taskType) ? res.taskType : "committee") as LedgerTaskType,
     model: nonEmpty(res.model) ? res.model : "unknown",
     classification: isClassification(res.classification) ? res.classification : "privileged-restricted",
     reservedInputTokens: count(res.reservedInputTokens) ?? 0,
