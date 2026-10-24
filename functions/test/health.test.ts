@@ -17,7 +17,12 @@ describe("health contract report (F32 R9)", () => {
   it("responds 200 with status ok, region and contract verdicts when all checks pass", async () => {
     const { createHealthHandler } = await import("../src/health")
     const handler = createHealthHandler({
-      env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1", FIREBASE_CONFIG: '{"locationId":"asia-south1"}' },
+      env: {
+        SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+        TRUSTED_PROXY_HOPS: "1",
+        FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        GCLOUD_PROJECT: "demo-sikander",
+      },
       deployed: true,
       metadata: async () => ({
         region: "asia-south1",
@@ -91,6 +96,7 @@ describe("health contract report (F32 R9)", () => {
         SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
         TRUSTED_PROXY_HOPS: "1",
         FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        GCLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
       metadata: async () => ({
@@ -102,6 +108,27 @@ describe("health contract report (F32 R9)", () => {
     const res = mockRes()
     await handler({} as never, res as never)
     expect(res.status).toHaveBeenCalledWith(503)
+  })
+
+  it("accepts the runtime SA when GCLOUD_PROJECT matches metadata project", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: {
+        SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+        TRUSTED_PROXY_HOPS: "1",
+        FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+        GOOGLE_CLOUD_PROJECT: "demo-sikander",
+      },
+      deployed: true,
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
+      }),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(200)
   })
 
   it("rejects a service account that only substring-matches the runtime identity", async () => {

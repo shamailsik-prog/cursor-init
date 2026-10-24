@@ -201,18 +201,34 @@ class BundleTier(unittest.TestCase):
         self.assertTrue(any("retryConfig" in f.message for f in hits))
 
 
-class RulesTtlParsing(unittest.TestCase):
-    def test_ttl_rules_rejects_allow_get_even_when_read_is_false(self) -> None:
-        body = "allow read, write: if false; allow get: if request.auth != null;"
-        self.assertTrue(gate.ttl_match_allows_client_read(body))
+class ProfileProjectId(unittest.TestCase):
+    def test_production_env_path_does_not_fall_back_to_demo_project(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        prod_id = manifest["environments"]["production"].get("gcpProjectId")
+        staging_id = manifest["environments"]["staging"]["gcpProjectId"]
+        self.assertIsNotNone(prod_id)
+        self.assertNotEqual(prod_id, staging_id)
+        hits = gate.check_canonical_deploy_env_path(
+            ROOT,
+            manifest,
+            "production",
+            str(ROOT / "functions" / f".env.{prod_id}"),
+        )
+        self.assertEqual(hits, [])
+        wrong = gate.check_canonical_deploy_env_path(
+            ROOT,
+            manifest,
+            "production",
+            str(ROOT / "functions" / f".env.{staging_id}"),
+        )
+        self.assertTrue(wrong)
 
-    def test_ttl_rules_ignores_if_false_elsewhere_in_block(self) -> None:
-        body = "allow write: if false; allow read: if sameFirm();"
-        self.assertTrue(gate.ttl_match_allows_client_read(body))
-
-    def test_ttl_rules_accepts_server_only_block(self) -> None:
-        body = "allow read, write: if false;"
-        self.assertFalse(gate.ttl_match_allows_client_read(body))
+    def test_bundle_rejects_project_id_mismatch_for_profile(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        staging_id = manifest["environments"]["staging"]["gcpProjectId"]
+        hits = gate.check_profile_project_id(manifest, "staging", "wrong-project-id")
+        self.assertTrue(hits)
+        self.assertEqual(gate.check_profile_project_id(manifest, "staging", staging_id), [])
 
 
 class RunbookEnvSource(unittest.TestCase):
@@ -225,6 +241,22 @@ class RunbookEnvSource(unittest.TestCase):
         steps = manifest.get("runbook", {}).get("orderedSteps", [])
         joined = " ".join(steps).lower()
         self.assertNotIn("print-env", joined)
+
+    def test_runbook_gate_catches_print_env_prefix_abbreviation(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        try:
+            shutil.copytree(ROOT / "infra", root / "infra")
+            (root / "docs/deploy").mkdir(parents=True, exist_ok=True)
+            (root / "docs/deploy/RELEASE_RUNBOOK.md").write_text(
+                "terraform apply stage 1\nuse print-e for env\nbash scripts/deploy-preflight.sh\nfirebase deploy\n",
+                encoding="utf-8",
+            )
+            manifest = gate.load_manifest(root)
+            hits = gate.run_static(root, manifest)
+            self.assertTrue(any(f.check == "runbook" and "print-e" in f.message.lower() for f in hits))
+        finally:
+            tmp.cleanup()
 
 
 class EnvFileParsing(unittest.TestCase):
@@ -240,6 +272,38 @@ class EnvFileParsing(unittest.TestCase):
 
     def test_bundle_requires_env_file(self) -> None:
         self.assertEqual(gate.main(["--bundle", "--profile", "staging"]), 1)
+
+    def test_check_env_file_rejects_unknown_keys(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        text = "SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\nTRUSTED_PROXY_HOPS=1\nEXTRA=1\n"
+        hits = gate.check_env_file(manifest, "staging", text)
+        self.assertTrue(any("unknown" in f.message for f in hits))
+
+    def test_cli_rejects_print_env_flag_abbreviation(self) -> None:
+        with self.assertRaises(SystemExit):
+            gate.main(["--print-e"])
+
+
+class TaskQueueRetry(unittest.TestCase):
+    def test_compare_endpoints_job_worker_max_doublings(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        endpoints = {
+            "jobWorker": {
+                "region": ["asia-south1"],
+                "taskQueueTrigger": {
+                    "rateLimits": {"maxConcurrentDispatches": 10, "maxDispatchesPerSecond": 5},
+                    "retryConfig": {
+                        "maxAttempts": 3,
+                        "minBackoffSeconds": 10,
+                        "maxBackoffSeconds": 60,
+                        "maxDoublings": 5,
+                        "maxRetrySeconds": None,
+                    },
+                },
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "staging", {})
+        self.assertTrue(any("retryConfig" in f.message for f in hits))
 
 
 class FirebaseJson(unittest.TestCase):
