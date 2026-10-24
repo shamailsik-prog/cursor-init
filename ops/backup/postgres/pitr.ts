@@ -11,14 +11,16 @@ export async function baseBackup(opts: { outRoot: string; key: Buffer; pgPrefix?
   const env = { ...process.env, ...opts.env }
   const bb = await runCommand(
     ["pg_basebackup", "-D", "-", "--format=tar", "--wal-method=fetch", "--checkpoint=fast", "--manifest-checksums=SHA256"],
-    { env, pgPrefix: opts.pgPrefix }
+    { env, pgPrefix: opts.pgPrefix, binaryStdout: true }
   )
   if (bb.code !== 0) throw new Error(bb.stderr || bb.stdout)
+  const baseBytes = bb.stdoutBytes
+  if (!baseBytes?.length) throw new Error("pg_basebackup produced no stdout bytes")
   const writer = await BundleWriter.create(opts.outRoot, "postgres-pitr-base", opts.key)
   const { createGzip } = await import("node:zlib")
   const { Readable } = await import("node:stream")
   const gzChunks: Buffer[] = []
-  await pipeline(Readable.from([Buffer.from(bb.stdout, "binary")]), createGzip({ level: 1 }), async function (src) {
+  await pipeline(Readable.from([baseBytes]), createGzip({ level: 1 }), async function (src) {
     for await (const c of src) gzChunks.push(Buffer.from(c))
   })
   await writer.addBuffer("base.tar.gz", Buffer.concat(gzChunks))
