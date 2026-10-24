@@ -35,7 +35,7 @@ const firestoreBackupSchema = z.object({
 
 const documentVaultSchema = z.object({
   objectLockDays: z.number().int().positive(),
-  governanceMode: z.literal("GOVERNANCE"),
+  governanceMode: z.enum(["GOVERNANCE", "COMPLIANCE"]),
   r2LockMinAgeSeconds: z.number().int().positive(),
 })
 

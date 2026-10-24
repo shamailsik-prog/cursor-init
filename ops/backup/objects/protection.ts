@@ -31,8 +31,11 @@ export async function applyVaultProtection(s3: S3Client, bucket: string, cfg: Do
 export async function checkVaultProtection(s3: S3Client, bucket: string, cfg: DocumentVaultConfig): Promise<string[]> {
   const problems: string[] = []
   const lock = await s3.send(new GetObjectLockConfigurationCommand({ Bucket: bucket }))
-  const days = lock.ObjectLockConfiguration?.Rule?.DefaultRetention?.Days
+  const retention = lock.ObjectLockConfiguration?.Rule?.DefaultRetention
+  const days = retention?.Days
+  const mode = retention?.Mode
   if (days !== cfg.objectLockDays) problems.push(`object lock days ${days} != ${cfg.objectLockDays}`)
+  if (mode !== cfg.governanceMode) problems.push(`object lock mode ${mode} != ${cfg.governanceMode}`)
   return problems
 }
 
