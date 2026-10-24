@@ -52,6 +52,12 @@ Full functions suite at 73a10ff on a fresh emulator (`firebase emulators:exec`, 
 
 Ruling for P1: `cloud_run_revision` alone, since every export's `__endpoint.platform` is `gcfv2`; the test fails if any export's generation stops matching the filters. The renderer change also repairs F32's existing alert policies (they could never match).
 
+After merging `origin/main` (38dbcd7, then 3c8ccb9), main had added four conditions, from #118 and #121, rendered on `cloud_function`. Each merge re-ran `render_terraform.py --write`, giving 24 conditions, all on `cloud_run_revision`. The export pins list all 18 exports.
+
+Full functions suite at eec1476, on a fresh emulator: 109 files passed, 2 failed and 1 skipped; 2,705 tests passed, 1 failed and 1 skipped. Both failures are wall-clock: the cleanup hook of `fa-d3c-embedding.emu.test.ts` passed 120 s (all 41 of its tests passed), and one `d1.entity-invariants` test passed its 15 s limit. Each file passed when run alone, both on the branch and on `origin/main` 3c8ccb9, twice each, interleaved.
+
+The G-2 functions route probe ("each firm-B role on each route ...") hits its 15 s limit on `origin/main` 3c8ccb9 as well as on this branch: it timed out 2 of 2 times on each tree. Measured with `--testTimeout=60000` on the command line, it took 15.5 and 18.4 s on main and 17.1 and 17.9 s on the branch.
+
 ## Mutation ledger
 
 Hand mutants, one exact edit each, run against their targeted files on the emulator (runner and logs kept in the builder's scratchpad). 18 of 18 killed. M16 survived the first pass: the concurrency assertion did not force two delivery passes onto one claimed page; the test "a page another run has claimed is not delivered twice; a claim that lapsed is delivered again" was added and kills it.
