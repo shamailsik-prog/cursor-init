@@ -392,7 +392,10 @@ service cloud.firestore {
     match /committee_outputs/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId); allow write: if false; }
     match /matter_client_search_index/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && (resource.data.rowType == 'matter' ? memberReader(resource.data.referenceId)
       : resource.data.linkedMatterId == null || memberReader(resource.data.linkedMatterId)); allow write: if false; }
-    match /draft_template_analytics/{id} { allow read: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
+    // FA-D4-001: rows are keyed template:{firmId}:{templateId}. A get needs the caller's firm AND an id that names the
+    // row's own firm and template (a legacy template:{templateId} row, or one whose id names another firm, is refused);
+    // a list must filter firmId == the caller's firm. Only the server (Admin SDK) writes.
+    match /draft_template_analytics/{id} { allow get: if sameFirm() && role() in ['partner', 'associate', 'clerk'] && id == 'template:' + resource.data.firmId + ':' + resource.data.templateId; allow list: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /matter_report_export_analytics/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /matter_report_relevance_snapshots/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /workflow_ops_activity/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId); allow write: if false; }
