@@ -217,6 +217,23 @@ class BundleTier(unittest.TestCase):
         hits = gate.compare_endpoints(manifest, endpoints, "staging", {})
         self.assertTrue(any("retryConfig" in f.message and "manifest" in f.message.lower() for f in hits))
 
+    def test_compare_endpoints_fails_when_manifest_queue_retry_config_empty(self) -> None:
+        manifest = json.loads(json.dumps(gate.load_manifest(ROOT)))
+        for q in manifest.get("queues", []):
+            if q.get("function") == "jobWorker":
+                q["retryConfig"] = {}
+        endpoints = {
+            "jobWorker": {
+                "region": ["asia-south1"],
+                "taskQueueTrigger": {
+                    "rateLimits": {"maxConcurrentDispatches": 10, "maxDispatchesPerSecond": 5},
+                    "retryConfig": {"maxAttempts": 3, "minBackoffSeconds": 10, "maxBackoffSeconds": 60},
+                },
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "staging", {})
+        self.assertTrue(any("retryConfig" in f.message and "manifest" in f.message.lower() for f in hits))
+
 
 class ProfileProjectId(unittest.TestCase):
     def test_production_env_path_does_not_fall_back_to_demo_project(self) -> None:

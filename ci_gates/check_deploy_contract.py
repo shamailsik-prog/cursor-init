@@ -216,6 +216,10 @@ def _check_alert_lines(root: Path, manifest: dict) -> list[Finding]:
     return out
 
 
+def _contract_env_without_profile(env: dict) -> dict:
+    return {k: v for k, v in env.items() if k != "SIKANDER_DEPLOY_PROFILE"}
+
+
 def _check_environments(manifest: dict) -> list[Finding]:
     out: list[Finding] = []
     envs = manifest.get("environments", {})
@@ -223,13 +227,16 @@ def _check_environments(manifest: dict) -> list[Finding]:
     stg = envs.get("staging", {}).get("env", {})
     if prod.get("SIKANDER_INGRESS_SETTINGS") == "ALLOW_ALL":
         out.append(_fail("environments", "production profile must not use ALLOW_ALL"))
-    if prod != stg:
+    if _contract_env_without_profile(prod) != _contract_env_without_profile(stg):
         out.append(_fail("environments", "staging and production contract env must match"))
     for name, cfg in envs.items():
         if name == "local":
             continue
         if not cfg.get("gcpProjectId"):
             out.append(_fail("environments", f"profile {name} must declare gcpProjectId"))
+        profile_env = cfg.get("env", {}).get("SIKANDER_DEPLOY_PROFILE")
+        if profile_env != name:
+            out.append(_fail("environments", f"profile {name} must set SIKANDER_DEPLOY_PROFILE={name}"))
     prod_id = envs.get("production", {}).get("gcpProjectId")
     stg_id = envs.get("staging", {}).get("gcpProjectId")
     if prod_id and stg_id and prod_id == stg_id:
@@ -384,7 +391,7 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
             if rl.get("maxDispatchesPerSecond") != qspec.get("maxDispatchesPerSecond"):
                 out.append(_fail("endpoints", f"{name} maxDispatchesPerSecond mismatch"))
             want_retry = qspec.get("retryConfig")
-            if want_retry is None:
+            if not want_retry:
                 out.append(_fail("endpoints", f"{name} manifest queue missing retryConfig"))
             else:
                 got_retry = tqt.get("retryConfig") or {}

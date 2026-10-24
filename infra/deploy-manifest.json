@@ -273,6 +273,7 @@
     "staging": {
       "gcpProjectId": "demo-sikander",
       "env": {
+        "SIKANDER_DEPLOY_PROFILE": "staging",
         "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
         "TRUSTED_PROXY_HOPS": "1"
       }
@@ -280,6 +281,7 @@
     "production": {
       "gcpProjectId": "sikander-legal-os-prod",
       "env": {
+        "SIKANDER_DEPLOY_PROFILE": "production",
         "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
         "TRUSTED_PROXY_HOPS": "1"
       }

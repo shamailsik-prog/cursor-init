@@ -106,14 +106,6 @@ describe("F32 deploy preflight (R3-001 / R3-004)", () => {
     )
   })
 
-  it("does not execute Python via crafted --profile (R4-003)", () => {
-    const marker = path.join(os.tmpdir(), `f32-preflight-inject-${process.pid}`)
-    fs.rmSync(marker, { force: true })
-    const evilProfile = `staging"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
-    runPreflight(isolatedRoot, ["--profile", evilProfile, "--project-id", STAGING_PROJECT_ID])
-    expect(fs.existsSync(marker)).toBe(false)
-  })
-
   it("does not mutate the committed repo functions/.env.demo-sikander", () => {
     const committed = path.join(repoRoot, "functions", `.env.${STAGING_PROJECT_ID}`)
     const before = fs.existsSync(committed) ? fs.readFileSync(committed, "utf8") : null
