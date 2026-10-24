@@ -31,7 +31,7 @@ describe("F32 deploy preflight injection (R5-002)", () => {
   it("heredoc regression fixture is exploitable with a crafted profile", () => {
     const marker = path.join(os.tmpdir(), `f32-preflight-inject-fixture-${process.pid}`)
     fs.rmSync(marker, { force: true })
-    const evilProfile = `staging"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
+    const evilProfile = `staging", "${STAGING_PROJECT_ID}"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
     spawnSync("bash", [VULNERABLE_FIXTURE, evilProfile, STAGING_PROJECT_ID], { cwd: repoRoot })
     expect(fs.existsSync(marker)).toBe(true)
     fs.rmSync(marker, { force: true })
@@ -41,7 +41,7 @@ describe("F32 deploy preflight injection (R5-002)", () => {
     const isolatedRoot = cloneWorkspace()
     const marker = path.join(os.tmpdir(), `f32-preflight-inject-safe-${process.pid}`)
     fs.rmSync(marker, { force: true })
-    const evilProfile = `staging"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
+    const evilProfile = `staging", "${STAGING_PROJECT_ID}"); import pathlib; pathlib.Path(${JSON.stringify(marker)}).write_text("pwned"); #`
     runPreflight(isolatedRoot, ["--profile", evilProfile, "--project-id", STAGING_PROJECT_ID])
     expect(fs.existsSync(marker)).toBe(false)
     fs.rmSync(isolatedRoot, { recursive: true, force: true })

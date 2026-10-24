@@ -2,6 +2,7 @@ import { onRequest } from "firebase-functions/v2/https"
 import type { Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
 import { deployContractViolations, INGRESS_SETTINGS, isDeployedRuntime, type Ingress } from "./deployConfig"
+import { gcpProjectIdForDeployProfile } from "./deployManifestProfile"
 import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT } from "./runtimeOptions"
 
 export { REGION } from "./runtimeOptions"
@@ -30,10 +31,27 @@ function deployedGcpProjectId(env: Record<string, string | undefined>): string |
   return undefined
 }
 
+function expectedGcpProjectId(env: Record<string, string | undefined>): string | undefined {
+  const profile = env.SIKANDER_DEPLOY_PROFILE?.trim()
+  const fromProfile = gcpProjectIdForDeployProfile(profile)
+  if (fromProfile) return fromProfile
+  return deployedGcpProjectId(env)
+}
+
 function expectedRuntimeServiceAccountEmail(env: Record<string, string | undefined>): string | undefined {
-  const projectId = deployedGcpProjectId(env)
+  const projectId = expectedGcpProjectId(env)
   if (!projectId) return undefined
   return `${RUNTIME_SERVICE_ACCOUNT}${projectId}.iam.gserviceaccount.com`
+}
+
+function runtimeProjectMatchesDeployProfile(env: Record<string, string | undefined>): Verdict {
+  const profile = env.SIKANDER_DEPLOY_PROFILE?.trim()
+  if (!profile) return "unknown"
+  const bound = gcpProjectIdForDeployProfile(profile)
+  const runtime = deployedGcpProjectId(env)
+  if (!bound) return "violated"
+  if (!runtime) return "unknown"
+  return runtime === bound ? "ok" : "violated"
 }
 
 type Metadata = { region?: string; serviceAccount?: string }
@@ -106,13 +124,18 @@ export async function contractReport(deps?: {
   const locationId = parseLocationId(env)
   const regionVerdict: Verdict = meta.region ? (meta.region === REGION ? "ok" : "violated") : "unknown"
   const dbVerdict: Verdict = locationId ? (locationId === REGION ? "ok" : "violated") : "unknown"
+  const profileBind = runtimeProjectMatchesDeployProfile(env)
   const expectedSa = expectedRuntimeServiceAccountEmail(env)
-  const identityVerdict: Verdict =
+  let identityVerdict: Verdict =
     meta.serviceAccount === undefined || expectedSa === undefined
       ? "unknown"
       : meta.serviceAccount === expectedSa
         ? "ok"
         : "violated"
+  if (profileBind === "violated") identityVerdict = "violated"
+  else if (deployed && env.SIKANDER_DEPLOY_PROFILE?.trim() && profileBind === "unknown") {
+    identityVerdict = "unknown"
+  }
 
   const ingressVerdict: Verdict = deployed
     ? ingressForCheck === DEPLOYED_API_INGRESS
