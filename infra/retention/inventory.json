@@ -209,6 +209,8 @@
     {"id": "firestore:mfa_recovery", "kind": "firestore", "name": "mfa_recovery", "profile": "identity_platform", "key": {"kind": "none"}},
     {"id": "firestore:notifications", "kind": "firestore", "name": "notifications", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
     {"id": "firestore:ocr_texts", "kind": "firestore", "name": "ocr_texts", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
+    {"id": "firestore:ops_alert_notifications", "kind": "firestore", "name": "ops_alert_notifications", "profile": "audit_trail", "key": {"kind": "none"}},
+    {"id": "firestore:ops_alerts", "kind": "firestore", "name": "ops_alerts", "profile": "audit_trail", "key": {"kind": "none"}},
     {"id": "firestore:p1_ocr_operations", "kind": "firestore", "name": "p1_ocr_operations", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
     {"id": "firestore:platform", "kind": "firestore", "name": "platform", "profile": "identity_platform", "key": {"kind": "none"}},
     {"id": "firestore:platform_onboarding", "kind": "firestore", "name": "platform_onboarding", "profile": "identity_platform", "key": {"kind": "none"}},

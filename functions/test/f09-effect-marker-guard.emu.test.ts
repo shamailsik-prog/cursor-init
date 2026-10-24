@@ -21,6 +21,7 @@ import * as p5Gates from "../src/p5/gates"
 import * as p5Identity from "../src/p5/identity"
 import * as p5Mfa from "../src/p5/mfa"
 import * as retentionOps from "../src/retention/ops"
+import * as alertOps from "../src/alerts/ops"
 import { EMULATORS, mintIdToken, mintMfaIdToken, mockRes, uniq } from "./emu"
 
 /**
@@ -55,6 +56,8 @@ const MODULES: Array<[string, Record<string, unknown>]> = [
   ["p5/identity.ts", p5Identity],
   ["p5/mfa.ts", p5Mfa],
   ["retention/ops.ts", retentionOps],
+  // Audit F43: the alert routes (acknowledgeAlert, resolveAlert, operatorAlertAction are `once` POSTs).
+  ["alerts/ops.ts", alertOps],
 ]
 
 const routeName = (r: Route) => r.path.split("/").pop()!

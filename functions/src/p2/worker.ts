@@ -3,7 +3,9 @@ import { Timestamp, type DocumentReference, type Transaction } from "firebase-ad
 import { logger } from "firebase-functions"
 import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
-import { logFailure } from "../log"
+import { prepareAlert, raiseAlertBestEffort, stageAlert } from "../alerts/raise"
+import { commitFailedSpec, deadLetterSpec } from "../alerts/specs"
+import { errorCode, logFailure } from "../log"
 import { stageJobAudit, stageJobAuditSync } from "./audit"
 import { CLOCK_SKEW_TOLERANCE_MS, DISPATCH_GRACE_MS, JOB_ENGINE, JOB_LEASE_MS, MAX_ATTEMPTS, MAX_FENCED_STEPS, MAX_LOG_ENTRIES, RETRY_DELAYS_MS } from "./constants"
 import type { JobDeps, JobTask } from "./dispatch"
@@ -80,16 +82,33 @@ function auditSubject(id: string, row: JobRow) {
  * `dispatchSeq + 1` (the caller dispatches after commit), `sweepAt` one dispatch grace after it is
  * due and `redispatches` 0 (P3-34, P3-35). Otherwise → `dead_lettered` with `sweepAt` null (the
  * caller raises the alert after commit). Both stage `job.failed`, and the dead-letter also
- * `job.deadLettered`, plus the system audit row. Writes only; the caller has done its reads.
+ * `job.deadLettered`, plus the system audit row and (audit F43) the durable `job.dead_lettered` alert, read first.
+ * Call it after the transaction's own reads and before any write.
  */
-export function stageFailure(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): "failed" | "dead_lettered" {
-  return stageFailureRow(tx, ref, row, err, now).status as "failed" | "dead_lettered"
+export async function stageFailure(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): Promise<"failed" | "dead_lettered"> {
+  return (await stageFailureAndAlert(tx, ref, row, err, now)).status as "failed" | "dead_lettered"
 }
 
-/** `stageFailure`, returning the post-transition row (for the after-commit dispatch or alert). */
+/** Whether a failed attempt is retried automatically (P3-7). Shared by the transition and its dead-letter alert, so they cannot disagree. */
+function willRetry(row: JobRow, err: SanitizedError): boolean {
+  return !err.permanent && row.attempts < MAX_ATTEMPTS
+}
+
+/**
+ * `stageFailureRow` and, for a dead letter, its alert (audit F43, spec R9): the alert is read here (after the caller's
+ * read of the row, before any write) and written with the transition, so it commits if and only if the dead letter does.
+ */
+async function stageFailureAndAlert(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): Promise<JobRow> {
+  const alert = willRetry(row, err) ? null : await prepareAlert(tx, deadLetterSpec(ref.id, row.firmId, row.jobType, err.code, row.totalAttempts))
+  const next = stageFailureRow(tx, ref, row, err, now)
+  if (alert !== null) stageAlert(tx, alert, now)
+  return next
+}
+
+/** The transition of `stageFailure` alone (writes only), returning the post-transition row (for the after-commit dispatch or alert). */
 function stageFailureRow(tx: Transaction, ref: DocumentReference, row: JobRow, err: SanitizedError, now: number): JobRow {
   const lastError = { code: err.code, message: err.message }
-  const retry = !err.permanent && row.attempts < MAX_ATTEMPTS
+  const retry = willRetry(row, err)
   // Only read on a retry, where attempts is 1..3 and the delay exists.
   const due = retry ? now + RETRY_DELAYS_MS[Math.max(0, row.attempts - 1)] : now
   const next: JobRow = retry
@@ -170,7 +189,7 @@ async function claim(ref: DocumentReference, task: JobTask, deps: JobDeps): Prom
     const reclaim = row.status === "running"
     if (reclaim && row.attempts >= MAX_ATTEMPTS) {
       const err = sanitizeError(new JobError("lease_expired"))
-      return ended(stageFailureRow(tx, ref, row, err, now), err.code)
+      return ended(await stageFailureAndAlert(tx, ref, row, err, now), err.code)
     }
     const owner = randomUUID()
     const claimed: JobRow = {
@@ -332,9 +351,9 @@ async function commit(ref: DocumentReference, owner: string, outcome: HandlerOut
     const snap = await tx.get(ref)
     const row = snap.exists ? (snap.data() as JobRow) : undefined
     if (!fenceHolds(row, owner)) return { kind: "lease_lost" }
-    const fail = (e: unknown) => {
+    const fail = async (e: unknown): Promise<Ended> => {
       const err = sanitizeError(e, outcome.handler)
-      return ended(stageFailureRow(tx, ref, row, err, now), err.code)
+      return ended(await stageFailureAndAlert(tx, ref, row, err, now), err.code)
     }
     if (!outcome.ok) return fail(outcome.err)
     // A handler bug (bad refs, or a firm-level job's ref into a matter-bound collection: audit F14 R1-D3) is a
@@ -399,6 +418,12 @@ function grpcStatus(err: unknown): number | undefined {
 function isRejectedWrite(err: unknown): boolean {
   const status = grpcStatus(err)
   return status !== undefined && !TRANSIENT_GRPC.has(status)
+}
+
+/** A commit failure's code: the gRPC status name for a store error, else `errorCode`. */
+function commitFailureCode(err: unknown): string {
+  const status = grpcStatus(err)
+  return status === undefined ? errorCode(err) : GRPC_NAMES[status]
 }
 
 /** Logs a commit failure by code only: the gRPC status name for a store error, else `errorCode`. */
@@ -486,7 +511,15 @@ export async function runJobTask(task: JobTask, deps: JobDeps): Promise<TaskOutc
   await jobWorkerTestSeam.afterHandler?.(seam)
   // A LeaseLostError from the handler is not trusted on its own: the commit re-checks the fence, and
   // if it still holds the error is recorded (sanitised to internal) like any other failure.
-  const result = await commitOutcome(ref, claimed.owner, outcome, deps)
+  let result: CommitResult
+  try {
+    result = await commitOutcome(ref, claimed.owner, outcome, deps)
+  } catch (err) {
+    // Audit F43 (spec R8): the commit failed, so there is no transaction to share; a bounded raise of its own. The
+    // row stays `running`, and lease recovery, `job.queue_age` and (at attempt 4) `job.dead_lettered` follow it.
+    await raiseAlertBestEffort(commitFailedSpec(ref.id, claimed.row.firmId, claimed.row.jobType, commitFailureCode(err)), deps.clock())
+    throw err
+  }
   if (result.kind === "lease_lost") return leaseLost(ref.id, claimed.row.jobType)
   if (result.kind === "done") return "done"
   await afterCommit(ref.id, result, deps)

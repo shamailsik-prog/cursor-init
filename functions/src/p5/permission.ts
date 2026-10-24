@@ -2,6 +2,7 @@ import type { Classification } from "@/platform/p1/types"
 import {
   decide,
   type AiAction,
+  type AlertAction,
   type D1Action,
   type DocTypeAction,
   type DraftAction,
@@ -73,7 +74,7 @@ export async function checkPermission(
  */
 export async function requirePermission(
   caller: Caller,
-  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction | RetentionAction,
+  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction | RetentionAction | AlertAction,
   matterId?: string
 ): Promise<void> {
   const decision = await checkPermission(caller, action, matterId)
