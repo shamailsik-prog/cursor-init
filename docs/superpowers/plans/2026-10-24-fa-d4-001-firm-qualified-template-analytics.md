@@ -61,22 +61,22 @@
 - Repository: `record(firmId, template, change, opts?) => Promise<DraftTemplateAnalyticsRow>`, `get(id, firmId)`, `listByFirm(firmId)`
 
 - [x] **Step 1: Write the failing e2e** (5 tests: compose isolation, search isolation, concurrency 3+3, legacy ignored, foreign stamp refused). Run: `vt.sh tests/fa-d4-001-template-analytics.e2e.firestore.test.ts`. Observed on main: 5 failed (ledger).
-- [ ] **Step 2: Write the unit test** (memory repository and pure functions): id literal `template:firm_a:writ_mandamus`; refusal of `""`, `"a:b"`, `"a/b"` in either part; validator null for legacy id, mismatched id, each wrong-typed field, negative or fractional count; decision: fresh row, compose +1, search +1 with query, foreign stamp throws `foreign_firm`, malformed throws `malformed`; memory `record` for two firms leaves two rows; memory `listByFirm` drops a legacy row.
-- [ ] **Step 3: Run it; expect FAIL** (exports absent).
-- [ ] **Step 4: Implement** the interfaces above; Firestore `record` = `runTransaction` reading `doc(db, COLL, id)`, `tx.set(ref, next)`; `get` = `getById` then the validator; `listByFirm` = `listAllRowsByFirm` + validator filter + `asFirmScopedList`. Route: compose `record(actor.firmId, {id,name,posture,category}, {kind:"compose"})`; search loop `record(refreshedActor.firmId, entry.template, {kind:"search", query}, {now})`.
-- [ ] **Step 5: Update the two existing tests** to the new API (`record` instead of `upsert`; canonical id in the stub row).
-- [ ] **Step 6: Run** unit + e2e + `tests/persistence.repositories.test.ts` + `tests/persistence.runtime-mode.test.ts` + `tests/persistence.route-wiring.test.ts` + `tests/api.drafts.test.ts`. Expected: all pass.
-- [ ] **Step 7: Commit, gitleaks, push.**
+- [x] **Step 2: Write the unit test** (memory repository and pure functions): id literal `template:firm_a:writ_mandamus`; refusal of `""`, `"a:b"`, `"a/b"` in either part; validator null for legacy id, mismatched id, each wrong-typed field, negative or fractional count; decision: fresh row, compose +1, search +1 with query, foreign stamp throws `foreign_firm`, malformed throws `malformed`; memory `record` for two firms leaves two rows; memory `listByFirm` drops a legacy row.
+- [x] **Step 3: Run it; expect FAIL** (exports absent).
+- [x] **Step 4: Implement** the interfaces above; Firestore `record` = `runTransaction` reading `doc(db, COLL, id)`, `tx.set(ref, next)`; `get` = `getById` then the validator; `listByFirm` = `listAllRowsByFirm` + validator filter + `asFirmScopedList`. Route: compose `record(actor.firmId, {id,name,posture,category}, {kind:"compose"})`; search loop `record(refreshedActor.firmId, entry.template, {kind:"search", query}, {now})`.
+- [x] **Step 5: Update the two existing tests** to the new API (`record` instead of `upsert`; canonical id in the stub row).
+- [x] **Step 6: Run** unit + e2e + `tests/persistence.repositories.test.ts` + `tests/persistence.runtime-mode.test.ts` + `tests/persistence.route-wiring.test.ts` + `tests/api.drafts.test.ts`. Expected: all pass.
+- [x] **Step 7: Commit, gitleaks, push.**
 
 ### Task 2: Rules bind reads to the firm-qualified id
 
 **Files:** Modify `firestore.rules:391`; fixture `functions/test/g2.cross-firm.test.ts` (`docIdFor`, `seedFor`). Test: `tests/fa-d4-001-template-analytics.rules.firestore.test.ts` (written first, RED 2/6 on main).
 
 - [x] **Step 1: Write the failing rules test.** Observed on main: 2 failed (legacy get, mismatched get), 4 passed.
-- [ ] **Step 2: Implement** `allow get: if sameFirm() && role() in ['partner', 'associate', 'clerk'] && id == 'template:' + resource.data.firmId + ':' + resource.data.templateId; allow list: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false;` (one line, no second `match /` on it).
-- [ ] **Step 3: G-2 fixture**: `draft_template_analytics` seeded at `template:g2-rules-firm-a:g2_template` with `templateId: "g2_template"`.
-- [ ] **Step 4: Run** the rules test (6/6), `tests/firestore.rules*.test.ts`, `tests/f32-ttl-*.test.ts`, and `npm run gate:g2`. Expected: pass.
-- [ ] **Step 5: Commit, gitleaks, push.**
+- [x] **Step 2: Implement** `allow get: if sameFirm() && role() in ['partner', 'associate', 'clerk'] && id == 'template:' + resource.data.firmId + ':' + resource.data.templateId; allow list: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false;` (one line, no second `match /` on it).
+- [x] **Step 3: G-2 fixture**: `draft_template_analytics` seeded at `template:g2-rules-firm-a:g2_template` with `templateId: "g2_template"`.
+- [x] **Step 4: Run** the rules test (6/6), `tests/firestore.rules*.test.ts`, `tests/f32-ttl-*.test.ts`, and `npm run gate:g2`. Expected: pass.
+- [x] **Step 5: Commit, gitleaks, push.**
 
 ### Task 3: Legacy backfill
 
@@ -89,27 +89,33 @@
 - `applyTemplateAnalyticsBackfill(store, plan, {runId, now}) => {moved, rejected, failed}`; store: `move(planned) => {status:"moved"|"merged"} | {status:"rejected", reason}`, `appendAudit(row)`
 - `runTemplateAnalyticsBackfill(argv, deps) => Promise<0 | 1 | 2>`
 
-- [ ] **Step 1: Write the failing test**: dry-run writes nothing and names each row; apply moves a clean legacy row (legacy gone, target equals legacy fields with the canonical id); merges into an existing target (composeCount 2+3 = 5, later `lastTemplateSearchQuery` kept); leaves an unrecoverable row (drafts from two firms) untouched and reports `{path, firmIds}` with no counts; leaves a malformed row; rerun plans no move; CLI exit 2 with unrecoverable, 0 without, 1 when the store throws; audit summary row counts.
-- [ ] **Step 2: Run; expect FAIL** (module absent).
-- [ ] **Step 3: Implement** per spec R8.
-- [ ] **Step 4: Run; expect PASS.**
-- [ ] **Step 5: Commit, gitleaks, push.**
+- [x] **Step 1: Write the failing test**: dry-run writes nothing and names each row; apply moves a clean legacy row (legacy gone, target equals legacy fields with the canonical id); merges into an existing target (composeCount 2+3 = 5, later `lastTemplateSearchQuery` kept); leaves an unrecoverable row (drafts from two firms) untouched and reports `{path, firmIds}` with no counts; leaves a malformed row; rerun plans no move; CLI exit 2 with unrecoverable, 0 without, 1 when the store throws; audit summary row counts.
+- [x] **Step 2: Run; expect FAIL** (module absent).
+- [x] **Step 3: Implement** per spec R8.
+- [x] **Step 4: Run; expect PASS.**
+- [x] **Step 5: Commit, gitleaks, push.**
 
 ### Task 4: Verification and mutation
 
-- [ ] Mutants (each run against the owning suite, then reverted): M1 id drops firm; M2 separator check removed; M3 firm check in `nextDraftTemplateAnalyticsRow` removed; M4 validator id check removed; M5 route search path back to a blind write; M6 Firestore `record` outside a transaction (get + set); M7 backfill deletes nothing (copy only); M8 unrecoverable detection off; M9 merge takes the target's count only; M10 rules get without the id check; M11 rules get without `sameFirm()`; M12 legacy filter off in `listByFirm`.
-- [ ] Gates: root typecheck, `tsc -p tsconfig.tests.json`, eslint on touched files, D4 / F12 / F13 / rules suites, G-0, G-1, G-2, claim gate on the PR body.
+- [x] Mutants (each run against the owning suite, then reverted): M1 id drops firm; M2 separator check removed; M3 firm check in `nextDraftTemplateAnalyticsRow` removed; M4 validator id check removed; M5 route search path back to a blind write; M6 Firestore `record` outside a transaction (get + set); M7 backfill deletes nothing (copy only); M8 unrecoverable detection off; M9 merge takes the target's count only; M10 rules get without the id check; M11 rules get without `sameFirm()`; M12 legacy filter off in `listByFirm`.
+- [x] Gates: root typecheck, `tsc -p tsconfig.tests.json`, eslint on touched files, D4 / F12 / F13 / rules suites, G-0, G-1, G-2, claim gate on the PR body.
 
 ## RED/GREEN ledger
 
 | Test | main `3c8ccb9` | branch |
 |---|---|---|
-| e2e: B's row survives A's compose | FAIL (B's row gone; `template:T` stamped A) | pending |
-| e2e: B's row survives A's search | FAIL (B's row gone) | pending |
-| e2e: concurrent 3+3 composes, one row per firm, count 3 | FAIL (one shared row, `composeCount: 2`) | pending |
-| e2e: legacy row never read or written | FAIL (legacy `composeCount` 7 to 8) | pending |
-| e2e: foreign stamp at own id refused | FAIL (status 200) | pending |
-| rules: control + cross-firm + writes + intern (4) | pass | pending |
-| rules: legacy id not readable | FAIL (allowed) | pending |
-| rules: mismatched id readable by neither | FAIL (allowed to firm B) | pending |
-| backfill e2e | FAIL (module absent) | pending |
+| e2e: B's row survives A's compose | FAIL (B's row gone; `template:T` stamped A) | PASS |
+| e2e: B's row survives A's search | FAIL (B's row gone) | PASS |
+| e2e: concurrent 3+3 composes, one row per firm, count 3 | FAIL (one shared row, `composeCount: 2`) | PASS |
+| e2e: legacy row never read or written | FAIL (legacy `composeCount` 7 to 8) | PASS |
+| e2e: foreign stamp at own id refused (409 `template_analytics_refused`) | FAIL (status 200) | PASS |
+| rules: control + cross-firm + writes + intern (4) | pass | PASS |
+| rules: legacy id not readable | FAIL (allowed) | PASS |
+| rules: mismatched id readable by neither | FAIL (allowed to firm B) | PASS |
+| backfill e2e (12) | FAIL (module absent) | PASS 12/12 |
+| unit (37) | FAIL (exports absent) | PASS 37/37 |
+
+Execution notes: the refusal status was first observed as 400 (compose) / 500 (search) and ruled to 409 (spec R5),
+test first. Mutation: 18 hand mutants, 18 killed; M7 survived until the legacy e2e also read through the Firestore
+repository (demonstrated by rerunning M7 on the earlier test file). The final RED on main and GREEN on the merged head
+are in the PR body and the evidence log.

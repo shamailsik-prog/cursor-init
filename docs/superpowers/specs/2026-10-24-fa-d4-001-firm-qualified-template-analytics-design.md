@@ -100,12 +100,15 @@ stored `id`. No F12 or F13 helper is edited.
 template) is dropped by `listByFirm`, is `null` from `get`, and is never addressed by `record`. It stays in storage until
 the backfill moves or reports it.
 
-**R5. A refusal is an error, not an absence.** Compose: the draft is created first (as on main), then the analytics
-transaction throws and the route's existing catch answers 400 `request_failed`. Search: the GET fails. Reason: the
-FA-F13-004 precedent (`SearchIndexMalformedError`): a refused integrity check must never be taken for a missing row and
-silently replaced. Devil's advocate: the compose reports failure while its draft exists. Accepted: this only happens over
-a row that is already corrupt (another firm's stamp under this firm's id, or bad fields), which no code path in this
-repo can now produce; it is the same outcome as any repository failure after `drafts.create` on main, and it is loud.
+**R5. A refusal is an error, not an absence.** Both paths answer **409** `{ code: "template_analytics_refused",
+reason: "foreign_firm" | "malformed" }`. Compose: the draft is created first (as on main), then the analytics
+transaction refuses; through the F02 router the 409 keeps the F10 `effectCommitted` signal, so a retry with the same key
+is not taken for a fresh compose. Search: the GET answers 409 and writes nothing. Reason: the FA-F13-004 precedent
+(`SearchIndexMalformedError`): a refused integrity check must never be taken for a missing row and silently replaced.
+Observed before this ruling (route e2e, production mode): compose answered 400 `invalid_request` and search 500
+`internal`, both misleading for a stored-state conflict; the e2e now pins 409 and the code. Devil's advocate: the compose
+reports failure while its draft exists. Accepted: this only happens over a row that is already corrupt (another firm's
+stamp under this firm's id, or bad fields), which no code path in this repo can now produce; it is loud and specific.
 
 **R6. Template metadata.** A row keeps the name, posture and category written when it was first created (as on main).
 
@@ -167,7 +170,8 @@ The collection name is unchanged (F42's inventory may name it).
   route. Test doubles that stub the repository must add `record`.
 - Response shapes of `/api/d4/drafts` are unchanged. Until the backfill runs, each firm's counts start from zero (legacy
   rows are ignored), so template ranking restarts; after it, moved rows carry their counts.
-- A compose or template search over a corrupt row of the caller's own id now fails (R5) instead of overwriting.
+- A compose or template search over a corrupt row of the caller's own id now answers 409
+  `template_analytics_refused` (R5) instead of overwriting it.
 - Clients can no longer `get` a legacy or mismatched row (no client reads this collection in the repo).
 - Operators: run `npm run backfill:template-analytics` (dry-run), then `-- --apply`, after the new code is fully deployed.
 
