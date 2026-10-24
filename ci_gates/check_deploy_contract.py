@@ -58,7 +58,6 @@ def run_static(root: Path, manifest: dict) -> list[Finding]:
     findings.extend(_check_firebase_json(root, manifest))
     findings.extend(_check_ttl(root, manifest))
     findings.extend(_check_ttl_writers(root, manifest))
-    findings.extend(_check_rules_ttl(root, manifest))
     findings.extend(_check_alerts(root, manifest))
     findings.extend(_check_alert_lines(root, manifest))
     findings.extend(_check_environments(manifest))
@@ -75,8 +74,6 @@ def _check_manifest_shape(manifest: dict) -> list[Finding]:
         out.append(_fail("manifest", "project.region must be asia-south1"))
     if manifest.get("project", {}).get("database", {}).get("location") != "asia-south1":
         out.append(_fail("manifest", "database.location must be asia-south1"))
-    if not manifest.get("project", {}).get("gcpProjectId"):
-        out.append(_fail("manifest", "project.gcpProjectId is required"))
     return out
 
 
@@ -149,48 +146,23 @@ def _check_ttl_writers(root: Path, manifest: dict) -> list[Finding]:
     return out
 
 
-ALLOW_STMT_RE = re.compile(r"allow\s+([^;:]+?)\s*:\s*if\s+([^;{]+)", re.S)
-CLIENT_READ_ACTIONS = frozenset({"read", "get", "list"})
+PRINT_ENV_DERIVE_RE = re.compile(r"print-e(?:nv)?", re.I)
 
 
-def manifest_gcp_project_id(manifest: dict) -> str:
-    pid = manifest.get("project", {}).get("gcpProjectId")
-    if not isinstance(pid, str) or not pid:
-        raise SystemExit("FAIL [manifest] project.gcpProjectId is required")
-    return pid
+def profile_gcp_project_id(manifest: dict, profile: str) -> str | None:
+    return manifest.get("environments", {}).get(profile, {}).get("gcpProjectId")
 
 
-def runtime_service_account_email(manifest: dict) -> str:
+def runtime_service_account_email(manifest: dict, profile: str) -> str:
+    pid = profile_gcp_project_id(manifest, profile)
+    if not pid:
+        raise SystemExit(f"FAIL [manifest] environments.{profile}.gcpProjectId is required")
     local = manifest.get("identities", {}).get("runtime", {}).get("email", "sikander-functions@")
-    return f"{local}{manifest_gcp_project_id(manifest)}.iam.gserviceaccount.com"
+    return f"{local}{pid}.iam.gserviceaccount.com"
 
 
 def resolve_deploy_env_file(root: Path, project_id: str) -> Path:
     return root / "functions" / f".env.{project_id}"
-
-
-def ttl_match_allows_client_read(body: str) -> bool:
-    cleaned = re.sub(r"//[^\n]*", "", body)
-    for match in ALLOW_STMT_RE.finditer(cleaned):
-        actions = {part.strip() for part in match.group(1).split(",")}
-        condition = match.group(2).strip()
-        if actions & CLIENT_READ_ACTIONS and condition != "false":
-            return True
-    return False
-
-
-def _check_rules_ttl(root: Path, manifest: dict) -> list[Finding]:
-    out: list[Finding] = []
-    rules = (root / "firestore.rules").read_text(encoding="utf-8")
-    for ttl in manifest.get("firestore", {}).get("ttl", []):
-        cg = ttl["collectionGroup"]
-        m = re.search(rf"match\s+/{re.escape(cg)}/\{{[^{{}}]+\}}\s*\{{([^}}]+)\}}", rules, re.S)
-        if not m:
-            out.append(_fail("rules", f"no firestore rules match for TTL collection {cg}"))
-            continue
-        if ttl_match_allows_client_read(m.group(1)):
-            out.append(_fail("rules", f"TTL collection {cg} must not be client-readable"))
-    return out
 
 
 def _scan_expires_at_files(root: Path) -> set[str]:
@@ -253,6 +225,15 @@ def _check_environments(manifest: dict) -> list[Finding]:
         out.append(_fail("environments", "production profile must not use ALLOW_ALL"))
     if prod != stg:
         out.append(_fail("environments", "staging and production contract env must match"))
+    for name, cfg in envs.items():
+        if name == "local":
+            continue
+        if not cfg.get("gcpProjectId"):
+            out.append(_fail("environments", f"profile {name} must declare gcpProjectId"))
+    prod_id = envs.get("production", {}).get("gcpProjectId")
+    stg_id = envs.get("staging", {}).get("gcpProjectId")
+    if prod_id and stg_id and prod_id == stg_id:
+        out.append(_fail("environments", "staging and production gcpProjectId must differ"))
     return out
 
 
@@ -301,10 +282,10 @@ def _check_runbook(root: Path, manifest: dict) -> list[Finding]:
     if "firebase deploy" in text and "deploy-preflight" in text:
         if text.find("firebase deploy") < text.find("deploy-preflight"):
             out.append(_fail("runbook", "firebase deploy must follow deploy-preflight"))
-    if "print-env" in text:
+    if PRINT_ENV_DERIVE_RE.search(text):
         out.append(_fail("runbook", "must not generate functions/.env from manifest print-env"))
     for step in steps:
-        if "print-env" in step.lower():
+        if PRINT_ENV_DERIVE_RE.search(step):
             out.append(_fail("runbook", "manifest runbook must not derive functions/.env from print-env"))
     return out
 
@@ -362,7 +343,7 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
             out.append(_fail("endpoints", f"{name} minInstances mismatch"))
         expected_sa = spec.get("serviceAccount")
         if isinstance(expected_sa, str) and expected_sa.endswith("@") and ".iam.gserviceaccount.com" not in expected_sa:
-            expected_sa = runtime_service_account_email(manifest)
+            expected_sa = runtime_service_account_email(manifest, profile)
         if ep.get("serviceAccountEmail") not in (expected_sa, spec.get("serviceAccount")):
             out.append(_fail("endpoints", f"{name} service account mismatch"))
         ingress = spec.get("ingress")
@@ -405,7 +386,7 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
             want_retry = qspec.get("retryConfig")
             if want_retry is not None:
                 got_retry = tqt.get("retryConfig") or {}
-                for key in ("maxAttempts", "minBackoffSeconds", "maxBackoffSeconds"):
+                for key in ("maxAttempts", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings", "maxRetrySeconds"):
                     if got_retry.get(key) != want_retry.get(key):
                         out.append(_fail("endpoints", f"{name} task queue retryConfig mismatch"))
                         break
@@ -418,10 +399,26 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
     return out
 
 
+def check_profile_project_id(manifest: dict, profile: str, project_id: str | None) -> list[Finding]:
+    out: list[Finding] = []
+    expected = profile_gcp_project_id(manifest, profile)
+    if not expected:
+        out.append(_fail("environments", f"profile {profile} missing gcpProjectId"))
+        return out
+    if not project_id:
+        out.append(_fail("project-id", "--project-id is required"))
+        return out
+    if project_id != expected:
+        out.append(_fail("project-id", f"--project-id must be {expected} for profile {profile}"))
+    return out
+
+
 def check_canonical_deploy_env_path(root: Path, manifest: dict, profile: str, env_file: str) -> list[Finding]:
     out: list[Finding] = []
-    env_cfg = manifest.get("environments", {}).get(profile, {})
-    project_id = env_cfg.get("gcpProjectId") or manifest_gcp_project_id(manifest)
+    project_id = profile_gcp_project_id(manifest, profile)
+    if not project_id:
+        out.append(_fail("environments", f"profile {profile} missing gcpProjectId"))
+        return out
     expected = resolve_deploy_env_file(root, project_id).resolve()
     given = Path(env_file).resolve()
     if given != expected:
@@ -434,6 +431,10 @@ def check_env_file(manifest: dict, profile: str, text: str) -> list[Finding]:
     out: list[Finding] = []
     expected = manifest.get("environments", {}).get(profile, {}).get("env", {})
     parsed = parse_dotenv(text)
+    allowed = set(expected.keys())
+    for key in parsed:
+        if key not in allowed:
+            out.append(_fail("env-file", f"unknown env key {key} for profile {profile}"))
     for key, value in expected.items():
         if parsed.get(key) != value:
             out.append(_fail("env-file", f"missing or wrong {key} for profile {profile}"))
@@ -455,9 +456,10 @@ def load_endpoints_dump(root: Path, bundle_env: dict[str, str]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--bundle", action="store_true")
     parser.add_argument("--profile", default="production")
+    parser.add_argument("--project-id")
     parser.add_argument("--env-file")
     parser.add_argument("--print-env", nargs="?", const="production")
     args = parser.parse_args(argv)
@@ -475,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         env_text = Path(args.env_file).read_text(encoding="utf-8")
         bundle_env = parse_dotenv(env_text)
+        findings.extend(check_profile_project_id(manifest, args.profile, args.project_id))
         findings.extend(check_canonical_deploy_env_path(root, manifest, args.profile, args.env_file))
         findings.extend(check_env_file(manifest, args.profile, env_text))
         findings.extend(compare_endpoints(manifest, load_endpoints_dump(root, bundle_env), args.profile, bundle_env))

@@ -2,7 +2,6 @@
   "manifestVersion": 1,
   "project": {
     "region": "asia-south1",
-    "gcpProjectId": "demo-sikander",
     "database": {
       "location": "asia-south1"
     }
@@ -219,7 +218,13 @@
       "function": "jobWorker",
       "maxConcurrentDispatches": 10,
       "maxDispatchesPerSecond": 5,
-      "retryConfig": { "maxAttempts": 3, "minBackoffSeconds": 10, "maxBackoffSeconds": 60 },
+      "retryConfig": {
+        "maxAttempts": 3,
+        "minBackoffSeconds": 10,
+        "maxBackoffSeconds": 60,
+        "maxDoublings": null,
+        "maxRetrySeconds": null
+      },
       "oidcServiceAccount": "sikander-functions@"
     }
   ],
@@ -273,6 +278,7 @@
       }
     },
     "production": {
+      "gcpProjectId": "sikander-legal-os-prod",
       "env": {
         "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
         "TRUSTED_PROXY_HOPS": "1"

@@ -253,7 +253,7 @@ class RunbookEnvSource(unittest.TestCase):
                 encoding="utf-8",
             )
             manifest = gate.load_manifest(root)
-            hits = gate.run_static(root, manifest)
+            hits = gate._check_runbook(root, manifest)
             self.assertTrue(any(f.check == "runbook" and "print-e" in f.message.lower() for f in hits))
         finally:
             tmp.cleanup()
@@ -271,7 +271,7 @@ class EnvFileParsing(unittest.TestCase):
         self.assertTrue(hits)
 
     def test_bundle_requires_env_file(self) -> None:
-        self.assertEqual(gate.main(["--bundle", "--profile", "staging"]), 1)
+        self.assertEqual(gate.main(["--bundle", "--profile", "staging", "--project-id", "demo-sikander"]), 1)
 
     def test_check_env_file_rejects_unknown_keys(self) -> None:
         manifest = gate.load_manifest(ROOT)

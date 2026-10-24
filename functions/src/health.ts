@@ -2,7 +2,7 @@ import { onRequest } from "firebase-functions/v2/https"
 import type { Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
 import { deployContractViolations, INGRESS_SETTINGS, isDeployedRuntime, type Ingress } from "./deployConfig"
-import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT_EMAIL } from "./runtimeOptions"
+import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT } from "./runtimeOptions"
 
 export { REGION } from "./runtimeOptions"
 
@@ -21,6 +21,20 @@ const METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instanc
 const METADATA_TTL_MS = 300_000
 const METADATA_TIMEOUT_MS = 500
 const DEPLOYED_API_INGRESS: Ingress = "ALLOW_INTERNAL_AND_GCLB"
+
+function deployedGcpProjectId(env: Record<string, string | undefined>): string | undefined {
+  const raw = env.GCLOUD_PROJECT ?? env.GOOGLE_CLOUD_PROJECT
+  if (raw === undefined || raw === "") return undefined
+  const trimmed = raw.trim()
+  return trimmed || undefined
+}
+
+function expectedRuntimeServiceAccountEmail(env: Record<string, string | undefined>): string | undefined {
+  const projectId = deployedGcpProjectId(env)
+  if (!projectId) return undefined
+  return `${RUNTIME_SERVICE_ACCOUNT}${projectId}.iam.gserviceaccount.com`
+}
+
 type Metadata = { region?: string; serviceAccount?: string }
 
 let metadataCache: { at: number; value: Metadata | null } | null = null
@@ -91,10 +105,11 @@ export async function contractReport(deps?: {
   const locationId = parseLocationId(env)
   const regionVerdict: Verdict = meta.region ? (meta.region === REGION ? "ok" : "violated") : "unknown"
   const dbVerdict: Verdict = locationId ? (locationId === REGION ? "ok" : "violated") : "unknown"
+  const expectedSa = expectedRuntimeServiceAccountEmail(env)
   const identityVerdict: Verdict =
-    meta.serviceAccount === undefined
+    meta.serviceAccount === undefined || expectedSa === undefined
       ? "unknown"
-      : meta.serviceAccount === RUNTIME_SERVICE_ACCOUNT_EMAIL
+      : meta.serviceAccount === expectedSa
         ? "ok"
         : "violated"
 

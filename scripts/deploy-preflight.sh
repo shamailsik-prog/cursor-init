@@ -28,10 +28,24 @@ if [ -n "$ENV_FILE" ]; then
   fi
 fi
 ENV_FILE="$CANONICAL"
+cd "$ROOT"
+python3 - <<PY
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path("ci_gates")))
+import check_deploy_contract as gate
+
+manifest = gate.load_manifest(Path("."))
+failures = gate.check_profile_project_id(manifest, "$PROFILE", "$PROJECT_ID")
+if failures:
+    for f in failures:
+        print(f"FAIL [{f.check}] {f.message}")
+    sys.exit(1)
+PY
 cd "$ROOT/functions"
 node build.mjs
 cd "$ROOT"
 python3 ci_gates/check_deploy_contract.py
-python3 ci_gates/check_deploy_contract.py --bundle --profile "$PROFILE" --env-file "$ENV_FILE"
+python3 ci_gates/check_deploy_contract.py --bundle --profile "$PROFILE" --project-id "$PROJECT_ID" --env-file "$ENV_FILE"
 echo "manifest: $(python3 -c 'import hashlib,pathlib; p=pathlib.Path("infra/deploy-manifest.json"); print(hashlib.sha256(p.read_bytes()).hexdigest()[:12])')"
 echo "commit: $(git rev-parse HEAD 2>/dev/null || echo unknown)"

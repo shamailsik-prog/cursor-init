@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           ENV_FILE="functions/.env.demo-sikander"
-          python3 ci_gates/check_deploy_contract.py --bundle --profile staging --env-file "$ENV_FILE"
+          python3 ci_gates/check_deploy_contract.py --bundle --profile staging --project-id demo-sikander --env-file "$ENV_FILE"
       # test/g2.cross-firm.test.ts is excluded here (functions/vitest.config.ts): it runs once, in the gates job.
       # Under CI a missing emulator env fails the run instead of skipping (functions/test/emu.ts).
       - name: Functions tests (Auth + Firestore emulators)
