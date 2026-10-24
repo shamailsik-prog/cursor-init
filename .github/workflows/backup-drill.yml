@@ -1,0 +1,93 @@
+name: Backup drill (F33)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "ops/backup/**"
+      - "infra/backup/**"
+      - "postgres/**"
+      - "corpus_service/**"
+      - "platform/documents/**"
+      - "firestore.rules"
+      - "firebase.json"
+      - ".github/workflows/backup-drill.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ops/backup/**"
+      - "infra/backup/**"
+      - "postgres/**"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-drill-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+  PYTHON_VERSION: "3.12"
+  MINIO_COMMIT: 07c3a429bfed433e49018cb0f78a52145d4bedeb
+  MINIO_GO_VERSION: "1.24.7"
+
+jobs:
+  drill:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-python@83679af6027a716bff588afee807560b69bcaec3 # v6.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install PostgreSQL 16 and pgvector
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16 postgresql-16-pgvector
+      - name: Python test deps (corpus migrate in drills)
+        run: pip install -r corpus_service/requirements-test.txt
+      - name: Cache MinIO build
+        id: minio-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sikander-minio
+          key: minio-${{ runner.os }}-${{ env.MINIO_COMMIT }}-go${{ env.MINIO_GO_VERSION }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        with:
+          go-version: ${{ env.MINIO_GO_VERSION }}
+          cache: false
+      - name: Build MinIO
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        run: |
+          GOBIN="$HOME/.cache/sikander-minio" GOTOOLCHAIN=local go install "github.com/minio/minio@${MINIO_COMMIT}"
+      - run: npm ci
+      - name: Backup key
+        run: |
+          KEY="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEY"
+          echo "SIKANDER_BACKUP_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Unit tests
+        run: npx vitest run -c ops/backup/vitest.config.ts ops/backup/test/*.unit.test.ts
+      - name: Drill tests
+        run: npx vitest run -c ops/backup/vitest.config.ts ops/backup/test/*.drill.test.ts
+      - uses: actions/upload-artifact@b7c566a772e6b06bfbfcbd5ace554f2e1ac75bff # v6.0.0
+        with:
+          name: backup-drill-results
+          path: ops/backup/.results/*.json
+          if-no-files-found: ignore
