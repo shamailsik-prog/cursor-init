@@ -62,6 +62,7 @@ def run_static(root: Path, manifest: dict) -> list[Finding]:
     findings.extend(_check_alert_lines(root, manifest))
     findings.extend(_check_environments(manifest))
     findings.extend(_check_next(root, manifest))
+    findings.extend(_check_next_corpus_research(root, manifest))
     findings.extend(_check_iam(manifest))
     findings.extend(_check_runbook(root, manifest))
     findings.extend(_check_terraform(root, manifest))
@@ -260,6 +261,61 @@ def _check_next(root: Path, manifest: dict) -> list[Finding]:
         text = path.read_text(encoding="utf-8")
         if MAX_DURATION_RE.search(text) and rel not in listed:
             out.append(_fail("next", f"route exports maxDuration but is not listed: {rel}"))
+    return out
+
+
+ENV_NAME_RE = re.compile(r"^SIKANDER_[A-Z0-9_]{1,64}$")
+ROLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+CORPUS_RESEARCH_FILES = ("migration", "provisioning", "selection", "reader")
+
+
+def _check_next_corpus_research(root: Path, manifest: dict) -> list[Finding]:
+    """FA-D5-003: the Next runtime's research corpus reader. The manifest names the source, the role and the env vars
+    (names only: the DSN and CA are Vercel secrets, never in the tree or in functions/.env), and the code, the migration
+    and the provisioning use exactly those names."""
+    out: list[Finding] = []
+    block = manifest.get("next", {}).get("corpusResearch")
+    if not isinstance(block, dict):
+        return [_fail("next-corpus", "next.corpusResearch is missing (FA-D5-003: the research reader's source, role and secrets)")]
+    if block.get("source") != "postgres":
+        out.append(_fail("next-corpus", "next.corpusResearch.source must be postgres: production never reads the in-memory store"))
+    role = block.get("role")
+    if not isinstance(role, str) or not ROLE_NAME_RE.match(role):
+        out.append(_fail("next-corpus", "next.corpusResearch.role must be a Postgres role name"))
+        role = None
+    secrets = block.get("secrets") if isinstance(block.get("secrets"), dict) else {}
+    env = block.get("env") if isinstance(block.get("env"), dict) else {}
+    names: dict[str, object] = {"selectorEnv": block.get("selectorEnv"), **{f"secrets.{k}": v for k, v in secrets.items()},
+                                **{f"env.{k}": v for k, v in env.items()}}
+    for required in ("selectorEnv", "secrets.url", "secrets.ca", "env.maxStalenessHours"):
+        if required not in names:
+            out.append(_fail("next-corpus", f"next.corpusResearch.{required} is missing"))
+    for label, name in names.items():
+        if not isinstance(name, str) or not ENV_NAME_RE.match(name):
+            out.append(_fail("next-corpus", f"next.corpusResearch.{label} must be an env var name, not a value"))
+    texts: dict[str, str] = {}
+    for key in CORPUS_RESEARCH_FILES:
+        rel = block.get(key)
+        fp = root / rel if isinstance(rel, str) else None
+        if fp is None or not fp.is_file():
+            out.append(_fail("next-corpus", f"next.corpusResearch.{key} file is missing: {rel}"))
+            continue
+        texts[key] = fp.read_text(encoding="utf-8")
+    selection = texts.get("selection", "")
+    for label, name in names.items():
+        if isinstance(name, str) and selection and f'"{name}"' not in selection:
+            out.append(_fail("next-corpus", f"{block.get('selection')} does not read {name} ({label})"))
+    if role:
+        if "migration" in texts and f"CREATE ROLE {role} NOLOGIN" not in texts["migration"]:
+            out.append(_fail("next-corpus", f"{block.get('migration')} does not create {role} NOLOGIN"))
+        for key in ("provisioning", "reader", "selection"):
+            if key in texts and role not in texts[key]:
+                out.append(_fail("next-corpus", f"{block.get(key)} does not name {role}"))
+    # A secret never travels in the Functions deploy env files the manifest describes.
+    for profile, cfg in manifest.get("environments", {}).items():
+        for name in secrets.values():
+            if isinstance(name, str) and name in (cfg.get("env") or {}):
+                out.append(_fail("next-corpus", f"environments.{profile}.env carries the secret {name}"))
     return out
 
 

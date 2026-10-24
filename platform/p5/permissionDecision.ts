@@ -15,6 +15,8 @@
  *     (cross-firm / not-member / clearance); then the role table -> role-not-permitted
  *   - a job action (JOB_ACTIONS): client or own_matters -> client-denied; job.read naming a
  *     matter -> cross-firm / not-member / clearance; then the role table -> role-not-permitted
+ *   - an alert action (ALERT_ACTIONS, audit F43): client or own_matters -> client-denied; then the
+ *     role table (partner only) -> role-not-permitted
  *   - an AI action (AI_ACTIONS): client or own_matters -> client-denied; ai.call is matter-level
  *     (must name a matter: cross-firm / not-member / clearance); then the role table -> role-not-permitted
  *   - a D4 drafting action (DRAFT_ACTIONS: draft.create ... draft.approve) or doctype.read: client or
@@ -146,6 +148,26 @@ const JOB_ROLES: Record<JobAction, readonly string[]> = {
 }
 
 /**
+ * Operational alerts (audit F43): read the firm's alert worklist (`alert.read`) and acknowledge or resolve an alert
+ * that has escalated to the firm's partners (`alert.ack`): partner only, firm-level (an alert carries references, never
+ * matter text). Staff only; a client or an own_matters scope is denied (client-denied) and accounts hit
+ * accounts-register-only before this table. Without these rows an unknown action would fall through to `allow ok`
+ * for every staff role. The operator's own route is not a table action: it needs the `platformAdmin` claim.
+ */
+export const ALERT_ACTIONS = ["alert.read", "alert.ack"] as const
+export type AlertAction = (typeof ALERT_ACTIONS)[number]
+const ALERT_ACTION_SET: ReadonlySet<string> = new Set(ALERT_ACTIONS)
+
+export function isAlertAction(action: string): action is AlertAction {
+  return ALERT_ACTION_SET.has(action)
+}
+
+const ALERT_ROLES: Record<AlertAction, readonly string[]> = {
+  "alert.read": ["partner"],
+  "alert.ack": ["partner"],
+}
+
+/**
  * P1 AI gateway (Phase 3d, P3-70, P3-71, P3-66): make a committee-brain call on a matter (`ai.call`:
  * partner, associate, clerk; matter-level, so it must name a matter the caller is a cleared member of),
  * read the firm's AI usage (`ai.usage.read`), set its budget (`ai.budget.set`) and set its kill switch
@@ -262,6 +284,11 @@ export function decide(
       if (refused) return refused
     }
     return JOB_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
+  }
+
+  if (isAlertAction(action)) {
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    return ALERT_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
   }
 
   if (isAiAction(action)) {

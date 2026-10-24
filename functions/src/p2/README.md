@@ -35,7 +35,7 @@ Derived from what the code calls (`dispatch.ts` enqueues on the `jobWorker` task
 - **Cloud Tasks Enqueuer** (`roles/cloudtasks.enqueuer`) for the runtime service account of the functions that call `dispatch` (`api` for `retryFailedJob`, `onJobCreated`, `jobWorker` for retries and `jobSweeper`). By default that is the project's default compute service account. If the dispatch also needs to act as the queue's OIDC service account, that runtime account needs Service Account User (`roles/iam.serviceAccountUser`) on it.
 - **Cloud Run Invoker** (`roles/run.invoker`) on `jobWorker` for the service account Cloud Tasks uses to call it with an OIDC token. `jobWorker` is IAM-private by design (no `invoker` is set, and `p2.boot.test.ts` pins that), so without this binding every delivery is rejected with 403 and jobs stay `queued`.
 
-Until these are in place a dispatch fails silently from the job's point of view: the row stays `queued`, each sweep re-stamps it and logs `job dispatch failed`, and nothing dead-letters, so the `job.deadLettered` alert never fires. Open item O-41 tracks an alert on repeated `job dispatch failed`.
+Until these are in place a dispatch fails from the job's point of view: the row stays `queued`, each sweep re-stamps it and logs `job dispatch failed`, and nothing dead-letters, so the `job.deadLettered` alert never fires. Audit F43 closes open item O-41: the third sweeper re-dispatch of a row without a claim (or a re-dispatch of a row waiting 15 minutes) raises the durable `job.dispatch_stalled` alert for its firm and job type, and `alertChecker` raises `job.queue_age` for jobs waiting 15 minutes even if the sweeper is not running (`functions/src/alerts/README.md`).
 
 ## Dead-letter runbook
 
@@ -43,7 +43,7 @@ A job that exhausts its attempts becomes `dead_lettered` and the engine writes o
 
     logger.error("job.deadLettered", { jobId, firmId, jobType, code, ... })
 
-carrying codes only, never payload values. Create the log-based alert policy at deploy (open item O-30): filter on `severity=ERROR` and `jsonPayload.message="job.deadLettered"` (or the log message `job.deadLettered`), notify the on-call channel. To recover: read the job (`getJob`), fix the cause, then call `retryFailedJob` (up to 3 manual retries per job). A job that should not run again is closed with `cancelJob`.
+carrying codes only, never payload values. Create the log-based alert policy at deploy (open item O-30): filter on `severity=ERROR` and `jsonPayload.message="job.deadLettered"` (or the log message `job.deadLettered`), notify the on-call channel. Since audit F43 the same transaction that dead-letters the job also writes the durable alert `job.dead_lettered` (`ops_alerts`, one per job), which pages the on-call operator, escalates to the firm's partners and then its founding partner while nobody acknowledges it, and is listed in the partners' worklist (`GET /api/platform/alerts/listAlerts`); see `functions/src/alerts/README.md`. To recover: read the job (`getJob`), fix the cause, then call `retryFailedJob` (up to 3 manual retries per job). A job that should not run again is closed with `cancelJob`. Then resolve the alert (`resolveAlert`); a later dead letter of the same job reopens it.
 
 ## Auto-confirm progress and the backlog alert (F38)
 

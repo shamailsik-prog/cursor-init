@@ -27,3 +27,6 @@ export { p1TraceExportReconciler } from "./p1/traceExport"
 export { p1CorpusEmbedding } from "./p1/corpusEmbedding"
 // Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
 export { auditOutboxReconciler } from "./p5/auditOutboxReconciler"
+// Audit F43: the alert escalator (every minute: escalate open alerts past their deadline, deliver pending pages) and the
+// alert checker (every five minutes: queue age, saga age and unresolved AI spend, derived from the rows).
+export { alertEscalator, alertChecker } from "./alerts/functions"

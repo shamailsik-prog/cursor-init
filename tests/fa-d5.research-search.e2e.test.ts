@@ -133,6 +133,9 @@ beforeAll(async () => {
   vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
   vi.stubEnv("FIREBASE_PROJECT_ID", "demo-sikander")
   vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "memory")
+  // FA-D5-003 (spec R13, R15): research reads the in-app read model only when explicitly selected; this suite seeds it.
+  // The published Annex A path is tests/fa-d5-003.research-corpus.e2e.firestore.test.ts.
+  vi.stubEnv("SIKANDER_RESEARCH_CORPUS", "memory")
   resetSessionStateForTests()
   resetRuntimeStoreForTests()
   installVerifier()
