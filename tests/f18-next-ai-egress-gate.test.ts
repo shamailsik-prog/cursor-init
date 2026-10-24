@@ -885,6 +885,15 @@ const FAILING: Case[] = [
     },
     names: ["lib/w.ts", "FA-F18-033"],
   },
+  // FA-D3C-002 (spec R16): the corpus service's embeddings go through P1's p1CorpusEmbedding, so its exemption from
+  // rules (a)-(d) is gone (until then this row passed, as "the corpus service (the F27 lane)").
+  { name: "the corpus service's env file handing a provider key (FA-D3C-002)", files: { "corpus_service/app.env": "OPENAI_API_KEY=placeholder\n" }, names: ["corpus_service/app.env", "OPENAI_API_KEY"] },
+  {
+    name: "the corpus service's compose file handing a provider key (FA-D3C-002)",
+    files: { "corpus_service/docker-compose.yml": "services:\n  worker-embed:\n    environment:\n      OPENAI_API_KEY: ${OPENAI_API_KEY:-}\n" },
+    names: ["corpus_service/docker-compose.yml", "OPENAI_API_KEY"],
+  },
+  { name: "a provider SDK imported by corpus JS (FA-D3C-002)", files: { "corpus_service/x.ts": 'import OpenAI from "openai"\nexport const c = OpenAI\n' }, names: ["corpus_service/x.ts", "openai"] },
 ]
 
 const PASSING: Case[] = [
@@ -946,7 +955,7 @@ const PASSING: Case[] = [
     },
     names: [],
   },
-  { name: "the corpus service (the F27 lane; FA-D3C-002 under G-0 [3])", files: { "corpus_service/app.env": "OPENAI_API_KEY=placeholder\n", "corpus_service/x.ts": 'import OpenAI from "openai"\n' }, names: [] },
+  { name: "the corpus service's P1 settings (FA-D3C-002: a URL and a token file path, no provider key)", files: { "corpus_service/app.env": "P1_EMBEDDING_URL=\nP1_ID_TOKEN_FILE=/run/secrets/p1_id_token\n" }, names: [] },
   { name: "the root test suite", files: { "tests/x.test.ts": 'import { generateText } from "ai"\nexport const g = generateText\n' }, names: [] },
   { name: "prose in an env example that names a key without setting it", files: { ".env.example": "# Never set AI_GATEWAY_API_KEY in the Next or eve runtime.\n" }, names: [] },
   { name: "a YAML comment that names a key", files: { ".github/workflows/ci.yml": "# AI_GATEWAY_API_KEY is bound only to the Functions api function\njobs: {}\n" }, names: [] },

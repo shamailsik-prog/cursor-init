@@ -23,6 +23,13 @@ export const REQUEST_OVERHEAD_TOKENS = 1024
  */
 export const MESSAGE_OVERHEAD_TOKENS = 16
 
+/**
+ * FA-D3C-002: the request overhead reserved for an embedding call beyond its input. An embeddings request carries one
+ * input and no chat template; 16 tokens is generous. [REQUIRES VERIFICATION] at G-1 with the other overheads; a provider
+ * that bills more is still charged in full and the breach is learned (`platform/p1Overhead`).
+ */
+export const EMBEDDING_OVERHEAD_TOKENS = 16
+
 /** A message as the transport sends it (platform/p1/outboundPrompt.ts `OutboundMessage`). */
 type SentMessage = { readonly role: string; readonly content: string }
 
@@ -52,6 +59,17 @@ export const MODEL_PRICES: Readonly<
     source: "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models",
     fetchedAt: "2026-10-11",
     inputOverheadTokens: REQUEST_OVERHEAD_TOKENS,
+    inputOverheadVerified: false,
+  }),
+  // FA-D3C-002 (spec R12): the corpus service's embedding model, routed by `callP1Embedding` (embedding.ts). The Gateway
+  // lists `"pricing": {"input": "0.00000002"}` USD per token, so 20 nano-USD; an embedding has no output side. It carries
+  // no chat template, so its overhead is 16 tokens, unmeasured until G-1 like the Opus figure.
+  "openai/text-embedding-3-small": Object.freeze({
+    inputNanoUsdPerToken: 20,
+    outputNanoUsdPerToken: 0,
+    source: "Vercel AI Gateway public model list, GET https://ai-gateway.vercel.sh/v1/models",
+    fetchedAt: "2026-10-24",
+    inputOverheadTokens: EMBEDDING_OVERHEAD_TOKENS,
     inputOverheadVerified: false,
   }),
 })

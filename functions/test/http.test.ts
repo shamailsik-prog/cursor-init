@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Firestore } from "firebase-admin/firestore"
 import { Timestamp } from "firebase-admin/firestore"
@@ -6,6 +8,8 @@ import { adminAuth, adminDb } from "../src/admin"
 import { HttpError } from "../src/http/errors"
 import { IDEMPOTENCY_LEASE_MS, canonicalJson, isStorableResult, isUuidV4, requestHash } from "../src/http/idempotency"
 import { FUNCTION_TIMEOUT_SECONDS } from "../src/health"
+import { CORPUS_EMBEDDING_TIMEOUT_SECONDS } from "../src/p1/corpusEmbedding"
+import { RESERVATION_LEASE_MS } from "../src/p1/gateway"
 import { clientIp, retryAfterSeconds, windowId } from "../src/http/rateLimit"
 import { ROUTES, api, buildRouteTable, createRouter, type Route } from "../src/http/router"
 import { type FirmOperation, type Operation } from "../src/p5/common"
@@ -239,14 +243,38 @@ describe("idempotency helpers", () => {
   it("the idempotency lease outlives the pinned function timeout; api pins it", async () => {
     expect(FUNCTION_TIMEOUT_SECONDS).toBe(120)
     expect(IDEMPOTENCY_LEASE_MS).toBeGreaterThan(FUNCTION_TIMEOUT_SECONDS * 1000)
-    const index = (await import("../src/index")) as Record<string, { __endpoint?: { timeoutSeconds?: number; httpsTrigger?: unknown } }>
+    type Endpoint = { timeoutSeconds?: number; httpsTrigger?: { invoker?: unknown }; callableTrigger?: unknown; ingressSettings?: unknown }
+    const index = (await import("../src/index")) as Record<string, { __endpoint?: Endpoint }>
+    // U-1 / E-37: no onCall callable is deployed, under any name.
+    expect(Object.keys(index).filter((n) => index[n].__endpoint?.callableTrigger !== undefined)).toEqual([])
     // The job runtime's trigger, queue and schedule functions are not HTTP and run under their own
     // timeout (JOB_WORKER_TIMEOUT_SECONDS, pinned by p2.boot.test.ts).
     const names = Object.keys(index).filter((n) => n !== "health" && index[n].__endpoint?.httpsTrigger !== undefined)
-    // U-1: the HTTP api is the only entry point (no onCall callables are deployed)
-    expect(names).toEqual(["api"])
-    for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, FUNCTION_TIMEOUT_SECONDS])
+    // U-1: the HTTP api is the only entry point to the P5 user operations. The one other HTTP export is p1CorpusEmbedding
+    // (FA-D3C-002, spec R18): a service-to-service endpoint, not a P5 operation, pinned below by what makes it one. Any
+    // further HTTP export fails here, by name.
+    expect(names.sort()).toEqual(["api", "p1CorpusEmbedding"])
+    const TIMEOUTS: Record<string, number> = { api: FUNCTION_TIMEOUT_SECONDS, p1CorpusEmbedding: CORPUS_EMBEDDING_TIMEOUT_SECONDS }
+    for (const name of names) expect([name, index[name].__endpoint?.timeoutSeconds]).toEqual([name, TIMEOUTS[name]])
     expect((api as unknown as { __endpoint: { timeoutSeconds?: number } }).__endpoint.timeoutSeconds).toBe(FUNCTION_TIMEOUT_SECONDS)
+
+    // p1CorpusEmbedding is not a P5 entry point: IAM-private (no public invoker; the deployment grants run.invoker to the
+    // corpus service account only), ALLOW_ALL ingress because that caller is in another cloud project, and its own
+    // pinned timeout; the F32 manifest pins the same three. It takes no user, firm header or Idempotency-Key and holds
+    // no idempotency lease: its only lease is the P1 reservation's, which must outlive its timeout by 60 s.
+    const svc = index.p1CorpusEmbedding.__endpoint!
+    expect(svc.httpsTrigger?.invoker).toEqual(["private"])
+    expect(svc.ingressSettings).toBe("ALLOW_ALL")
+    expect(CORPUS_EMBEDDING_TIMEOUT_SECONDS).toBe(90)
+    expect(RESERVATION_LEASE_MS).toBeGreaterThanOrEqual(CORPUS_EMBEDDING_TIMEOUT_SECONDS * 1000 + 60_000)
+    const manifest = JSON.parse(readFileSync(path.resolve(__dirname, "..", "..", "infra", "deploy-manifest.json"), "utf8")) as {
+      functions: { name: string; timeoutSeconds?: number; ingress?: string; invoker?: string[] }[]
+    }
+    const pinned = manifest.functions.find((f) => f.name === "p1CorpusEmbedding")
+    expect(pinned).toMatchObject({ timeoutSeconds: CORPUS_EMBEDDING_TIMEOUT_SECONDS, ingress: "ALLOW_ALL", invoker: ["private"] })
+    expect(manifest.functions.find((f) => f.name === "api")?.timeoutSeconds).toBe(FUNCTION_TIMEOUT_SECONDS)
+    // Nor is it reachable through the api router: no route serves it.
+    expect(ROUTES.filter((r) => /embedding/i.test(r.path))).toEqual([])
   })
 
   it.each([

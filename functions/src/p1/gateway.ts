@@ -32,7 +32,7 @@ import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateReque
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, exportTrace } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
-import { TRANSPORT_ERROR, type BlockReason, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
+import { TRANSPORT_ERROR, type BlockReason, type LedgerTaskType, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
 import { uuidv7 } from "./uuidv7"
 
 /**
@@ -804,7 +804,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   }
 }
 
-type ReserveArgs = {
+export type ReserveArgs = {
   firmId: string
   monthKey: string
   /** The call's clock when it reserves: the lease runs from it, and a live reservation is one whose lease is later. */
@@ -814,6 +814,11 @@ type ReserveArgs = {
    * `reservedBodyTokens`; the transaction adds the overhead it reads (`reservationOverheadTokens`).
    */
   bodyTokens: number
+  /**
+   * FA-D3C-002: the output ceiling the reservation holds, in tokens: MAX_OUTPUT_TOKENS when absent (every chat call). An
+   * embedding call has no output side and passes 0.
+   */
+  outputTokens?: number
   reservationRef: DocumentReference
   configRef: DocumentReference
   totalRef: DocumentReference
@@ -822,20 +827,27 @@ type ReserveArgs = {
     actorId: string
     matterId: string | null
     jobId: string | null
-    taskType: TaskType
+    taskType: LedgerTaskType
     model: string
     classification: Classification
     traceId: string
     idempotencyDoc?: string
+    /**
+     * FA-D3C-002 (Codex P2 on PR #118): an embedding call's verified service caller and the corpus's F27 operation id,
+     * kept on the reservation so a row the lease reconciler writes still joins the corpus's receipt. Absent on every
+     * chat call, whose reservation and reconciled row are unchanged.
+     */
+    caller?: string
+    corpusOperationId?: string
   }
 }
 
 /**
  * The reservation transaction (F07), retried on P1's own back-off like the commit until RESERVE_DEADLINE_MS. Returns
  * "reserved", or the refusal it decided. A failure is thrown, unless a reservation of this call turns out to exist
- * (an attempt that committed and lost its answer), which is "reserved".
+ * (an attempt that committed and lost its answer), which is "reserved". Exported for `callP1Embedding` (FA-D3C-002).
  */
-async function reserve(db: Firestore, a: ReserveArgs): Promise<"reserved" | BlockReason> {
+export async function reserve(db: Firestore, a: ReserveArgs): Promise<"reserved" | BlockReason> {
   const started = Date.now()
   const remaining = () => RESERVE_DEADLINE_MS - (Date.now() - started)
   let failure: unknown = reserveDeadlineError()
@@ -899,7 +911,8 @@ async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs):
   const overheadTokens = reservationOverheadTokens(a.fields.model, learnedOverheadOf(overheadSnap!.data(), a.fields.model))
   if (overheadTokens === null) return "model_unpriced"
   const reservedInputTokens = a.bodyTokens + overheadTokens
-  const worstCase = costMicroUsd(a.fields.model, reservedInputTokens, MAX_OUTPUT_TOKENS)
+  const reservedOutputTokens = a.outputTokens ?? MAX_OUTPUT_TOKENS
+  const worstCase = costMicroUsd(a.fields.model, reservedInputTokens, reservedOutputTokens)
   if (worstCase === null) return "model_unpriced"
   const config = configSnap!.data()
   if (killSwitchBlocks(platformSnap!.get("killSwitch"), a.fields.model)) return "kill_switch_platform"
@@ -935,7 +948,7 @@ async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs):
     reservedInputTokens,
     reservedBodyTokens: a.bodyTokens,
     reservedOverheadTokens: overheadTokens,
-    reservedOutputTokens: MAX_OUTPUT_TOKENS,
+    reservedOutputTokens,
     reservedMicroUsd: worstCase,
     state: "reserved",
     leaseUntil: Timestamp.fromMillis(a.nowMs + RESERVATION_LEASE_MS),
@@ -953,8 +966,9 @@ async function stageReservation(db: Firestore, tx: Transaction, a: ReserveArgs):
  * and creates it (`kind: "p1_dispatch"`, this call's usage row id and trace id) when it is absent. A marker carrying
  * this call's trace id is an earlier attempt of this transaction that committed and lost its answer, and the call goes
  * on; any other marker means the operation already dispatched (or committed another effect), and nothing is sent.
+ * Exported for `callP1Embedding` (FA-D3C-002), which records its attempt the same way, with no operation.
  */
-async function markAttempt(
+export async function markAttempt(
   db: Firestore,
   ref: DocumentReference,
   s: typeof p1TestSeam,
@@ -990,7 +1004,7 @@ async function markAttempt(
  * records the attempt receipt on the operation's marker, only while the marker carries this call's trace id. Cut off
  * like the mark.
  */
-type AttemptOutcome = {
+export type AttemptOutcome = {
   result: P1Outcome
   inputTokens: number
   outputTokens: number
@@ -1016,9 +1030,9 @@ const ATTEMPT_OUTCOME_BACKOFF_MS = 100
  * 100 then 200 ms between them, all inside the step's one ATTEMPT_RECORD_TIMEOUT_MS share of the time budget (no attempt
  * or wait starts past it, and each attempt is cut off at what is left), so CALL_WORST_CASE_MS is unchanged. Each
  * attempt rewrites the same values, so a retry after an attempt whose commit landed unseen changes nothing. The last
- * failure is rethrown; the call stays fail-open on it.
+ * failure is rethrown; the call stays fail-open on it. Exported for `callP1Embedding` (FA-D3C-002).
  */
-async function recordAttemptOutcomeRetrying(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op?: ReceiptArgs): Promise<void> {
+export async function recordAttemptOutcomeRetrying(db: Firestore, ref: DocumentReference, r: AttemptOutcome, op?: ReceiptArgs): Promise<void> {
   const started = Date.now()
   const remaining = () => ATTEMPT_RECORD_TIMEOUT_MS - (Date.now() - started)
   let failure: unknown = Object.assign(new Error("P1 attempt_outcome_timeout"), { code: "attempt_outcome_timeout" })
@@ -1071,7 +1085,7 @@ async function recordAttemptOutcome(db: Firestore, ref: DocumentReference, r: At
 export type UsageRecord = {
   firmId: string
   actorId: string
-  taskType: TaskType
+  taskType: LedgerTaskType
   model: string
   classification: Classification
   outcome: UsageOutcome
@@ -1112,9 +1126,9 @@ export type CommitArgs = {
  * back-off (see COMMIT_DEADLINE_MS) until COMMIT_MAX_ATTEMPTS or the deadline. The usage row's `tx.create`
  * makes a retry after an unseen commit fail with ALREADY_EXISTS rather than double-count. Before any failure
  * is reported, the usage row is read: a commit found done returns the crossings its alert docs record, so an
- * unseen commit is never logged as a failure.
+ * unseen commit is never logged as a failure. Exported for `callP1Embedding` (FA-D3C-002).
  */
-async function commit(db: Firestore, args: CommitArgs): Promise<StageResult> {
+export async function commit(db: Firestore, args: CommitArgs): Promise<StageResult> {
   const clock = args.seam.wallClock ?? Date.now
   const started = clock()
   const remaining = () => COMMIT_DEADLINE_MS - (clock() - started)

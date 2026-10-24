@@ -77,6 +77,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   d1ConflictPartyWritten: "Firestore trigger, no caller; on a matter party written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
   d1ConflictIndexChunkWritten: "Firestore trigger, no caller; on a name removed from a chunk, breaks only that chunk's firm's name index (audit F37 re-audit)",
   p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)",
+  p1CorpusEmbedding: "service endpoint, no tenant caller: IAM-private and OIDC-verified for the corpus service account only; spends the one firm its deployment names (P1_CORPUS_FIRM_ID), never a firm the request names, and reads or returns no firm data (FA-D3C-002)",
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
   alertEscalator: "scheduler, no caller; escalates each open alert within its own firm (its partners, its founding partner) and delivers pages (audit F43)",
   alertChecker: "scheduler, no caller; derives queue, saga and AI-spend alerts from each firm's own rows, one alert per firm (audit F43)",

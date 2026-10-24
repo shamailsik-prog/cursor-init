@@ -95,6 +95,7 @@ def make_test_pki(directory: Path) -> Dict[str, Path]:
 
 def server_tls_context(pki: Dict[str, Path]) -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(str(pki["cert"]), str(pki["key"]))
     return ctx
 

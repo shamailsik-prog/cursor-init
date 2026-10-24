@@ -1,23 +1,51 @@
-/** Parse helpers for F32 TTL static rules checks (R116-001 / R116-002). */
+/** Parse helpers for F32 TTL static rules checks (R116 / R117). */
 
-export const TTL_ONLY_RULE = "allow read, write: if false;"
+export type RulesMatchBlock = { path: string; body: string }
+
+type QuoteState = "'" | '"' | null
 
 export function stripRulesComments(rules: string): string {
   let out = ""
   let i = 0
+  let quote: QuoteState = null
+  let escape = false
   while (i < rules.length) {
-    if (rules[i] === "/" && rules[i + 1] === "/") {
+    const ch = rules[i]
+    const next = rules[i + 1]
+
+    if (quote) {
+      out += ch
+      if (escape) {
+        escape = false
+      } else if (ch === "\\") {
+        escape = true
+      } else if (ch === quote) {
+        quote = null
+      }
+      i++
+      continue
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      out += ch
+      i++
+      continue
+    }
+
+    if (ch === "/" && next === "/") {
       i += 2
       while (i < rules.length && rules[i] !== "\n") i++
       continue
     }
-    if (rules[i] === "/" && rules[i + 1] === "*") {
+    if (ch === "/" && next === "*") {
       i += 2
       while (i < rules.length && !(rules[i] === "*" && rules[i + 1] === "/")) i++
       i += 2
       continue
     }
-    out += rules[i]
+
+    out += ch
     i++
   }
   return out
@@ -26,8 +54,6 @@ export function stripRulesComments(rules: string): string {
 export function normalizeRuleBody(body: string): string {
   return stripRulesComments(body).replace(/\s+/g, " ").trim()
 }
-
-export type RulesMatchBlock = { path: string; body: string }
 
 export function extractMatchBlocks(rules: string): RulesMatchBlock[] {
   const cleaned = stripRulesComments(rules)
@@ -53,9 +79,14 @@ export function extractMatchBlocks(rules: string): RulesMatchBlock[] {
 
 /** True when a rules path could apply to documents in this collection group. */
 export function matchPathAppliesToCollectionGroup(path: string, collectionGroup: string): boolean {
-  const segment = `/${collectionGroup}/`
-  if (path === `/${collectionGroup}/{id}` || path.startsWith(segment)) return true
-  if (path.includes(`/${collectionGroup}/`)) return true
+  if (path.includes("{document=**}")) return true
+  const segments = path.split("/").filter(Boolean)
+  for (const seg of segments) {
+    if (seg === collectionGroup) return true
+    if (seg === `{${collectionGroup}}`) return true
+    const recur = seg.match(/^\{([^=]+)=\*\*\}$/)
+    if (recur && recur[1] === collectionGroup) return true
+  }
   if (path.includes(`{path=**}/${collectionGroup}/`)) return true
   const wildcard = `{${collectionGroup}=**}`
   if (path.includes(wildcard)) return true
@@ -66,8 +97,42 @@ export function matchBlocksForCollectionGroup(rules: string, collectionGroup: st
   return extractMatchBlocks(rules).filter((b) => matchPathAppliesToCollectionGroup(b.path, collectionGroup))
 }
 
-const FORBIDDEN_CLIENT_ALLOW_RE =
-  /allow\s+(?:read|write|get|list|create|update|delete)[^;]*:\s*if\s+(?!false\b)/i
+export type AllowStatement = { verbs: string[]; condition: string }
+
+const ALLOW_STMT_RE = /allow\s+([^:;]+)\s*:\s*if\s+([^;]+);/gi
+
+export function extractAllowStatements(body: string): AllowStatement[] {
+  const cleaned = stripRulesComments(body)
+  const out: AllowStatement[] = []
+  let m: RegExpExecArray | null
+  ALLOW_STMT_RE.lastIndex = 0
+  while ((m = ALLOW_STMT_RE.exec(cleaned)) !== null) {
+    const verbs = m[1]
+      .split(",")
+      .map((v) => v.trim().toLowerCase())
+      .filter(Boolean)
+    out.push({ verbs, condition: m[2].trim() })
+  }
+  return out
+}
+
+function isUnconditionallyFalse(condition: string): boolean {
+  return normalizeRuleBody(condition) === "false"
+}
+
+/** Every allow in the block must be `if false` only (structural; equivalent spacing/order/split allows OK). */
+export function assertBlockIsServerDenyOnly(body: string): void {
+  const allows = extractAllowStatements(body)
+  if (allows.length === 0) {
+    throw new Error("TTL block has no allow statements")
+  }
+  for (const { verbs, condition } of allows) {
+    if (verbs.length === 0) throw new Error("TTL allow has no verbs")
+    if (!isUnconditionallyFalse(condition)) {
+      throw new Error(`TTL allow [${verbs.join(", ")}] must be if false (got if ${condition})`)
+    }
+  }
+}
 
 export function assertTtlCollectionServerDenyOnly(rules: string, collectionGroup: string): void {
   const blocks = matchBlocksForCollectionGroup(rules, collectionGroup)
@@ -75,18 +140,6 @@ export function assertTtlCollectionServerDenyOnly(rules: string, collectionGroup
     throw new Error(`no rules match blocks apply to TTL collection ${collectionGroup}`)
   }
   for (const block of blocks) {
-    const normalized = normalizeRuleBody(block.body)
-    if (normalized !== TTL_ONLY_RULE) {
-      throw new Error(
-        `TTL collection ${collectionGroup} block ${block.path} must be only "${TTL_ONLY_RULE}" (got "${normalized}")`,
-      )
-    }
-    if (FORBIDDEN_CLIENT_ALLOW_RE.test(stripRulesComments(block.body))) {
-      throw new Error(`TTL collection ${collectionGroup} block ${block.path} has conditional client allow`)
-    }
-    const raw = stripRulesComments(block.body)
-    if (/platformAdmin/i.test(raw) || /victim/i.test(raw) || /request\.auth\.uid\s*==/i.test(raw)) {
-      throw new Error(`TTL collection ${collectionGroup} block ${block.path} contains mutant bypass pattern`)
-    }
+    assertBlockIsServerDenyOnly(block.body)
   }
 }
