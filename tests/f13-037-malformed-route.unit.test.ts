@@ -76,6 +76,37 @@ describe("F13 FA-F13-037: malformed documents.get on routes", () => {
     seam.__setDocumentsGet(null)
   })
 
+  it("POST ingest returns 500 and drops cache when the pre-update get throws DocumentMalformedError", async () => {
+    const { matterId } = seedMatterAndDocument()
+    let calls = 0
+    const seam = await repoSeam()
+    seam.__setDocumentsGet(async (id) => {
+      calls += 1
+      if (calls === 1) throw new DocumentMalformedError(id)
+    })
+    const store = getRuntimeStore()
+    const res = await documentsPost(
+      new Request("http://127.0.0.1/api/d1/documents", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "c3d4e5f6-a7b8-4901-8234-567890f03731",
+        },
+        body: JSON.stringify({
+          action: "ingest",
+          actorId: "partner_a",
+          firmId: "firmA",
+          matterId,
+          contentBase64: Buffer.from("%PDF-f13-037b%").toString("base64"),
+          sourceChannel: "web",
+          classification: "internal",
+        }),
+      })
+    )
+    expect(res.status).toBe(500)
+    expect([...store.documents.keys()]).toEqual([docId])
+  })
+
   it("POST ingest returns 500 and drops cache when the post-persist get throws DocumentMalformedError", async () => {
     const { matterId } = seedMatterAndDocument()
     let calls = 0
@@ -104,9 +135,7 @@ describe("F13 FA-F13-037: malformed documents.get on routes", () => {
       })
     )
     expect(res.status).toBe(500)
-    const created = [...store.documents.keys()].find((id) => id !== docId)
-    expect(created).toBeTruthy()
-    expect(store.documents.has(created!)).toBe(false)
+    expect([...store.documents.keys()]).toEqual([docId])
   })
 
   it("workflow review_decision returns 400 and drops cache when documents.get throws DocumentMalformedError", async () => {
