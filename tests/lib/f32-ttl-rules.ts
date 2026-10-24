@@ -137,7 +137,9 @@ export function extractAllowStatements(body: string): AllowStatement[] {
 }
 
 function isUnconditionallyFalse(condition: string): boolean {
-  return normalizeRuleBody(condition) === "false"
+  const n = normalizeRuleBody(condition)
+  if (n === "false") return true
+  return /^\(\s*false\s*\)$/.test(n)
 }
 
 /** Every allow in the block must be `if false` only (structural; equivalent spacing/order/split allows OK). */
@@ -148,6 +150,9 @@ export function assertBlockIsServerDenyOnly(body: string): void {
   }
   for (const { verbs, condition } of allows) {
     if (verbs.length === 0) throw new Error("TTL allow has no verbs")
+    if (condition === null) {
+      throw new Error(`TTL allow [${verbs.join(", ")}] must be if false (unconditional allow)`)
+    }
     if (!isUnconditionallyFalse(condition)) {
       throw new Error(`TTL allow [${verbs.join(", ")}] must be if false (got if ${condition})`)
     }
