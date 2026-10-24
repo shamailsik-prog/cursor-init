@@ -246,7 +246,9 @@ describe.skipIf(!EMULATORS)("FA-F34-R1-001: the exported trace carries no revers
     const retried = opik.traces().filter((t) => t.id === r.traceId)
     expect(retried).toHaveLength(2)
     expect(retried[1]!.metadata).not.toHaveProperty("promptHash")
-    expect(opik.bodies.join("\n")).not.toContain(hash)
+    // Only this record's posts: another suite's internal record with the same body may be due in the shared emulator,
+    // and at rank 1 its hash rides legitimately.
+    expect(JSON.stringify(retried)).not.toContain(hash)
   })
 
   it("R1-005 (R19): the provider's model name is exported only when it is the configured model or its alias", async () => {
