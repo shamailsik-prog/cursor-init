@@ -48,6 +48,13 @@ describe("F32 TTL rules static shape (R117-001..003 / R117-006)", () => {
     expect(() => assertTtlCollectionServerDenyOnly(docMutant, "idempotency_keys")).toThrow()
   })
 
+  it("rejects bare allow without if even when other allows are deny-only (R119-002)", () => {
+    const mixed = "allow read: if false; allow write;"
+    expect(() => assertBlockIsServerDenyOnly(mixed)).toThrow()
+    const bareOnly = "allow read, write;"
+    expect(() => assertBlockIsServerDenyOnly(bareOnly)).toThrow()
+  })
+
   it("accepts equivalent full-deny allow shapes", () => {
     const variants = [
       "allow read, write: if false;",
