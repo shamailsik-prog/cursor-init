@@ -2,22 +2,50 @@
 
 export const TTL_ONLY_RULE = "allow read, write: if false;"
 
+type QuoteState = "'" | '"' | null
+
 export function stripRulesComments(rules: string): string {
   let out = ""
   let i = 0
+  let quote: QuoteState = null
+  let escape = false
   while (i < rules.length) {
-    if (rules[i] === "/" && rules[i + 1] === "/") {
+    const ch = rules[i]
+    const next = rules[i + 1]
+
+    if (quote) {
+      out += ch
+      if (escape) {
+        escape = false
+      } else if (ch === "\\") {
+        escape = true
+      } else if (ch === quote) {
+        quote = null
+      }
+      i++
+      continue
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      out += ch
+      i++
+      continue
+    }
+
+    if (ch === "/" && next === "/") {
       i += 2
       while (i < rules.length && rules[i] !== "\n") i++
       continue
     }
-    if (rules[i] === "/" && rules[i + 1] === "*") {
+    if (ch === "/" && next === "*") {
       i += 2
       while (i < rules.length && !(rules[i] === "*" && rules[i + 1] === "/")) i++
       i += 2
       continue
     }
-    out += rules[i]
+
+    out += ch
     i++
   }
   return out
