@@ -76,6 +76,7 @@ export default defineConfig({
             "tests/f13-003-backfill.e2e.firestore.test.ts",
             "tests/f13-004-documents.e2e.firestore.test.ts",
             "tests/f13-026-documents-firmid.e2e.firestore.test.ts",
+            "tests/f13-035-037.e2e.firestore.test.ts",
             "tests/f13-004-reporting-index.e2e.firestore.test.ts",
             "tests/f32-ttl-collections.firestore.test.ts",
             "tests/fa-d4-001-template-analytics.e2e.firestore.test.ts",
