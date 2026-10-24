@@ -40,12 +40,14 @@ describe("F32 TTL rules static shape (R117-001..003 / R117-006)", () => {
     expect(matchPathAppliesToCollectionGroup("/{c}/{d}", "counters")).toBe(true)
   })
 
-  it("rejects fresh-name mutants on all-variable match paths (R119-001)", () => {
-    const mutant = `match /{c}/{d} { allow read: if request.auth.token.auditorZ == true; }`
-    expect(() => assertTtlCollectionServerDenyOnly(mutant, "counters")).toThrow()
-    expect(() => assertTtlCollectionServerDenyOnly(mutant, "rate_limits")).toThrow()
-    const docMutant = `match /{c}/{d} { allow get: if d == 'qq-unseen-77'; }`
-    expect(() => assertTtlCollectionServerDenyOnly(docMutant, "idempotency_keys")).toThrow()
+  it("rejects mutants on applicable paths with deny-only errors (R122-002)", () => {
+    const wildcardPath = `match {path=**}/{grp}/{id} { allow read: if request.auth.token.extraClaim == true; }`
+    expect(matchBlocksForCollectionGroup(wildcardPath, "counters").length).toBeGreaterThan(0)
+    expect(() => assertTtlCollectionServerDenyOnly(wildcardPath, "counters")).toThrow(/must be if false/i)
+
+    const allVar = `match /{grp}/{id} { allow get: if id == 'doc-needle-12'; }`
+    expect(matchBlocksForCollectionGroup(allVar, "rate_limits").length).toBeGreaterThan(0)
+    expect(() => assertTtlCollectionServerDenyOnly(allVar, "rate_limits")).toThrow(/must be if false/i)
   })
 
   it("rejects conditional allows on widened wildcard and collection-slot paths (R122-001)", () => {
