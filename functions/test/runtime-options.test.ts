@@ -23,7 +23,8 @@ describe("F32 runtime options on every export", () => {
     vi.resetModules()
   })
 
-  it("pins memory, concurrency, identity, caps and ingress on all 15 exports", async () => {
+  // Audit F34 adds p1TraceExportReconciler and FA-D3C-002 adds p1CorpusEmbedding: 16 exports.
+  it("pins memory, concurrency, identity, caps and ingress on all 16 exports", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<
       string,
@@ -58,6 +59,7 @@ describe("F32 runtime options on every export", () => {
       "onJobCreated",
       "p1CorpusEmbedding",
       "p1ReservationReconciler",
+      "p1TraceExportReconciler",
     ])
 
     for (const name of names) {

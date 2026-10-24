@@ -197,6 +197,19 @@
       "schedule": "every 1 minutes"
     },
     {
+      "name": "p1TraceExportReconciler",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 5 minutes"
+    },
+    {
       "name": "p1CorpusEmbedding",
       "kind": "https",
       "region": "asia-south1",
@@ -277,6 +290,8 @@
       { "event": "p1.reconcile_quarantined", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.reconcile_failure_uncounted", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
       { "event": "p1.reconcile_pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.trace_export_abandoned", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/traceExport.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.trace_export_reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/traceExport.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "autoconfirm.backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/d1/entity/autoConfirmJob.ts"], "runbook": "functions/src/p2/README.md" },
       { "event": "job.deadLettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p2/jobEvents.ts"], "runbook": "functions/src/p2/README.md" },
       { "event": "audit.outbox_backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
