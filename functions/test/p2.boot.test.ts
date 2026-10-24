@@ -34,7 +34,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler", "p1TraceExportReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -84,6 +84,10 @@ describe("P2 boot (P3-5, P3-8)", () => {
     expect(index.auditOutboxReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
     expect(index.auditOutboxReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect([index.auditOutboxReconciler.__endpoint.httpsTrigger, index.auditOutboxReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
+    // Audit F34: the trace export reconciler, the same pattern on a five-minute schedule (its own backoff is 5 minutes and up).
+    expect(index.p1TraceExportReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 5 minutes" } })
+    expect(index.p1TraceExportReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect([index.p1TraceExportReconciler.__endpoint.httpsTrigger, index.p1TraceExportReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     // F32: the worker invoker is exactly the runtime service account (not public).
     expect(index.jobWorker.__endpoint.taskQueueTrigger).toMatchObject({ invoker: ["sikander-functions@"] })
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {

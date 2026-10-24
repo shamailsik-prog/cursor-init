@@ -1107,7 +1107,7 @@ describe.skipIf(!EMULATORS)("deactivateUser", () => {
 describe("index exports", () => {
   it("U-1: deploys only the HTTP api (and the health probe) as HTTP functions, plus the job runtime's non-HTTP functions, in asia-south1 — no onCall callables", async () => {
     const mod = (await import("../src/index")) as Record<string, { __endpoint?: { region?: string[]; callableTrigger?: unknown; httpsTrigger?: unknown } }>
-    expect(Object.keys(mod).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(mod).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler", "p1TraceExportReconciler"])
     for (const name of Object.keys(mod)) {
       expect(mod[name]?.__endpoint?.callableTrigger, name).toBeUndefined()
     }

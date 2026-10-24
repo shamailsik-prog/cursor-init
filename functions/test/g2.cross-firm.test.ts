@@ -76,6 +76,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   d1ConflictIndexChunkWritten: "Firestore trigger, no caller; on a name removed from a chunk, breaks only that chunk's firm's name index (audit F37 re-audit)",
   p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)",
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
+  p1TraceExportReconciler: "scheduler, no caller; re-exports each pending P1 decision record's metadata-only trace by its own id and records the outcome on that record only (audit F34)",
 }
 
 /**

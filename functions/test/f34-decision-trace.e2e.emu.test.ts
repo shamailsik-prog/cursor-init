@@ -238,6 +238,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
       route: { classification: "internal", rank: 1, provider: "ai-gateway", allowed: true, minimisationRequired: false },
       budget: { firstLook: "fits", reservation: "reserved" },
       credentials: "present",
+      attemptRecord: "recorded",
     })
     expect(d!.decisions.budget.worstCaseMicroUsd).toBeGreaterThan(0)
     // R7: every phase the call reached, timed.
@@ -323,7 +324,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     const usageLogId = (await outputOf(out.outputId)).usageLogId as string
     const d = await decisionOf(usageLogId)
     expect(d).toMatchObject({ outcome: "blocked", blockReason: "kill_switch_firm", prompt: { templateId: "committee-brain", templateVersion: SYSTEM_POLICY_VERSION } })
-    expect(d!.decisions).toMatchObject({ killSwitch: { platform: "clear", firm: "blocks" }, budget: { reservation: "not_attempted" }, credentials: "not_checked" })
+    expect(d!.decisions).toMatchObject({ killSwitch: { platform: "clear", firm: "blocks" }, systemVerified: null, budget: { firstLook: "not_reached", reservation: "not_attempted" }, credentials: "not_checked", attemptRecord: "not_attempted" })
     expect(d!.phases).toMatchObject({ reserveMs: null, attemptRecordMs: null, transportMs: null, attemptOutcomeMs: null })
     expect(d!.model).toMatchObject({ reported: null, revisionStatus: "unreported" })
     expect(d!.export).toMatchObject({ state: "disabled", attempts: 0 })

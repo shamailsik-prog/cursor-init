@@ -560,7 +560,8 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       platform: killSwitchBlocks(platformSnap.get("killSwitch"), model) ? ("blocks" as const) : ("clear" as const),
       firm: killSwitchBlocks(config?.killSwitch, model) ? ("blocks" as const) : ("clear" as const),
     },
-    systemVerified: false,
+    // Null until the refusal reaches the check (a kill switch refuses first).
+    systemVerified: null as boolean | null,
     policy: providerAllowedFor(PROVIDER_ID, classification),
     minimised: null as boolean | null,
     firstLook: "not_reached" as "fits" | "exhausted" | "not_set" | "unpriced" | "not_reached",
