@@ -346,13 +346,13 @@ export async function callP1Embedding(req: P1EmbeddingRequest, opts?: { now?: ()
   let staged: StageResult = { ...NOTHING_STAGED, crossings: [] }
   let accounting: P1Accounting = "pending"
   try {
-    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation })
+    staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, nowMs: Math.floor(now()) })
     accounting = "settled"
   } catch (err) {
-    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
+    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err), event: "p1.usage_log_failed" })
   }
   for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
-  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
+  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded, event: "p1.reservation_exceeded" })
   logLearning(usageRef.id, firmId, staged)
 
   return {
