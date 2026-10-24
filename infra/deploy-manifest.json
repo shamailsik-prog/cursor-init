@@ -292,7 +292,28 @@
     "routes": [
       { "file": "app/api/p1/committee-brain/route.ts", "maxDuration": 130 },
       { "file": "app/api/d1/documents/route.ts", "maxDuration": 60 }
-    ]
+    ],
+    "corpusResearch": {
+      "source": "postgres",
+      "selectorEnv": "SIKANDER_RESEARCH_CORPUS",
+      "role": "corpus_research_reader",
+      "secrets": {
+        "url": "SIKANDER_CORPUS_RESEARCH_READER_URL",
+        "ca": "SIKANDER_CORPUS_RESEARCH_READER_CA"
+      },
+      "env": {
+        "maxStalenessHours": "SIKANDER_CORPUS_MAX_STALENESS_HOURS"
+      },
+      "migration": "postgres/ddl/005_research_reader.sql",
+      "provisioning": "corpus_service/docker/postgres/provision-roles.sh",
+      "selection": "services/d5-1/researchCorpus.ts",
+      "reader": "platform/corpus/pgResearchCorpus.ts",
+      "why": {
+        "source": "Audit FA-D5-003: WhatsApp /research is answered by the court-ops core in the Next process and reads the published Annex A corpus; production never selects the in-memory store (refused on a hosted runtime)",
+        "secrets": "Vercel secrets, never in the tree or in functions/.env: the reader DSN (sslmode=verify-full in production) and its PEM CA. Without the DSN research answers 503 corpus_unavailable",
+        "role": "The DSN's login is a member of corpus_research_reader and, for CONNECT only, corpus_clients, and of nothing else; the reader refuses any other login (wrong_role)"
+      }
+    }
   },
   "runbook": {
     "orderedSteps": [
@@ -301,7 +322,8 @@
       "bash scripts/deploy-preflight.sh --profile",
       "firebase deploy",
       "terraform apply stage 2",
-      "set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel"
+      "set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel",
+      "set the research corpus reader secrets on Vercel"
     ]
   },
   "apis": ["run.googleapis.com", "cloudfunctions.googleapis.com", "eventarc.googleapis.com", "cloudtasks.googleapis.com", "cloudscheduler.googleapis.com"]

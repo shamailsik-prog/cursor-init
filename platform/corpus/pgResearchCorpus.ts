@@ -21,7 +21,6 @@
  */
 import pg from "pg"
 import { PENDING_OVERRULING } from "@/functions/src/d4/authorityPending"
-import { classifyPgError, parseLastRefresh } from "@/functions/src/d4/corpusAuthorityStore"
 import type { CorpusReaderConfig } from "@/functions/src/d4/corpusReaderConfig"
 import { verdictFromTreatments, type Bench, type CitationVerdict, type TreatmentFact } from "@/services/d4-2/citationVerdict"
 import { CorpusUnavailableError, type CorpusUnavailableReason } from "@/services/d5-1/corpusUnavailable"
@@ -66,11 +65,74 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const isBench = (value: unknown): value is Bench => typeof value === "string" && BENCHES.has(value)
 const unavailable = (reason: CorpusUnavailableReason) => new CorpusUnavailableError(reason)
 
-/** The F05 classification of a driver error (D6), as a research reason. */
-const DRIVER_REASONS: ReadonlySet<string> = new Set(["unreachable", "timeout", "auth", "tls", "permission", "schema_missing", "busy"])
-function driverReason(err: unknown): CorpusUnavailableReason {
-  const reason = classifyPgError(err)
-  return DRIVER_REASONS.has(reason) ? (reason as CorpusUnavailableReason) : "error"
+// The F05 reader's classification of a driver error (functions/src/d4/corpusAuthorityStore.ts classifyPgError, plan D6),
+// restated here because that module is not a pure Functions module the Next runtime may import (audit F18). A parity test
+// (tests/fa-d5-003.research-source.test.ts) holds the two equal over every code and message they know.
+const SQLSTATE_REASONS: Readonly<Record<string, CorpusUnavailableReason>> = {
+  "42501": "permission",
+  "28P01": "auth",
+  "28000": "auth",
+  "57014": "timeout",
+  "42P01": "schema_missing",
+  "42703": "schema_missing",
+  "3D000": "schema_missing",
+  // undefined_object: the role 005 creates (corpus_research_reader) is not there.
+  "42704": "schema_missing",
+  "57P01": "unreachable",
+  "57P02": "unreachable",
+  "57P03": "unreachable",
+}
+const NODE_REASONS: Readonly<Record<string, CorpusUnavailableReason>> = {
+  ECONNREFUSED: "unreachable",
+  ENOTFOUND: "unreachable",
+  EHOSTUNREACH: "unreachable",
+  ENETUNREACH: "unreachable",
+  ECONNRESET: "unreachable",
+  EPIPE: "unreachable",
+  EAI_AGAIN: "unreachable",
+  ETIMEDOUT: "timeout",
+}
+const TLS_CODES = /^(ERR_TLS_|ERR_SSL_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|UNABLE_TO_(VERIFY|GET)_|CERT_|ERR_OSSL_)/
+const TIMEOUT_MESSAGES = /^(timeout expired|Connection terminated due to connection timeout|Query read timeout)$/
+// pg-pool's message when a call waited connectionTimeoutMillis in its queue: every connection was in use (F05 D24).
+const POOL_BUSY_MESSAGE = "timeout exceeded when trying to connect"
+const TLS_MESSAGES = /^The server does not support SSL connections$/
+
+/** The reason for a driver error, from its SQLSTATE or Node code, or node-pg's own timeout and TLS messages; else "error". */
+export function classifyResearchPgError(err: unknown): CorpusUnavailableReason {
+  if (err instanceof CorpusUnavailableError) return err.reason
+  if (err === null || typeof err !== "object") return "error"
+  const { code, message } = err as { code?: unknown; message?: unknown }
+  if (typeof code === "string") {
+    if (SQLSTATE_REASONS[code]) return SQLSTATE_REASONS[code]
+    if (/^08[0-9A-Z]{3}$/.test(code)) return "unreachable"
+    if (NODE_REASONS[code]) return NODE_REASONS[code]
+    if (TLS_CODES.test(code)) return "tls"
+  }
+  if (typeof message === "string") {
+    if (message === POOL_BUSY_MESSAGE) return "busy"
+    if (TIMEOUT_MESSAGES.test(message)) return "timeout"
+    if (TLS_MESSAGES.test(message)) return "tls"
+  }
+  return "error"
+}
+const driverReason = classifyResearchPgError
+
+const LAST_REFRESH = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{6})Z$/
+
+/** corpus_metadata.last_refresh (F19 D30: YYYY-MM-DDTHH:MI:SS.ffffffZ, UTC) in epoch ms, or null (F05's parser, restated). */
+export function parseResearchLastRefresh(value: unknown): number | null {
+  if (typeof value !== "string") return null
+  const m = LAST_REFRESH.exec(value)
+  if (!m) return null
+  const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number)
+  const ms = Date.UTC(y, mo - 1, d, h, mi, s, Math.floor(Number(m[7]) / 1000))
+  const back = new Date(ms)
+  // A 30 February or a 25th hour does not round-trip.
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d || back.getUTCHours() !== h || back.getUTCMinutes() !== mi || back.getUTCSeconds() !== s) {
+    return null
+  }
+  return ms
 }
 
 // R11, F05 D7's allowlist under the research role. The session first: a role check reads no table, so a writer or
@@ -280,7 +342,7 @@ export class PgResearchCorpus implements ResearchSource {
       | { contract: unknown; last_refresh: unknown; embedding_model: unknown; embedding_dim: unknown }
       | undefined
     if (meta?.contract !== PUBLICATION_CONTRACT) throw unavailable("contract_missing")
-    const refreshed = parseLastRefresh(meta.last_refresh)
+    const refreshed = parseResearchLastRefresh(meta.last_refresh)
     if (refreshed === null) throw unavailable("contract_missing")
     const wall = Date.now()
     if (refreshed - wall > FUTURE_SKEW_MS || wall - refreshed > this.maxStalenessMs) throw unavailable("stale")

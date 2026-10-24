@@ -100,10 +100,15 @@ KEY_GUARD_FILE = "platform/p1/providerKeyGuard.ts"
 # Outside functions/, an import of the Functions tree is allowed only when it names one of these modules.
 # costTable and types are pure data. f02RouterBoundary is the one F02 entry (FA-F18-013/014): Next names it; inside
 # functions/ it builds createRouter(F02_NEXT_AUTHORITY_ROUTES) only. The full router (ROUTES, p1/ops) is not on this list.
+# corpusReaderConfig (node:crypto only) and authorityPending (one frozen fact, type imports only) are the F05 corpus
+# reader's URL/TLS policy and its pending-overruling fact; the Next research reader (audit FA-D5-003) reuses both rather
+# than copy them. The F05 store itself (corpusAuthorityStore: firebase-functions, pg) is not on this list.
 FUNCTIONS_PURE_MODULES = (
     "functions/src/p1/costTable",
     "functions/src/p1/types",
     "functions/src/http/f02RouterBoundary",
+    "functions/src/d4/corpusReaderConfig",
+    "functions/src/d4/authorityPending",
 )
 _JS_EXT_RE = re.compile(r"\.(?:[cm]?[jt]sx?)$", re.I)
 # Same comment-aware gap as g0_guard_common.JS_WS (FA-F18-009). The type argument allows one nested `<>`

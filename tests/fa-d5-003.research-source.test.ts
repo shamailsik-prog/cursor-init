@@ -259,6 +259,31 @@ describe("one ranking for both sources (R6): judgments with several citations", 
   })
 })
 
+describe("parity with the F05 reader (R11, R12, R18): what the research reader restates must not drift", () => {
+  type Parity = {
+    classifyResearchPgError(err: unknown): string
+    parseResearchLastRefresh(value: unknown): number | null
+  }
+  const errors: unknown[] = [
+    ...["42501", "28P01", "28000", "57014", "42P01", "42703", "3D000", "42704", "57P01", "57P02", "57P03", "08006", "08001", "08P01"].map((code) => ({ code })),
+    ...["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "ECONNRESET", "EPIPE", "EAI_AGAIN", "ETIMEDOUT"].map((code) => ({ code })),
+    ...["ERR_TLS_CERT_ALTNAME_INVALID", "ERR_SSL_WRONG_VERSION_NUMBER", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "CERT_HAS_EXPIRED", "ERR_OSSL_EVP_BAD_DECRYPT"].map((code) => ({ code })),
+    ...["timeout exceeded when trying to connect", "timeout expired", "Connection terminated due to connection timeout", "Query read timeout", "The server does not support SSL connections", "something else"].map((message) => ({ message })),
+    { code: "XX000" }, { code: 42 }, null, undefined, "text", 7, {},
+  ]
+  const stamps: unknown[] = [
+    "2099-03-04T05:06:07.123456Z", "2099-02-30T00:00:00.000000Z", "2099-03-04T25:00:00.000000Z", "2099-03-04T05:06:07Z",
+    "2099-03-04 05:06:07.123456Z", "", null, 20990304, "2099-12-31T23:59:59.999999Z",
+  ]
+
+  it("classifies every driver error as the F05 reader does", async () => {
+    const mine = (await import(/* @vite-ignore */ spec("@/platform/corpus/pgResearchCorpus"))) as unknown as Parity
+    const f05 = await import("@/functions/src/d4/corpusAuthorityStore")
+    expect(errors.map((e) => mine.classifyResearchPgError(e))).toEqual(errors.map((e) => f05.classifyPgError(e)))
+    expect(stamps.map((s) => mine.parseResearchLastRefresh(s))).toEqual(stamps.map((s) => f05.parseLastRefresh(s)))
+  })
+})
+
 describe("the Postgres verdict rule (R7): the F05 facts through Module 33", () => {
   it("OVERRULED by a larger bench, UNVERIFIED while an overruling is pending, and a pending one never hides a qualifying one", async () => {
     const { researchVerdicts } = await verdictModule()
