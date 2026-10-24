@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { withManifestPsqlEnv } from "../postgres/psqlEnv"
 
 export type CommandResult = { code: number; stdout: string; stderr: string; stdoutBytes?: Buffer }
 
@@ -171,11 +172,15 @@ export class PersistentPsqlSession implements PsqlQueryable {
 
 /** One-shot psql invocations (restore manifest, guards). */
 export class PsqlSession implements PsqlQueryable {
+  private readonly env: NodeJS.ProcessEnv
+
   constructor(
     private readonly pgPrefix: string[] | undefined,
-    private readonly env: NodeJS.ProcessEnv,
+    env: NodeJS.ProcessEnv,
     private readonly database: string
-  ) {}
+  ) {
+    this.env = withManifestPsqlEnv(env)
+  }
 
   async query(sql: string): Promise<string> {
     const dir = mkdtempSync(path.join(os.tmpdir(), "f33-psql-"))
