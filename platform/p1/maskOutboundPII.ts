@@ -77,6 +77,14 @@ const TOKEN: Readonly<Record<RedactionKind, string>> = {
 export const MASK_TOKENS: readonly string[] = Object.values(TOKEN)
 
 /**
+ * The version of what this mask redacts (audit F34 re-audit R1-011, spec ruling R25), recorded on every P1 decision record
+ * (`decisions.mask.policyVersion`) beside the counts by kind, so a record says which mask produced them. Bump it with any
+ * change to what is masked; functions/test/f34-decision-units.test.ts pins it beside a golden set of masked outputs, so
+ * a change in behaviour without a bump fails there. "f34.1" is the mask as audit F15 and F16 left it.
+ */
+export const MASK_POLICY_VERSION = "f34.1"
+
+/**
  * The words and prefixes the patterns key on. The bound test (tests/f15-r2-bounds.test.ts) runs each, followed by
  * 100,000 characters of every filler, through the mask and the residual check, so a cue added here is covered.
  */
