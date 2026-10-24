@@ -259,6 +259,103 @@ describe("one ranking for both sources (R6): judgments with several citations", 
   })
 })
 
+describe("FA-D5-003 R1 at the seam (spec R23, R30, R34)", () => {
+  const vector = (i: number) => {
+    const v = new Array<number>(1536).fill(0)
+    v[i] = 1
+    return v
+  }
+
+  it("R1-002: a corpus whose readable vectors break the lock is 503 inconsistent, not the caller's 400; the caller's own vector stays a 400", async () => {
+    const { searchResearch } = await researchModule()
+    const { memoryResearchSource } = await sourceModule()
+    const store = bailStore()
+    store.embeddings.push({ entityId: "j-1", model: "text-embedding-3-small", vector: vector(0) })
+    store.embeddings.push({ entityId: "j-2", model: "text-embedding-3-large", vector: vector(1) })
+    expect(await reasonOf(searchResearch(memoryResearchSource(store), { text: "bail" }))).toBe("inconsistent")
+    store.embeddings.pop()
+    store.embeddings.push({ entityId: "j-2", model: "text-embedding-3-small", vector: [1, 2, 3] })
+    expect(await reasonOf(searchResearch(memoryResearchSource(store), { text: "bail" }))).toBe("inconsistent")
+    store.embeddings.pop()
+    store.corpusMetadata.embedding_dim = "3072"
+    expect(await reasonOf(searchResearch(memoryResearchSource(store), { text: "bail" }))).toBe("inconsistent")
+    store.corpusMetadata.embedding_dim = "1536"
+    // The caller's own vector: the wrong model, the wrong length, a zero vector. A PublicError (400), never a 503.
+    const own = async (embedding: unknown) => (await reasonOf(searchResearch(memoryResearchSource(store), { embedding }))).replace(/^threw /, "")
+    expect(await own({ model: "text-embedding-3-large", vector: vector(0) })).toBe("PublicError: search refuses: embedding_model mismatch")
+    expect(await own({ model: "text-embedding-3-small", vector: [1, 2] })).toBe("PublicError: search refuses: embedding_dim mismatch")
+    expect(await own({ model: "text-embedding-3-small", vector: new Array(1536).fill(0) })).toBe("PublicError: research embedding vector must not be zero")
+    // The synchronous in-memory search (G-1 test 10) still refuses with its PublicError.
+    const { searchCorpus } = (await import("@/services/d5-1/research")) as { searchCorpus(s: SpineStore, q: unknown): unknown }
+    store.embeddings.push({ entityId: "j-2", model: "text-embedding-3-large", vector: vector(1) })
+    expect(() => searchCorpus(store, { text: "bail" })).toThrow("search refuses: embedding_model mismatch")
+  })
+
+  it("R1-002 through the route (memory source): 503 corpus_unavailable, and the same key answers 200 once the corpus is consistent", async () => {
+    vi.stubEnv("SIKANDER_RESEARCH_CORPUS", "memory")
+    const store = getRuntimeStore()
+    seedJudgment(store, "j-lock", "Bail under section 497 CrPC", "single", "2099 SCMR 4501")
+    store.embeddings.push({ entityId: "j-lock", model: "text-embedding-3-large", vector: vector(0) })
+    const key = "5d0f9a8e-0d5c-4c39-9f37-2f2a8d6f0e11"
+    const send = () =>
+      POST(
+        new Request("http://127.0.0.1/api/d2/court-ops", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+          body: JSON.stringify({ action: "whatsapp_command", actorId: "associate_a", command: "/research bail 497" }),
+        })
+      )
+    try {
+      const refused = await send()
+      expect([refused.status, ((await refused.json()) as { code?: string }).code]).toEqual([503, "corpus_unavailable"])
+      store.embeddings.pop()
+      const back = await send()
+      const body = (await back.json()) as { reused?: boolean; result?: { result?: { research?: Array<{ entityId: string }> } } }
+      expect([back.status, body.reused, body.result?.result?.research?.map((h) => h.entityId)]).toEqual([200, false, ["j-lock"]])
+    } finally {
+      vi.unstubAllEnvs()
+      resetRuntimeStoreForTests()
+    }
+  })
+
+  it("R23: each text is folded alone, so markup left open in a title cannot erase its citations' terms", async () => {
+    const { searchResearch } = await researchModule()
+    const docs: Doc[] = [
+      { id: "open", title: "Bail order <!-- unterminated", citations: ["2099 SCMR 4601"], benchType: "single" },
+      { id: "tag", title: "Bail <b", citations: ["2099 SCMR 4602 > guarded"], benchType: "single" },
+    ]
+    const c: Corpus = { ...corpus, documents: docs }
+    const s: Source = { load: async (plan) => (plan({ embeddingModel: c.embeddingModel, embeddingDim: c.embeddingDim }), c) }
+    expect((await searchResearch(s, { text: "4601" })).items.map((h) => h.entityId)).toEqual(["open"])
+    expect((await searchResearch(s, { text: "4602" })).items.map((h) => h.entityId)).toEqual(["tag"])
+  })
+
+  it("R19: a candidate set ranked with whole-corpus statistics ranks as the whole corpus does", async () => {
+    const research = (await import("@/services/d5-1/research")) as unknown as {
+      rankResearchCorpus(c: unknown, q: unknown, u: null): { top: Array<{ doc: { id: string }; score: number }> }
+      prepareResearchQuery(q: unknown): unknown
+      researchDocumentTerms(d: Doc): ReadonlySet<string>
+    }
+    const docs: Doc[] = Array.from({ length: 40 }, (_, i) => ({
+      id: `d${String(i).padStart(2, "0")}`,
+      title: `${i % 3 === 0 ? "bail" : "rent"} ${i % 5 === 0 ? "arrest" : "tenant"} matter ${i}`,
+      citations: [`2099 SCMR ${4700 + i}`],
+      benchType: "single",
+    }))
+    const whole: Corpus = { ...corpus, documents: docs }
+    const prepared = research.prepareResearchQuery({ text: "bail arrest", k: 5 })
+    const full = research.rankResearchCorpus(whole, prepared, null).top.map((h) => [h.doc.id, h.score])
+    const df = new Map<string, number>()
+    for (const t of ["bail", "arrest"]) df.set(t, docs.filter((d) => research.researchDocumentTerms(d).has(t)).length)
+    const subset = docs.filter((d) => /bail|arrest/.test(d.title))
+    const ranked = research.rankResearchCorpus({ ...whole, documents: subset, stats: { documents: docs.length, df } }, prepared, null)
+    expect(ranked.top.map((h) => [h.doc.id, h.score])).toEqual(full)
+    // Without the statistics the subset alone would rank differently (its own N and df).
+    const naive = research.rankResearchCorpus({ ...whole, documents: subset }, prepared, null).top.map((h) => [h.doc.id, h.score])
+    expect(naive).not.toEqual(full)
+  })
+})
+
 describe("parity with the F05 reader (R11, R12, R18): what the research reader restates must not drift", () => {
   type Parity = {
     classifyResearchPgError(err: unknown): string

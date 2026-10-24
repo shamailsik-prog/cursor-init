@@ -25,35 +25,48 @@ import {
   insertUnpublishedJudgment,
   judgmentIds,
 } from "@/tests/helpers/fa-d5-003-corpus"
+import { loadTruthCorpus, truthSource } from "@/tests/helpers/fa-d5-003-scale"
 
 const NINE_PROMOTED_VIEWS = [
   "v_citation", "v_court", "v_judge", "v_judgment", "v_instrument", "v_statute", "v_statute_section",
   "v_statute_section_version", "v_treatment",
 ]
+// 006 (FA-D5-003 R1, spec R20) adds the term index's two views.
 const RESEARCH_READABLE = [
   "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_treatment", "v_research_embedding",
-  "v_research_judgment",
+  "v_research_judgment", "v_research_pending", "v_research_term",
 ]
 const AUTHORITY_READABLE = [
   "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_section_version", "v_authority_treatment",
 ]
 
+type ReaderSource = {
+  load(plan: (meta: { embeddingModel: string; embeddingDim: string }) => { vectors: boolean }): Promise<{
+    embeddingModel: string
+    embeddingDim: string
+    documents: ReadonlyArray<{ id: string; title: string; citations: readonly string[]; benchType: string }>
+    storedVectors: Iterable<{ model: string; dim: number }>
+    vectors: ReadonlyMap<string, readonly number[]> | null
+  }>
+  end(): Promise<void>
+}
 type ReaderModule = {
   PgResearchCorpus: new (
     config: unknown,
-    opts?: { maxJudgments?: number; maxTreatments?: number; maxVectors?: number; statementTimeoutMs?: number; sessionOptions?: string }
-  ) => {
-    load(plan: (meta: { embeddingModel: string; embeddingDim: string }) => { vectors: boolean }): Promise<{
-      embeddingModel: string
-      embeddingDim: string
-      documents: ReadonlyArray<{ id: string; title: string; citations: readonly string[]; benchType: string }>
-      storedVectors: ReadonlyArray<{ model: string; dim: number }>
-      vectors: ReadonlyMap<string, readonly number[]> | null
-      verdicts(ids: readonly string[]): ReadonlyMap<string, string>
-    }>
-    end(): Promise<void>
-  }
+    opts?: {
+      maxPending?: number
+      maxCited?: number
+      maxSignatures?: number
+      maxSemantic?: number
+      statementTimeoutMs?: number
+      sessionOptions?: string
+    }
+  ) => ReaderSource
 }
+type SearchModule = {
+  searchResearch(source: unknown, query: unknown): Promise<{ items: Array<Record<string, unknown>>; k: number; mode: string }>
+}
+const searchModule = async () => (await import("@/services/d5-1/research")) as unknown as SearchModule
 type ConfigModule = { readCorpusReaderConfig(env: Record<string, string | undefined>, production?: boolean): { ok: boolean; config?: unknown; reason?: string } }
 
 /** The branch's Postgres adapter (absent on main: the import fails and so does the test). */
@@ -215,7 +228,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
   })
 
   describe("the research reader role", () => {
-    it("corpus_research_reader logs in as nothing, holds no attribute or membership, and reads exactly six relations", async () => {
+    it("corpus_research_reader logs in as nothing, holds no attribute or membership, and reads exactly eight relations", async () => {
       const role = await db.admin.query(
         `SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit,
                 (SELECT count(*)::int FROM pg_auth_members m WHERE m.member = r.oid) AS memberships,
@@ -238,7 +251,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(readable.rows[0]).toEqual({ names: RESEARCH_READABLE.join(","), writes: false })
     })
 
-    it("the two research views are security_barrier, carry no provenance or text, and only corpus_research_reader reads them", async () => {
+    it("the four research views are security_barrier, carry no provenance or text, and only corpus_research_reader reads them", async () => {
       const views = await db.admin.query(
         `SELECT c.relname, c.reloptions FROM pg_class c
           WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'v' AND c.relname LIKE 'v\\_research\\_%' ORDER BY 1`
@@ -246,6 +259,8 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(views.rows).toEqual([
         { relname: "v_research_embedding", reloptions: ["security_barrier=true"] },
         { relname: "v_research_judgment", reloptions: ["security_barrier=true"] },
+        { relname: "v_research_pending", reloptions: ["security_barrier=true"] },
+        { relname: "v_research_term", reloptions: ["security_barrier=true"] },
       ])
       const columns = await db.admin.query(
         `SELECT table_name, string_agg(column_name || ':' || udt_name, ',' ORDER BY ordinal_position) AS cols
@@ -254,8 +269,10 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(Object.fromEntries(columns.rows.map((r) => [r.table_name, r.cols]))).toEqual({
         v_research_embedding: "judgment_id:uuid,model:text,embedding:vector",
         v_research_judgment: "judgment_id:uuid,case_title:text,bench_type:text",
+        v_research_pending: "judgment_id:uuid",
+        v_research_term: "judgment_id:uuid,term:text",
       })
-      for (const view of ["v_research_judgment", "v_research_embedding"]) {
+      for (const view of ["v_research_judgment", "v_research_embedding", "v_research_term", "v_research_pending"]) {
         const p = await db.admin.query(
           `SELECT has_table_privilege('corpus_research_reader', $1, 'SELECT') AS research,
                   has_any_column_privilege('corpus_reader', $1, 'SELECT') AS corpus_reader,
@@ -280,10 +297,40 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(readable.rows[0].names).toBe(AUTHORITY_READABLE.join(","))
     })
 
-    it("the inventory lists both research views (35 relations), so provisioning keeps them with the superuser", async () => {
+    it("the inventory lists the research views and 006's term index (41 relations, 13 routines), so provisioning keeps them with the superuser", async () => {
       const inv = await db.admin.query("SELECT count(*)::int AS n, bool_and(r::text <> '') AS ok, array_agg(r::text ORDER BY r::text) AS names FROM corpus_contract_relations() r")
-      expect(inv.rows[0].n).toBe(35)
-      expect(inv.rows[0].names).toEqual(expect.arrayContaining(["v_research_judgment", "v_research_embedding"]))
+      expect(inv.rows[0].n).toBe(41)
+      expect(inv.rows[0].names).toEqual(
+        expect.arrayContaining([
+          "v_research_judgment", "v_research_embedding", "v_research_term", "v_research_pending", "research_title_term",
+          "research_citation_term", "research_title_pending", "research_citation_pending",
+        ])
+      )
+      const routines = await db.admin.query("SELECT count(*)::int AS n, array_agg(routine::text) AS names FROM corpus_contract_routines()")
+      expect(routines.rows[0].n).toBe(13)
+      expect(routines.rows[0].names).toContain("research_terms_mark_pending()")
+    })
+
+    it("the term index is the writer's to maintain and the research role's to read through its views only (spec R20)", async () => {
+      const p = await db.admin.query(
+        `SELECT c.relname,
+                has_table_privilege('corpus_writer', c.oid, 'SELECT') AS w_select,
+                has_table_privilege('corpus_writer', c.oid, 'INSERT') AS w_insert,
+                has_table_privilege('corpus_writer', c.oid, 'DELETE') AS w_delete,
+                has_table_privilege('corpus_writer', c.oid, 'UPDATE') AS w_update,
+                has_any_column_privilege('corpus_research_reader', c.oid, 'SELECT') AS research,
+                has_any_column_privilege('corpus_reader', c.oid, 'SELECT') AS corpus_reader,
+                has_any_column_privilege('corpus_authority_reader', c.oid, 'SELECT') AS gate_reader,
+                has_any_column_privilege('public', c.oid, 'SELECT') AS everyone
+           FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'research\\_%' ORDER BY 1`
+      )
+      const deny = { research: false, corpus_reader: false, gate_reader: false, everyone: false, w_update: false }
+      expect(p.rows).toEqual([
+        { relname: "research_citation_pending", w_select: true, w_insert: false, w_delete: true, ...deny },
+        { relname: "research_citation_term", w_select: true, w_insert: true, w_delete: true, ...deny },
+        { relname: "research_title_pending", w_select: true, w_insert: false, w_delete: true, ...deny },
+        { relname: "research_title_term", w_select: true, w_insert: true, w_delete: true, ...deny },
+      ])
     })
   })
 
@@ -338,6 +385,46 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       }
     })
 
+    it("v_research_term holds exactly the visible judgments' terms, and v_research_pending the visible ones the index has not caught up with (spec R20)", async () => {
+      const visible = Object.entries(J).filter(([k]) => !Object.keys(hidden).includes(k)).map(([, id]) => id)
+      const read = () =>
+        asLogin(db.researchUrl, async (c) => ({
+          ids: (await c.query("SELECT DISTINCT judgment_id::text AS id FROM v_research_term")).rows.map((r) => r.id as string).sort(),
+          hiddenTerms: (
+            await c.query(
+              `SELECT term FROM v_research_term
+                WHERE term LIKE 'zq%' OR term IN ('3601', '3602', '3603', '3604', '3605', '3606', '3700', '3705', '3710')
+                ORDER BY 1`
+            )
+          ).rows.map((r) => r.term as string),
+          pending: (await c.query("SELECT judgment_id::text AS id FROM v_research_pending")).rows.map((r) => r.id as string),
+        }))
+      // The fixture was published by the F19 CLI, which indexed what it wrote; the superuser's hidden rows are pending but
+      // not visible, and a defect hides a judgment's terms with it.
+      expect(await read()).toEqual({ ids: [...visible].sort(), hiddenTerms: [], pending: [] })
+      const planted = (
+        await db.admin.query(
+          `INSERT INTO judgment (case_title, bench_type, classification, source_id, review_status, publication_id)
+           SELECT 'Zqplanted bail after arrest', 'division', 'public', source_id, 'promoted', publication_id FROM judgment WHERE id = $1
+           RETURNING id::text AS id`,
+          [J["j-bail-01"]]
+        )
+      ).rows[0].id as string
+      try {
+        // Written by the superuser, outside a publication: visible, and pending because nobody indexed it.
+        const before = await read()
+        expect(before.pending).toEqual([planted])
+        expect(before.hiddenTerms).toEqual([])
+        expect(await db.indexTerms()).toMatchObject({ pending_titles: 0, pending_citations: 0 })
+        const after = await read()
+        expect(after.pending).toEqual([])
+        expect(after.ids).toContain(planted)
+        expect(after.hiddenTerms).toEqual(["zqplanted"])
+      } finally {
+        await db.admin.query("DELETE FROM judgment WHERE id = $1", [planted])
+      }
+    })
+
     it("the research login can read nothing else: base tables, 001's views and the gate's section view are refused", async () => {
       const states = await asLogin(db.researchUrl, async (c) => ({
         judgment: await sqlstate(c.query("SELECT count(*) FROM judgment")),
@@ -346,40 +433,119 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         v_judgment: await sqlstate(c.query("SELECT count(*) FROM v_judgment")),
         sections: await sqlstate(c.query("SELECT count(*) FROM v_authority_section_version")),
         write: await sqlstate(c.query("INSERT INTO corpus_metadata (key, value) VALUES ('fa-d5-003', 'x')")),
+        titleTerms: await sqlstate(c.query("SELECT count(*) FROM research_title_term")),
+        citationTerms: await sqlstate(c.query("SELECT count(*) FROM research_citation_term")),
+        pending: await sqlstate(c.query("SELECT count(*) FROM research_title_pending")),
       }))
-      expect(states).toEqual({ judgment: "42501", embeddings: "42501", provenance: "42501", v_judgment: "42501", sections: "42501", write: "42501" })
+      expect(states).toEqual({
+        judgment: "42501", embeddings: "42501", provenance: "42501", v_judgment: "42501", sections: "42501", write: "42501",
+        titleTerms: "42501", citationTerms: "42501", pending: "42501",
+      })
     })
   })
 
   describe("the Postgres research reader (platform/corpus/pgResearchCorpus)", () => {
     const keywordPlan = () => ({ vectors: false })
 
-    it("loads the published corpus: documents with their citations, treatment verdicts and the stored vector pairs", async () => {
+    it("answers every mode as the whole published corpus ranks it, with each treatment verdict (spec R19-R26)", async () => {
       const { PgResearchCorpus } = await reader()
+      const { searchResearch } = await searchModule()
       const store = new PgResearchCorpus(await configFor(db.researchUrl))
+      const truth = await loadTruthCorpus(db.admin, true)
+      const hot = (i: number) => {
+        const v = new Array<number>(DIM).fill(0)
+        v[i] = 1
+        return { model: LIVE_MODEL, vector: v }
+      }
+      const queries: Array<Record<string, unknown>> = [
+        { text: "bail 497" }, { text: "bail", k: 50 }, { text: "Bail under section 497 CrPC" }, { text: "PLD 2099 SC 3202" },
+        { text: "2099 SCMR 3102" }, { text: "custody minors" }, { text: "zqnothing" }, { embedding: hot(0) },
+        { embedding: hot(3), k: 3 }, { text: "bail", embedding: hot(1) }, { text: "khula dower", embedding: hot(12), k: 5 },
+      ]
       try {
+        const got: string[] = []
+        const want: string[] = []
+        for (const q of queries) {
+          got.push(JSON.stringify(await searchResearch(store, q)))
+          want.push(JSON.stringify(await searchResearch(truthSource(truth), q)))
+        }
+        expect(got).toEqual(want)
+        const bail = await searchResearch(store, { text: "bail 497", k: 50 })
+        const verdict = (key: string) => bail.items.find((h) => h.entityId === J[key])?.treatment
+        expect([verdict("j-bail-01"), verdict("j-pending"), verdict("j-bail-02")]).toEqual(["OVERRULED", "UNVERIFIED", "VERIFIED"])
+        expect(bail.items.find((h) => h.entityId === J["j-bail-02"])).toMatchObject({ citation: "2099 SCMR 3102" })
+        // The lock reads the model set and the column's declared dimension (R29); the keyword-only load reads no vector.
         const corpus = await store.load(keywordPlan)
-        const visible = Object.entries(J).filter(([k]) => !Object.keys(hidden).includes(k)).map(([, id]) => id)
-        expect(corpus.documents.map((d) => d.id).sort()).toEqual([...visible].sort())
-        expect(corpus.documents.find((d) => d.id === J["j-bail-02"])).toMatchObject({
-          title: "Post-arrest bail under section 497 CrPC granted on further inquiry",
-          citations: ["2099 SCMR 3102", "PLD 2099 SC 3202"],
-          benchType: "division",
-        })
         expect(corpus).toMatchObject({ embeddingModel: LIVE_MODEL, embeddingDim: String(DIM), vectors: null })
-        expect(corpus.storedVectors).toEqual([{ model: LIVE_MODEL, dim: DIM }])
-        const v = corpus.verdicts([J["j-bail-01"], J["j-pending"], J["j-bail-02"]])
-        expect(Object.fromEntries([...v.entries()])).toEqual({
-          [J["j-bail-01"]]: "OVERRULED",
-          [J["j-pending"]]: "UNVERIFIED",
-          [J["j-bail-02"]]: "VERIFIED",
-        })
-        const withVectors = await store.load(() => ({ vectors: true }))
-        expect(withVectors.vectors?.size).toBe(visible.length)
-        expect(withVectors.vectors?.get(J["j-bail-01"])?.length).toBe(DIM)
+        expect([...corpus.storedVectors]).toEqual([{ model: LIVE_MODEL, dim: DIM }])
       } finally {
         await store.end()
       }
+    })
+
+    it("a judgment with no visible citation reads citation null; a followed treatment by a larger bench reads VERIFIED (R1-004)", async () => {
+      const { PgResearchCorpus } = await reader()
+      const { searchResearch } = await searchModule()
+      const a = db.admin
+      const nocite = (
+        await a.query(
+          `INSERT INTO judgment (case_title, bench_type, classification, source_id, review_status, publication_id)
+           SELECT 'Zqnocite visible judgment', 'division', 'public', source_id, 'promoted', publication_id FROM judgment WHERE id = $1
+           RETURNING id::text AS id`,
+          [J["j-bail-01"]]
+        )
+      ).rows[0].id as string
+      await a.query(
+        `INSERT INTO citation (judgment_id, citation_text, source_id, review_status, publication_id)
+         SELECT $1, '2099 SCMR 3790', source_id, 'rejected', publication_id FROM judgment WHERE id = $2`,
+        [nocite, J["j-bail-01"]]
+      )
+      await a.query(
+        `INSERT INTO treatment (treating_judgment_id, treated_judgment_id, treatment, treating_bench_type, source_id, review_status, publication_id)
+         SELECT $1, $2, 'followed', 'larger', source_id, 'promoted', publication_id FROM judgment WHERE id = $1`,
+        [J["j-larger"], J["j-bail-03"]]
+      )
+      await db.indexTerms()
+      const store = new PgResearchCorpus(await configFor(db.researchUrl))
+      try {
+        const found = await searchResearch(store, { text: "zqnocite" })
+        expect(found.items).toEqual([expect.objectContaining({ entityId: nocite, citation: null, score: 1, treatment: "VERIFIED" })])
+        const followed = await searchResearch(store, { text: "statutory delay third proviso" })
+        expect(followed.items[0]).toMatchObject({ entityId: J["j-bail-03"], treatment: "VERIFIED" })
+      } finally {
+        await store.end()
+        await a.query("DELETE FROM treatment WHERE treatment = 'followed' AND treated_judgment_id = $1", [J["j-bail-03"]])
+        await a.query("DELETE FROM citation WHERE judgment_id = $1", [nocite])
+        await a.query("DELETE FROM judgment WHERE id = $1", [nocite])
+      }
+    })
+
+    it("a last_refresh an hour ahead is stale; a publication contract other than '1' is contract_missing (R1-004)", async () => {
+      const { PgResearchCorpus } = await reader()
+      const a = db.admin
+      const orig = (await a.query("SELECT key, value FROM corpus_metadata WHERE key IN ('last_refresh', 'publication_contract')")).rows as Array<{ key: string; value: string }>
+      const restore = async () => {
+        for (const r of orig) await a.query("UPDATE corpus_metadata SET value = $2 WHERE key = $1", [r.key, r.value])
+      }
+      const d30 = (ms: number) => new Date(ms).toISOString().replace(/\.(\d{3})Z$/, ".$1000Z")
+      const cases: Array<[string, string, string, string]> = [
+        ["an hour ahead", "last_refresh", d30(Date.now() + 60 * 60_000), "stale"],
+        ["a minute ahead", "last_refresh", d30(Date.now() + 60_000), "loaded"],
+        ["contract 2", "publication_contract", "2", "contract_missing"],
+      ]
+      const store = new PgResearchCorpus(await configFor(db.researchUrl))
+      const out: Record<string, string> = {}
+      try {
+        for (const [label, key, value] of cases) {
+          await restore()
+          await a.query("UPDATE corpus_metadata SET value = $2 WHERE key = $1", [key, value])
+          out[label] = await reasonOf(store.load(keywordPlan))
+        }
+      } finally {
+        await restore()
+        await store.end()
+      }
+      expect(out).toEqual(Object.fromEntries(cases.map(([label, , , want]) => [label, want])))
     })
 
     it("refuses a login that can do more than read the research relations (wrong_role), whatever the shape", async () => {
@@ -394,19 +560,52 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
         ["a column SELECT on source_provenance", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT (source_url) ON source_provenance TO "${u}"`]],
         ["a write on corpus_metadata", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT UPDATE ON corpus_metadata TO "${u}"`]],
         ["no research role at all", () => []],
+        // FA-D5-003-R1-004: the audit's surviving mutants X08-X10.
+        ["a login with BYPASSRLS", (u) => [`GRANT corpus_research_reader TO "${u}"`, `ALTER ROLE "${u}" BYPASSRLS`]],
+        ["a SELECT on v_source_provenance", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON v_source_provenance TO "${u}"`]],
+        ["a SELECT on the gate's v_authority_section_version", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON v_authority_section_version TO "${u}"`]],
+        ["USAGE on a sequence in public", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT USAGE ON SEQUENCE corpus_publication_seq_seq TO "${u}"`]],
+        ["a SELECT on the term table itself", (u) => [`GRANT corpus_research_reader TO "${u}"`, `GRANT SELECT ON research_title_term TO "${u}"`]],
+        // FA-D5-003-R1-003 (spec R31): a readable or writable relation outside schema public, and ADMIN OPTION.
+        ["a SELECT on a table in another schema", (u) => [
+          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
+          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT SELECT ON fad5_side.secret TO "${u}"`,
+        ]],
+        ["an INSERT on a table in another schema", (u) => [
+          `GRANT corpus_research_reader TO "${u}"`, "CREATE SCHEMA IF NOT EXISTS fad5_side", "CREATE TABLE IF NOT EXISTS fad5_side.secret (x text)",
+          `GRANT USAGE ON SCHEMA fad5_side TO "${u}"`, `GRANT INSERT ON fad5_side.secret TO "${u}"`,
+        ]],
+        ["corpus_research_reader held WITH ADMIN OPTION", (u) => [`GRANT corpus_research_reader TO "${u}" WITH ADMIN OPTION`]],
       ]
       const reasons: Record<string, string> = {}
-      for (const [label, grants] of shapes) {
-        const login = await db.createLogin("fad5s")
-        for (const sql of grants(login.user)) await db.admin.query(sql)
-        const store = new PgResearchCorpus(await configFor(login.url))
-        try {
-          reasons[label] = await reasonOf(store.load(keywordPlan))
-        } finally {
-          await store.end()
+      try {
+        for (const [label, grants] of shapes) {
+          const login = await db.createLogin("fad5s")
+          for (const sql of grants(login.user)) await db.admin.query(sql)
+          const store = new PgResearchCorpus(await configFor(login.url))
+          try {
+            reasons[label] = await reasonOf(store.load(keywordPlan))
+          } finally {
+            await store.end()
+          }
         }
+      } finally {
+        await db.admin.query("DROP SCHEMA IF EXISTS fad5_side CASCADE")
       }
       expect(reasons).toEqual(Object.fromEntries(shapes.map(([label]) => [label, "wrong_role"])))
+      // Controls: the plain research login loads, and so does one that is also a member of corpus_clients (CONNECT only).
+      const plain = new PgResearchCorpus(await configFor(db.researchUrl))
+      const clientsLogin = await db.createLogin("fad5c")
+      await db.admin.query(`GRANT corpus_research_reader TO "${clientsLogin.user}"`)
+      const clientsRole = await db.admin.query("SELECT 1 FROM pg_roles WHERE rolname = 'corpus_clients'")
+      if (clientsRole.rowCount === 1) await db.admin.query(`GRANT corpus_clients TO "${clientsLogin.user}"`)
+      const withClients = new PgResearchCorpus(await configFor(clientsLogin.url))
+      try {
+        expect([await reasonOf(plain.load(keywordPlan)), await reasonOf(withClients.load(keywordPlan))]).toEqual(["loaded", "loaded"])
+      } finally {
+        await plain.end()
+        await withClients.end()
+      }
       // A session that is not read-only is refused too.
       const store = new PgResearchCorpus(await configFor(db.researchUrl), { sessionOptions: "-c default_transaction_read_only=off" })
       try {
@@ -416,26 +615,52 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       }
     })
 
-    it("over a row cap the load fails as row_cap, never a truncated corpus", async () => {
+    it("over a per-query bound one search fails (row_cap, unindexed), never a truncated answer, and the next query is unaffected (spec R27)", async () => {
       const { PgResearchCorpus } = await reader()
-      const visible = Object.keys(J).filter((k) => !(k in hidden)).length
-      const cases: Array<[string, { maxJudgments?: number; maxTreatments?: number; maxVectors?: number }, boolean, string]> = [
-        ["judgments at the cap", { maxJudgments: visible }, false, "loaded"],
-        ["judgments over the cap", { maxJudgments: visible - 1 }, false, "row_cap"],
-        ["treatments over the cap", { maxTreatments: 1 }, false, "row_cap"],
-        ["treatments at the cap", { maxTreatments: 2 }, false, "loaded"],
-        ["vectors over the cap", { maxVectors: visible - 1 }, true, "row_cap"],
-        ["vectors at the cap", { maxVectors: visible }, true, "loaded"],
-        ["vectors over the cap, not loaded for a keyword query", { maxVectors: 1 }, false, "loaded"],
+      const { searchResearch } = await searchModule()
+      const hot = (i: number) => {
+        const v = new Array<number>(DIM).fill(0)
+        v[i] = 1
+        return { model: LIVE_MODEL, vector: v }
+      }
+      // Two visible judgments the index has not caught up with (written by the superuser, outside a publication).
+      const planted: string[] = []
+      for (const t of ["Zqbound one bail", "Zqbound two bail"]) {
+        planted.push(
+          (
+            await db.admin.query(
+              `INSERT INTO judgment (case_title, bench_type, classification, source_id, review_status, publication_id)
+               SELECT $2, 'division', 'public', source_id, 'promoted', publication_id FROM judgment WHERE id = $1 RETURNING id::text AS id`,
+              [J["j-bail-01"], t]
+            )
+          ).rows[0].id as string
+        )
+      }
+      const cases: Array<[string, Record<string, number>, Record<string, unknown>, string]> = [
+        ["pending over the bound", { maxPending: 1 }, { text: "bail" }, "unindexed"],
+        ["pending at the bound", { maxPending: 2 }, { text: "bail" }, "answered"],
+        ["R4a candidates over the bound", { maxCited: 0 }, { text: "PLD 2099 SC 3202" }, "row_cap"],
+        ["R4a candidates at the bound", { maxCited: 1 }, { text: "PLD 2099 SC 3202" }, "answered"],
+        ["signature groups over the bound", { maxSignatures: 1 }, { text: "bail 497 crpc" }, "row_cap"],
+        ["signature groups at the bound, another query", { maxSignatures: 1 }, { text: "khula" }, "answered"],
+        ["semantic candidates over the bound", { maxSemantic: 2 }, { embedding: hot(0) }, "row_cap"],
+        ["semantic candidates within the bound", { maxSemantic: 100 }, { embedding: hot(0) }, "answered"],
       ]
       const out: Record<string, string> = {}
-      for (const [label, opts, vectors, _want] of cases) {
-        const store = new PgResearchCorpus(await configFor(db.researchUrl), opts)
-        try {
-          out[label] = await reasonOf(store.load(() => ({ vectors })))
-        } finally {
-          await store.end()
+      try {
+        for (const [label, opts, query] of cases) {
+          const store = new PgResearchCorpus(await configFor(db.researchUrl), opts)
+          try {
+            out[label] = await searchResearch(store, query).then(
+              (r) => (r.items.length > 0 ? "answered" : "empty"),
+              (e: { reason?: string; message?: string }) => e.reason ?? `threw ${e.message}`
+            )
+          } finally {
+            await store.end()
+          }
         }
+      } finally {
+        await db.admin.query("DELETE FROM judgment WHERE id = ANY($1::uuid[])", [planted])
       }
       expect(out).toEqual(Object.fromEntries(cases.map(([label, , , want]) => [label, want])))
     })

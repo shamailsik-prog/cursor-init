@@ -302,6 +302,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003: /research reads the published Annex 
        SELECT 'judgment', $1, 'text-embedding-3-large', 0, embedding FROM corpus_embeddings WHERE entity_id = $1 AND model = $2`,
       [hidden["j-review"], LIVE_MODEL]
     )
+    const key = randomUUID()
     try {
       const ok = await research(clerk, "bail 497")
       expect([ok.status, hitsOf(ok).length > 0]).toEqual([200, true])
@@ -310,16 +311,18 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003: /research reads the published Annex 
          SELECT 'judgment', $1, 'text-embedding-3-large', 0, embedding FROM corpus_embeddings WHERE entity_id = $1 AND model = $2`,
         [J["j-bail-03"], LIVE_MODEL]
       )
-      // The core's PublicError ("search refuses: embedding_model mismatch") is a 400 REQUEST_FAILED; the Functions router
-      // answers a 400 whose code it cannot carry as `invalid_request`. A refusal, not an empty list and not a 503.
-      const refused = await research(clerk, "bail 497")
+      // FA-D5-003-R1-002 (spec R30): the corpus's own state, not the caller's query, so it is 503 corpus_unavailable
+      // (reason `inconsistent`, logged), never a stored 400 that a retry with the same key would replay.
+      const refused = await research(clerk, "bail 497", key)
       expect(refused.authority).toBe("functions")
-      expect([refused.status, codeOf(refused), hitsOf(refused)]).toEqual([400, "invalid_request", []])
+      expect([refused.status, codeOf(refused), hitsOf(refused)]).toEqual([503, "corpus_unavailable", []])
     } finally {
       await db.admin.query("DELETE FROM corpus_embeddings WHERE model = 'text-embedding-3-large'")
     }
-    const back = await research(clerk, "bail 497")
+    // The same key answers once the corpus is consistent again: the refusal was not stored as the reply.
+    const back = await research(clerk, "bail 497", key)
     expect([back.status, hitsOf(back).length > 0]).toEqual([200, true])
+    expect((back.body as { reused?: unknown }).reused).toBe(false)
   }, SLOW)
 
   describe("a corpus research cannot read is 503 corpus_unavailable, never an empty list", () => {

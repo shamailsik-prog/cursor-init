@@ -23,13 +23,17 @@ export const CORPUS_FIXTURES = path.join(REPO_ROOT, "tests", "fixtures", "corpus
 export const FA_D5_003_BATCH = path.join(CORPUS_FIXTURES, "curated-batch.fa-d5-003.json")
 const CORPUS_SERVICE = path.join(REPO_ROOT, "corpus_service")
 
-/** The Annex A DDL in order: 004 re-defines 003's inventory, 005 re-defines 004's (spec R4). */
+/** The Annex A DDL in order: 004 re-defines 003's inventory, 005 re-defines 004's (spec R4), 006 re-defines 005's (R20). */
 export const ANNEX_A_DDL: readonly string[] = [
   "001_corpus_contract.sql",
   "003_corpus_publication.sql",
   "004_authority_read_views.sql",
   "005_research_reader.sql",
+  "006_research_terms.sql",
 ]
+
+/** Whether this tree has the research term index (FA-D5-003 R1, spec R20); main does not. */
+export const HAS_RESEARCH_TERMS = fs.existsSync(path.join(DDL_DIR, "006_research_terms.sql"))
 
 export const LIVE_MODEL = "text-embedding-3-small"
 export const DIM = 1536
@@ -53,6 +57,9 @@ export type PublishSummary = {
   items: Array<{ item_key: string; entity_type: string; entity_id: string | null; decision: string; reason: string | null }>
 }
 
+/** What `python -m scraper.publication.cli index-terms` reports (spec R21). */
+export type IndexTermsSummary = { titles: number; citations: number; unindexable: number; pending_titles: number; pending_citations: number }
+
 export type ResearchDb = {
   name: string
   admin: pg.Client
@@ -64,6 +71,8 @@ export type ResearchDb = {
   /** A fresh login on this database, created for this run (dropped with the database). */
   createLogin(prefix: string): Promise<{ user: string; password: string; url: string }>
   publish(batchPath: string): Promise<PublishSummary>
+  /** The F19 term indexer over every pending row (spec R21), as the writer; null where the tree has no 006 (main). */
+  indexTerms(): Promise<IndexTermsSummary | null>
   drop(): Promise<void>
 }
 
@@ -122,32 +131,42 @@ export async function createResearchDb(suite: string): Promise<ResearchDb> {
   const python = process.env.SIKANDER_CORPUS_PYTHON?.trim() || "python3"
   const writerUrl = urlAs(writerUser, writerPassword)
 
-  const publish = (batchPath: string): Promise<PublishSummary> =>
+  /** Runs the F19 CLI as the writer login and parses its JSON summary. */
+  const cli = <T>(args: string[], label: string): Promise<T> =>
     new Promise((resolve, reject) => {
       const dsn = new URL(writerUrl)
       dsn.protocol = "postgresql+asyncpg:"
       execFile(
         python,
-        ["-m", "scraper.publication.cli", "publish", "--batch", path.resolve(batchPath), "--actor", "fa-d5-003-curator-2099"],
+        ["-m", "scraper.publication.cli", ...args],
         {
           cwd: CORPUS_SERVICE,
           env: { ...process.env, DATABASE_URL: dsn.toString(), REDIS_URL: "", ENVIRONMENT: "development", SKIP_DIR_CREATE: "1" },
-          timeout: 180_000,
+          timeout: 600_000,
           maxBuffer: 16 * 1024 * 1024,
         },
         (err, stdout, stderr) => {
           if (err) {
-            reject(new Error(`publish ${path.basename(batchPath)} failed: ${redact(String(stderr)).slice(-2000)}`))
+            reject(new Error(`${label} failed: ${redact(String(stderr)).slice(-2000)}`))
             return
           }
           try {
-            resolve(JSON.parse(String(stdout)) as PublishSummary)
+            resolve(JSON.parse(String(stdout)) as T)
           } catch {
-            reject(new Error(`publish ${path.basename(batchPath)}: stdout is not the summary JSON`))
+            reject(new Error(`${label}: stdout is not the summary JSON`))
           }
         }
       )
     })
+
+  const publish = (batchPath: string): Promise<PublishSummary> =>
+    cli<PublishSummary>(
+      ["publish", "--batch", path.resolve(batchPath), "--actor", "fa-d5-003-curator-2099"],
+      `publish ${path.basename(batchPath)}`
+    )
+
+  const indexTerms = async (): Promise<IndexTermsSummary | null> =>
+    HAS_RESEARCH_TERMS ? cli<IndexTermsSummary>(["index-terms"], "index-terms") : null
 
   const createLogin = async (prefix: string) => {
     if (!/^[a-z][a-z0-9_]{0,11}$/.test(prefix)) throw new Error(`createLogin: bad prefix ${prefix}`)
@@ -171,7 +190,18 @@ export async function createResearchDb(suite: string): Promise<ResearchDb> {
     }
   }
 
-  return { name, admin, researchUrl: urlAs(researchUser, researchPassword), researchUser, writerUser, urlAs, createLogin, publish, drop }
+  return {
+    name,
+    admin,
+    researchUrl: urlAs(researchUser, researchPassword),
+    researchUser,
+    writerUser,
+    urlAs,
+    createLogin,
+    publish,
+    indexTerms,
+    drop,
+  }
 }
 
 /** Judgment ids by item key from a CLI summary. */

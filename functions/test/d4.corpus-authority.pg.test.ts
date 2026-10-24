@@ -434,6 +434,17 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
     { shape: "TRUNCATE on judgment", sql: ["GRANT TRUNCATE ON public.judgment TO $ROLE"] },
     { shape: "UPDATE on one column of citation", sql: ["GRANT UPDATE (review_status) ON public.citation TO $ROLE"] },
     { shape: "the database's owner", sql: ["ALTER DATABASE $DB OWNER TO $ROLE"], undo: ["ALTER DATABASE $DB OWNER TO CURRENT_USER"] },
+    // FA-D5-003-R1-003 (spec R31): the same allowlist as the research reader. A login that can hand its role on is more
+    // than a reader, and a write outside schema public is still a write.
+    {
+      shape: "holding corpus_authority_reader WITH ADMIN OPTION",
+      sql: [`REVOKE ${READER_ROLE} FROM $ROLE`, `GRANT ${READER_ROLE} TO $ROLE WITH ADMIN OPTION`],
+    },
+    {
+      shape: "able to INSERT into a table in another schema",
+      sql: ["CREATE SCHEMA f05x_side", "CREATE TABLE f05x_side.w (id int)", "GRANT USAGE ON SCHEMA f05x_side TO $ROLE", "GRANT INSERT ON f05x_side.w TO $ROLE"],
+      undo: ["DROP SCHEMA f05x_side CASCADE"],
+    },
   ]
 
   it.each(MORE_THAN_READING)("wrong_role: a reader login that is also $shape (#51 R1 D-2)", async ({ sql, undo }) => {
@@ -465,6 +476,12 @@ describe("PgAuthorityStore failure handling (F05 plan Task 7)", () => {
       shape: "able to SELECT a non-Annex A table in public",
       sql: ["CREATE TABLE public.f05x_other (id int)", "GRANT SELECT ON public.f05x_other TO $ROLE"],
       undo: ["DROP TABLE public.f05x_other"],
+    },
+    // FA-D5-003-R1-003 (spec R31): a readable relation outside schema public counts as well.
+    {
+      shape: "able to SELECT a table in another schema",
+      sql: ["CREATE SCHEMA f05x_read", "CREATE TABLE f05x_read.secret (x text)", "GRANT USAGE ON SCHEMA f05x_read TO $ROLE", "GRANT SELECT ON f05x_read.secret TO $ROLE"],
+      undo: ["DROP SCHEMA f05x_read CASCADE"],
     },
   ]
 

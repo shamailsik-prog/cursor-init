@@ -1,0 +1,1143 @@
+{
+  "format": "research-terms-golden/1",
+  "generatedBy": "npm run corpus:research-terms-golden (tests/research-terms.golden.test.ts with UPDATE_RESEARCH_TERMS_GOLDEN=1)",
+  "note": "FA-D5-003 R1 (spec R22). `terms` and `blocks` are researchTermsOf (services/d5-1/researchTerms.ts) output, written by the generator only. `domain` and `contexts` are inputs: the code points the Python fold claims (its DOMAIN) and the texts each is swept in ({} is the code point). `python` says whether research_terms.py folds the case (match) or declines it (none: outside the domain, folded by the application at query time). Synthetic text only.",
+  "domain": [
+    [
+      0,
+      660
+    ],
+    [
+      662,
+      739
+    ],
+    [
+      741,
+      887
+    ],
+    [
+      890,
+      895
+    ],
+    [
+      900,
+      906
+    ],
+    [
+      908,
+      908
+    ],
+    [
+      910,
+      929
+    ],
+    [
+      931,
+      1327
+    ],
+    [
+      1536,
+      1791
+    ],
+    [
+      1872,
+      1919
+    ],
+    [
+      2208,
+      2303
+    ],
+    [
+      2406,
+      2415
+    ],
+    [
+      4352,
+      4607
+    ],
+    [
+      6832,
+      6862
+    ],
+    [
+      7424,
+      7957
+    ],
+    [
+      7960,
+      7965
+    ],
+    [
+      7968,
+      8005
+    ],
+    [
+      8008,
+      8013
+    ],
+    [
+      8016,
+      8023
+    ],
+    [
+      8025,
+      8025
+    ],
+    [
+      8027,
+      8027
+    ],
+    [
+      8029,
+      8029
+    ],
+    [
+      8031,
+      8061
+    ],
+    [
+      8064,
+      8116
+    ],
+    [
+      8118,
+      8132
+    ],
+    [
+      8134,
+      8147
+    ],
+    [
+      8150,
+      8155
+    ],
+    [
+      8157,
+      8175
+    ],
+    [
+      8178,
+      8180
+    ],
+    [
+      8182,
+      8190
+    ],
+    [
+      8192,
+      8292
+    ],
+    [
+      8294,
+      8305
+    ],
+    [
+      8308,
+      8334
+    ],
+    [
+      8336,
+      8348
+    ],
+    [
+      8352,
+      8384
+    ],
+    [
+      8400,
+      8432
+    ],
+    [
+      8448,
+      8500
+    ],
+    [
+      8505,
+      8587
+    ],
+    [
+      8592,
+      8959
+    ],
+    [
+      9312,
+      9471
+    ],
+    [
+      10240,
+      10495
+    ],
+    [
+      11360,
+      11391
+    ],
+    [
+      11776,
+      11869
+    ],
+    [
+      12288,
+      12343
+    ],
+    [
+      12347,
+      12351
+    ],
+    [
+      12593,
+      12686
+    ],
+    [
+      42784,
+      42954
+    ],
+    [
+      42960,
+      42961
+    ],
+    [
+      42963,
+      42963
+    ],
+    [
+      42965,
+      42969
+    ],
+    [
+      42994,
+      43007
+    ],
+    [
+      43824,
+      43883
+    ],
+    [
+      64256,
+      64262
+    ],
+    [
+      64286,
+      64286
+    ],
+    [
+      64297,
+      64297
+    ],
+    [
+      64336,
+      64450
+    ],
+    [
+      64467,
+      64911
+    ],
+    [
+      64914,
+      64967
+    ],
+    [
+      64975,
+      64975
+    ],
+    [
+      65008,
+      65049
+    ],
+    [
+      65056,
+      65106
+    ],
+    [
+      65108,
+      65126
+    ],
+    [
+      65128,
+      65131
+    ],
+    [
+      65136,
+      65140
+    ],
+    [
+      65142,
+      65276
+    ],
+    [
+      65279,
+      65279
+    ],
+    [
+      65281,
+      65374
+    ],
+    [
+      65377,
+      65380
+    ],
+    [
+      65440,
+      65470
+    ],
+    [
+      65474,
+      65479
+    ],
+    [
+      65482,
+      65487
+    ],
+    [
+      65490,
+      65495
+    ],
+    [
+      65498,
+      65500
+    ],
+    [
+      65504,
+      65510
+    ],
+    [
+      65513,
+      65516
+    ],
+    [
+      65529,
+      65533
+    ],
+    [
+      119808,
+      119892
+    ],
+    [
+      119894,
+      119964
+    ],
+    [
+      119966,
+      119967
+    ],
+    [
+      119970,
+      119970
+    ],
+    [
+      119973,
+      119974
+    ],
+    [
+      119977,
+      119980
+    ],
+    [
+      119982,
+      119993
+    ],
+    [
+      119995,
+      119995
+    ],
+    [
+      119997,
+      120003
+    ],
+    [
+      120005,
+      120069
+    ],
+    [
+      120071,
+      120074
+    ],
+    [
+      120077,
+      120084
+    ],
+    [
+      120086,
+      120092
+    ],
+    [
+      120094,
+      120121
+    ],
+    [
+      120123,
+      120126
+    ],
+    [
+      120128,
+      120132
+    ],
+    [
+      120134,
+      120134
+    ],
+    [
+      120138,
+      120144
+    ],
+    [
+      120146,
+      120485
+    ],
+    [
+      120488,
+      120779
+    ],
+    [
+      120782,
+      120831
+    ],
+    [
+      126464,
+      126467
+    ],
+    [
+      126469,
+      126495
+    ],
+    [
+      126497,
+      126498
+    ],
+    [
+      126500,
+      126500
+    ],
+    [
+      126503,
+      126503
+    ],
+    [
+      126505,
+      126514
+    ],
+    [
+      126516,
+      126519
+    ],
+    [
+      126521,
+      126521
+    ],
+    [
+      126523,
+      126523
+    ],
+    [
+      126530,
+      126530
+    ],
+    [
+      126535,
+      126535
+    ],
+    [
+      126537,
+      126537
+    ],
+    [
+      126539,
+      126539
+    ],
+    [
+      126541,
+      126543
+    ],
+    [
+      126545,
+      126546
+    ],
+    [
+      126548,
+      126548
+    ],
+    [
+      126551,
+      126551
+    ],
+    [
+      126553,
+      126553
+    ],
+    [
+      126555,
+      126555
+    ],
+    [
+      126557,
+      126557
+    ],
+    [
+      126559,
+      126559
+    ],
+    [
+      126561,
+      126562
+    ],
+    [
+      126564,
+      126564
+    ],
+    [
+      126567,
+      126570
+    ],
+    [
+      126572,
+      126578
+    ],
+    [
+      126580,
+      126583
+    ],
+    [
+      126585,
+      126588
+    ],
+    [
+      126590,
+      126590
+    ],
+    [
+      126592,
+      126601
+    ],
+    [
+      126603,
+      126619
+    ],
+    [
+      126625,
+      126627
+    ],
+    [
+      126629,
+      126633
+    ],
+    [
+      126635,
+      126651
+    ],
+    [
+      126704,
+      126705
+    ],
+    [
+      127232,
+      127405
+    ],
+    [
+      127462,
+      127487
+    ],
+    [
+      917505,
+      917505
+    ],
+    [
+      917536,
+      917631
+    ],
+    [
+      917760,
+      917999
+    ]
+  ],
+  "contexts": [
+    "a{}b",
+    "{}",
+    "9{}9 {}{}",
+    "aΣ{}",
+    "a{}Σ"
+  ],
+  "blocks": {
+    "0000": "7bd4b320aed294bed8c860fbaa4c6b28486d04f06c44ac995fcd22143051bbb6",
+    "0001": "b49e72a3aed2d3f6312a4ad912413aeddacf54a36773ff86324baf694f094ad6",
+    "0002": "4c6322e13e14c2f77d5e01a5c5647b085a355bc820e8205725b86b322c0ed958",
+    "0003": "bc1c16706791a05146b2dbe10f35a0b72de85af33d3db00feedb2ae24b1d2f98",
+    "0004": "9338cb0e798922269d10b914522d3547ff71500cef2e56d8e6b43f8d4a9e8e0a",
+    "0005": "3311199cd1c4fa414849a73f242fb1eb59bdd62d74cb2d490332eda6e41f0199",
+    "0006": "a865adf249c0624ba6a077add6b3232caade24a7c4368eeda372cba8230f45a4",
+    "0007": "037786d8a0c5c4ab955777350f2299abbd584edfe679ea7f703b2fbc4ac3da42",
+    "0008": "fbcded8ddb746207747f98d93551d39fe25d470c9655dad4d940eb3ad62d4009",
+    "0009": "d7b2bc08fbbb4f290ade35089f78097138f90a72f199552857f1f42038af03c5",
+    "0011": "ebf73dcd6abc77c81e45e168d79f1ac2ae0cbfb371235036a62ef04fda28177f",
+    "001a": "f23d7629813a31a835fdcc8d558bcf7be45b7eac133d5fc77a73ca7d0daafbee",
+    "001d": "2883594bb48f9f32c1008b55f63ef0b8422e10c9071767e0ce2af7909461160c",
+    "001e": "fc7a2faf09030b118fb7510a77e963e2a87efd8bf477b0d28ac0b5d3426b8a04",
+    "001f": "c750a218b6dbef377c02757a4b2178626d5407db18b1c83465cb6ee0437646e2",
+    "0020": "1e08a7e38ecbc61990d95e663e1c0060fb4d7b408a3075217866b1270488e091",
+    "0021": "469e6928f3e6f48b7fe79971cfb2cc6d7b8c52f70c95a19414e5dedc44f8c260",
+    "0022": "d8d640c52d6ab4a0d53b76d8ca550ccf6c97d9832af783e7b235387fc1013df8",
+    "0024": "0935affe4d6b799d6b6259480e9f6341b98473902d9bb518e7438acfd3bf231b",
+    "0028": "d6f1097163be1c819444857d882e0a4b5de74a1c0634416fb56681e696031073",
+    "002c": "21133cbe30eb7863894854c870a5e55e598fcfd18fa9e25ab7e621c65ef23e2c",
+    "002e": "38dcc5b54c9352d7937c5ac2f4ed87048a6106574dcbc9d265e5134fff1304b0",
+    "0030": "64cc0877f1f178869085e994b0046ae55b8751c90d2c885a5dfd86a09d684c34",
+    "0031": "da7491838374d7f0ebd102c5f9e06b5933811cf47d82810c7e178b259553750d",
+    "00a7": "6175ea1c02b66542c92de7f5ab08504b2cf3e456d2bdce992c609d4c70e292d0",
+    "00ab": "ed7a5ecdd0b88d63dad053361d3d5820d3d25486820eccf1cfee2d902e8329f1",
+    "00fb": "13ae20650ee6ddfd53a4c15a22cfc929415c1b10df74926149348e5d5d47d117",
+    "00fc": "c5793576f898fa76138124fb208916096a6efe5672d3e7374b95db31e64575f7",
+    "00fd": "602992e234458eba9a4b2e6a49757a48a0f17514e178ec4dd51399d6daae3cb6",
+    "00fe": "07991df7fe5cd521f513aa30c0543be476d940466c98425318b61a17fdc75746",
+    "00ff": "a1f44c4870cc6f200e014f5bf6bad3ec7f538be9e60b804b074b4e3866b8a15f",
+    "01d4": "8c93c8f27f7f97065e397d698436953dbdfaf684759166ce45d9a866aec56f2c",
+    "01d5": "7cd31b73b156cd7b08b63514a773f3d0baffdceace98984914414472dc7692c8",
+    "01d6": "6e060f7f7978740731b8f19d9691064b264e308628601dd796cd51250f71b072",
+    "01d7": "875e3ea12d090212958f632fed8f8a5d2042a26b5da90edd0d4a76a4ae0194df",
+    "01ee": "2846fae1aadcfc717ac09e0c5f42ce5621c9496f8f130e810b4700feabbc713a",
+    "01f1": "e2cdd65467bbc64a09cd7f088c9a251a0f65e5c5e0c28501289433ce1c8db0f6",
+    "0e00": "9ce9edf516c8b0c2b426b859807cc6e48b720a9bf6b07b37f4c414d3f85eb80e",
+    "0e01": "33725c6ad25c0bea4433abc5cab240229fd3eb9675ca06f1212a25f17811c7c1"
+  },
+  "cases": [
+    {
+      "id": "plain",
+      "text": "Bail after arrest under section 497 CrPC",
+      "python": "match",
+      "terms": [
+        "bail",
+        "after",
+        "arrest",
+        "under",
+        "section",
+        "497",
+        "crpc"
+      ]
+    },
+    {
+      "id": "stop-words-lone-letters",
+      "text": "The State v. Muhammad s. 302 PPC a 1 b 2 ab",
+      "python": "match",
+      "terms": [
+        "state",
+        "muhammad",
+        "302",
+        "ppc",
+        "1",
+        "2",
+        "ab"
+      ]
+    },
+    {
+      "id": "only-stop-words",
+      "text": "the of v vs versus with and",
+      "python": "match",
+      "terms": []
+    },
+    {
+      "id": "empty",
+      "text": "",
+      "python": "match",
+      "terms": []
+    },
+    {
+      "id": "blanks",
+      "text": "   \t  ",
+      "python": "match",
+      "terms": []
+    },
+    {
+      "id": "fullwidth",
+      "text": "ＰＬＤ　２０９９ ＳＣ １２",
+      "python": "match",
+      "terms": [
+        "pld",
+        "2099",
+        "sc",
+        "12"
+      ]
+    },
+    {
+      "id": "arabic-indic-digits",
+      "text": "PLD ٢٠٩٩ SC ١٢",
+      "python": "match",
+      "terms": [
+        "pld",
+        "2099",
+        "sc",
+        "12"
+      ]
+    },
+    {
+      "id": "urdu-digits",
+      "text": "۲۰۹۹ SCMR ۱۲۳",
+      "python": "match",
+      "terms": [
+        "2099",
+        "scmr",
+        "123"
+      ]
+    },
+    {
+      "id": "devanagari-digits",
+      "text": "२०९९ SCMR ४५",
+      "python": "match",
+      "terms": [
+        "2099",
+        "scmr",
+        "45"
+      ]
+    },
+    {
+      "id": "math-alphanumerics",
+      "text": "𝟐𝟎𝟗𝟗 𝐒𝐂𝐌𝐑 𝟕 𝔅𝔞𝔦𝔩",
+      "python": "match",
+      "terms": [
+        "2099",
+        "scmr",
+        "7",
+        "bail"
+      ]
+    },
+    {
+      "id": "combining-marks",
+      "text": "Muḥammad Ḥusayn, Qāḍī, café",
+      "python": "match",
+      "terms": [
+        "muhammad",
+        "husayn",
+        "qadi",
+        "cafe"
+      ]
+    },
+    {
+      "id": "ligatures",
+      "text": "ﬁnal ﬂat ﬀ ﬃx",
+      "python": "match",
+      "terms": [
+        "final",
+        "flat",
+        "ff",
+        "ffix"
+      ]
+    },
+    {
+      "id": "zero-width",
+      "text": "S​CMR 20‍99 bail⁠out",
+      "python": "match",
+      "terms": [
+        "scmr",
+        "2099",
+        "bailout"
+      ]
+    },
+    {
+      "id": "bom-soft-hyphen",
+      "text": "﻿bail­able",
+      "python": "match",
+      "terms": [
+        "bailable"
+      ]
+    },
+    {
+      "id": "nbsp-em-space",
+      "text": "bail after arrest　appeal",
+      "python": "match",
+      "terms": [
+        "bail",
+        "after",
+        "arrest",
+        "appeal"
+      ]
+    },
+    {
+      "id": "dashes",
+      "text": "pre‐arrest pre–arrest pre—arrest pre−arrest 2099−SCMR",
+      "python": "match",
+      "terms": [
+        "pre",
+        "arrest",
+        "pre",
+        "arrest",
+        "pre",
+        "arrest",
+        "pre",
+        "arrest",
+        "2099",
+        "scmr"
+      ]
+    },
+    {
+      "id": "tags",
+      "text": "<b>Bail</b> <span class=\"x\">granted</span> <a href=x>link</a>",
+      "python": "match",
+      "terms": [
+        "bail",
+        "granted",
+        "link"
+      ]
+    },
+    {
+      "id": "bare-angle",
+      "text": "rate < 5% and > 2 percent",
+      "python": "match",
+      "terms": [
+        "rate",
+        "5",
+        "2",
+        "percent"
+      ]
+    },
+    {
+      "id": "entities",
+      "text": "Bail &amp; arrest &nbsp; &#83;CMR &#x53;CMR &nbspSCMR &quot;x&quot; &unknown; &lt;b&gt;",
+      "python": "match",
+      "terms": [
+        "bail",
+        "arrest",
+        "scmr",
+        "scmr",
+        "scmr"
+      ]
+    },
+    {
+      "id": "entity-spaces",
+      "text": "& n b s p ;bail &# 8 3;CMR &#x 5 3;CMR",
+      "python": "match",
+      "terms": [
+        "bail",
+        "scmr",
+        "scmr"
+      ]
+    },
+    {
+      "id": "entity-0x",
+      "text": "&#x0x41;bc &#xZZ;q &#;q &#x;q",
+      "python": "match",
+      "terms": [
+        "abc"
+      ]
+    },
+    {
+      "id": "entity-out-of-range",
+      "text": "&#x110000;bail &#9999999;arrest",
+      "python": "match",
+      "terms": [
+        "bail",
+        "arrest"
+      ]
+    },
+    {
+      "id": "entity-nested",
+      "text": "&amp;amp;lt;b&amp;amp;gt;Bail",
+      "python": "match",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "comment",
+      "text": "Bail <!-- hidden --> granted <!-- unterminated tail words",
+      "python": "match",
+      "terms": [
+        "bail",
+        "granted"
+      ]
+    },
+    {
+      "id": "emphasis",
+      "text": "*Bail* _granted_ `code` ~strike~ snake_case",
+      "python": "match",
+      "terms": [
+        "bail",
+        "granted",
+        "code",
+        "strike",
+        "snakecase"
+      ]
+    },
+    {
+      "id": "nested-tags",
+      "text": "<b<span>>Bail</b> </span<>x",
+      "python": "match",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "tag-79",
+      "text": "<axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>bail",
+      "python": "match",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "tag-80",
+      "text": "<axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>bail",
+      "python": "match",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "tag-over-80",
+      "text": "<axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx>bail",
+      "python": "match",
+      "terms": [
+        "axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "bail"
+      ]
+    },
+    {
+      "id": "tag-astral",
+      "text": "<axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx𝐀>bail",
+      "python": "match",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "hyphenation",
+      "text": "pre-\narrest bail SC-\n  MR 12-\n34 a -\nb",
+      "python": "match",
+      "terms": [
+        "prearrest",
+        "bail",
+        "scmr",
+        "12",
+        "34"
+      ]
+    },
+    {
+      "id": "sigma",
+      "text": "ΟΔΟΣ ΟΔΟΣΑ ΟΔΟΣ. ΣΑ Σ",
+      "python": "match",
+      "terms": [
+        "οδος",
+        "οδοσα",
+        "οδος",
+        "σα"
+      ]
+    },
+    {
+      "id": "dotted-i",
+      "text": "İSTANBUL ıi İi",
+      "python": "match",
+      "terms": [
+        "istanbul",
+        "ıi",
+        "ii"
+      ]
+    },
+    {
+      "id": "urdu-title",
+      "text": "ضمانت قبل از گرفتاری دفعہ ۴۹۷",
+      "python": "match",
+      "terms": [
+        "ضمانت",
+        "قبل",
+        "از",
+        "گرفتاری",
+        "دفعہ",
+        "497"
+      ]
+    },
+    {
+      "id": "arabic-presentation",
+      "text": "ﻣﺤﻤﺪ ﷲ ﷺ",
+      "python": "match",
+      "terms": [
+        "محمد",
+        "الله",
+        "صلى",
+        "الله",
+        "عليه",
+        "وسلم"
+      ]
+    },
+    {
+      "id": "arabic-diacritics",
+      "text": "مُحَمَّد ـــ علی",
+      "python": "match",
+      "terms": [
+        "محمد",
+        "ـــ",
+        "علی"
+      ]
+    },
+    {
+      "id": "superscripts-circled",
+      "text": "123² ① ⑳ ⒈ x₂ ⁴⁹⁷",
+      "python": "match",
+      "terms": [
+        "1232",
+        "1",
+        "20",
+        "1",
+        "x2",
+        "497"
+      ]
+    },
+    {
+      "id": "roman-numerals",
+      "text": "Ⅻ ⅻ Order Ⅲ Rule ⅳ",
+      "python": "match",
+      "terms": [
+        "xii",
+        "xii",
+        "order",
+        "iii",
+        "rule",
+        "iv"
+      ]
+    },
+    {
+      "id": "number-forms",
+      "text": "½ ¼ 1⁄2",
+      "python": "match",
+      "terms": [
+        "1",
+        "2",
+        "1",
+        "4",
+        "1",
+        "2"
+      ]
+    },
+    {
+      "id": "greek-extended",
+      "text": "Ἀθῆναι ᾅδης",
+      "python": "match",
+      "terms": [
+        "αθηναι",
+        "αδης"
+      ]
+    },
+    {
+      "id": "cyrillic",
+      "text": "Суд ПРИГОВОР по делу",
+      "python": "match",
+      "terms": [
+        "суд",
+        "приговор",
+        "по",
+        "делу"
+      ]
+    },
+    {
+      "id": "controls",
+      "text": "bail\u0000\u0007arrest\r\nappeal\ttaxcustoms",
+      "python": "match",
+      "terms": [
+        "bailarrest",
+        "appeal",
+        "taxcustoms"
+      ]
+    },
+    {
+      "id": "tags-block",
+      "text": "bail󠁁󠁢out",
+      "python": "match",
+      "terms": [
+        "bailout"
+      ]
+    },
+    {
+      "id": "variation-selectors",
+      "text": "bail️out bail󠄀out",
+      "python": "match",
+      "terms": [
+        "bailout",
+        "bailout"
+      ]
+    },
+    {
+      "id": "hangul-fillers",
+      "text": "bailㅤout ᅟbail ｢x｣",
+      "python": "match",
+      "terms": [
+        "bail",
+        "out",
+        "bail"
+      ]
+    },
+    {
+      "id": "braille-blank",
+      "text": "bail⠀out",
+      "python": "match",
+      "terms": [
+        "bail",
+        "out"
+      ]
+    },
+    {
+      "id": "line-separators",
+      "text": "bail out x",
+      "python": "match",
+      "terms": [
+        "bail",
+        "out"
+      ]
+    },
+    {
+      "id": "letterlike",
+      "text": "K Ω Å ℃ № ™",
+      "python": "match",
+      "terms": [
+        "no",
+        "tm"
+      ]
+    },
+    {
+      "id": "out-of-domain-cjk",
+      "text": "Bail 保释 arrest",
+      "python": "none",
+      "terms": [
+        "bail",
+        "保释",
+        "arrest"
+      ]
+    },
+    {
+      "id": "out-of-domain-emoji",
+      "text": "Bail 🙂 arrest",
+      "python": "none",
+      "terms": [
+        "bail",
+        "arrest"
+      ]
+    },
+    {
+      "id": "out-of-domain-halfwidth-kana",
+      "text": "ｱﾙ bail",
+      "python": "none",
+      "terms": [
+        "アル",
+        "bail"
+      ]
+    },
+    {
+      "id": "out-of-domain-entity",
+      "text": "&#x4E00;bail",
+      "python": "none",
+      "terms": [
+        "一bail"
+      ]
+    },
+    {
+      "id": "out-of-domain-surrogate-entity",
+      "text": "&#xD800;bail",
+      "python": "none",
+      "terms": [
+        "bail"
+      ]
+    },
+    {
+      "id": "out-of-domain-hebrew",
+      "text": "Bail שלום",
+      "python": "none",
+      "terms": [
+        "bail",
+        "שלום"
+      ]
+    }
+  ]
+}
