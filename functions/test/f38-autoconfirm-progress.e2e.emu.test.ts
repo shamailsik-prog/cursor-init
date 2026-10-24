@@ -305,7 +305,8 @@ describe.skipIf(!EMULATORS)("F38 auto-confirm progress (audit F38)", () => {
 
     // The first run left 1 head pair: its row became due at HEAD_AT + 480 ms + 30 days, far more than 36 h ago.
     const stale = logged(error, "autoconfirm.backlog_stale")
-    expect(stale).toEqual([{ firmId, jobId: runIdOf(firmId, period, 0), source: "frontier", ageMs: T - (HEAD_AT + RUN_PAIRS + LINK_AUTO_CONFIRM_MS) }])
+    // `event`: the field the log-based alert policy filters on (audit F43 R1, FA-F43-R1-001).
+    expect(stale).toEqual([{ firmId, jobId: runIdOf(firmId, period, 0), source: "frontier", ageMs: T - (HEAD_AT + RUN_PAIRS + LINK_AUTO_CONFIRM_MS), event: "autoconfirm.backlog_stale" }])
     expect((stale[0] as { ageMs: number }).ageMs).toBeGreaterThan(STALE_MS)
     expect(logged(info, "autoconfirm.backlog_cleared")).toEqual([{ firmId, jobId: runIdOf(firmId, period, 1) }])
     expect((await confirmedOf(firmId, tail)).confirmed).toBe(5)

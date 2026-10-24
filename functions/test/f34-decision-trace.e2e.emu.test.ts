@@ -429,7 +429,8 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     expect(e.abandonedAt).toBeInstanceOf(Timestamp)
     // Other suites' pending records may be due in the shared emulator too: only this record's line is asserted.
     const abandoned = error.mock.calls.filter((c) => c[0] === "p1.trace_export_abandoned" && (c[1] as { usageLogId?: string }).usageLogId === r.usageLogId)
-    expect(abandoned).toEqual([["p1.trace_export_abandoned", { firmId, usageLogId: r.usageLogId, traceId: r.traceId, attempts: 5, code: "export_failed" }]])
+    // `event`: the field the log-based alert policy filters on (audit F43 R1, FA-F43-R1-001).
+    expect(abandoned).toEqual([["p1.trace_export_abandoned", { firmId, usageLogId: r.usageLogId, traceId: r.traceId, attempts: 5, code: "export_failed", event: "p1.trace_export_abandoned" }]])
     expect((await reconstruct({ usageLogId: r.usageLogId }))!.checks).toMatchObject({ exportState: "failed" })
   })
 

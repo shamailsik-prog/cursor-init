@@ -377,7 +377,7 @@ async function checkpoint(c: CheckpointInput): Promise<void> {
     return { wasStale }
   })
   if (result === null) return
-  if (stale) logger.error("autoconfirm.backlog_stale", { firmId: c.firmId, jobId: c.jobId, source: pending!.source, ageMs })
+  if (stale) logger.error("autoconfirm.backlog_stale", { firmId: c.firmId, jobId: c.jobId, source: pending!.source, ageMs, event: "autoconfirm.backlog_stale" })
   else if (result.wasStale) logger.info("autoconfirm.backlog_cleared", { firmId: c.firmId, jobId: c.jobId })
   if (outcome === "backlog_remaining") logger.warn("autoconfirm.backlog_remaining", { firmId: c.firmId, jobId: c.jobId, period: c.period, continuation: c.continuation })
 }

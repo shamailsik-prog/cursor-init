@@ -157,7 +157,7 @@ export async function reconcileTraceExports(opts: { now?: () => number; config?:
       .get()
     due = snap.docs.map((d) => d.ref)
   } catch (err) {
-    logger.error("p1.trace_export_reconcile_failed", { code: errorCode(err) })
+    logger.error("p1.trace_export_reconcile_failed", { code: errorCode(err), event: "p1.trace_export_reconcile_failed" })
     return result
   }
 
@@ -185,7 +185,7 @@ export async function reconcileTraceExports(opts: { now?: () => number; config?:
       if (step.state === "exported") result.exported.push(ref.id)
       else if (step.state === "failed") {
         result.abandoned.push(ref.id)
-        logger.error("p1.trace_export_abandoned", { firmId: data.firmId ?? null, usageLogId: ref.id, traceId: data.traceId ?? null, attempts: step.attempts, code: step.lastCode })
+        logger.error("p1.trace_export_abandoned", { firmId: data.firmId ?? null, usageLogId: ref.id, traceId: data.traceId ?? null, attempts: step.attempts, code: step.lastCode, event: "p1.trace_export_abandoned" })
       } else result.rescheduled.push(ref.id)
     } catch (err) {
       // The record keeps its state and its due time; a later run tries it again once any lease this run set has lapsed.

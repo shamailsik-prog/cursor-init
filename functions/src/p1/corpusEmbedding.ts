@@ -106,7 +106,7 @@ export async function handleCorpusEmbedding(req: Request, res: Response, deps: {
   }
   const config = corpusEmbeddingConfig()
   if (config === null) {
-    logger.error("p1.corpus_embedding_not_configured", { firm: Boolean(process.env.P1_CORPUS_FIRM_ID), audience: Boolean(process.env.P1_CORPUS_AUDIENCE), callers: Boolean(process.env.P1_CORPUS_CALLERS) })
+    logger.error("p1.corpus_embedding_not_configured", { firm: Boolean(process.env.P1_CORPUS_FIRM_ID), audience: Boolean(process.env.P1_CORPUS_AUDIENCE), callers: Boolean(process.env.P1_CORPUS_CALLERS), event: "p1.corpus_embedding_not_configured" })
     return answer(res, 503, { error: "not_configured" })
   }
   if (!/^application\/json(?:\s*;.*)?$/i.test(String(req.headers["content-type"] ?? ""))) return answer(res, 415, { error: "unsupported_media_type" })
@@ -119,7 +119,7 @@ export async function handleCorpusEmbedding(req: Request, res: Response, deps: {
     caller = (await verifyServiceCaller(req.headers.authorization, { audience: config.audience, callers: config.callers, nowMs: deps.now() })).email
   } catch (err) {
     if (!(err instanceof ServiceAuthError)) {
-      logger.error("p1.corpus_embedding_failed", { stage: "auth", code: errorCode(err) })
+      logger.error("p1.corpus_embedding_failed", { stage: "auth", code: errorCode(err), event: "p1.corpus_embedding_failed" })
       return answer(res, 500, { error: "internal" })
     }
     logger.warn("p1.corpus_caller_refused", { code: err.code })
@@ -144,7 +144,7 @@ export async function handleCorpusEmbedding(req: Request, res: Response, deps: {
     return answer(res, 200, result)
   } catch (err) {
     if (err instanceof P1EmbeddingRequestError) return answer(res, 400, { error: err.code })
-    logger.error("p1.corpus_embedding_failed", { stage: "call", code: errorCode(err) })
+    logger.error("p1.corpus_embedding_failed", { stage: "call", code: errorCode(err), event: "p1.corpus_embedding_failed" })
     return answer(res, 500, { error: "internal" })
   }
 }

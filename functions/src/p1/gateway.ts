@@ -856,6 +856,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
           operationId: operation.operation.fields.operationId ?? null,
           traceId,
           code: errorCode(err),
+          event: "p1.receipt_record_failed",
         })
       }
     })
@@ -970,10 +971,10 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   } catch (err) {
     // The result is still returned (P3-63) and the log keeps the record; the reservation, when there is one, keeps
     // holding the worst case with its provider attempt, so the spend is never lost from the books (F08).
-    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
+    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err), event: "p1.usage_log_failed" })
   }
   for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
-  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
+  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded, event: "p1.reservation_exceeded" })
   logLearning(usageRef.id, firmId, staged)
 
   return {
@@ -1442,8 +1443,8 @@ export type StageResult = { crossings: Crossing[]; exceeded: Exceeded | null; le
  * one, and an anomaly is logged `p1.overhead_anomaly` at ERROR (re-audit R3-D1). Shared by the call and the reconciler.
  */
 export function logLearning(usageLogId: string, firmId: string, staged: StageResult): void {
-  if (staged.learnedOverhead !== null) logger.error("p1.overhead_learned", { usageLogId, ...staged.learnedOverhead })
-  if (staged.anomaly !== null) logger.error("p1.overhead_anomaly", { firmId, usageLogId, ...staged.anomaly })
+  if (staged.learnedOverhead !== null) logger.error("p1.overhead_learned", { usageLogId, ...staged.learnedOverhead, event: "p1.overhead_learned" })
+  if (staged.anomaly !== null) logger.error("p1.overhead_anomaly", { firmId, usageLogId, ...staged.anomaly, event: "p1.overhead_anomaly" })
 }
 
 /** A stage that crossed nothing, exceeded nothing, taught nothing and showed no anomaly. */

@@ -307,7 +307,7 @@ async function measureBacklog(db: Firestore, nowMs: number, swept: number | null
     },
     { merge: true }
   )
-  if (firing) log.error("audit.outbox_backlog_stale", { oldestAgeMs, stale, unreadable, alertAgeMs: AUDIT_OUTBOX_ALERT_AGE_MS })
+  if (firing) log.error("audit.outbox_backlog_stale", { oldestAgeMs, stale, unreadable, alertAgeMs: AUDIT_OUTBOX_ALERT_AGE_MS, event: "audit.outbox_backlog_stale" })
   if (transition === "cleared") log.info("audit.outbox_backlog_cleared", { oldestAgeMs, stale, unreadable })
   return { firing, transition, oldestAgeMs, stale, unreadable }
 }
@@ -374,11 +374,11 @@ async function sweepUnreachable(
     try {
       if ((await deadLetterUnreachable(db, entryId, now())) === "dead_lettered") {
         deadLettered.push(entryId)
-        log.error("audit.outbox_dead_lettered", { outboxId: entryId, reason: "entry_malformed", stage: "sweep" })
+        log.error("audit.outbox_dead_lettered", { outboxId: entryId, reason: "entry_malformed", stage: "sweep", event: "audit.outbox_dead_lettered" })
       }
       return true
     } catch (err) {
-      log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code: codeOf(err), transient: isRetryableReconcileError(err), stage: "sweep" })
+      log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code: codeOf(err), transient: isRetryableReconcileError(err), stage: "sweep", event: "audit.outbox_reconcile_failed" })
       if (pending.length >= limits.pendingMax) return false
       pending.push(entryId)
       return true
@@ -452,7 +452,7 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
       if (outcome.kind === "gone") return
       if (outcome.kind === "dead_lettered") {
         result.deadLettered.push(entryId)
-        log.error("audit.outbox_dead_lettered", { outboxId: entryId, firmId: outcome.firmId, reason: outcome.reason })
+        log.error("audit.outbox_dead_lettered", { outboxId: entryId, firmId: outcome.firmId, reason: outcome.reason, event: "audit.outbox_dead_lettered" })
         return
       }
       result.published.push(entryId)
@@ -460,7 +460,7 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
       result.rowsSuperseded += outcome.superseded
       result.rowsDeadLettered += outcome.letters.length
       for (const letter of outcome.letters) {
-        log.error("audit.outbox_row_dead_lettered", { outboxId: entryId, firmId: outcome.firmId, index: letter.index, reason: letter.reason })
+        log.error("audit.outbox_row_dead_lettered", { outboxId: entryId, firmId: outcome.firmId, index: letter.index, reason: letter.reason, event: "audit.outbox_row_dead_lettered" })
       }
       log.info("audit.outbox_published", { outboxId: entryId, firmId: outcome.firmId, rows: outcome.rows, superseded: outcome.superseded })
     } catch (err) {
@@ -472,19 +472,19 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
       }
       const before = doc.get("attempts")
       const attempts = (typeof before === "number" && Number.isSafeInteger(before) && before >= 0 ? before : 0) + 1
-      log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code, transient: false, attempts })
+      log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code, transient: false, attempts, event: "audit.outbox_reconcile_failed" })
       try {
         if (attempts >= AUDIT_OUTBOX_MAX_ATTEMPTS) {
           if (await deadLetterWhole(db, entryId, "publish_failed", nowMs)) {
             result.deadLettered.push(entryId)
-            log.error("audit.outbox_dead_lettered", { outboxId: entryId, firmId: doc.get("firmId") ?? null, reason: "publish_failed", code })
+            log.error("audit.outbox_dead_lettered", { outboxId: entryId, firmId: doc.get("firmId") ?? null, reason: "publish_failed", code, event: "audit.outbox_dead_lettered" })
           }
           return
         }
         await outboxRef(db, entryId).update({ attempts, lastErrorCode: code, lastFailedAt: new Date(nowMs) })
         result.counted.push(entryId)
       } catch (bookkeeping) {
-        log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code: codeOf(bookkeeping), transient: isRetryableReconcileError(bookkeeping), stage: "bookkeeping" })
+        log.error("audit.outbox_reconcile_failed", { outboxId: entryId, code: codeOf(bookkeeping), transient: isRetryableReconcileError(bookkeeping), stage: "bookkeeping", event: "audit.outbox_reconcile_failed" })
       }
     }
   }
@@ -499,7 +499,7 @@ export async function reconcileAuditOutbox(deps: ReconcileDeps): Promise<Reconci
     result.deadLettered.push(...swept.deadLettered)
     unreadable = swept.unreadable
   } catch (err) {
-    log.error("audit.outbox_sweep_failed", { code: codeOf(err), transient: isRetryableReconcileError(err) })
+    log.error("audit.outbox_sweep_failed", { code: codeOf(err), transient: isRetryableReconcileError(err), event: "audit.outbox_sweep_failed" })
   }
 
   const cutoff = new Date(now() - AUDIT_OUTBOX_GRACE_MS)

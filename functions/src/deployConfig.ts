@@ -76,7 +76,7 @@ export function deployContractViolations(env: Env, ctx: { deployed: boolean }): 
 function enforceContractAtLoad(): void {
   const codes = deployContractViolations(process.env, { deployed: isDeployedRuntime() })
   if (codes.length > 0) {
-    logger.error(CONTRACT_ALERT, { codes })
+    logger.error(CONTRACT_ALERT, { codes, event: CONTRACT_ALERT })
     throw new DeployContractError(codes)
   }
 }

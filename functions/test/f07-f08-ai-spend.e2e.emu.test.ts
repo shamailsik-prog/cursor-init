@@ -421,7 +421,8 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       const raised = (await byFirm("events", firmId)).filter((e) => e.data.name === "ai.reservation.exceeded")
       expect(raised.map((e) => [e.id, e.data.payload])).toEqual([[`${r.usageLogId}_reservation_exceeded`, { monthKey: MONTH, reservedMicroUsd: WORST, actualMicroUsd: charge, excessMicroUsd: charge - WORST }]])
       expect(errors.mock.calls.filter((c) => c[0] === "p1.reservation_exceeded").map((c) => c[1])).toEqual([
-        { firmId, usageLogId: r.usageLogId, monthKey: MONTH, reservedMicroUsd: WORST, actualMicroUsd: charge, excessMicroUsd: charge - WORST },
+        // `event`: the field the log-based alert policy filters on (audit F43 R1, FA-F43-R1-001).
+        { firmId, usageLogId: r.usageLogId, monthKey: MONTH, reservedMicroUsd: WORST, actualMicroUsd: charge, excessMicroUsd: charge - WORST, event: "p1.reservation_exceeded" },
       ])
     })
 
@@ -497,7 +498,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect((await db().collection("platform").doc("p1Overhead").get()).data()?.models).toMatchObject({ "anthropic_claude-opus-5_5": { inputTokens: 2_000, model: OPUS } })
       // Re-audit R3-D1: below the clamp the overhead is learned exactly, every raise is logged at ERROR, and it is no anomaly.
       expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_learned").map((c) => c[1])).toEqual([
-        { usageLogId: breach.usageLogId, model: OPUS, inputTokens: 2_000, exceededInputTokens: 2_000 - OVERHEAD },
+        { usageLogId: breach.usageLogId, model: OPUS, inputTokens: 2_000, exceededInputTokens: 2_000 - OVERHEAD, event: "p1.overhead_learned" },
       ])
       expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly")).toEqual([])
       expect((await byFirm("events", first)).filter((e) => e.data.name === "ai.usage.anomaly")).toEqual([])

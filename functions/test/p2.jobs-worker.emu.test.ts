@@ -654,7 +654,8 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
   it("the default alert logs job.deadLettered with codes only", async () => {
     const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
     await logDeadLetterAlert.deadLettered({ jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
-    expect(error).toHaveBeenCalledWith("job.deadLettered", { jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
+    // `event`: the field the log-based alert policy filters on (audit F43 R1, FA-F43-R1-001).
+    expect(error).toHaveBeenCalledWith("job.deadLettered", { jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal", event: "job.deadLettered" })
   })
 
   it("a raw error is sanitised to internal and its text is stored nowhere", async () => {
