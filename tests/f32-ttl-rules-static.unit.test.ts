@@ -48,6 +48,20 @@ describe("F32 TTL rules static shape (R117-001..003 / R117-006)", () => {
     expect(() => assertTtlCollectionServerDenyOnly(docMutant, "idempotency_keys")).toThrow()
   })
 
+  it("rejects conditional allows on widened wildcard and collection-slot paths (R122-001)", () => {
+    const claimMutant = `match /{prefix=**}/{key}/{val} { allow read: if request.auth.token.claimProbe == true; }`
+    expect(matchBlocksForCollectionGroup(claimMutant, "rate_limits").length).toBeGreaterThan(0)
+    expect(() => assertTtlCollectionServerDenyOnly(claimMutant, "rate_limits")).toThrow(/must be if false/i)
+
+    const pathWildcard = `match {path=**}/{col}/{docId} { allow get: if docId == 'doc-probe-99'; }`
+    expect(matchBlocksForCollectionGroup(pathWildcard, "counters").length).toBeGreaterThan(0)
+    expect(() => assertTtlCollectionServerDenyOnly(pathWildcard, "counters")).toThrow(/must be if false/i)
+
+    const tenantSlot = `match /parents/{parentId}/{coll}/{docId} { allow read: if request.auth.token.slotClaim == true; }`
+    expect(matchBlocksForCollectionGroup(tenantSlot, "idempotency_keys").length).toBeGreaterThan(0)
+    expect(() => assertTtlCollectionServerDenyOnly(tenantSlot, "idempotency_keys")).toThrow(/must be if false/i)
+  })
+
   it("rejects bare allow without if even when other allows are deny-only (R119-002)", () => {
     const mixed = "allow read: if false; allow write;"
     expect(() => assertBlockIsServerDenyOnly(mixed)).toThrow()
