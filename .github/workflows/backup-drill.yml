@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: backup-drill-${{ github.event.pull_request.number || github.ref }}
@@ -90,4 +91,40 @@ jobs:
         with:
           name: backup-drill-results
           path: ops/backup/.results/*.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
+      - name: Alert on backup drill failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@ed597411d8f924b61e1fc1c8e48fdf2e52543165 # v8.0.0
+        with:
+          script: |
+            const title = `F33 weekly backup drill failed (${context.sha.slice(0, 7)})`
+            const body = [
+              `Scheduled backup drill workflow **${context.workflow}** failed on \`${context.ref}\`.`,
+              ``,
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Investigate ops/backup drills and docs/runbooks/backup-restore.md.`,
+            ].join('\n')
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'backup-drill-failure',
+              per_page: 5,
+            })
+            if (issues.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body,
+              })
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['backup-drill-failure'],
+              })
+            }
