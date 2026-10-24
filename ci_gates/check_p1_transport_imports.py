@@ -94,6 +94,47 @@ _COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 _SEND_TOKEN_RE = re.compile(r"(?<![\w$])(?:send|embed)(?![\w$])")
 
 
+def strip_comments(text: str) -> str:
+    """The text with `//` and `/* */` comments blanked (newlines kept), outside '...', "..." and `...` literals, so prose
+    such as "may import (audit F18)" in a comment is never read as code. Regex literals are not tracked; a `//` or `/*`
+    inside one blanks the rest of the comment it seems to open, which can only hide a match, never invent one."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    quote: str | None = None
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i:j]))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _module_id(path: str) -> str:
     p = _JS_EXT_RE.sub("", path)
     return p[: -len("/index")] if p.endswith("/index") else p
@@ -160,16 +201,17 @@ def file_findings(rel: str, text: str) -> list[str]:
         module = resolve(spec, rel)
         if module in RESTRICTED and rel not in GRANTS[module]:
             out.append(f"{rel}: loads {module} dynamically (the names it uses cannot be read)")
-    if rel.startswith(COMPUTED_SCOPE) and _COMPUTED_RE.search(text):
+    code = strip_comments(text)
+    if rel.startswith(COMPUTED_SCOPE) and _COMPUTED_RE.search(code):
         out.append(f"{rel}: computed module load (import() or require() of a non-literal specifier)")
     granted_any = any(rel in g for g in GRANTS.values())
     if granted_any:
-        for line in text.splitlines():
+        for line in code.splitlines():
             if re.match(r"\s*export\b", line):
                 for name in VALUE_NAMES:
                     if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", line):
                         out.append(f"{rel}: re-exports {name} (a granted file may not hand a transport on)")
-        if rel not in SEND_SITES and _SEND_TOKEN_RE.search(_COMMENT_RE.sub(" ", text)):
+        if rel not in SEND_SITES and _SEND_TOKEN_RE.search(code):
             out.append(f"{rel}: calls send or embed (only {', '.join(sorted(SEND_SITES))} send)")
     return sorted(set(out))
 

@@ -182,6 +182,10 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
     ["a side-effect import (binds nothing)", { "functions/src/p1/x.ts": 'import "./transport"\n' }],
     ["a test under functions/test using the seams", { "functions/test/x.test.ts": 'import { setP1TransportForTests, type P1Transport } from "../src/p1/transport"\nexport const s = setP1TransportForTests\nexport type T = P1Transport\n' }],
     ["prose that names the transport", { "functions/src/p1/x.ts": '// values come from "./transport" in the gateway\nexport const note = "see the gateway"\n' }],
+    [
+      "prose in comments that reads like a computed load",
+      { "platform/corpus/x.ts": "// that module is not one the Next runtime may import (audit F18), so it is restated\n/* they require (at least) a reader */\nexport const url = \"https://example.invalid/a\" // trailing\n" },
+    ],
   ])("passes: %s", (_name, files) => {
     const r = run(probe(files as Record<string, string>))
     expect(r.out).toContain("PASS: P1 transports are imported only by their grants")
