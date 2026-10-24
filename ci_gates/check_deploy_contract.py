@@ -384,7 +384,9 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env:
             if rl.get("maxDispatchesPerSecond") != qspec.get("maxDispatchesPerSecond"):
                 out.append(_fail("endpoints", f"{name} maxDispatchesPerSecond mismatch"))
             want_retry = qspec.get("retryConfig")
-            if want_retry is not None:
+            if want_retry is None:
+                out.append(_fail("endpoints", f"{name} manifest queue missing retryConfig"))
+            else:
                 got_retry = tqt.get("retryConfig") or {}
                 for key in ("maxAttempts", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings", "maxRetrySeconds"):
                     if got_retry.get(key) != want_retry.get(key):
@@ -462,9 +464,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-id")
     parser.add_argument("--env-file")
     parser.add_argument("--print-env", nargs="?", const="production")
+    parser.add_argument(
+        "--validate-profile-project",
+        action="store_true",
+        help="Check --profile and --project-id against manifest only (no shell interpolation).",
+    )
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
     manifest = load_manifest(root)
+    if args.validate_profile_project:
+        findings = check_profile_project_id(manifest, args.profile, args.project_id)
+        if findings:
+            for f in findings:
+                print(f"FAIL [{f.check}] {f.message}")
+            return 1
+        return 0
     if args.print_env is not None:
         profile = args.print_env if isinstance(args.print_env, str) else "production"
         sys.stdout.write(print_env(manifest, profile))

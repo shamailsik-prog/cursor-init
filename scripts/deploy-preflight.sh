@@ -29,19 +29,7 @@ if [ -n "$ENV_FILE" ]; then
 fi
 ENV_FILE="$CANONICAL"
 cd "$ROOT"
-python3 - <<PY
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path("ci_gates")))
-import check_deploy_contract as gate
-
-manifest = gate.load_manifest(Path("."))
-failures = gate.check_profile_project_id(manifest, "$PROFILE", "$PROJECT_ID")
-if failures:
-    for f in failures:
-        print(f"FAIL [{f.check}] {f.message}")
-    sys.exit(1)
-PY
+python3 ci_gates/check_deploy_contract.py --validate-profile-project --profile "$PROFILE" --project-id "$PROJECT_ID"
 cd "$ROOT/functions"
 node build.mjs
 cd "$ROOT"

@@ -23,10 +23,11 @@ const METADATA_TIMEOUT_MS = 500
 const DEPLOYED_API_INGRESS: Ingress = "ALLOW_INTERNAL_AND_GCLB"
 
 function deployedGcpProjectId(env: Record<string, string | undefined>): string | undefined {
-  const raw = env.GCLOUD_PROJECT ?? env.GOOGLE_CLOUD_PROJECT
-  if (raw === undefined || raw === "") return undefined
-  const trimmed = raw.trim()
-  return trimmed || undefined
+  const gcloud = env.GCLOUD_PROJECT?.trim()
+  if (gcloud) return gcloud
+  const google = env.GOOGLE_CLOUD_PROJECT?.trim()
+  if (google) return google
+  return undefined
 }
 
 function expectedRuntimeServiceAccountEmail(env: Record<string, string | undefined>): string | undefined {
