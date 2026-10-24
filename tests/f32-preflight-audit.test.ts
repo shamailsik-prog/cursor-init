@@ -16,11 +16,44 @@ function runPreflight(args: string[]): { status: number | null; out: string } {
   return { status: res.status, out: `${res.stdout ?? ""}${res.stderr ?? ""}` }
 }
 
+const STAGING_PROJECT_ID = "demo-sikander"
+
 describe("F32 deploy preflight (FA-F32-001)", () => {
-  it("refuses to run without --env-file", () => {
+  it("refuses to run without --project-id", () => {
     const result = runPreflight(["--profile", "staging"])
     expect(result.status).not.toBe(0)
-    expect(result.out).toMatch(/env-file/i)
+    expect(result.out).toMatch(/project-id/i)
+  })
+
+  it("rejects an env file outside functions/.env.<projectId>", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f32-preflight-"))
+    const envFile = path.join(dir, "bad.env")
+    fs.writeFileSync(
+      envFile,
+      "SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\nTRUSTED_PROXY_HOPS=1\n",
+    )
+    const result = runPreflight([
+      "--profile",
+      "staging",
+      "--project-id",
+      STAGING_PROJECT_ID,
+      "--env-file",
+      envFile,
+    ])
+    expect(result.status).not.toBe(0)
+    expect(result.out).toMatch(new RegExp(`functions/\\.env\\.${STAGING_PROJECT_ID}`))
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("rejects when functions/.env.<projectId> is missing", () => {
+    const canonical = path.join(repoRoot, "functions", `.env.${STAGING_PROJECT_ID}`)
+    const had = fs.existsSync(canonical)
+    const backup = had ? fs.readFileSync(canonical, "utf8") : null
+    if (had) fs.unlinkSync(canonical)
+    const result = runPreflight(["--profile", "staging", "--project-id", STAGING_PROJECT_ID])
+    expect(result.status).not.toBe(0)
+    expect(result.out).toMatch(new RegExp(`functions/\\.env\\.${STAGING_PROJECT_ID}`))
+    if (backup !== null) fs.writeFileSync(canonical, backup)
   })
 
   it("rejects an env file whose effective values are wrong (dotenv last-wins)", () => {
@@ -30,9 +63,13 @@ describe("F32 deploy preflight (FA-F32-001)", () => {
       envFile,
       "SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\nTRUSTED_PROXY_HOPS=1\nSIKANDER_INGRESS_SETTINGS=ALLOW_ALL\n",
     )
-    const result = runPreflight(["--profile", "staging", "--env-file", envFile])
+    const canonical = path.join(repoRoot, "functions", `.env.${STAGING_PROJECT_ID}`)
+    fs.mkdirSync(path.dirname(canonical), { recursive: true })
+    fs.writeFileSync(canonical, fs.readFileSync(envFile, "utf8"))
+    const result = runPreflight(["--profile", "staging", "--project-id", STAGING_PROJECT_ID])
     expect(result.status).not.toBe(0)
     fs.rmSync(dir, { recursive: true, force: true })
+    fs.unlinkSync(canonical)
   })
 
   it("rejects commented-out contract values masquerading as set", () => {
@@ -42,8 +79,11 @@ describe("F32 deploy preflight (FA-F32-001)", () => {
       envFile,
       "# SIKANDER_INGRESS_SETTINGS=ALLOW_INTERNAL_AND_GCLB\n# TRUSTED_PROXY_HOPS=1\nSIKANDER_INGRESS_SETTINGS=ALLOW_ALL\nTRUSTED_PROXY_HOPS=0\n",
     )
-    const result = runPreflight(["--profile", "staging", "--env-file", envFile])
+    const canonical = path.join(repoRoot, "functions", `.env.${STAGING_PROJECT_ID}`)
+    fs.writeFileSync(canonical, fs.readFileSync(envFile, "utf8"))
+    const result = runPreflight(["--profile", "staging", "--project-id", STAGING_PROJECT_ID])
     expect(result.status).not.toBe(0)
     fs.rmSync(dir, { recursive: true, force: true })
+    fs.unlinkSync(canonical)
   })
 })

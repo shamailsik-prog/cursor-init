@@ -186,6 +186,46 @@ class BundleTier(unittest.TestCase):
         hits = gate.compare_endpoints(manifest, endpoints, "production", {})
         self.assertTrue(any("maxDispatchesPerSecond" in f.message for f in hits))
 
+    def test_compare_endpoints_job_worker_task_retry_config(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        endpoints = {
+            "jobWorker": {
+                "region": ["asia-south1"],
+                "taskQueueTrigger": {
+                    "rateLimits": {"maxConcurrentDispatches": 10, "maxDispatchesPerSecond": 5},
+                    "retryConfig": {"maxAttempts": 1, "minBackoffSeconds": 10, "maxBackoffSeconds": 60},
+                },
+            }
+        }
+        hits = gate.compare_endpoints(manifest, endpoints, "production", {})
+        self.assertTrue(any("retryConfig" in f.message for f in hits))
+
+
+class RulesTtlParsing(unittest.TestCase):
+    def test_ttl_rules_rejects_allow_get_even_when_read_is_false(self) -> None:
+        body = "allow read, write: if false; allow get: if request.auth != null;"
+        self.assertTrue(gate.ttl_match_allows_client_read(body))
+
+    def test_ttl_rules_ignores_if_false_elsewhere_in_block(self) -> None:
+        body = "allow write: if false; allow read: if sameFirm();"
+        self.assertTrue(gate.ttl_match_allows_client_read(body))
+
+    def test_ttl_rules_accepts_server_only_block(self) -> None:
+        body = "allow read, write: if false;"
+        self.assertFalse(gate.ttl_match_allows_client_read(body))
+
+
+class RunbookEnvSource(unittest.TestCase):
+    def test_release_runbook_does_not_derive_env_from_manifest(self) -> None:
+        text = (ROOT / "docs/deploy/RELEASE_RUNBOOK.md").read_text(encoding="utf-8")
+        self.assertNotIn("print-env", text)
+
+    def test_manifest_runbook_steps_do_not_derive_env_from_manifest(self) -> None:
+        manifest = gate.load_manifest(ROOT)
+        steps = manifest.get("runbook", {}).get("orderedSteps", [])
+        joined = " ".join(steps).lower()
+        self.assertNotIn("print-env", joined)
+
 
 class EnvFileParsing(unittest.TestCase):
     def test_parse_dotenv_last_wins(self) -> None:

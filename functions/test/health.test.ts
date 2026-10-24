@@ -78,6 +78,26 @@ describe("health contract report (F32 R9)", () => {
     expect(body).not.toHaveProperty("contract")
   })
 
+  it("rejects the runtime service account email in the wrong GCP project", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: {
+        SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+        TRUSTED_PROXY_HOPS: "1",
+        FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+      },
+      deployed: true,
+      metadata: async () => ({
+        region: "asia-south1",
+        serviceAccount: "sikander-functions@attacker-proj.iam.gserviceaccount.com",
+      }),
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+  })
+
   it("rejects a service account that only substring-matches the runtime identity", async () => {
     const { createHealthHandler } = await import("../src/health")
     const handler = createHealthHandler({
