@@ -10,5 +10,6 @@ describe("backup-drill workflow", () => {
     expect(yaml).toContain("Alert on backup drill failure")
     expect(yaml).toMatch(/if:\s*failure\(\)/)
     expect(yaml).toMatch(/github\.event_name\s*==\s*'schedule'/)
+    expect(yaml).toMatch(/gh label create backup-drill-failure/)
   })
 })
