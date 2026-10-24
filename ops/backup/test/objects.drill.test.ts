@@ -1,12 +1,13 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { spawn } from "node:child_process"
+import { type ChildProcess, spawn } from "node:child_process"
 import { describe, expect, it } from "vitest"
 import { S3Client, CreateBucketCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import { applyVaultProtection, checkVaultProtection } from "../objects/protection"
 import { loadInfraConfig } from "../config"
 import { recordDrillResult } from "../lib/results"
+import { stopMinioServer } from "./helpers/minio"
 
 const REPO = path.resolve(__dirname, "../../..")
 
@@ -17,22 +18,23 @@ function minioBin(): string {
   )
 }
 
-async function startMinio(dir: string): Promise<{ endpoint: string; stop: () => void }> {
+async function startMinio(dir: string): Promise<{ endpoint: string; proc: ChildProcess; dataDir: string }> {
   const bin = minioBin()
   if (!existsSync(bin)) {
     throw new Error(
       `build or install MinIO at ${bin} (see gate-g0.yml document-object-s3 job) or set SIKANDER_BACKUP_DRILL_MINIO_BIN`
     )
   }
-  const data = path.join(dir, "data")
-  const proc = spawn(bin, ["server", data, "--address", "127.0.0.1:19021", "--console-address", "127.0.0.1:19022"], {
+  const dataDir = path.join(dir, "data")
+  const proc = spawn(bin, ["server", dataDir, "--address", "127.0.0.1:19021", "--console-address", "127.0.0.1:19022"], {
     env: { ...process.env, MINIO_ROOT_USER: "minioadmin", MINIO_ROOT_PASSWORD: "minioadmin" },
     stdio: "ignore",
   })
   await new Promise((r) => setTimeout(r, 2000))
   return {
     endpoint: "http://127.0.0.1:19021",
-    stop: () => proc.kill("SIGTERM"),
+    proc,
+    dataDir: dir,
   }
 }
 
@@ -42,7 +44,7 @@ describe("document vault objects drill", () => {
     async () => {
       const started = Date.now()
       const tmp = mkdtempSync(path.join(os.tmpdir(), "f33-minio-"))
-      const { endpoint, stop } = await startMinio(tmp)
+      const { endpoint, proc, dataDir } = await startMinio(tmp)
       try {
         const cfg = loadInfraConfig(REPO).documentVault
         const s3 = new S3Client({
@@ -63,8 +65,7 @@ describe("document vault objects drill", () => {
           details: { bucket, endpoint },
         })
       } finally {
-        stop()
-        rmSync(tmp, { recursive: true, force: true })
+        await stopMinioServer(proc, dataDir)
       }
     },
     120_000
