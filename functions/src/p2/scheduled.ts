@@ -1,7 +1,7 @@
 import { FieldPath } from "firebase-admin/firestore"
 import { onSchedule, type ScheduleFunction } from "firebase-functions/v2/scheduler"
 import { adminDb } from "../admin"
-import { REGION } from "../health"
+import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { logFailure } from "../log"
 import { AUTO_CONFIRM_SPEC } from "../d1/entity/autoConfirmJob"
 import { NAME_REINDEX_SPEC } from "../d1/conflict/reindexJob"
@@ -214,7 +214,18 @@ export const SCHEDULE_RETRY = { retryCount: 3, minBackoffSeconds: 60, maxBackoff
 
 /** A deployed schedule for `spec`, in PKT. */
 export function scheduledJobFunction(spec: ScheduledJobSpec): ScheduleFunction {
-  return onSchedule({ schedule: spec.cron, timeZone: "Asia/Karachi", region: REGION, ...SCHEDULE_RETRY }, async () => {
-    await enqueueScheduledRuns(spec, Date.now())
-  })
+  return onSchedule(
+    {
+      ...RUNTIME_DEFAULTS,
+      schedule: spec.cron,
+      timeZone: "Asia/Karachi",
+      maxInstances: 1,
+      timeoutSeconds: 60,
+      ingressSettings: INTERNAL_ONLY,
+      ...SCHEDULE_RETRY,
+    },
+    async () => {
+      await enqueueScheduledRuns(spec, Date.now())
+    }
+  )
 }

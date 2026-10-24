@@ -1,6 +1,7 @@
 import { onRequest } from "firebase-functions/v2/https"
 import { INGRESS_SETTINGS } from "../deployConfig"
-import { FUNCTION_TIMEOUT_SECONDS, REGION } from "../health"
+import { FUNCTION_TIMEOUT_SECONDS } from "../health"
+import { RUNTIME_DEFAULTS } from "../runtimeOptions"
 import type { Operation } from "../p5/common"
 import {
   approveMfaDisableOp,
@@ -155,6 +156,11 @@ export const ROUTES: readonly Route[] = [
 const router = createRouter(ROUTES)
 
 export const api = onRequest(
-  { region: REGION, timeoutSeconds: FUNCTION_TIMEOUT_SECONDS, ingressSettings: INGRESS_SETTINGS },
+  {
+    ...RUNTIME_DEFAULTS,
+    maxInstances: 20,
+    timeoutSeconds: FUNCTION_TIMEOUT_SECONDS,
+    ingressSettings: INGRESS_SETTINGS,
+  },
   router
 )

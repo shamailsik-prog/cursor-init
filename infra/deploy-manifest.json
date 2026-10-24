@@ -1,0 +1,287 @@
+{
+  "manifestVersion": 1,
+  "project": {
+    "region": "asia-south1",
+    "database": {
+      "location": "asia-south1"
+    }
+  },
+  "runtime": {
+    "nodejs": "nodejs22"
+  },
+  "identities": {
+    "runtime": {
+      "email": "sikander-functions@",
+      "projectRoles": [
+        { "role": "roles/datastore.user", "reason": "Firestore read/write for all functions" },
+        { "role": "roles/firebaseauth.admin", "reason": "Admin SDK Auth in P5 identity/MFA" },
+        { "role": "roles/logging.logWriter", "reason": "Structured logs" },
+        { "role": "roles/eventarc.eventReceiver", "reason": "Firestore trigger delivery" }
+      ],
+      "actAs": [{ "target": "sikander-functions@", "reason": "Cloud Tasks OIDC as the enqueuer identity" }]
+    }
+  },
+  "functions": [
+    {
+      "name": "api",
+      "kind": "https",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 120,
+      "minInstances": 0,
+      "maxInstances": 20,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "env:SIKANDER_INGRESS_SETTINGS",
+      "why": { "maxInstances": "Cost ceiling for tenant HTTP; per-user rate limit is 60/min", "ingress": "GCLB-only in staging/production profiles" }
+    },
+    {
+      "name": "health",
+      "kind": "https",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 2,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_ALL",
+      "why": { "maxInstances": "Uptime probes without the load balancer", "ingress": "No tenant data; external smoke checks" }
+    },
+    {
+      "name": "onJobCreated",
+      "kind": "firestore",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY"
+    },
+    {
+      "name": "onEventCreated",
+      "kind": "firestore",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY"
+    },
+    {
+      "name": "jobWorker",
+      "kind": "taskQueue",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 300,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "invoker": ["sikander-functions@"],
+      "why": { "maxInstances": "Matches queue maxConcurrentDispatches" }
+    },
+    {
+      "name": "jobSweeper",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 1 minutes"
+    },
+    {
+      "name": "ocrLegacySweep",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 1 minutes"
+    },
+    {
+      "name": "d1AutoConfirmTick",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "15 2 * * *",
+      "timeZone": "Asia/Karachi"
+    },
+    {
+      "name": "d1ConflictReindexTick",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "35 2 * * *",
+      "timeZone": "Asia/Karachi"
+    },
+    {
+      "name": "d1ConflictClientWritten",
+      "kind": "firestore",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY"
+    },
+    {
+      "name": "d1ConflictPartyWritten",
+      "kind": "firestore",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY"
+    },
+    {
+      "name": "d1ConflictIndexChunkWritten",
+      "kind": "firestore",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 10,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY"
+    },
+    {
+      "name": "p1ReservationReconciler",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 1 minutes"
+    },
+    {
+      "name": "auditOutboxReconciler",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 1 minutes"
+    }
+  ],
+  "queues": [
+    {
+      "function": "jobWorker",
+      "maxConcurrentDispatches": 10,
+      "maxDispatchesPerSecond": 5,
+      "oidcServiceAccount": "sikander-functions@"
+    }
+  ],
+  "firestore": {
+    "ttl": [
+      { "collectionGroup": "idempotency_keys", "fieldPath": "expiresAt", "writers": ["functions/src/http/idempotency.ts"] },
+      { "collectionGroup": "idempotency_effects", "fieldPath": "expiresAt", "writers": ["functions/src/http/idempotency.ts"] },
+      { "collectionGroup": "rate_limits", "fieldPath": "expiresAt", "writers": ["functions/src/http/rateLimit.ts"] },
+      { "collectionGroup": "conflict_index_breaks", "fieldPath": "expiresAt", "writers": ["functions/src/d1/conflict/registryTriggers.ts"] },
+      { "collectionGroup": "counters", "fieldPath": "expiresAt", "writers": ["functions/src/d1/dailyLimit.ts"] }
+    ],
+    "ttlExemptions": [
+      { "path": "functions/src/p5/mfa.ts", "reason": "MFA approval validity; retention is F42" },
+      { "path": "functions/src/p2/enqueue.ts", "reason": "Nested lease field, not a collection TTL" },
+      { "path": "functions/src/p2/sweeper.ts", "reason": "Nested lease field, not a collection TTL" },
+      { "path": "functions/src/p2/worker.ts", "reason": "Nested lease field, not a collection TTL" },
+      { "path": "platform/http/durableIdempotency.ts", "reason": "Next durable idempotency; epoch fields not Firestore TTL" }
+    ]
+  },
+  "alerts": {
+    "policies": [
+      { "event": "deploy.contract_violation", "level": "ERROR", "surface": "functions", "files": ["functions/src/deployConfig.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "p1.reservation_exceeded", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts", "functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.usage_log_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.receipt_record_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.overhead_learned", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.overhead_anomaly", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.reconcile_quarantined", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.reconcile_failure_uncounted", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "p1.reconcile_pass_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "autoconfirm.backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/d1/entity/autoConfirmJob.ts"], "runbook": "functions/src/p2/README.md" },
+      { "event": "job.deadLettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p2/jobEvents.ts"], "runbook": "functions/src/p2/README.md" },
+      { "event": "audit.outbox_backlog_stale", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "audit.outbox_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "audit.outbox_row_dead_lettered", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "audit.outbox_reconcile_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
+      { "event": "audit.outbox_sweep_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p5/auditOutbox.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" }
+    ],
+    "exemptions": [
+      { "event": "p1.provider_key_in_next_runtime", "reason": "Next runtime; external delivery F43", "delivery": "external" }
+    ]
+  },
+  "environments": {
+    "local": { "env": {} },
+    "staging": {
+      "env": {
+        "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
+        "TRUSTED_PROXY_HOPS": "1"
+      }
+    },
+    "production": {
+      "env": {
+        "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
+        "TRUSTED_PROXY_HOPS": "1"
+      }
+    }
+  },
+  "next": {
+    "host": "vercel",
+    "routes": [
+      { "file": "app/api/p1/committee-brain/route.ts", "maxDuration": 130 },
+      { "file": "app/api/d1/documents/route.ts", "maxDuration": 60 }
+    ]
+  },
+  "runbook": {
+    "orderedSteps": [
+      "terraform apply stage 1",
+      "write functions/.env from print-env",
+      "bash scripts/deploy-preflight.sh",
+      "firebase deploy",
+      "terraform apply stage 2",
+      "set SIKANDER_FUNCTIONS_API_BASE_URL on Vercel"
+    ]
+  },
+  "apis": ["run.googleapis.com", "cloudfunctions.googleapis.com", "eventarc.googleapis.com", "cloudtasks.googleapis.com", "cloudscheduler.googleapis.com"]
+}

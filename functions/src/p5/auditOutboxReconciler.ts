@@ -1,7 +1,7 @@
 import { logger } from "firebase-functions"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { adminDb } from "../admin"
-import { REGION } from "../health"
+import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { RECONCILER_TIMEOUT_SECONDS, reconcileAuditOutbox } from "./auditOutbox"
 
 /**
@@ -10,7 +10,13 @@ import { RECONCILER_TIMEOUT_SECONDS, reconcileAuditOutbox } from "./auditOutbox"
  * (./auditOutbox.ts). No caller, no tenant input: each entry is published into its own firm's audit log.
  */
 export const auditOutboxReconciler = onSchedule(
-  { schedule: "every 1 minutes", region: REGION, timeoutSeconds: RECONCILER_TIMEOUT_SECONDS },
+  {
+    ...RUNTIME_DEFAULTS,
+    schedule: "every 1 minutes",
+    maxInstances: 1,
+    timeoutSeconds: RECONCILER_TIMEOUT_SECONDS,
+    ingressSettings: INTERNAL_ONLY,
+  },
   async () => {
     await reconcileAuditOutbox({ db: adminDb(), log: logger })
   }

@@ -1,7 +1,8 @@
 {
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "indexes": "firestore.indexes.json",
+    "location": "asia-south1"
   },
   "emulators": {
     "firestore": {
@@ -22,6 +23,7 @@
   },
   "functions": {
     "source": "functions",
+    "runtime": "nodejs22",
     "predeploy": [
       "npm --prefix \"$RESOURCE_DIR\" run build"
     ]

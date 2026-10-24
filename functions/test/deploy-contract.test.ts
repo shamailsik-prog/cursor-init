@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { deployContractViolations } from "../src/deployConfig"
 
 type ContractCode =
   | "ingress_not_set"
@@ -12,10 +13,6 @@ type Env = Record<string, string | undefined>
 const CONTRACT_ALERT = "deploy.contract_violation"
 
 function codes(env: Env, deployed: boolean): ContractCode[] {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { deployContractViolations } = require("../src/deployConfig") as {
-    deployContractViolations: (e: Env, ctx: { deployed: boolean }) => ContractCode[]
-  }
   return deployContractViolations(env, { deployed })
 }
 
@@ -55,7 +52,8 @@ describe("deploy contract violations (R6)", () => {
     expect(errSpy).toHaveBeenCalledTimes(1)
     expect(errSpy.mock.calls[0]?.[0]).toBe(CONTRACT_ALERT)
     const payload = errSpy.mock.calls[0]?.[1] as { codes?: string[] } | undefined
-    expect(payload?.codes).toEqual(expect.arrayContaining(expect.any(Array)))
+    expect(Array.isArray(payload?.codes)).toBe(true)
+    expect(payload?.codes?.length).toBeGreaterThan(0)
     expect(JSON.stringify(errSpy.mock.calls[0])).not.toMatch(/ALLOW_ALL|ALLOW_INTERNAL/)
   })
 

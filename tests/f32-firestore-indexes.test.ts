@@ -23,13 +23,16 @@ describe("F32 firestore.indexes.json TTL overrides", () => {
     const indexes = JSON.parse(readFileSync(indexesPath, "utf8")) as {
       fieldOverrides?: { collectionGroup: string; fieldPath: string; ttl?: boolean; indexes?: unknown[] }[]
     }
-    const { validateField } = await import("firebase-tools/lib/firestore/validateField.js")
+    const { createRequire } = await import("node:module")
+    const require = createRequire(import.meta.url)
+    const { FirestoreApi } = require("firebase-tools/lib/firestore/api") as { FirestoreApi: new () => { validateField: (f: unknown) => void } }
+    const api = new FirestoreApi()
     for (const ttl of manifest.firestore.ttl) {
       const override = indexes.fieldOverrides?.find((o) => o.collectionGroup === ttl.collectionGroup && o.fieldPath === ttl.fieldPath)
       expect(override, ttl.collectionGroup).toBeDefined()
       expect(override!.ttl).toBe(true)
       expect(override!.indexes?.length).toBeGreaterThanOrEqual(3)
-      expect(() => validateField(override!)).not.toThrow()
+      expect(() => api.validateField(override!)).not.toThrow()
     }
   })
 })
