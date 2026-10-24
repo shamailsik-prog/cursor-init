@@ -81,6 +81,16 @@ paths = [
 ]
 targetRules = ["generic-api-key"]
 
+# F33 backup restoreObjects unit test (commit 5c836bb9): one-shot vitest AES key literal before
+# switching to randomBytes(32); PR history scan is commit-by-commit.
+[[allowlists]]
+description = "F33 backup restoreObjects vitest encryption fixture"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$''']
+paths = ['''^ops/backup/test/objects\.unit\.test\.ts$''']
+targetRules = ["generic-api-key"]
+
 # Audit F23 re-audit round 2: commits 155cc9f..935166d on claude/remediate-f23-fu passed the admin
 # key positionally and then a length keyword set to the body-cap constant MAX_BODY_BYTES in the
 # uvicorn body-guard test's header helper; generic-api-key read the word "key" and the keyword

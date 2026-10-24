@@ -1,0 +1,98 @@
+[
+  {
+    "id": "digest-count-off",
+    "file": "ops/backup/lib/digest.ts",
+    "old": "this._count += 1",
+    "new": "this._count += 0",
+    "tests": ["ops/backup/test/diff.unit.test.ts"],
+    "why": "count must affect digest"
+  },
+  {
+    "id": "diff-missing-skip",
+    "file": "ops/backup/lib/diff.ts",
+    "old": "if (inExp && !inAct)",
+    "new": "if (false && inExp && !inAct)",
+    "tests": ["ops/backup/test/diff.unit.test.ts"],
+    "why": "missing keys must be reported"
+  },
+  {
+    "id": "canonical-null-false",
+    "file": "ops/backup/firestore/canonical.ts",
+    "old": "if (v === null) parts.push(\"null\")",
+    "new": "if (v === null) parts.push(\"false\")",
+    "tests": ["ops/backup/test/firestore-canonical.unit.test.ts"],
+    "why": "null encoding"
+  },
+  {
+    "id": "compare-digest-skip",
+    "file": "ops/backup/postgres/manifest.ts",
+    "old": "if (exp.digest !== act.digest)",
+    "new": "if (false)",
+    "tests": ["ops/backup/test/pg-compare.unit.test.ts"],
+    "why": "digest compare"
+  },
+  {
+    "id": "guard-db-exists",
+    "file": "ops/backup/postgres/guards.ts",
+    "old": "if (Number(exists) > 0)",
+    "new": "if (false)",
+    "tests": ["ops/backup/test/guards.unit.test.ts"],
+    "why": "refuse existing db"
+  },
+  {
+    "id": "pick-version-reverse",
+    "file": "ops/backup/objects/restore.ts",
+    "old": ".reverse()",
+    "new": "",
+    "tests": ["ops/backup/test/objects.unit.test.ts"],
+    "why": "newest version first"
+  },
+  {
+    "id": "r2-lock-age",
+    "file": "ops/backup/objects/protection.ts",
+    "old": "< minAgeSeconds",
+    "new": "> minAgeSeconds",
+    "tests": ["ops/backup/test/objects.unit.test.ts"],
+    "why": "min age validation"
+  },
+  {
+    "id": "firestore-export-bucket",
+    "file": "ops/backup/firestore/managed.ts",
+    "old": "gs://${ctx.exportBucket}/",
+    "new": "gs://${ctx.exportBucket}/rm/",
+    "tests": ["ops/backup/test/firestore-managed.unit.test.ts"],
+    "why": "export path must not embed rm"
+  },
+  {
+    "id": "sets-missing",
+    "file": "ops/backup/lib/diff.ts",
+    "old": "if (!act.has(item))",
+    "new": "if (false)",
+    "tests": ["ops/backup/test/diff.unit.test.ts"],
+    "why": "set missing lines"
+  },
+  {
+    "id": "collection-pattern-star",
+    "file": "ops/backup/firestore/canonical.ts",
+    "old": "out.push(\"*\")",
+    "new": "out.push(\"?\")",
+    "tests": ["ops/backup/test/firestore-canonical.unit.test.ts"],
+    "why": "path patterns"
+  },
+  {
+    "id": "exec-prefix-drop",
+    "file": "ops/backup/lib/exec.ts",
+    "old": "return pgPrefix?.length ? [...pgPrefix, ...argv] : argv",
+    "new": "return argv",
+    "tests": ["ops/backup/test/exec.unit.test.ts"],
+    "why": "R19 prefix"
+  },
+  {
+    "id": "link-staging-case",
+    "file": "ops/backup/postgres/links.ts",
+    "old": "'published','embedded'",
+    "new": "'published'",
+    "tests": ["ops/backup/test/links.unit.test.ts"],
+    "why": "link contract"
+  }
+]

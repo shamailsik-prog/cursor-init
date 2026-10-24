@@ -1,0 +1,6 @@
+{
+  "database": "(default)",
+  "schedule": { "recurrence": "daily", "retention": "14w" },
+  "exportBucket": { "retentionDays": 35, "lock": false },
+  "restore": { "destinationDatabase": "restore-f33" }
+}
