@@ -8,7 +8,8 @@ if (!manifestPath) throw new Error("usage: firestore-verify-import <manifestPath
 
 async function main(): Promise<void> {
   if (!process.env.FIRESTORE_EMULATOR_HOST) throw new Error("FIRESTORE_EMULATOR_HOST required")
-  if (!getApps().length) initializeApp({ projectId: "demo-sikander" })
+  const projectId = process.env.FIRESTORE_DRILL_PROJECT?.trim() || "demo-sikander"
+  if (!getApps().length) initializeApp({ projectId })
   const db = getFirestore()
   const before = JSON.parse(readFileSync(manifestPath, "utf8"))
   const after = await collectFirestoreManifest(db)
