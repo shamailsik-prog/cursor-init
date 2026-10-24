@@ -53,3 +53,4 @@ all via `firebase-admin` 13 -> 14 (a major bump, upgrade backlog).
 
 | scope | advisory | package | severity | reason | owner | review by |
 | --- | --- | --- | --- | --- | --- | --- |
+| npm:root | GHSA-xjj6-f33q-929c | undici | high | Transitive via `eve`; override pins 8.11.2 but GHSA-xjj6-f33q-929c needs undici > 8.12.1. Bump `overrides` to 8.12.3 (same major) in a dependency slice; not in F33 backup lane. | platform-deps | 2026-11-01 |
