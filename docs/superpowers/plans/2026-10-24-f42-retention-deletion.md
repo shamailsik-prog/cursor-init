@@ -9,14 +9,15 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 | Path | Purpose |
 | --- | --- |
 | `infra/retention/inventory.json`, `infra/retention/policy.json` | R2, R3 |
-| `ci_gates/check_data_inventory.py`, `ci_gates/test_check_data_inventory.py`, `ci_gates/gate_g0.sh` step 20 | R3 |
+| `ci_gates/check_data_inventory.py`, `ci_gates/test_check_data_inventory.py`, `ci_gates/gate_g0.sh` step 21 | R3 |
 | `platform/retention/tombstone.ts` | shared tombstone shape and the row-to-matter key (both stacks) |
 | `platform/p5/permissionDecision.ts` | `matter-deleted`, retention actions (R4, R6) |
-| `functions/src/retention/{model,config,tombstone,ops,saga,acks,apply,watch,alert}.ts` | R4, R5, R7 to R11 |
+| `functions/src/retention/{model,config,ops,saga,acks,apply,watch,alert,functions}.ts` | R4, R5, R7 to R11 |
 | `functions/src/p5/permission.ts`, `functions/src/d1/matter/ops.ts`, `functions/src/p2/{worker,errors,registry,scheduled}.ts`, `functions/src/http/router.ts`, `functions/src/index.ts` | R6, R7, R11, routes, exports |
-| `platform/persistence/{firestoreSpineRepositories,firmScopedList}.ts`, `platform/p5/committeeScope.ts`, `app/api/d1/reporting/route.ts` | R6 (Next), R12 |
+| `platform/persistence/{firestoreSpineRepositories,firmScopedList,matterTombstones}.ts`, `app/api/d1/reporting/route.ts` | R6 (Next), R12 |
 | `firestore.rules`, `firestore.indexes.json`, `infra/deploy-manifest.json`, `infra/terraform/alerts.tf` | R13, deploy |
 | `functions/test/f42-*.test.ts`, `tests/f42-tombstone-next.e2e.firestore.test.ts`, `functions/test/g2.cross-firm.test.ts` | tests |
+| `functions/test/{http,p5.identity,runtime-options,p2.boot,p2.engine,p2.scheduled,f09-effect-marker-guard}.test.ts`, `tests/g0-gate-e2e.test.ts`, `tests/f13-004-reporting-index.e2e.firestore.test.ts`, `package.json` (`test:rules`), `vitest.config.ts` | neighbour lists: new routes, exports, operations module, G-0 tree, reporting membership |
 | `docs/runbooks/retention-deletion.md`, `functions/src/p2/README.md` | runbook |
 | `functions/test/f42-mutants.json`, `functions/scripts/f42-mutants.mjs` | mutation |
 
@@ -28,7 +29,9 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 3. Inventory, policy, gate (Python), G-0 wiring; gate tests GREEN.
 4. Shared table, Functions permission and list filter, worker refusal; units GREEN.
 5. Retention module: config, ops, saga, acks; deletion e2e GREEN.
-6. Next repository filter, committee scope, reporting membership; Next e2e GREEN.
+6. Next repository filter, reporting membership; Next e2e GREEN. (A change to `committeeScope.loadMatter` was
+   tried and reverted: it broke 15 Committee Brain unit tests, and the route's `syncFirmMatters` already drops the
+   tombstoned matter through the repository filter.)
 7. Retention job, watch, alert seam, deploy manifest, indexes, rules, G-2 entries; apply e2e GREEN.
 8. Mutants (at least 12) on the tombstone check, acknowledgement completeness, legal-hold check, authorisation and the
    inventory gate.

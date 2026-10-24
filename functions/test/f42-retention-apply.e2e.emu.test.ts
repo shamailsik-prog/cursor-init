@@ -127,4 +127,25 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     await runRetentionWatch(now + 60_000)
     expect(raised.filter((r) => r.fields.firmId === firmId)).toHaveLength(1)
   })
+
+  it("a request that falls overdue behind a full page of already-alerted ones is still alerted", async () => {
+    const raised: Array<{ event: string; fields: Record<string, unknown> }> = []
+    retentionAlertTestSeam.sink = (event, fields) => void raised.push({ event, fields })
+    const firmId = uniq("f42watchpage")
+    const db = adminDb()
+    const now = Date.now()
+    // 201 halted requests, overdue for years and alerted long ago: they stay in_progress (a hold halted them).
+    const base = { firmId, matterId: uniq("m"), expected: ["a"], acked: {}, status: "in_progress" }
+    for (let start = 0; start < 201; start += 100) {
+      const batch = db.batch()
+      for (let i = start; i < Math.min(start + 100, 201); i += 1) {
+        batch.set(db.collection("deletion_requests").doc(uniq("old")), { ...base, ackDeadlineAt: Timestamp.fromMillis(now - 1000 * DAY + i), alertedAt: Timestamp.fromMillis(now - 900 * DAY) })
+      }
+      await batch.commit()
+    }
+    const fresh = uniq("req")
+    await db.collection("deletion_requests").doc(fresh).set({ ...base, ackDeadlineAt: Timestamp.fromMillis(now - 1000), alertedAt: null })
+    await runRetentionWatch(now)
+    expect(raised.filter((r) => r.fields.requestId === fresh)).toHaveLength(1)
+  })
 })

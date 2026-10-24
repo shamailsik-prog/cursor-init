@@ -165,6 +165,10 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-004: the search index i
       })
       await adminDb().collection("matters").doc(badMatter).set(matterDoc(firmId, badMatter, badTitle))
       await adminDb().collection("matters").doc(healthyMatter).set(matterDoc(firmId, healthyMatter, healthyTitle))
+      // Audit F42 (spec R12): the search shows a matter row to a member of the matter only, so the actor is seated on both.
+      for (const matterId of [badMatter, healthyMatter]) {
+        await adminDb().collection("matter_members").doc(`${matterId}_${actorId}`).set({ firmId, matterId, userId: actorId })
+      }
       await adminDb().collection("matter_client_search_index").doc(indexId).set({
         ...good(firmId, indexId),
         referenceId: badMatter,

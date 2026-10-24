@@ -20,6 +20,20 @@ function run(m) {
   return spawnSync("npx", ["vitest", "run", "--no-cache", ...m.tests], { cwd, encoding: "utf8", env: process.env })
 }
 
+// Baseline: every distinct test command must pass on the unmutated tree, or a "killed" mutant proves nothing.
+const seen = new Set()
+for (const m of mutants) {
+  const key = `${m.runner ?? "functions"} ${m.tests.join(" ")}`
+  if (seen.has(key)) continue
+  seen.add(key)
+  const r = run(m)
+  if (r.status !== 0) {
+    console.log(`baseline FAILED: ${key}\n${(r.stdout ?? "").slice(-2000)}`)
+    process.exit(2)
+  }
+  console.log(`baseline ok: ${key}`)
+}
+
 const results = []
 let bad = false
 for (const m of mutants) {

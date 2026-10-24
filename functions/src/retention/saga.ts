@@ -259,7 +259,7 @@ const isAnonymised = (store: InventoryStore, data: DocumentData | undefined): bo
   data !== undefined && Object.entries(store.anonymise ?? {}).every(([field, value]) => data[field] === value)
 
 /** Whether a stored row of the matter still needs the treatment (exists in the firm, and is not yet anonymised). */
-const pending = (store: InventoryStore, treatment: Treatment, data: DocumentData | undefined, firmId: string): boolean =>
+const pending = (store: InventoryStore, treatment: Treatment, data: DocumentData | undefined, firmId: string): data is DocumentData =>
   data !== undefined && data.firmId === firmId && (treatment !== "anonymise" || !isAnonymised(store, data))
 
 /**

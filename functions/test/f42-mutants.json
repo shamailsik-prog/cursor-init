@@ -115,6 +115,17 @@
     "why": "a store is acknowledged only once no row of the matter is left in it"
   },
   {
+    "id": "A4-watch-filters-after-read",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/watch.ts",
+    "old": "    .where(\"alertedAt\", \"==\", null)\n",
+    "new": "",
+    "tests": [
+      "test/f42-retention-apply.e2e.emu.test.ts"
+    ],
+    "why": "a page of already-alerted halted requests must not hide a new overdue one from the unacknowledged-deletion alert"
+  },
+  {
     "id": "H1-matter-hold-ignored",
     "area": "legal hold",
     "file": "functions/src/retention/config.ts",

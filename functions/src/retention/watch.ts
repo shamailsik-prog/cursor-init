@@ -18,7 +18,15 @@ const PAGE = 200
 export const WATCH_TIMEOUT_SECONDS = 120
 
 export async function runRetentionWatch(nowMs: number): Promise<{ scanned: number; alerted: number }> {
-  const snap = await requestsRef().where("status", "==", "in_progress").where("ackDeadlineAt", "<=", Timestamp.fromMillis(nowMs)).limit(PAGE).get()
+  // Only the requests not yet alerted (`alertedAt` is null from the approval): a request halted by a hold stays
+  // in_progress for good, so filtering after the read would let a page of old, alerted ones hide a new overdue one.
+  const snap = await requestsRef()
+    .where("status", "==", "in_progress")
+    .where("alertedAt", "==", null)
+    .where("ackDeadlineAt", "<=", Timestamp.fromMillis(nowMs))
+    .orderBy("ackDeadlineAt")
+    .limit(PAGE)
+    .get()
   let alerted = 0
   for (const doc of snap.docs) {
     const r = doc.data()

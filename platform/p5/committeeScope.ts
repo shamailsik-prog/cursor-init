@@ -55,13 +55,7 @@ async function loadMatter(
   matterId: string,
   firmId: string
 ): Promise<Matter | null> {
-  const persisted = await repos.matters.get(matterId, firmId)
-  const cached = store.matters.get(matterId)
-  // Audit F42: a matter of the caller's firm that the repository no longer returns (tombstoned by an approved deletion,
-  // or removed) is dropped from the cache, never served from it. A cached matter of another firm is still returned, so
-  // the permission check refuses it as cross-firm (in memory mode the repository is the store, so this never differs).
-  if (!persisted && cached && cached.firmId === firmId) store.matters.delete(matterId)
-  const matter = persisted ?? (cached && cached.firmId !== firmId ? cached : undefined)
+  const matter = (await repos.matters.get(matterId, firmId)) ?? store.matters.get(matterId)
   if (matter) store.matters.set(matter.id, matter)
   return matter ?? null
 }

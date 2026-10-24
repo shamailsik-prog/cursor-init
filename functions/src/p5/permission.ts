@@ -99,13 +99,16 @@ async function evaluate(
     const db = adminDb()
     // Audit F42: the matter's tombstone is read with it. A tombstone of the caller's firm refuses the matter
     // (`matter-deleted`), also once the saga has purged the matter row itself.
-    const [matterSnap, tombSnap] = await db.getAll(db.collection("matters").doc(matterId), db.collection(MATTER_TOMBSTONES).doc(matterId))
+    const [matterSnap, tombSnap] = await Promise.all([
+      db.collection("matters").doc(matterId).get(),
+      db.collection(MATTER_TOMBSTONES).doc(matterId).get(),
+    ])
     const data = matterSnap.data()
     const deleted = isTombstoneFor(tombSnap.data(), caller.firmId, matterId)
     matter = data
       ? { firmId: data.firmId as string, classification: data.classification, deleted }
       : deleted
-        ? { firmId: caller.firmId, classification: tombSnap.get("classification"), deleted }
+        ? { firmId: caller.firmId, classification: tombSnap.data()?.classification, deleted }
         : null
     if (matter && matter.firmId === caller.firmId && !deleted) {
       isMember = (await db.collection("matter_members").doc(`${matterId}_${caller.uid}`).get()).exists

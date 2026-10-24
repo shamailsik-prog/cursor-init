@@ -1,6 +1,6 @@
-import type { Firestore as AdminFirestore } from "firebase-admin/firestore"
+import type { DocumentReference as AdminDocumentReference, Firestore as AdminFirestore } from "firebase-admin/firestore"
 import { MATTER_TOMBSTONES, isTombstoneFor, matterKeyOfRow } from "@/platform/retention/tombstone"
-import { firestoreSdkOf, type Firestore } from "@/platform/persistence/firestoreDbModular"
+import { doc, firestoreSdkOf, type Firestore } from "@/platform/persistence/firestoreDbModular"
 
 /**
  * Audit F42: the Next repository's tombstone filter. A firm-scoped read (`getById`, every firm-scoped list page) drops
@@ -19,8 +19,9 @@ const canRead = (db: Firestore): boolean => firestoreSdkOf(db) === "admin"
 export async function tombstonedAmong(db: Firestore, firmId: string, ids: readonly string[]): Promise<ReadonlySet<string>> {
   const unique = [...new Set(ids.filter((id) => typeof id === "string" && id !== "" && !id.includes("/")))]
   if (!canRead(db) || unique.length === 0) return new Set()
-  const admin = db as unknown as AdminFirestore
-  const snaps = await admin.getAll(...unique.map((id) => admin.collection(MATTER_TOMBSTONES).doc(id)))
+  // One batched read of the tombstones (document reads only; FA-F01-001: no collection scan outside firestoreDbModular).
+  const refs = unique.map((id) => doc(db, MATTER_TOMBSTONES, id)) as unknown as AdminDocumentReference[]
+  const snaps = await (db as unknown as AdminFirestore).getAll(...refs)
   return new Set(snaps.filter((s) => isTombstoneFor(s.data(), firmId, s.id)).map((s) => s.id))
 }
 
