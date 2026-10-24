@@ -30,6 +30,10 @@ function envOf(opts: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
   return { ...process.env, ...opts.env }
 }
 
+export function logicalPgRestoreArgv(db: string, dumpPath: string): string[] {
+  return ["pg_restore", "--no-owner", "-d", db, dumpPath]
+}
+
 export async function backupLogical(opts: BackupLogicalOptions): Promise<{ dir: string; manifest: PgManifest }> {
   const env = envOf(opts)
   const session = await PersistentPsqlSession.open(opts.pgPrefix, env, opts.db)
@@ -138,7 +142,7 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<{
   }
   const dumpTmp = path.join(opts.bundleDir, ".dump.part")
   await decryptToFile(opts.bundleDir, "database.dump", opts.ring, dumpTmp)
-  const restore = await runCommand(["pg_restore", "--no-owner", "--no-acl", "-d", opts.db, dumpTmp], {
+  const restore = await runCommand(logicalPgRestoreArgv(opts.db, dumpTmp), {
     env,
     pgPrefix: opts.pgPrefix,
   })
