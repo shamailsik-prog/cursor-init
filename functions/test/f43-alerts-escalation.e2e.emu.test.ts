@@ -311,7 +311,8 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(await apiError(list({ token: founder.token, data: { firmId, state: "closed" } } as never))).toEqual([400, "invalid_query"])
     // A view carries references, codes and counts, never a job payload.
     expect(Object.keys(p2.items[0]).sort()).toEqual(
-      ["acknowledgedAt", "acknowledgedBy", "alertId", "condition", "count", "detail", "episode", "escalateAt", "firstSeenAt", "lastSeenAt", "level", "ownerRole", "ref", "resolvedAt", "resolvedBy", "severity", "state", "subjectKey", "totalCount"].sort()
+      // clearedAt: added by the R1 follow-up (spec R22), so the worklist shows a derived condition no longer observed.
+      ["acknowledgedAt", "acknowledgedBy", "alertId", "clearedAt", "condition", "count", "detail", "episode", "escalateAt", "firstSeenAt", "lastSeenAt", "level", "ownerRole", "ref", "resolvedAt", "resolvedBy", "severity", "state", "subjectKey", "totalCount"].sort()
     )
   })
 

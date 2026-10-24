@@ -43,6 +43,8 @@ export type AlertView = {
   acknowledgedBy: ActorRecord | null
   resolvedAt: string | null
   resolvedBy: ActorRecord | null
+  /** Spec R22: when the checker stopped observing this derived condition (it no longer escalates), or null. */
+  clearedAt: string | null
 }
 
 const iso = (t: unknown): string | null => (t instanceof Timestamp ? t.toDate().toISOString() : null)
@@ -68,6 +70,7 @@ export function alertView(id: string, a: DocumentData): AlertView {
     acknowledgedBy: a.acknowledgedBy ?? null,
     resolvedAt: iso(a.resolvedAt),
     resolvedBy: a.resolvedBy ?? null,
+    clearedAt: iso(a.clearedAt),
   }
 }
 

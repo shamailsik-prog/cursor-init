@@ -245,6 +245,11 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     await runAlertChecker({ now: () => T0 + 66 * MIN, passes: ["sagas"] })
     const cleared = await alertDoc(alert.id)
     expect([cleared.state, millis(cleared.clearedAt), cleared.escalateAt, cleared.count]).toEqual(["open", T0 + 66 * MIN, null, 1])
+    // The partners' worklist shows it open and cleared.
+    const partner = await mintIdToken({ firmId, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(partner.uid)
+    const list = await viaApi<{ items: Array<Record<string, unknown>> }>("listAlerts", { now: () => T0 + 67 * MIN })({ token: partner.token, data: { firmId } } as never)
+    expect(list.items.map((i) => [i.alertId, i.state, i.clearedAt, i.escalateAt])).toEqual([[alert.id, "open", new Date(T0 + 66 * MIN).toISOString(), null]])
     // Past its old deadline the escalator leaves it alone.
     expect((await escalate(T0 + 2 * HOUR)).escalated).toEqual([])
     expect((await alertDoc(alert.id)).level).toBe(0)
