@@ -52,18 +52,21 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 | Postgres views (gate test added after FA-D5-003 landed) | RED on the merged branch before the fix: views unfound, `CREATE TABLE public.x` read as `public` | GREEN |
 | Watch page window (added test) | RED on the branch before the fix: `expected [] to have a length of 1` | GREEN |
 | F34 decision records (added assertions after F34 landed) | RED on the merged branch before the fix: Opik request held 1 trace, not 3; `retention.apply` left an old decision record | GREEN (27 of 27 F42 Functions tests) |
+| F43 durable alert (watch tests rewritten after F43 landed) | RED on the merged branch before the switch: 2 failed (no `ops_alerts` row) | GREEN, 5 of 5 |
 
 ## Verification log
 
-(Full output in the evidence log, `scratchpad/evidence-f42.txt`.)
+(Code head a9fb3c4, after merging main 0d9af65; full output in the evidence log, `scratchpad/evidence-f42.txt`.)
 
 - Typecheck: `tsc --noEmit -p .`, `tsc --noEmit -p tsconfig.tests.json`, `functions: tsc --noEmit -p .`: exit 0 each.
 - `eslint --max-warnings 0` on every touched TS file: exit 0 (two pre-existing unused imports removed from
   `firestoreSpineRepositories.ts`; `functions/scripts/f42-mutants.mjs` is outside the lint config).
-- G-0 (`BASE=origin/main bash ci_gates/gate_g0.sh`): PASSED, step 21 PASS (321 stores).
+- G-0 (`BASE=origin/main bash ci_gates/gate_g0.sh`): PASSED, step 21 PASS (323 stores).
 - G-1 (`python3 ci_gates/gate_g1.py`): 10 of 10.
-- G-2 (the gate's suites and coverage evaluation on the private emulator): PASS, 450 tested, 0 allowed; the five
+- G-2 (the gate's suites and coverage evaluation on the private emulator): PASS, 457 tested, 0 allowed; the five
   retention routes tested with 12 attempts each.
 - Deploy contract: static PASS, bundle mode PASS (`--profile staging`), its tests 30 OK.
-- Mutation: 28 mutants, all killed (27 of 27 on 6aacb5b; the six gate mutants again on 6a6fdcb); table in the PR body.
-- Neighbour suites and their wall-clock reruns: see the PR body.
+- Mutation: 29 mutants; the full set on a9fb3c4 is in the PR body (earlier: 27 of 27 on 6aacb5b, G1 to G6 on 6a6fdcb).
+- Functions full suite: 2703 tests passed, 0 failed (two hook timeouts, each file green alone on the branch and on main).
+- Root unit suite: 6280 passed; the 31 failures are wall-clock (timeouts and time budgets), green alone. Root emulator
+  neighbours: 419 of 419. Details and reruns in the PR body.

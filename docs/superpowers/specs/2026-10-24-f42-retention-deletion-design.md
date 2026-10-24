@@ -290,7 +290,8 @@ hold a tombstone; the mechanism is Firestore-mode only.
   row that lands after its store's purge is purged before the acknowledgement; F34 decision records of the matter are
   anonymised and acknowledged, and the Opik request lists their exported and pending traces (not the abandoned one).
 - `functions/test/f42-retention-apply.e2e.emu.test.ts`: the default policy deletes nothing; a test policy deletes
-  old rows and keeps held ones; the watch raises the alert once; a request that falls overdue behind a full page of
+  old rows and keeps held ones; the watch raises one F43 durable alert per late request (one page, no matter id, no
+  second raise); a request that falls overdue behind a full page of
   already-alerted ones is still alerted; an old F34 decision record is anonymised by its `settledAt`, a young one kept.
 - `tests/f42-tombstone-next.e2e.firestore.test.ts`: the Next routes through the production authority path refuse or
   omit the tombstoned matter; a revoked member no longer finds the matter in search; the repositories return null.
@@ -298,7 +299,7 @@ hold a tombstone; the mechanism is Firestore-mode only.
   fails; a pending entry passes absent and present; malformed entries fail; the real tree passes.
 - `functions/test/f42-retention.units.test.ts`: the policy, inventory, store-key (shared with the Python gate) and
   acknowledgement logic.
-- Mutation: `functions/test/f42-mutants.json` (28 mutants over the tombstone check, acknowledgement completeness, legal
+- Mutation: `functions/test/f42-mutants.json` (29 mutants over the tombstone check, acknowledgement completeness, legal
   hold, authorisation and the inventory gate), run by `functions/scripts/f42-mutants.mjs` after a passing baseline.
 - Neighbour lists updated for the new routes and exports: the F09 effect-marker guard registers
   `functions/src/retention/ops.ts`, whose four `once` POST routes pass its static check with no write outside their
