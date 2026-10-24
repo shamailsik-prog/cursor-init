@@ -28,7 +28,8 @@ import * as draftOps from "../src/d4/drafts"
 import * as doctypeOps from "../src/d4/doctypeOps"
 import * as gateOps from "../src/d4/gateOps"
 import { enqueueJob } from "../src/p2/enqueue"
-import { ROUTES, createRouter } from "../src/http/router"
+import { F02_NEXT_AUTHORITY_ROUTES } from "../src/http/f02NextAuthority"
+import { ROUTES, createRouter, type Route } from "../src/http/router"
 import type { Operation } from "../src/p5/common"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
 
@@ -67,6 +68,7 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   onEventCreated: "Firestore trigger on events, no caller",
   jobWorker: "Cloud Tasks queue function, OIDC-invoked by Cloud Tasks only; acts on the job id it is given",
   jobSweeper: "scheduler, no caller",
+  ocrLegacySweep: "scheduler, no caller; drains legacy OCR rows the create trigger missed, each in its own firm (audit F04)",
   d1AutoConfirmTick: "scheduler, no caller; enqueues d1.autoconfirm for every firm, which acts only on its own firm",
   d1ConflictReindexTick: "scheduler, no caller; enqueues d1.conflict.reindex for every firm, which reconciles only its own firm's name index (audit F37)",
   d1ConflictClientWritten: "Firestore trigger, no caller; on a client written outside functions/src, breaks only that row's firm's name index (audit F37 re-audit)",
@@ -141,6 +143,44 @@ const PROBES: Record<string, Probe> = {
   getVerificationReport: { data: (a) => ({ draftId: a.draftId }), target: true },
   overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID, reason: "G2 probe override reason, long enough to pass" }), target: true },
   approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID }), target: true },
+  // Audit F02: GET and POST share a path tail, so the key is method + path. Firm-B with
+  // X-Firm-Id of firm A is refused at session bind, before the Next core (which is absent
+  // here and would otherwise answer 503 authority_core_unconfigured).
+  "GET /api/d1/matters": { data: () => ({}), target: false },
+  "POST /api/d1/matters": { data: () => ({}), target: false },
+  "GET /api/d1/documents": { data: () => ({}), target: false },
+  "POST /api/d1/documents": { data: () => ({}), target: false },
+  "GET /api/d1/document-workflow": { data: () => ({}), target: false },
+  "POST /api/d1/document-workflow": { data: () => ({}), target: false },
+  "GET /api/d1/reporting": { data: () => ({}), target: false },
+  "POST /api/d1/reporting": { data: () => ({}), target: false },
+  "GET /api/d2/court-ops": { data: () => ({}), target: false },
+  "POST /api/d2/court-ops": { data: () => ({}), target: false },
+  "GET /api/d2/ops-reporting": { data: () => ({}), target: false },
+  "POST /api/d2/ops-reporting": { data: () => ({}), target: false },
+  "GET /api/d4/drafts": { data: () => ({}), target: false },
+  "POST /api/d4/drafts": { data: () => ({}), target: false },
+  "GET /api/d4/filings": { data: () => ({}), target: false },
+  "POST /api/d4/filings": { data: () => ({}), target: false },
+  "GET /api/p5/tenancy": { data: () => ({}), target: false },
+  "POST /api/p5/tenancy": { data: () => ({}), target: false },
+}
+
+function routeTail(route: { path: string }): string {
+  return route.path.split("/").pop()!
+}
+
+/** Existing operations are unique by path tail. The F02 pair shares a tail, so the probe key is method + path. */
+function probeKey(route: { method: string; path: string }): string {
+  const tail = routeTail(route)
+  const shared = ROUTES.filter((other) => routeTail(other) === tail).length > 1
+  return shared ? `${route.method} ${route.path}` : tail
+}
+
+function isF02AuthorityRoute(route: Route): boolean {
+  return F02_NEXT_AUTHORITY_ROUTES.some(
+    (candidate) => candidate.method === route.method && candidate.path === route.path && candidate.handler === route.handler,
+  )
 }
 
 const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps] as unknown as Record<string, unknown>[]
@@ -353,10 +393,10 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
 
   it("only the HTTP api, the health probe and the job runtime functions are deployed; every route has a cross-firm probe and runs its operation", () => {
     expect(OTHER_EXPORTS).toEqual([])
-    expect(ROUTES.map((route) => route.path.split("/").pop()!).sort()).toEqual(Object.keys(PROBES).sort())
+    expect(ROUTES.map((route) => probeKey(route)).sort()).toEqual(Object.keys(PROBES).sort())
     for (const route of ROUTES) {
-      const name = route.path.split("/").pop()!
-      expect([route.path, opFor(name) === route.handler]).toEqual([route.path, true])
+      const real = opFor(routeTail(route)) === route.handler || isF02AuthorityRoute(route)
+      expect([route.method, route.path, real]).toEqual([route.method, route.path, true])
     }
   })
 
@@ -365,8 +405,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
     const router = createRouter(ROUTES)
     const failures: string[] = []
     for (const route of ROUTES) {
-      const name = route.path.split("/").pop()!
-      const probe = PROBES[name]
+      const probe = PROBES[probeKey(route)]
       let attempts = 0
       let allowed = 0
       for (const [i, role] of ROLES.entries()) {
@@ -519,6 +558,9 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: Firestore rules, every te
     // matter_client_search_index reads membership of the row's matter (fix/sec-gaps R1 #6):
     // a matter row names it in referenceId.
     ...(name === "matter_client_search_index" ? { rowType: "matter", referenceId: MATTER_A } : {}),
+    // FA-F04-003: ocr_texts reads the named document's current label. The documents row is
+    // seeded at this same id, firm A, classification public.
+    ...(name === "ocr_texts" ? { documentId: "g2-a-doc" } : {}),
   })
 
   beforeAll(async () => {

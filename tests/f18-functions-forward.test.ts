@@ -17,6 +17,7 @@ async function forward(): Promise<Forward> {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
@@ -116,6 +117,14 @@ describe("audit F18: forwardCommitteeBrain (R1, R4, R6, R7)", () => {
     expect(limited).toEqual({ kind: "refused", status: 429, code: "rate_limited", retryAfter: "30" })
     const opaque = await forwardCommitteeBrain("https://fn.example.test", REQUEST, { fetch: fakeFetch(() => new Response("upstream down", { status: 500 })).fetch })
     expect(opaque).toEqual({ kind: "refused", status: 500, code: "p1_functions_error" })
+    // FA-F18-004 M15: a code that is not a short identifier is replaced; a 64-character identifier is kept.
+    for (const code of ["Not_A_Code", "../x", "", "a".repeat(65), "1abc", "__proto__", "has space"]) {
+      const unsafe = await forwardCommitteeBrain("https://fn.example.test", REQUEST, { fetch: fakeFetch(() => json(400, { error: { code } })).fetch })
+      expect(unsafe, JSON.stringify(code)).toEqual({ kind: "refused", status: 400, code: "p1_functions_error" })
+    }
+    const maxSafe = `a${"b".repeat(63)}`
+    const kept = await forwardCommitteeBrain("https://fn.example.test", REQUEST, { fetch: fakeFetch(() => json(400, { error: { code: maxSafe } })).fetch })
+    expect(kept).toEqual({ kind: "refused", status: 400, code: maxSafe })
   })
 
   it("fails closed with an alert line when Functions is unreachable, slow or answers something that is not a committee answer", async () => {
@@ -150,6 +159,18 @@ describe("audit F18: forwardCommitteeBrain (R1, R4, R6, R7)", () => {
  * must also fit the smallest Vercel plan: Hobby, 300 s maximum with Fluid compute (vercel.com/docs/functions/
  * configuring-functions/duration, read 2026-10-18). It must be a literal, because Next reads it statically.
  */
+describe("audit F18: the forward-timeout seam (FA-F18-004 M18)", () => {
+  it("refuses to be set when NODE_ENV is production", async () => {
+    const { setForwardTimeoutForTests } = await forward()
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => setForwardTimeoutForTests(1)).toThrow(/test-only/)
+    expect(() => setForwardTimeoutForTests(null)).toThrow(/test-only/)
+    vi.stubEnv("NODE_ENV", "test")
+    expect(() => setForwardTimeoutForTests(1)).not.toThrow()
+    setForwardTimeoutForTests(null)
+  })
+})
+
 describe("audit F18 review round 1: the committee route's maxDuration covers the forward deadline", () => {
   it("exports a static maxDuration above FORWARD_TIMEOUT_MS and within the smallest plan's limit", async () => {
     const { FORWARD_TIMEOUT_MS } = await forward()

@@ -91,6 +91,14 @@ export type Job = {
   matterId: string | null
   classification: Classification
   idempotencyKey: string
+  /**
+   * F04: the OCR worker's user-visible progress on a legacy `ocr` row. Absent means the row is
+   * still waiting (the upload writer does not set it). The derived text lives in `ocr_texts`, not here.
+   */
+  ocrStatus?: "queued" | "running" | "done" | "failed"
+  ocrResultId?: string
+  ocrFailureCode?: string | null
+  ocrClassification?: Classification
 }
 
 export type Entity = {

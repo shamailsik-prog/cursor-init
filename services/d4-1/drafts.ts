@@ -129,8 +129,11 @@ export function ownCaseReferenceMatcher(matter: {
     // ("The Supreme Court in C.P. No. 12 of 2019" is not an SHC matter's C.P. No. 12 of 2019).
     if (context) {
       const mentions = courtMentions(`${context.before} ${raw} ${context.after}`)
-      // A matter with no court admits no mentioned court (fail closed, audit F13).
-      if (mentions.some((ids) => matter.courtId === null || !ids.has(matter.courtId))) return false
+      // A matter whose courtId is not a string admits no mentioned court (fail closed).
+      // FA-F13-008 M10: Set.has(null) is already false, so `!ids.has(courtId)` alone does not prove the
+      // null branch. FA-F13-025: `typeof === "string" && !ids.has` fails open for every other non-string
+      // (number, undefined, object), so a mention of another court is treated as this matter's own case.
+      if (mentions.some((ids) => typeof matter.courtId !== "string" || !ids.has(matter.courtId))) return false
     }
     return true
   }

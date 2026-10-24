@@ -1,4 +1,4 @@
-import { FieldPath, Timestamp, type DocumentData, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
 import { decide } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../d1/pagination"
@@ -7,9 +7,10 @@ import { logFailure } from "../log"
 import type { Caller } from "../p5/auth"
 import { isSafeDocId, type Data, type FirmOperation, type Session } from "../p5/common"
 import { requirePermission } from "../p5/permission"
-import { DISPATCH_GRACE_MS, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
+import { DISPATCH_GRACE_MS, JOB_ENGINE, JOB_STATUSES, MAX_MANUAL_RETRIES } from "./constants"
 import { runtimeDeps } from "./dispatch"
 import { jobsRef, stageJobUpdate, type JobActorNote, type JobRow } from "./enqueue"
+import { legacyJobIdFromEngine, OCR_JOB_TYPE } from "./ocrJob"
 import { handlerFor } from "./registry"
 import { atMatterLabel, jobView, visibilityOf, type JobView, type MatterNow, type Visibility } from "./view"
 import { appendLog } from "./worker"
@@ -371,8 +372,24 @@ export const cancelJobOp: FirmOperation<JobView> = {
         updatedAt: at,
         logs: appendLog(job, "cancelled", typeof job.attempts === "number" ? job.attempts : 0, now),
       }
+      const legacyId = job.jobType === OCR_JOB_TYPE ? legacyJobIdFromEngine(job) : undefined
+      let legacyClose: { ref: DocumentReference; patch: { ocrStatus: "failed"; ocrFailureCode: "cancelled" } } | undefined
+      if (legacyId !== undefined) {
+        const legacyRef = jobsRef().doc(legacyId)
+        const legacySnap = await tx.get(legacyRef)
+        const legacy = legacySnap.data()
+        if (
+          legacySnap.exists &&
+          legacy?.firmId === caller.firmId &&
+          legacy.engine !== JOB_ENGINE &&
+          legacy.ocrStatus !== "done"
+        ) {
+          legacyClose = { ref: legacyRef, patch: { ocrStatus: "failed", ocrFailureCode: "cancelled" } }
+        }
+      }
       await audit.stage(tx, "allow", "ok")
       stageJobUpdate(tx, jobsRef().doc(jobId), update)
+      if (legacyClose !== undefined) tx.update(legacyClose.ref, legacyClose.patch)
       return jobView(jobId, { ...job, ...update }, "full", { logs: true })
     })
     audit.committed()

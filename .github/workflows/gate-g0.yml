@@ -189,6 +189,8 @@ jobs:
         run: npm --prefix functions ci && npm --prefix functions run build
       - name: F02 console Functions client (Auth + Firestore emulators)
         run: npm run test:f02-console-auth
+      - name: F02 Next authority (Auth + Firestore emulators)
+        run: npm run test:f02-authority
       - name: F02 Functions HTTP emulator
         run: npm run test:f02-functions-http
       - name: Install Playwright Chromium
@@ -268,6 +270,8 @@ jobs:
         env:
           # pull_request: the PR's base commit; push: origin/main (present because fetch-depth is 0).
           BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+          # Rule (f) AST needs node_modules; run check_next_ai_egress.py --rule-f-ast-only after Install.
+          G0_STATIC_ONLY: "1"
         run: bash ci_gates/gate_g0.sh
       # Audit F39: the pinned npm's own `npm ci` validator (dry run, no install) accepts every lockfile, and the npm
       # here is inside the pin (ci_gates/check_lockfiles.py; G-0 [18] runs its static half).
@@ -278,6 +282,9 @@ jobs:
       - name: Install
         if: ${{ !cancelled() }}
         run: npm ci && npm --prefix functions ci
+      - name: Gate F18 eve model AST (G-0 [19] rule f; needs node_modules)
+        if: ${{ !cancelled() }}
+        run: python3 ci_gates/check_next_ai_egress.py --rule-f-ast-only
       - name: Gate G-1 spine
         if: ${{ !cancelled() }}
         run: python3 ci_gates/gate_g1.py

@@ -34,11 +34,13 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
+    expect(Object.keys(index).sort()).toEqual(["api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1ReservationReconciler"])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
       eventFilterPathPatterns: { document: "jobs/{jobId}" },
+      // FA-F04-001: a thrown drain is redelivered. Permanent causes never throw.
+      retry: true,
     })
     expect(index.onEventCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -63,6 +65,11 @@ describe("P2 boot (P3-5, P3-8)", () => {
       expect([name, index[name].__endpoint.region]).toEqual([name, ["asia-south1"]])
       expect(index[name].__endpoint.eventTrigger).toMatchObject({ eventType: "google.cloud.firestore.document.v1.written", eventFilterPathPatterns: { document: doc }, retry: true })
     }
+    // FA-F04-007: legacy OCR rows the create trigger never drained are swept every minute.
+    // No retry count: the next minute's sweep is the retry, same as the engine sweeper.
+    expect(index.ocrLegacySweep.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 1 minutes" } })
+    expect(index.ocrLegacySweep.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
+    expect([index.ocrLegacySweep.__endpoint.httpsTrigger, index.ocrLegacySweep.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     // The sweeper sets no retry count: the next minute's sweep is its retry.
     expect(index.jobSweeper.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect(index.jobSweeper.__endpoint.scheduleTrigger).toMatchObject({ schedule: "every 1 minutes" })
@@ -83,7 +90,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex"])
+    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr"])
     expect(SUBSCRIBERS).toEqual([])
   })
 

@@ -4,6 +4,9 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
+import type { Matter } from "@/platform/spine/store"
+import { ownCaseReferenceMatcher } from "@/services/d4-1/drafts"
 import {
   MATTER_STAGES,
   MatterShapeError,
@@ -171,7 +174,7 @@ describe("F13: the canonical status set includes closed", () => {
 
 // FA-F13-008: the two read-side null-court paths, each guarded by a test that fails on its revert (mutants M8, M10).
 describe("F13 re-audit: null-court read paths", () => {
-  const courtless = {
+  const base: Matter = {
     id: "m_null_court",
     firmId: "firm_a",
     clientId: "client_a",
@@ -181,19 +184,45 @@ describe("F13 re-audit: null-court read paths", () => {
     courtId: null,
     caseNumber: null,
     caseNumberStatus: "pending",
-  } as const
+  }
 
-  it("M8: the search index row of a matter with no court and no case number has an empty detail", async () => {
-    const { buildMatterSearchIndexRow } = await import("@/platform/persistence/matterClientSearchIndex")
-    const row = buildMatterSearchIndexRow(courtless as never, { updatedAt: 1 })
+  it("M8: the search index row of a matter with no court and no case number has an empty detail", () => {
+    // Revert of `?? ""` (matterClientSearchIndex.ts) leaves detail null. A case number wins over the court,
+    // the court is used only when the case number is null, and an empty case number does not fall through.
+    const row = buildMatterSearchIndexRow(base, { updatedAt: 1 })
     expect(row.detail).toBe("")
     expect(row.tags).not.toContain("null")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: "CP 12/2019", courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("CP 12/2019")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: null, courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("SHC")
+    expect(buildMatterSearchIndexRow({ ...base, caseNumber: "", courtId: "SHC" }, { updatedAt: 1 }).detail).toBe("")
   })
 
-  it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", async () => {
-    const { ownCaseReferenceMatcher } = await import("@/services/d4-1/drafts")
-    const isOwn = ownCaseReferenceMatcher({ courtId: null, caseNumber: "CP 12/2019" })
+  it("M10: a matter with no court admits no court mentioned around its recorded number (fails closed)", () => {
+    // Set.has(null) is false, so `!ids.has(courtId)` already fail-closes on any mention and a revert of
+    // `courtId === null ||` is invisible. The clause is load-bearing only when a non-string court id is
+    // not treated as excluded by set membership. This pins that expression and the behaviour around it.
+    const courtless = ownCaseReferenceMatcher({ courtId: null, caseNumber: "CP 12/2019" })
+    expect(courtless("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(courtless("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(false)
+    expect(courtless("CP 12/2019", { before: "As recorded,", after: "the suit continues" })).toBe(true)
+    expect(courtless("CP 12/2019")).toBe(true)
+    const shc = ownCaseReferenceMatcher({ courtId: "SHC", caseNumber: "CP 12/2019" })
+    expect(shc("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
+    expect(shc("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(true)
+    const drafts = readFileSync(path.join(path.resolve(__dirname, ".."), "services/d4-1/drafts.ts"), "utf8")
+    // FA-F13-025: the null/non-string branch must be explicit. `!ids.has` alone is equivalent for these
+    // values because Set.has returns false, and `typeof === "string" &&` fails open for every non-string
+    // other than null.
+    expect(drafts).toContain('typeof matter.courtId !== "string" || !ids.has(matter.courtId)')
+  })
+
+  it.each([
+    ["a number", 12],
+    ["undefined", undefined],
+    ["an object", { id: "SHC" }],
+  ])("FA-F13-025: courtId as %s never matches a mentioned court", (_label, courtId) => {
+    const isOwn = ownCaseReferenceMatcher({ courtId: courtId as never, caseNumber: "CP 12/2019" })
     expect(isOwn("CP 12/2019", { before: "The Supreme Court in", after: "held" })).toBe(false)
-    expect(isOwn("CP 12/2019", { before: "The Sindh High Court in", after: "held" })).toBe(false)
+    expect(isOwn("CP 12/2019", { before: "As recorded,", after: "the suit continues" })).toBe(true)
   })
 })

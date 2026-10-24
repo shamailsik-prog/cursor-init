@@ -6,6 +6,8 @@ import { z } from "zod"
 import { PublicError } from "@/platform/http/publicError"
 import { actionOf, getQuery, isAction, refuseUndeclaredBody } from "@/platform/http/surface"
 import { withSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_MATTERS } from "@/platform/authority/f02Routes"
 import { allPostActionsExcept, gateByFlag } from "@/platform/flags/routeGate"
 import { REQUEST_FAILED_CODE, publicErrorMessage } from "@/platform/http/errors"
 import { isClassification, type Classification } from "@/platform/p1/types"
@@ -23,6 +25,7 @@ import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositori
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import { buildMatterSearchIndexRow } from "@/platform/persistence/matterClientSearchIndex"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
+import { primeFirmUsers } from "@/platform/d1/primeFirmUsers"
 import {
   cacheMember,
   MembershipAssignmentError,
@@ -63,19 +66,6 @@ function ensureClientIdentityInFirm(clientId: string, firmId: string) {
   }
 }
 
-/**
- * FA-F13-001: the users a request names (a new matter's client and members, an added member) are resolved through the
- * firm-scoped users repository on a cache miss, not only from the process's session cache. A record of another firm,
- * or one the identity policy would refuse (not `active: true`), is not cached, so the checks below refuse it as before.
- */
-async function primeFirmUsers(store: ReturnType<typeof getRuntimeStore>, repo: SpineRepositories, firmId: string, ids: Iterable<string>) {
-  for (const id of ids) {
-    if (!id || store.users.has(id)) continue
-    const row = await repo.users.get(id, firmId)
-    if (row && row.firmId === firmId && row.active === true) store.users.set(id, row.id === id ? row : { ...row, id })
-  }
-}
-
 async function ensureMatterAccess(
   repos: SpineRepositories,
   actorId: string,
@@ -97,7 +87,7 @@ async function ensureMatterAccess(
 }
 
 export async function GET(request: Request) {
-  return withSession(request, handleGet, { surface: MATTERS_SURFACE })
+  return withSession(request, handleGetAuthorised, { surface: MATTERS_SURFACE })
 }
 
 async function handleGet(request: Request) {
@@ -138,13 +128,16 @@ async function handleGet(request: Request) {
   })
 }
 
+const handleGetAuthorised = withF02Authority(F02_MATTERS, "GET", handleGet)
+
 export async function POST(request: Request) {
-  return withSession(request, handlePostGated, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
+  return withSession(request, handlePostAuthorised, { maxBodyBytes: DEFAULT_JSON_BODY_BYTES, surface: MATTERS_SURFACE })
 }
 
 // Phase 2a final review I3: the check-free `create` action is frozen behind LEGACY_D1_NEXT_WRITES
 // (default off; Erratum E-40). Every other action is unchanged.
 const handlePostGated = gateByFlag("LEGACY_D1_NEXT_WRITES", handlePost, allPostActionsExcept(["create"]))
+const handlePostAuthorised = withF02Authority(F02_MATTERS, "POST", handlePostGated)
 
 async function handlePost(request: Request) {
   const store = getRuntimeStore()
@@ -361,8 +354,9 @@ async function handlePost(request: Request) {
       const updatedMatter = store.matters.get(parsed.matterId)
       if (updatedMatter) {
         // FA-F13-011: the check above is a fast path; the repository re-checks `closed` in the write's transaction.
+        let persisted: Awaited<ReturnType<typeof repo.matters.recordCaseNumber>>
         try {
-          await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
+          persisted = await repo.matters.recordCaseNumber(parsed.matterId, actor.firmId, {
             caseNumber: updatedMatter.caseNumber,
             caseNumberStatus: updatedMatter.caseNumberStatus,
             courtId: updatedMatter.courtId,
@@ -375,7 +369,13 @@ async function handlePost(request: Request) {
           }
           throw err
         }
-        await repo.reportingIndex.upsert(buildMatterSearchIndexRow(updatedMatter))
+        // FA-F13-017: index the matter the transaction stored, not the pre-transaction cached copy, so a court the
+        // transaction refused to write (a set court is never replaced) is never published to the search index.
+        const stored = persisted ?? (await repo.matters.get(parsed.matterId, actor.firmId))
+        if (stored) {
+          store.matters.set(stored.id, stored)
+          await repo.reportingIndex.upsert(buildMatterSearchIndexRow(stored))
+        }
       }
       const newFollowUps = store.followUps.filter((row) => !priorFollowUpIds.has(row.id))
       for (const row of newFollowUps) {

@@ -4,6 +4,8 @@ import { parseLimit, parseCursor } from "@/platform/http/pagination"
 import { fingerprintOf } from "@/platform/http/validation"
 import { PublicError } from "@/platform/http/publicError"
 import { withSession, type HandlerSession } from "@/platform/http/withSession"
+import { withF02Authority } from "@/platform/authority/f02Gate"
+import { F02_FILINGS } from "@/platform/authority/f02Routes"
 import { gateByFlag } from "@/platform/flags/routeGate"
 import { isFilingsCoreRequest } from "@/platform/flags/filingsCore"
 import { isFeatureEnabled } from "@/platform/flags/featureFlags"
@@ -3691,9 +3693,10 @@ async function recomputeClosureComplianceState(
 // Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
 // while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
 const handleGetGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handleGet, isFilingsCoreRequest)
+const handleGetAuthorised = withF02Authority(F02_FILINGS, "GET", handleGetGated)
 
 export async function GET(request: Request) {
-  return withSession(request, handleGetGated)
+  return withSession(request, handleGetAuthorised)
 }
 
 async function handleGet(request: Request) {
@@ -7110,9 +7113,10 @@ async function handleGet(request: Request) {
 // Erratum E-24 (L18 §9.1 rule 4): only the core package path (isFilingsCoreRequest) stays live
 // while LEGACY_GOVERNANCE_CHAINS is off. The gate runs inside withSession, so auth applies first.
 const handlePostGated = gateByFlag("LEGACY_GOVERNANCE_CHAINS", handlePost, isFilingsCoreRequest)
+const handlePostAuthorised = withF02Authority(F02_FILINGS, "POST", handlePostGated)
 
 export async function POST(request: Request) {
-  return withSession(request, handlePostGated)
+  return withSession(request, handlePostAuthorised)
 }
 
 async function handlePost(request: Request, session: HandlerSession | null) {

@@ -1,3 +1,11 @@
+import {
+  DocumentMalformedError,
+  canonicalDocumentForCreate,
+  partitionFirmDocuments,
+  readDocumentRecord,
+  type DroppedDocument,
+} from "@/platform/d1/documentRecord"
+import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -473,19 +481,51 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
     },
     documents: {
       async create(row) {
-        await setById(db, "documents", row)
+        await setById(db, "documents", canonicalDocumentForCreate(row))
       },
+      // FA-F13-004: every stored row through the one validator (platform/d1/documentRecord.ts), not a blind cast.
+      // A row that exists but is malformed throws DocumentMalformedError (Codex P1 on #99): a caller must never mistake
+      // it for an absent row and fall back to a cached copy.
       async get(id, firmId) {
-        return getById<DocumentRecord>(db, "documents", id, firmId)
+        const row = await getById<DocumentRecord>(db, "documents", id, firmId)
+        if (!row) return null
+        const doc = readDocumentRecord(id, row)
+        if (!doc) throw new DocumentMalformedError(id)
+        return doc
       },
+      // Codex P2 on #99: the stored row and the merged result are both validated, in one transaction, BEFORE the write,
+      // so a refused update leaves storage unchanged.
       async update(id, firmId, patch) {
-        return updateById<DocumentRecord>(db, "documents", id, patch, firmId)
+        const firm = requireCallerFirmId(firmId, "documents.update")
+        const patchFirm = (patch as { firmId?: string }).firmId
+        if (patchFirm !== undefined && patchFirm !== firm) return null
+        return runTransaction(db, async (tx) => {
+          const ref = doc(db, "documents", id)
+          const snap = await tx.get(ref)
+          if (!snap.exists()) return null
+          const stored = snap.data() as Record<string, unknown>
+          if (stored.firmId !== firm) return null
+          if (!readDocumentRecord(id, stored)) throw new DocumentMalformedError(id)
+          const fields: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(patch)) if (v !== undefined && k !== "id") fields[k] = v
+          const next = readDocumentRecord(id, { ...stored, ...fields })
+          if (!next) throw new DocumentMalformedError(id)
+          tx.update(ref, fields)
+          return next
+        })
       },
       async delete(id) {
         await deleteDoc(doc(db, "documents", id))
       },
       async listByFirm(firmId) {
-        return listByFirm<DocumentRecord>(db, "documents", firmId)
+        const page = await listAllRowsByFirm<DocumentRecord & { id: string }>(db, "documents", firmId)
+        const { items, droppedDocuments } = partitionFirmDocuments(page.items)
+        const listed = asFirmScopedList({ ...page, items }) as DocumentRecord[] & {
+          droppedDocuments: DroppedDocument[]
+          firmScopedMeta: { truncated: boolean; nextCursor: string | null }
+        }
+        listed.droppedDocuments = droppedDocuments
+        return listed
       },
     },
     drafts: {
@@ -2252,14 +2292,41 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
       },
     },
     reportingIndex: {
+      // FA-F13-004: the stored row and the row to write are both validated, in one transaction, BEFORE the write,
+      // so a refused upsert leaves storage unchanged. A malformed stored row is not repaired by a later upsert.
       async upsert(row) {
-        await setDoc(doc(db, "matter_client_search_index", row.id), row)
+        const id = typeof row?.id === "string" ? row.id : ""
+        if (!id) throw new SearchIndexMalformedError("unknown")
+        const ref = doc(db, "matter_client_search_index", id)
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref)
+          if (snap.exists() && !readMatterClientSearchIndexRow(id, snap.data())) throw new SearchIndexMalformedError(id)
+          const next = readMatterClientSearchIndexRow(id, row)
+          if (!next) throw new SearchIndexMalformedError(id)
+          tx.set(ref, next)
+        })
       },
+      // A row that exists but is malformed throws SearchIndexMalformedError: a caller must never mistake it for an
+      // absent row and fall back to a cached copy.
+      // FA-F13-020: firmId's type is checked before the firm gate. getById compares `firmId !== firm` first, so a
+      // number, null, boolean, or blank firmId comes back as null (absence) and the reader never runs.
       async get(id, firmId) {
-        return getById<MatterClientSearchIndexRow>(db, "matter_client_search_index", id, firmId)
+        const firm = requireCallerFirmId(firmId, "reportingIndex.get")
+        const snap = await getDoc(doc(db, "matter_client_search_index", id))
+        if (!snap.exists()) return null
+        const data = (snap.data() ?? {}) as { firmId?: unknown }
+        if (typeof data.firmId !== "string" || data.firmId.trim() === "") throw new SearchIndexMalformedError(id)
+        if (data.firmId !== firm) return null
+        const parsed = readMatterClientSearchIndexRow(id, data)
+        if (!parsed) throw new SearchIndexMalformedError(id)
+        return parsed
       },
       async listByFirm(firmId) {
-        return listByFirm<MatterClientSearchIndexRow>(db, "matter_client_search_index", firmId)
+        const page = await listAllRowsByFirm<StoredRow & { id: string }>(db, "matter_client_search_index", firmId)
+        const items = page.items
+          .map((row) => readMatterClientSearchIndexRow(row.id, row))
+          .filter((row): row is MatterClientSearchIndexRow => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     draftTemplateAnalytics: {

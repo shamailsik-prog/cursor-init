@@ -1,4 +1,5 @@
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
+import { canonicalDocumentForCreate, partitionFirmDocuments, type DroppedDocument } from "@/platform/d1/documentRecord"
 import type {
   DocumentRecord,
   DraftRecord,
@@ -171,6 +172,7 @@ import type {
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgersOutboundRegistryAttestationLedgersPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow,
 } from "@/platform/spine/store"
 import { storedUserRecord } from "@/platform/spine/store"
+import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
@@ -238,7 +240,8 @@ export type DocumentRepository = {
   get(id: string, firmId: string): Promise<DocumentRecord | null>
   update(id: string, firmId: string, patch: Partial<DocumentRecord>): Promise<DocumentRecord | null>
   delete(id: string): Promise<void>
-  listByFirm(firmId: string): Promise<DocumentRecord[]>
+  /** Valid rows only. `droppedDocuments` names each same-firm row the reader refused. */
+  listByFirm(firmId: string): Promise<DocumentRecord[] & { droppedDocuments: DroppedDocument[] }>
 }
 
 export type DraftRepository = {
@@ -2013,7 +2016,8 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     },
     documents: {
       async create(row) {
-        store.documents.set(row.id, row)
+        const doc = canonicalDocumentForCreate(row)
+        store.documents.set(doc.id, doc)
       },
       async get(id, firmId) {
         return firmScoped(store.documents.get(id), firmId)
@@ -2030,7 +2034,11 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         store.documents.delete(id)
       },
       async listByFirm(firmId) {
-        return [...store.documents.values()].filter((row) => row.firmId === firmId)
+        const rows = [...store.documents.values()].filter((row) => row.firmId === firmId)
+        const { items, droppedDocuments } = partitionFirmDocuments(rows)
+        const listed = items as DocumentRecord[] & { droppedDocuments: DroppedDocument[] }
+        listed.droppedDocuments = droppedDocuments
+        return listed
       },
     },
     drafts: {
@@ -3200,14 +3208,33 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
       },
     },
     reportingIndex: {
+      // FA-F13-004: same contract as the Firestore adapter. A malformed stored row is not repaired, and a refused
+      // upsert leaves the map unchanged.
       async upsert(row) {
-        store.matterClientSearchIndex.set(row.id, row)
+        const id = typeof row?.id === "string" ? row.id : ""
+        if (!id) throw new SearchIndexMalformedError("unknown")
+        const existing = store.matterClientSearchIndex.get(id)
+        if (existing && !readMatterClientSearchIndexRow(id, existing)) throw new SearchIndexMalformedError(id)
+        const next = readMatterClientSearchIndexRow(id, row)
+        if (!next) throw new SearchIndexMalformedError(id)
+        store.matterClientSearchIndex.set(id, next)
       },
+      // FA-F13-020: same order as the Firestore adapter. firmScoped compares firmId with === first, so a non-string
+      // or blank firmId is null (absence) and the reader never runs.
       async get(id, firmId) {
-        return firmScoped(store.matterClientSearchIndex.get(id), firmId)
+        const stored = store.matterClientSearchIndex.get(id) as { firmId?: unknown } | undefined
+        if (!stored) return null
+        if (typeof stored.firmId !== "string" || stored.firmId.trim() === "") throw new SearchIndexMalformedError(id)
+        if (stored.firmId !== firmId) return null
+        const parsed = readMatterClientSearchIndexRow(id, stored)
+        if (!parsed) throw new SearchIndexMalformedError(id)
+        return parsed
       },
       async listByFirm(firmId) {
-        return [...store.matterClientSearchIndex.values()].filter((row) => row.firmId === firmId)
+        return [...store.matterClientSearchIndex.values()]
+          .filter((row) => row.firmId === firmId)
+          .map((row) => readMatterClientSearchIndexRow(row.id, row))
+          .filter((row): row is MatterClientSearchIndexRow => row !== null)
       },
     },
     draftTemplateAnalytics: {

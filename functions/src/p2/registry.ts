@@ -4,6 +4,7 @@ import { autoConfirmHandler } from "../d1/entity/autoConfirmJob"
 import { nameReindexHandler } from "../d1/conflict/reindexJob"
 import { unmergeChecksHandler, unmergeLinksHandler } from "../d1/entity/unmergeJobs"
 import { diagnosticHandler } from "./diagnostic"
+import { ocrHandler } from "./ocrJob"
 import type { Subscriber } from "./fanout"
 
 /**
@@ -56,13 +57,14 @@ export type JobHandler<P = unknown> = {
   run(ctx: JobContext<P>): Promise<JobResult>
 }
 
-/** Production job types: the diagnostic type (P3-17), the 3b un-merge saga types (P3-24), the 3c auto-confirm job (P3-43) and the F37 name index reconciliation. */
+/** Production job types: the diagnostic type (P3-17), the 3b un-merge saga types (P3-24), the 3c auto-confirm job (P3-43), the F37 name index reconciliation and the F04 OCR worker. */
 export const JOB_HANDLERS: ReadonlyMap<string, JobHandler> = new Map<string, JobHandler>([
   [diagnosticHandler.jobType, diagnosticHandler as JobHandler],
   [unmergeLinksHandler.jobType, unmergeLinksHandler as JobHandler],
   [unmergeChecksHandler.jobType, unmergeChecksHandler as JobHandler],
   [autoConfirmHandler.jobType, autoConfirmHandler as JobHandler],
   [nameReindexHandler.jobType, nameReindexHandler as JobHandler],
+  [ocrHandler.jobType, ocrHandler as JobHandler],
 ])
 
 /** Test-only registrations (e.g. a saga-flagged type). Never set in production code. */
