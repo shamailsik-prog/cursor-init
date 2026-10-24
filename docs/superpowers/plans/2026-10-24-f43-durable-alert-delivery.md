@@ -43,6 +43,15 @@ The seventh escalation test (a claimed page is delivered once; a lapsed claim ag
 
 Full functions suite at 73a10ff on a fresh emulator (`firebase emulators:exec`, `CI=true`, `--no-cache`): 103 files passed, 1 skipped (`f37-fu-trigger-pipeline`, Functions-emulator only, as on main); 2,562 tests passed, 1 skipped, 0 failed. An earlier full run on a persistent emulator failed 10 sweeper tests on rows left by an earlier run of that suite; `origin/main` failed the same file on the same emulator (16), and both pass on a fresh one.
 
+### PR #120 review (Codex), test first
+
+| Fix | Test | before the fix | after the fix |
+| --- | --- | --- | --- |
+| P1, thread 4367607817: log filters on `cloud_function`, but every export is v2 (`cloud_run_revision`) | `functions/test/deploy-contract-alert-runtime.test.ts` | 1/1 FAIL (rendered filter `["cloud_function"]`, expected `["cloud_run_revision"]`) | 1/1 PASS; F32 deploy-contract tests 17/17, Python gate tests 30 OK, root F32 tests 23/23 |
+| P2, thread 4367607820: each checker query read a fixed first 500 rows, no cursor | `functions/test/f43-alerts-checker-paging.e2e.emu.test.ts` | 3/3 FAIL (firm B behind 520 of firm A's rows is never alerted; no page constants) | 3/3 PASS; with the other F43 files 6 files, 30/30 |
+
+Ruling for P1: `cloud_run_revision` alone, since every export's `__endpoint.platform` is `gcfv2`; the test fails if any export's generation stops matching the filters. The renderer change also repairs F32's existing alert policies (they could never match).
+
 ## Mutation ledger
 
 Hand mutants, one exact edit each, run against their targeted files on the emulator (runner and logs kept in the builder's scratchpad). 18 of 18 killed. M16 survived the first pass: the concurrency assertion did not force two delivery passes onto one claimed page; the test "a page another run has claimed is not delivered twice; a claim that lapsed is delivered again" was added and kills it.
@@ -67,5 +76,17 @@ Hand mutants, one exact edit each, run against their targeted files on the emula
 | M16 | delivery claim ignores the page's status | escalation | survived, then killed after the added test (1 / 7) |
 | M17 | saga threshold 60 → 59 minutes | P2 | killed (1 / 8) |
 | M18 | unresolved-reservation cutoff 1 ms early | P1 | killed (1 / 5) |
+
+PR #120 review fixes (Codex), each test first:
+
+| # | Mutant | Targeted files | Result |
+| --- | --- | --- | --- |
+| M19 | checker cursor never advances (each run restarts at the oldest row) | paging | killed (2 / 3) |
+| M20 | no wrap: at a query's end the cursor stays on its last row | paging | killed (2 / 3) |
+| M21 | page bound ignored (a run reads every page) | paging | killed (2 / 3) |
+| M22 | filters back on `cloud_function` | alert-runtime filter | killed (1 / 1) |
+| M23 | filters name both resource types although no export is v1 | alert-runtime filter | killed (1 / 1) |
+
+M06, M17 and M18 (the checker's cutoffs) were re-run against the paged checker: all killed (1 / 8, 1 / 8, 1 / 5). Total 23 of 23 killed.
 
 Known redundancy (recorded, not a defect): the escalation fence has two independent checks (the level the query saw, and the deadline); with the new deadline always computed from now, either one alone stops a second step, so a mutant removing only one survives by design. M08 removes both.

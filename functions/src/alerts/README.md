@@ -18,6 +18,8 @@ Spec: `docs/superpowers/specs/2026-10-24-f43-durable-alert-delivery-design.md`. 
 
 An alert carries codes, ids, integers and document references only (`detail`, `subjectKey`, `ref`), never a payload, a note or client text.
 
+**How the checker reads a backlog.** Each of its five queries (waiting jobs, running jobs past their lease, sagas, held reservations, quarantined reservations) is read oldest first in pages of 100, at most 5 pages per query per run, from a cursor kept in `platform/opsAlertChecker` (server-only). After a query's last page the cursor is cleared and the next run starts again from the oldest row. So in a backlog of N rows every row, and every firm behind another, is read within ceil(N / 500) runs. A checker alert's counts (`waiting`, `inProgress`, `unresolved`, `quarantined`) are of the rows that run read, not the whole backlog. Deleting `platform/opsAlertChecker` is safe: the checker restarts every query from the oldest row.
+
 ## Lifecycle
 
 - **Raise.** The first raise creates the alert `open` at level 0 (owner: the on-call operator) with an acknowledgment deadline (critical 15 minutes, high 30 minutes, warning 4 hours) and one page. Later raises count it (`count`, `lastSeenAt`) and page no one. A raise after `resolved` reopens it as a new episode at level 0 with a new page.
@@ -26,7 +28,7 @@ An alert carries codes, ids, integers and document references only (`detail`, `s
 
 ## Log lines and their policies
 
-All three are ERROR lines registered in `infra/deploy-manifest.json` and rendered into `infra/terraform/alerts.tf`, which notifies the on-call channel (`var.oncall_email`).
+All three are ERROR lines registered in `infra/deploy-manifest.json` and rendered into `infra/terraform/alerts.tf`, which notifies the on-call channel (`var.oncall_email`). The policies match `resource.type="cloud_run_revision"`, the resource second-generation functions log under (every export here is second generation); `functions/test/deploy-contract-alert-runtime.test.ts` fails if that stops matching the functions' runtime.
 
 - `ops_alert.notified` — one per page delivered (`pageId`, `alertId`, `firmId`, `condition`, `severity`, `level`, `ownerRole`, `episode`, `users`, `fallback`). This is the page: read the alert (`ops_alerts/{alertId}`, or `listAlerts` as a partner of the firm), act, then acknowledge or resolve it.
 - `ops_alert.raise_failed` — an alert could not be written (`condition`, `firmId`, `subjectKey`, `code`). The condition is real and its durable record is missing, usually because Firestore itself is failing. The sweeper or the checker derives it again on its next run; if the line repeats, treat the Firestore outage as the incident.

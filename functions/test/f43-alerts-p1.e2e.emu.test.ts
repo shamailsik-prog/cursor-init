@@ -73,13 +73,15 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
     if (spentMicroUsd !== undefined) await monthRef(firmId, MONTH).set({ firmId, monthKey: MONTH, spentMicroUsd })
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPIK_BASE_URL", undefined)
     vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", undefined)
     setProviderConfigForTests(null)
     resetSeam()
     stubTransport()
     firmId = uniq("firm")
+    // The checker resumes each query from a cursor in the shared emulator; start this test's runs from the oldest row.
+    await adminDb().collection("platform").doc("opsAlertChecker").delete()
   })
 
   afterEach(async () => {

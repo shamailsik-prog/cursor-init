@@ -86,6 +86,8 @@ describe.skipIf(!EMULATORS)("audit F43: P2 faults raise durable alerts (e2e)", (
     T0 = nextOrigin()
     clock = new FakeClock(T0)
     firmId = await newFirm()
+    // The checker resumes each query from a cursor in the shared emulator; start this test's runs from the oldest row.
+    await adminDb().collection("platform").doc("opsAlertChecker").delete()
   })
 
   afterEach(async () => {
@@ -297,6 +299,8 @@ describe.skipIf(!EMULATORS)("audit F43: a stuck un-merge saga raises saga.age (e
 
   it("an un-merge whose jobs never run is in progress for 60 minutes: one saga.age alert names the merge event", { timeout: E2E_TIMEOUT_MS }, async () => {
     firmId = uniq("firm")
+    // The checker resumes each query from a cursor in the shared emulator; start this test's runs from the oldest row.
+    await adminDb().collection("platform").doc("opsAlertChecker").delete()
     await adminDb().collection("firms").doc(firmId).set({ name: "F", plan: "internal", clientPrefix: "SKD", matterPrefix: "NHS" })
     const claims = (role: string) => ({ firmId, role, clearanceLevel: "privileged-restricted" })
     const partner = await mintIdToken(claims("partner"))
