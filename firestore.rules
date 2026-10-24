@@ -267,6 +267,10 @@ service cloud.firestore {
     // Audit F07, F08: the AI spend reservations (one per provider call, holding its worst case until settled or
     // released by the lease reconciler) are written and read by Cloud Functions only.
     match /ai_reservations/{id} { allow read, write: if false; }
+    // Audit F43: the operational alerts and their page outbox are written and read by Cloud Functions only. Partners
+    // read the worklist through the alert routes (P5: alert.read); a page reaches a person as a notifications row.
+    match /ops_alerts/{id} { allow read, write: if false; }
+    match /ops_alert_notifications/{id} { allow read, write: if false; }
     match /evidence_items/{id} {
       allow read: if sameFirm() && memberReader(resource.data.matterId) && cleared(resource.data.classification);
       allow create: if sameFirmNew() && isAuthor() && clearedNew() && isMember(request.resource.data.matterId);

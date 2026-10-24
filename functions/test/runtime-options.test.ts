@@ -21,7 +21,7 @@ describe("F32 runtime options on every export", () => {
     vi.resetModules()
   })
 
-  it("pins memory, concurrency, identity, caps and ingress on all 14 exports", async () => {
+  it("pins memory, concurrency, identity, caps and ingress on all 16 exports", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<
       string,
@@ -41,6 +41,8 @@ describe("F32 runtime options on every export", () => {
     >
     const names = Object.keys(index).sort()
     expect(names).toEqual([
+      "alertChecker",
+      "alertEscalator",
       "api",
       "auditOutboxReconciler",
       "d1AutoConfirmTick",

@@ -20,6 +20,7 @@ import { getEntityOp, listAliasesOp, listReviewQueueOp } from "../d1/entity/read
 import { confirmMergeOp, disputeLinkOp, rejectLinkOp } from "../d1/entity/ops"
 import { unmergeEntityOp } from "../d1/entity/unmerge"
 import { cancelJobOp, getJobOp, listJobsOp, retryFailedJobOp } from "../p2/ops"
+import { acknowledgeAlertOp, listAlertsOp, operatorAlertActionOp, resolveAlertOp } from "../alerts/ops"
 import { committeeBrainOp, getAiUsageOp, setAiKillSwitchOp, setBudgetAlertsOp, setPlatformAiKillSwitchOp } from "../p1/ops"
 import { createDraftOp, getDraftOp, listDraftVersionsOp, listDraftsOp, restoreDraftVersionOp, saveDraftVersionOp } from "../d4/drafts"
 import { getTypeProfileOp, listDocumentTypesOp } from "../d4/doctypeOps"
@@ -63,6 +64,8 @@ const D1_MATTER = "/api/d1/matter"
 const D1_ENTITY = "/api/d1/entity"
 /** P2 job engine (P3-10): CORE, no layer flag. */
 const PLATFORM_JOBS = "/api/platform/jobs"
+/** Operational alerts (audit F43): CORE, no layer flag. */
+const PLATFORM_ALERTS = "/api/platform/alerts"
 /** P1 AI gateway (P3-60): CORE, no layer flag. */
 const PLATFORM_BRAIN = "/api/platform/brain"
 /** D4-1 drafting (P4-10): the draft store, the partner override and the approval stand-in. */
@@ -129,6 +132,11 @@ export const ROUTES: readonly Route[] = [
   get(`${PLATFORM_JOBS}/getJob`, getJobOp),
   post(`${PLATFORM_JOBS}/retryFailedJob`, retryFailedJobOp),
   post(`${PLATFORM_JOBS}/cancelJob`, cancelJobOp),
+  // Audit F43: the partner worklist and the owning role's acknowledgment; the operator's route is firmless (platformAdmin).
+  get(`${PLATFORM_ALERTS}/listAlerts`, listAlertsOp),
+  post(`${PLATFORM_ALERTS}/acknowledgeAlert`, acknowledgeAlertOp),
+  post(`${PLATFORM_ALERTS}/resolveAlert`, resolveAlertOp),
+  post(`${PLATFORM_ALERTS}/operatorAlertAction`, operatorAlertActionOp),
   // Audit F09: a same-key retry after the provider call resumes publication from the operation's receipt.
   post(`${PLATFORM_BRAIN}/committeeBrain`, committeeBrainOp, { idempotency: "resume" }),
   get(`${PLATFORM_BRAIN}/getAiUsage`, getAiUsageOp),

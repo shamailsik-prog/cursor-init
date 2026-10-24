@@ -21,3 +21,6 @@ export { d1ConflictClientWritten, d1ConflictPartyWritten, d1ConflictIndexChunkWr
 export { p1ReservationReconciler } from "./p1/reconciler"
 // Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
 export { auditOutboxReconciler } from "./p5/auditOutboxReconciler"
+// Audit F43: the alert escalator (every minute: escalate open alerts past their deadline, deliver pending pages) and the
+// alert checker (every five minutes: queue age, saga age and unresolved AI spend, derived from the rows).
+export { alertEscalator, alertChecker } from "./alerts/functions"

@@ -111,5 +111,23 @@ resource "google_monitoring_alert_policy" "functions_errors" {
       filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="audit.outbox_sweep_failed"'
     }
   }
+  conditions {
+    display_name = "ops_alert.notified"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="ops_alert.notified"'
+    }
+  }
+  conditions {
+    display_name = "ops_alert.raise_failed"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="ops_alert.raise_failed"'
+    }
+  }
+  conditions {
+    display_name = "ops_alert.pass_failed"
+    condition_matched_log {
+      filter = 'resource.type="cloud_function" AND severity="ERROR" AND jsonPayload.message="ops_alert.pass_failed"'
+    }
+  }
   notification_channels = [google_monitoring_notification_channel.oncall.name]
 }

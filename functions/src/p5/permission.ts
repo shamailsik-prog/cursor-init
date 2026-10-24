@@ -1,5 +1,5 @@
 import type { Classification } from "@/platform/p1/types"
-import { decide, type AiAction, type D1Action, type DocTypeAction, type DraftAction, type FirmAdminAction, type JobAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
+import { decide, type AiAction, type AlertAction, type D1Action, type DocTypeAction, type DraftAction, type FirmAdminAction, type JobAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { appendAudit } from "./audit"
@@ -61,7 +61,7 @@ export async function checkPermission(
  */
 export async function requirePermission(
   caller: Caller,
-  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction,
+  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction | AlertAction,
   matterId?: string
 ): Promise<void> {
   const decision = await checkPermission(caller, action, matterId)

@@ -36,7 +36,7 @@ const checker = async (): Promise<CheckerModule> => (await import(/* @vite-ignor
 type Alert = DocumentData & { id: string }
 const alertsOf = async (firmId: string, condition?: string): Promise<Alert[]> =>
   (await adminDb().collection("ops_alerts").where("firmId", "==", firmId).get()).docs
-    .map((d) => ({ id: d.id, ...d.data() }))
+    .map((d): Alert => ({ id: d.id, ...d.data() }))
     .filter((a) => condition === undefined || a.condition === condition)
 const pagesOf = async (alertId: string): Promise<Alert[]> =>
   (await adminDb().collection("ops_alert_notifications").where("alertId", "==", alertId).get()).docs.map((d) => ({ id: d.id, ...d.data() }))

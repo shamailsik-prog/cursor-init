@@ -23,6 +23,13 @@ import { FakeClock, diagSpec, enqueueAt, readJob, sweepOrigins, testDeps } from 
 const nextOrigin = sweepOrigins(800)
 const MIN = 60_000
 
+type OpsModule = { alertOpsTestSeam: { now?: () => number } }
+const OPS = ["..", "src", "alerts", "ops"].join("/")
+/** The operator route's clock (a firmless route gets no router clock): this file's fake clock while a test runs. */
+async function useOperatorClock(clock: FakeClock): Promise<void> {
+  ;((await import(/* @vite-ignore */ OPS)) as OpsModule).alertOpsTestSeam.now = () => clock.now()
+}
+
 type Notification = { id: string; alertId: string; firmId: string; level: number; episode: number; ownerRole: string; severity: string; targets: unknown[] }
 type EscalatorModule = {
   runAlertEscalator: (o: { now: () => number; notifier: { deliver: (n: Notification) => Promise<void> } }) => Promise<{ escalated: string[]; delivered: string[] }>
@@ -93,6 +100,10 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
 
   afterEach(async () => {
     delete jobRuntime.deps
+    await import(/* @vite-ignore */ OPS).then(
+      (m: OpsModule) => delete m.alertOpsTestSeam.now,
+      () => undefined
+    )
     await deleteFirmData([firmId, otherFirmId], uids.splice(0))
   })
 
@@ -170,6 +181,7 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
   it("the operator acknowledges at level 0: escalation stops, the action is recorded and audited", async () => {
     const { alert } = await deadLetter()
     clock.set(T0 + MIN)
+    await useOperatorClock(clock)
     const view = await viaApi<Record<string, unknown>>("operatorAlertAction", route())({ token: operator.token, data: { alertId: alert.id, action: "acknowledge" } } as never)
     expect(view).toMatchObject({ alertId: alert.id, state: "acknowledged", level: 0, escalateAt: null, acknowledgedBy: { uid: operator.uid, role: "operator" } })
     const stored = await alertDoc(alert.id)
