@@ -219,6 +219,12 @@ describe("bundle writer and verifier", () => {
 
 describe("loadKeyRing", () => {
   const hex = () => randomBytes(32).toString("hex")
+  const envNoBackupKey = (): NodeJS.ProcessEnv => {
+    const env = { ...process.env }
+    delete env.SIKANDER_BACKUP_KEY
+    delete env.SIKANDER_BACKUP_PREVIOUS_KEYS
+    return env
+  }
 
   it("reads the current key from SIKANDER_BACKUP_KEY and previous keys from SIKANDER_BACKUP_PREVIOUS_KEYS", () => {
     const current = hex()
@@ -235,24 +241,22 @@ describe("loadKeyRing", () => {
     const value = hex()
     writeFileSync(file, `${value}\n`)
     chmodSync(file, 0o600)
-    expect(loadKeyRing({ env: { ...process.env }, keyFile: file }).current.toString("hex")).toBe(value)
+    expect(loadKeyRing({ env: envNoBackupKey(), keyFile: file }).current.toString("hex")).toBe(value)
   })
 
   it("refuses a key file readable by group or others", () => {
     const file = path.join(root, "backup.key")
     writeFileSync(file, hex())
     chmodSync(file, 0o644)
-    expect(() => loadKeyRing({ env: { ...process.env }, keyFile: file })).toThrow(/mode/)
+    expect(() => loadKeyRing({ env: envNoBackupKey(), keyFile: file })).toThrow(/mode/)
   })
 
   it("refuses when both a key and a key file are given, and when neither is", () => {
     const file = path.join(root, "backup.key")
     writeFileSync(file, hex())
     chmodSync(file, 0o600)
-    expect(() => loadKeyRing({ env: { ...process.env, SIKANDER_BACKUP_KEY: hex() }, keyFile: file })).toThrow(/both/)
-    const noKey = { ...process.env }
-    delete noKey.SIKANDER_BACKUP_KEY
-    expect(() => loadKeyRing({ env: noKey })).toThrow(/no backup key/)
+    expect(() => loadKeyRing({ env: { ...envNoBackupKey(), SIKANDER_BACKUP_KEY: hex() }, keyFile: file })).toThrow(/both/)
+    expect(() => loadKeyRing({ env: envNoBackupKey() })).toThrow(/no backup key/)
   })
 
   it("refuses a bad previous key without echoing it", () => {
