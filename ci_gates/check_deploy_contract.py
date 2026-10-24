@@ -104,6 +104,10 @@ def _check_queues(manifest: dict) -> list[Finding]:
     queues = manifest.get("queues", [])
     if len(workers) != len(queues):
         out.append(_fail("queues", "queue count must match taskQueue functions"))
+    worker_names = {w["name"] for w in workers}
+    for q in queues:
+        if q.get("function") not in worker_names:
+            out.append(_fail("queues", f"queue references unknown function {q.get('function')}"))
     return out
 
 
@@ -114,6 +118,9 @@ def _check_firebase_json(root: Path, manifest: dict) -> list[Finding]:
         out.append(_fail("firebase-json", "firestore.location mismatch"))
     if fb.get("functions", {}).get("runtime") != manifest["runtime"]["nodejs"]:
         out.append(_fail("firebase-json", "functions.runtime mismatch"))
+    indexes_file = manifest.get("firebase", {}).get("indexesFile", "firestore.indexes.json")
+    if fb.get("firestore", {}).get("indexes") != indexes_file:
+        out.append(_fail("firebase-json", f"firestore.indexes must be {indexes_file}"))
     return out
 
 
@@ -145,8 +152,9 @@ def _check_rules_ttl(root: Path, manifest: dict) -> list[Finding]:
     rules = (root / "firestore.rules").read_text(encoding="utf-8")
     for ttl in manifest.get("firestore", {}).get("ttl", []):
         cg = ttl["collectionGroup"]
-        m = re.search(rf"match\s+/{re.escape(cg)}/[^{{]+\{{([^}}]+)\}}", rules, re.S)
+        m = re.search(rf"match\s+/{re.escape(cg)}/\{{[^{{}}]+\}}\s*\{{([^}}]+)\}}", rules, re.S)
         if not m:
+            out.append(_fail("rules", f"no firestore rules match for TTL collection {cg}"))
             continue
         body = m.group(1)
         if re.search(r"allow\s+read", body) and "if false" not in body:
@@ -276,10 +284,29 @@ def _check_terraform(root: Path, manifest: dict) -> list[Finding]:
     return out
 
 
-def compare_endpoints(manifest: dict, endpoints: dict, profile: str) -> list[Finding]:
+def parse_dotenv(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        values[key] = val
+    return values
+
+
+def compare_endpoints(manifest: dict, endpoints: dict, profile: str, bundle_env: dict[str, str]) -> list[Finding]:
     out: list[Finding] = []
-    env = manifest.get("environments", {}).get(profile, {}).get("env", {})
     by_name = {f["name"]: f for f in manifest.get("functions", [])}
+    queue_by_fn = {q["function"]: q for q in manifest.get("queues", [])}
     for name, spec in by_name.items():
         ep = endpoints.get(name)
         if not ep:
@@ -300,9 +327,41 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str) -> list[Fin
         if ep.get("serviceAccountEmail") != spec.get("serviceAccount"):
             out.append(_fail("endpoints", f"{name} service account mismatch"))
         ingress = spec.get("ingress")
-        expected_ingress = env.get("SIKANDER_INGRESS_SETTINGS", "ALLOW_ALL") if ingress == "env:SIKANDER_INGRESS_SETTINGS" else ingress
-        if ep.get("ingressSettings") != expected_ingress:
+        if ingress == "env:SIKANDER_INGRESS_SETTINGS":
+            expected_ingress = bundle_env.get("SIKANDER_INGRESS_SETTINGS")
+            if not expected_ingress:
+                out.append(_fail("endpoints", f"{name} bundle env missing SIKANDER_INGRESS_SETTINGS"))
+            elif ep.get("ingressSettings") != expected_ingress:
+                out.append(_fail("endpoints", f"{name} ingress mismatch"))
+        elif ep.get("ingressSettings") != ingress:
             out.append(_fail("endpoints", f"{name} ingress mismatch"))
+        trigger = spec.get("firestoreTrigger")
+        if trigger:
+            et = ep.get("eventTrigger") or {}
+            patterns = et.get("eventFilterPathPatterns") or {}
+            if patterns.get("document") != trigger.get("document"):
+                out.append(_fail("endpoints", f"{name} firestore document path mismatch"))
+            if et.get("retry") is not trigger.get("retry"):
+                out.append(_fail("endpoints", f"{name} firestore trigger retry mismatch"))
+        if spec.get("schedule"):
+            st = ep.get("scheduleTrigger") or {}
+            if st.get("schedule") != spec.get("schedule"):
+                out.append(_fail("endpoints", f"{name} schedule mismatch"))
+            if spec.get("timeZone") and st.get("timeZone") != spec.get("timeZone"):
+                out.append(_fail("endpoints", f"{name} schedule timeZone mismatch"))
+            want_retry = spec.get("retryConfig")
+            if want_retry is not None:
+                if (st.get("retryConfig") or {}) != want_retry:
+                    out.append(_fail("endpoints", f"{name} schedule retryConfig mismatch"))
+            elif st.get("retryConfig"):
+                out.append(_fail("endpoints", f"{name} schedule must not set retryConfig"))
+        if name in queue_by_fn:
+            qspec = queue_by_fn[name]
+            rl = (ep.get("taskQueueTrigger") or {}).get("rateLimits") or {}
+            if rl.get("maxConcurrentDispatches") != qspec.get("maxConcurrentDispatches"):
+                out.append(_fail("endpoints", f"{name} maxConcurrentDispatches mismatch"))
+            if rl.get("maxDispatchesPerSecond") != qspec.get("maxDispatchesPerSecond"):
+                out.append(_fail("endpoints", f"{name} maxDispatchesPerSecond mismatch"))
         if name == "jobWorker":
             inv = (ep.get("taskQueueTrigger") or {}).get("invoker")
             if inv != spec.get("invoker"):
@@ -315,10 +374,10 @@ def compare_endpoints(manifest: dict, endpoints: dict, profile: str) -> list[Fin
 def check_env_file(manifest: dict, profile: str, text: str) -> list[Finding]:
     out: list[Finding] = []
     expected = manifest.get("environments", {}).get(profile, {}).get("env", {})
+    parsed = parse_dotenv(text)
     for key, value in expected.items():
-        if f"{key}={value}" not in text.replace(" ", "") and f'{key}="{value}"' not in text:
-            if not re.search(rf"^{re.escape(key)}={re.escape(value)}\s*$", text, re.M):
-                out.append(_fail("env-file", f"missing or wrong {key} for profile {profile}"))
+        if parsed.get(key) != value:
+            out.append(_fail("env-file", f"missing or wrong {key} for profile {profile}"))
     return out
 
 
@@ -328,10 +387,10 @@ def print_env(manifest: dict, profile: str) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def load_endpoints_dump(root: Path, manifest: dict, profile: str) -> dict:
+def load_endpoints_dump(root: Path, bundle_env: dict[str, str]) -> dict:
     script = root / "functions/scripts/dump-endpoints.cjs"
     env = os.environ.copy()
-    env.update(manifest.get("environments", {}).get(profile, {}).get("env", {}))
+    env.update(bundle_env)
     raw = subprocess.check_output(["node", str(script)], cwd=root / "functions", text=True, env=env)
     return json.loads(raw)
 
@@ -352,9 +411,13 @@ def main(argv: list[str] | None = None) -> int:
     findings = run_static(root, manifest)
     findings.extend(_check_unclassified_expires_at(root, manifest))
     if args.bundle:
-        findings.extend(compare_endpoints(manifest, load_endpoints_dump(root, manifest, args.profile), args.profile))
-        if args.env_file:
-            findings.extend(check_env_file(manifest, args.profile, Path(args.env_file).read_text(encoding="utf-8")))
+        if not args.env_file:
+            print("FAIL [env-file] --bundle requires --env-file (functions/.env.<projectId>)")
+            return 1
+        env_text = Path(args.env_file).read_text(encoding="utf-8")
+        bundle_env = parse_dotenv(env_text)
+        findings.extend(check_env_file(manifest, args.profile, env_text))
+        findings.extend(compare_endpoints(manifest, load_endpoints_dump(root, bundle_env), args.profile, bundle_env))
     if findings:
         for f in findings:
             print(f"FAIL [{f.check}] {f.message}")

@@ -58,7 +58,8 @@
       "maxInstances": 10,
       "concurrency": 1,
       "serviceAccount": "sikander-functions@",
-      "ingress": "ALLOW_INTERNAL_ONLY"
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "firestoreTrigger": { "document": "jobs/{jobId}", "retry": true }
     },
     {
       "name": "onEventCreated",
@@ -70,7 +71,8 @@
       "maxInstances": 10,
       "concurrency": 1,
       "serviceAccount": "sikander-functions@",
-      "ingress": "ALLOW_INTERNAL_ONLY"
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "firestoreTrigger": { "document": "events/{eventId}", "retry": true }
     },
     {
       "name": "jobWorker",
@@ -124,7 +126,8 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "15 2 * * *",
-      "timeZone": "Asia/Karachi"
+      "timeZone": "Asia/Karachi",
+      "retryConfig": { "retryCount": 3, "minBackoffSeconds": 60, "maxBackoffSeconds": 600 }
     },
     {
       "name": "d1ConflictReindexTick",
@@ -138,7 +141,8 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_INTERNAL_ONLY",
       "schedule": "35 2 * * *",
-      "timeZone": "Asia/Karachi"
+      "timeZone": "Asia/Karachi",
+      "retryConfig": { "retryCount": 3, "minBackoffSeconds": 60, "maxBackoffSeconds": 600 }
     },
     {
       "name": "d1ConflictClientWritten",
@@ -150,7 +154,8 @@
       "maxInstances": 10,
       "concurrency": 1,
       "serviceAccount": "sikander-functions@",
-      "ingress": "ALLOW_INTERNAL_ONLY"
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "firestoreTrigger": { "document": "clients/{clientId}", "retry": true }
     },
     {
       "name": "d1ConflictPartyWritten",
@@ -162,7 +167,8 @@
       "maxInstances": 10,
       "concurrency": 1,
       "serviceAccount": "sikander-functions@",
-      "ingress": "ALLOW_INTERNAL_ONLY"
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "firestoreTrigger": { "document": "matter_parties/{partyId}", "retry": true }
     },
     {
       "name": "d1ConflictIndexChunkWritten",
@@ -174,7 +180,8 @@
       "maxInstances": 10,
       "concurrency": 1,
       "serviceAccount": "sikander-functions@",
-      "ingress": "ALLOW_INTERNAL_ONLY"
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "firestoreTrigger": { "document": "conflict_name_index/{chunkId}", "retry": true }
     },
     {
       "name": "p1ReservationReconciler",
@@ -203,6 +210,9 @@
       "schedule": "every 1 minutes"
     }
   ],
+  "firebase": {
+    "indexesFile": "firestore.indexes.json"
+  },
   "queues": [
     {
       "function": "jobWorker",

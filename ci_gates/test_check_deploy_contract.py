@@ -199,8 +199,7 @@ class EnvFileParsing(unittest.TestCase):
         self.assertTrue(hits)
 
     def test_bundle_requires_env_file(self) -> None:
-        with self.assertRaises(SystemExit):
-            gate.main(["--bundle", "--profile", "staging"])
+        self.assertEqual(gate.main(["--bundle", "--profile", "staging"]), 1)
 
 
 class FirebaseJson(unittest.TestCase):
@@ -214,6 +213,7 @@ class FirebaseJson(unittest.TestCase):
             shutil.copytree(ROOT / "functions/src", root / "functions/src")
             shutil.copytree(ROOT / "app", root / "app")
             shutil.copy2(ROOT / "firestore.rules", root / "firestore.rules")
+            (root / "docs/deploy").mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / "docs/deploy/RELEASE_RUNBOOK.md", root / "docs/deploy/RELEASE_RUNBOOK.md")
             data = json.loads((root / "firebase.json").read_text())
             data["firestore"].pop("indexes", None)

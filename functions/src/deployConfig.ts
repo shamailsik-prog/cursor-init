@@ -28,12 +28,11 @@ export class DeployContractError extends Error {
   }
 }
 
-/** Production bundle (NODE_ENV production, not the Functions emulator). */
+/** Cloud Run / Functions revision (not the emulator). */
 export function isDeployedRuntime(env: Env = process.env): boolean {
-  const emulator = (env.FUNCTIONS_EMULATOR ?? "").trim() === "true"
-  const firebaseConfig = (env.FIREBASE_CONFIG ?? "").trim() !== ""
-  if (emulator && firebaseConfig) return false
-  return env.NODE_ENV === "production" && !emulator
+  if ((env.FUNCTIONS_EMULATOR ?? "").trim() === "true") return false
+  if (env.NODE_ENV === "production") return true
+  return Boolean((env.K_SERVICE ?? "").trim() || (env.FUNCTION_TARGET ?? "").trim())
 }
 
 /** TRUSTED_PROXY_HOPS as a non-negative integer; anything else counts as 0 for rate limiting. */

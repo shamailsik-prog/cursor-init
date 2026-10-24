@@ -1,8 +1,8 @@
 import { onRequest } from "firebase-functions/v2/https"
 import type { Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
-import { deployContractViolations, isDeployedRuntime, type Ingress } from "./deployConfig"
-import { REGION, RUNTIME_DEFAULTS } from "./runtimeOptions"
+import { deployContractViolations, INGRESS_SETTINGS, isDeployedRuntime, type Ingress } from "./deployConfig"
+import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT } from "./runtimeOptions"
 
 export { REGION } from "./runtimeOptions"
 
@@ -20,6 +20,10 @@ export type ContractKey = "region" | "database_location" | "ingress" | "proxy_tr
 const METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/"
 const METADATA_TTL_MS = 300_000
 const METADATA_TIMEOUT_MS = 500
+const DEPLOYED_API_INGRESS: Ingress = "ALLOW_INTERNAL_AND_GCLB"
+const RUNTIME_SA_RE = new RegExp(
+  `^${RUNTIME_SERVICE_ACCOUNT.replace("@", "\\@")}[a-z0-9-]+\\.iam\\.gserviceaccount\\.com$`
+)
 
 type Metadata = { region?: string; serviceAccount?: string }
 
@@ -78,9 +82,15 @@ export async function contractReport(deps?: {
   const now = deps?.now ?? (() => Date.now())
   const meta = await metadataWithCache(now, deps?.metadata ?? defaultMetadataProbe)
 
-  const contractCodes = deployContractViolations(env, { deployed })
-  const ingressOk = !contractCodes.some((c) => c.startsWith("ingress") || c === "proxy_trust_with_open_ingress" || c === "gclb_ingress_without_trusted_hop")
-  const proxyOk = !contractCodes.includes("proxy_hops_invalid")
+  const ingressForCheck =
+    env.SIKANDER_INGRESS_SETTINGS !== undefined && env.SIKANDER_INGRESS_SETTINGS !== ""
+      ? env.SIKANDER_INGRESS_SETTINGS
+      : INGRESS_SETTINGS
+  const synthEnv = { ...env, SIKANDER_INGRESS_SETTINGS: ingressForCheck }
+  const contractCodes = deployContractViolations(synthEnv, { deployed })
+  const proxyOk = !contractCodes.some(
+    (c) => c === "proxy_hops_invalid" || c === "proxy_trust_with_open_ingress" || c === "gclb_ingress_without_trusted_hop"
+  )
 
   const locationId = parseLocationId(env)
   const regionVerdict: Verdict = meta.region ? (meta.region === REGION ? "ok" : "violated") : "unknown"
@@ -88,9 +98,17 @@ export async function contractReport(deps?: {
   const identityVerdict: Verdict =
     meta.serviceAccount === undefined
       ? "unknown"
-      : meta.serviceAccount.includes("sikander-functions@")
+      : RUNTIME_SA_RE.test(meta.serviceAccount)
         ? "ok"
         : "violated"
+
+  const ingressVerdict: Verdict = deployed
+    ? ingressForCheck === DEPLOYED_API_INGRESS
+      ? "ok"
+      : ingressForCheck
+        ? "violated"
+        : "unknown"
+    : "unknown"
 
   const requiredEnv: Verdict = deployed
     ? env.SIKANDER_INGRESS_SETTINGS && (["ALLOW_ALL", "ALLOW_INTERNAL_ONLY", "ALLOW_INTERNAL_AND_GCLB"] as const).includes(env.SIKANDER_INGRESS_SETTINGS as Ingress)
@@ -101,7 +119,7 @@ export async function contractReport(deps?: {
   return {
     region: regionVerdict,
     database_location: dbVerdict,
-    ingress: ingressOk ? "ok" : "violated",
+    ingress: ingressVerdict,
     proxy_trust: proxyOk ? "ok" : "violated",
     required_env: requiredEnv,
     runtime_identity: identityVerdict,
@@ -110,12 +128,15 @@ export async function contractReport(deps?: {
 
 export function createHealthHandler(deps?: Parameters<typeof contractReport>[0]) {
   return async (_req: Request, res: Response): Promise<void> => {
+    const env = deps?.env ?? process.env
+    const deployed = deps?.deployed ?? isDeployedRuntime(env)
     const contract = await contractReport(deps)
-    const unhealthy = Object.values(contract).some((v) => v === "violated")
+    const violated = Object.values(contract).some((v) => v === "violated")
+    const unknownWhenDeployed = deployed && Object.values(contract).some((v) => v === "unknown")
+    const unhealthy = violated || unknownWhenDeployed
     res.status(unhealthy ? 503 : 200).json({
       status: unhealthy ? "unhealthy" : "ok",
       region: REGION,
-      contract,
     })
   }
 }

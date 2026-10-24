@@ -36,10 +36,10 @@ the 2026-10-06 baseline were fixed, not listed, and the table is empty:
   so `--omit=dev` drops its CLI tree, including `braces` (GHSA-vfj7-8cjw-p6xm).
 - `undici` under `eve`: eve 0.56 pins `undici` 8.9.0 exactly, and npm's own
   fix is a breaking downgrade of eve. A package.json `overrides` entry moves
-  eve's copy to `undici` 8.12.2, the same major (fixes GHSA-rfgv-xxqx-mfg5,
+  eve's copy to `undici` 8.12.3, the same major (fixes GHSA-rfgv-xxqx-mfg5,
   GHSA-w293-vg96-wgc3, GHSA-xjj6-f33q-929c and related undici advisories). Remove the
-  override once an eve release pins undici >= 8.12.2. The override is keyed on
-  the version it replaces, `"eve": { "undici@8.9.0": "8.12.2" }` (audit F39):
+  override once an eve release pins undici >= 8.12.3. The override is keyed on
+  the version it replaces, `"eve": { "undici@8.9.0": "8.12.3" }` (audit F39):
   the unkeyed form `"eve": { "undici": "8.11.2" }` is carried by npm >= 11.2
   across eve's peer dependency on `ai` into `@ai-sdk/provider-utils` (which
   declares undici ^7.29.0), so npm 10 and npm 11 resolved different trees and
