@@ -1,7 +1,9 @@
 // Audit FA-D4-001: the firm-qualified id, the row validator, the one decision both repositories write through, and the
 // memory repository (the unit suite's persistence) keep each firm's template analytics on its own row.
 import { describe, expect, it } from "vitest"
+import { MAX_PAGE_LIMIT } from "@/platform/http/pagination"
 import {
+  DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS,
   DraftTemplateAnalyticsIdError,
   DraftTemplateAnalyticsRefusedError,
   draftTemplateAnalyticsId,
@@ -204,6 +206,47 @@ describe("FA-D4-001: the memory repository", () => {
       DraftTemplateAnalyticsRefusedError
     )
     expect(store.draftTemplateAnalytics.get("template:firm_a:writ_mandamus")).toEqual(foreign)
+  })
+
+  it("counts a page of search hits all or nothing: one refused hit leaves every other row as it was", async () => {
+    const store = new SpineStore()
+    const repos = createMemoryRepositories(store)
+    const second = { id: "writ_certiorari", name: "Writ of Certiorari", posture: "writ", category: "constitutional" }
+    await repos.draftTemplateAnalytics.record("firm_a", TEMPLATE, { kind: "compose" }, { now: 5 })
+    const firstBefore = store.draftTemplateAnalytics.get("template:firm_a:writ_mandamus")
+    const foreign = stored({ id: "template:firm_a:writ_certiorari", firmId: "firm_b", templateId: "writ_certiorari" })
+    store.draftTemplateAnalytics.set("template:firm_a:writ_certiorari", foreign as never)
+    await expect(
+      repos.draftTemplateAnalytics.recordSearchHits("firm_a", [TEMPLATE, second], "writ", { now: 9 })
+    ).rejects.toBeInstanceOf(DraftTemplateAnalyticsRefusedError)
+    expect(store.draftTemplateAnalytics.get("template:firm_a:writ_mandamus")).toEqual(firstBefore)
+    expect(store.draftTemplateAnalytics.get("template:firm_a:writ_certiorari")).toEqual(foreign)
+  })
+
+  it("counts every hit of an accepted page once, in page order", async () => {
+    const repos = createMemoryRepositories(new SpineStore())
+    const second = { id: "writ_certiorari", name: "Writ of Certiorari", posture: "writ", category: "constitutional" }
+    const rows = await repos.draftTemplateAnalytics.recordSearchHits("firm_a", [TEMPLATE, second], "writ", { now: 9 })
+    expect(rows.map((r) => [r.id, r.templateSearchCount, r.lastTemplateSearchQuery])).toEqual([
+      ["template:firm_a:writ_mandamus", 1, "writ"],
+      ["template:firm_a:writ_certiorari", 1, "writ"],
+    ])
+    expect((await repos.draftTemplateAnalytics.listByFirm("firm_a")).map((r) => r.templateSearchCount)).toEqual([1, 1])
+    expect(await repos.draftTemplateAnalytics.recordSearchHits("firm_a", [], "writ")).toEqual([])
+  })
+
+  it("refuses a page with a repeated template or more than 100 templates, writing nothing", async () => {
+    const store = new SpineStore()
+    const repos = createMemoryRepositories(store)
+    await expect(repos.draftTemplateAnalytics.recordSearchHits("firm_a", [TEMPLATE, TEMPLATE], "writ")).rejects.toThrow()
+    const many = Array.from({ length: 101 }, (_, i) => ({ ...TEMPLATE, id: `t_${i}` }))
+    await expect(repos.draftTemplateAnalytics.recordSearchHits("firm_a", many, "writ")).rejects.toThrow()
+    await expect(repos.draftTemplateAnalytics.recordSearchHits("firm_a", many.slice(0, 100), "writ")).resolves.toHaveLength(100)
+    expect(store.draftTemplateAnalytics.size).toBe(100)
+  })
+
+  it("the route's largest search page fits one batch", () => {
+    expect(MAX_PAGE_LIMIT).toBeLessThanOrEqual(DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS)
   })
 
   it("requires a caller firm", async () => {

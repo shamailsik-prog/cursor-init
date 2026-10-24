@@ -188,18 +188,17 @@ async function handleGet(request: Request) {
       cursor + sliced.length < ranked.length ? String(cursor + sliced.length) : null
     if (query.length > 0) {
       const now = Date.now()
-      // FA-D4-001: each search hit is counted on the caller's own row, in one transaction that re-reads it (never a
-      // blind write of the row listed above, which a concurrent request may have changed).
+      // FA-D4-001: the page's hits are counted on the caller's own rows in ONE transaction that re-reads them (never a
+      // blind write of the rows listed above). PR #126 (Codex P2): all or nothing, so a refused hit leaves every other
+      // hit's count as it was and a retried request counts nothing twice. `sliced` holds at most MAX_PAGE_LIMIT (100).
       try {
-        for (const entry of sliced) {
-          const next = await repos.draftTemplateAnalytics.record(
-            refreshedActor.firmId,
-            entry.template,
-            { kind: "search", query },
-            { now }
-          )
-          analytics.set(next.templateId, next)
-        }
+        const counted = await repos.draftTemplateAnalytics.recordSearchHits(
+          refreshedActor.firmId,
+          sliced.map((entry) => entry.template),
+          query,
+          { now }
+        )
+        for (const next of counted) analytics.set(next.templateId, next)
       } catch (err) {
         if (err instanceof DraftTemplateAnalyticsRefusedError) return templateAnalyticsRefused(err)
         throw err

@@ -119,3 +119,14 @@ Execution notes: the refusal status was first observed as 400 (compose) / 500 (s
 test first. Mutation: 18 hand mutants, 18 killed; M7 survived until the legacy e2e also read through the Firestore
 repository (demonstrated by rerunning M7 on the earlier test file). The final RED on main and GREEN on the merged head
 are in the PR body and the evidence log.
+
+### Follow-up: PR #126 Codex P2 (search page all or nothing, spec R2a)
+
+| Test | branch `333c1b7` (per-hit loop) | branch with `recordSearchHits` |
+|---|---|---|
+| e2e: a refused template search counts no hit at all, and a retry counts none either | FAIL (409, but the first hit's `templateSearchCount` 0 to 1) | PASS |
+| unit: search page all or nothing (memory); accepted page counted once in order; repeated / >100 refused | FAIL 3/3 (function absent) | PASS |
+| unit: the route's largest page fits one batch (added with the implementation; not observed failing) | n/a | PASS |
+
+Mutants M19-M23 (Firestore page committed per hit; route back to a per-hit `record` loop; memory stored per hit; batch
+bound removed; repeated template accepted): 5 killed of 5.

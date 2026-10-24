@@ -156,6 +156,38 @@ export function withTemplateSearchSeen(
 export type DraftTemplateAnalyticsChange = { kind: "compose" } | { kind: "search"; query: string }
 
 /**
+ * The most templates one template-search page counts, all in ONE transaction (PR #126, Codex P2). It equals the
+ * route's page cap (platform/http/pagination.ts MAX_PAGE_LIMIT, 100): a page reads and writes at most 100 rows, plus
+ * the request's audit-outbox entry, well inside Firestore's 500 writes per transaction (and its 10 MiB size cap: a row
+ * is well under 1 KiB). A larger batch is refused, not split, so a page is never counted in parts.
+ */
+export const DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS = 100
+
+/** The firm-qualified ids of one search page, in page order; a repeated template or an oversized page is refused. */
+export function draftTemplateAnalyticsSearchHitIds(firmId: string, templates: readonly TemplateSummary[]): string[] {
+  if (templates.length > DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS) {
+    throw new RangeError(`a template-search page counts at most ${DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS} templates`)
+  }
+  const ids = templates.map((template) => draftTemplateAnalyticsId(firmId, template.id))
+  if (new Set(ids).size !== ids.length) throw new RangeError("a template-search page names a template twice")
+  return ids
+}
+
+/**
+ * Every next row of one search page, computed before anything is written: one refused hit (another firm's row or a
+ * malformed one at the caller's id) throws, so the caller's single transaction writes none of them.
+ */
+export function nextDraftTemplateAnalyticsSearchRows(
+  firmId: string,
+  templates: readonly TemplateSummary[],
+  stored: readonly unknown[],
+  query: string,
+  opts?: { now?: number }
+): DraftTemplateAnalyticsRow[] {
+  return templates.map((template, i) => nextDraftTemplateAnalyticsRow(firmId, template, stored[i] ?? null, { kind: "search", query }, opts))
+}
+
+/**
  * The next row for one compose or template search of `template` by `firmId`, given what is stored at the firm's own id
  * (`stored`, null when absent). Both repositories call this between the read and the write of one transaction.
  * A stored row of another firm (`foreign_firm`) or one that is not canonical (`malformed`) is refused, never replaced.

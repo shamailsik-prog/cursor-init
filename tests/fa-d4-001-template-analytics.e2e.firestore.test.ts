@@ -266,4 +266,49 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001: template analytics are 
     expect((searched.body as { error?: { code?: string } }).error?.code).toBe("template_analytics_refused")
     expect((await ref.get()).data()).toEqual(foreign)
   })
+
+  // Codex P2 on PR #126: a search page is counted all or nothing. `q=writ_` matches five catalog templates; firm A has
+  // composed writ_certiorari, so it ranks first and writ_habeas_corpus (by id) second. The foreign-stamped row sits on
+  // the second hit: the 409 must leave the first hit's count as it was, on the first attempt and on a retry.
+  it("a refused template search counts no hit at all, and a retry counts none either", async () => {
+    const [a, b] = [await provisionActor(), await provisionActor()]
+    expect((await compose(a, "writ_certiorari")).status).toBe(200)
+    const first = adminDb().collection(COLLECTION).doc(`template:${a.firmId}:writ_certiorari`)
+    const before = (await first.get()).data()
+    expect(before).toMatchObject({ composeCount: 1, templateSearchCount: 0 })
+    const ref = adminDb().collection(COLLECTION).doc(`template:${a.firmId}:writ_habeas_corpus`)
+    const foreign = {
+      id: ref.id,
+      firmId: b.firmId,
+      templateId: "writ_habeas_corpus",
+      templateName: "Foreign",
+      templatePosture: "foreign",
+      templateCategory: "foreign",
+      composeCount: 2,
+      templateSearchCount: 0,
+      lastComposedAt: 1,
+      lastTemplateSearchAt: null,
+      lastTemplateSearchQuery: null,
+      updatedAt: 1,
+    }
+    await ref.set(foreign)
+    for (const attempt of ["first", "retry"]) {
+      const searched = await searchTemplates(a, "writ_")
+      expect(searched.status, `${attempt}: ${JSON.stringify(searched.body)}`).toBe(409)
+      expect((await first.get()).data(), attempt).toEqual(before)
+      expect((await ref.get()).data(), attempt).toEqual(foreign)
+      for (const later of ["writ_mandamus", "writ_prohibition", "writ_quo_warranto"]) {
+        expect((await adminDb().collection(COLLECTION).doc(`template:${a.firmId}:${later}`).get()).exists, `${attempt}: ${later}`).toBe(false)
+      }
+    }
+    // Once the conflicting row is gone, one search counts every hit of the page exactly once.
+    await ref.delete()
+    expect((await searchTemplates(a, "writ_")).status).toBe(200)
+    const counts = await Promise.all(
+      ["writ_certiorari", "writ_habeas_corpus", "writ_mandamus", "writ_prohibition", "writ_quo_warranto"].map(
+        async (t) => (await adminDb().collection(COLLECTION).doc(`template:${a.firmId}:${t}`).get()).data()?.templateSearchCount
+      )
+    )
+    expect(counts).toEqual([1, 1, 1, 1, 1])
+  })
 })

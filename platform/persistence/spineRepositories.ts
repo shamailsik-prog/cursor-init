@@ -175,7 +175,9 @@ import { storedUserRecord } from "@/platform/spine/store"
 import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import {
   draftTemplateAnalyticsId,
+  draftTemplateAnalyticsSearchHitIds,
   nextDraftTemplateAnalyticsRow,
+  nextDraftTemplateAnalyticsSearchRows,
   readDraftTemplateAnalyticsRow,
   type DraftTemplateAnalyticsChange,
 } from "@/platform/persistence/draftTemplateAnalytics"
@@ -735,6 +737,18 @@ export type DraftTemplateAnalyticsRepository = {
     change: DraftTemplateAnalyticsChange,
     opts?: { now?: number }
   ): Promise<DraftTemplateAnalyticsRow>
+  /**
+   * One template-search page, all or nothing (PR #126, Codex P2): in ONE transaction, reads every hit's row of the
+   * caller's firm, refuses the whole page if any is another firm's or malformed (DraftTemplateAnalyticsRefusedError,
+   * nothing written), otherwise counts each hit once and returns the rows in page order. At most
+   * DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS templates, none repeated.
+   */
+  recordSearchHits(
+    firmId: string,
+    templates: readonly TemplateSummary[],
+    query: string,
+    opts?: { now?: number }
+  ): Promise<DraftTemplateAnalyticsRow[]>
   /** The canonical row of the caller's firm at `id`; null for another firm's row, a legacy id or a malformed row. */
   get(id: string, firmId: string): Promise<DraftTemplateAnalyticsRow | null>
   /** The caller's canonical rows; legacy and malformed rows are left out. */
@@ -3267,6 +3281,20 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         const id = draftTemplateAnalyticsId(requireCallerFirmId(firmId, "draftTemplateAnalytics.record"), template.id)
         const next = nextDraftTemplateAnalyticsRow(firmId, template, store.draftTemplateAnalytics.get(id) ?? null, change, opts)
         store.draftTemplateAnalytics.set(id, next)
+        return next
+      },
+      async recordSearchHits(firmId, templates, query, opts) {
+        const firm = requireCallerFirmId(firmId, "draftTemplateAnalytics.recordSearchHits")
+        const ids = draftTemplateAnalyticsSearchHitIds(firm, templates)
+        // Every next row is computed (and any refusal thrown) before the first one is stored.
+        const next = nextDraftTemplateAnalyticsSearchRows(
+          firm,
+          templates,
+          ids.map((id) => store.draftTemplateAnalytics.get(id) ?? null),
+          query,
+          opts
+        )
+        next.forEach((row, i) => store.draftTemplateAnalytics.set(ids[i] as string, row))
         return next
       },
       async get(id, firmId) {

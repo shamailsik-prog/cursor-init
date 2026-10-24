@@ -90,6 +90,16 @@ otherwise applies the change to the stored row (or a fresh row) and sets it. Mem
 `await` between read and write. Reason: the blind upsert was the overwrite path, and the non-transactional
 read-modify-write loses increments under concurrency (RED: six concurrent composes, count 2).
 
+**R2a. A template-search page is ONE transaction** (PR #126, Codex P2). The search counts its page through
+`recordSearchHits(firmId, templates, query, opts?)`, not a loop of `record` calls: one transaction reads every hit's
+row, decides every next row (one `foreign_firm` / `malformed` refusal throws, and the transaction writes nothing), then
+sets every row. Memory decides every row before storing any. Bound: at most `DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS`
+= 100 templates, none repeated; 100 is the route's page cap (`MAX_PAGE_LIMIT`, pinned by a unit test), so a page is at
+most 100 reads + 100 writes + the request's audit-outbox entry, inside Firestore's 500 writes per transaction and its
+10 MiB transaction size. A larger page is refused, never split. Compose stays on the single-row `record`. Reason: with
+the per-hit loop, a later refused hit returned 409 after the earlier hits had committed, and every retry counted them
+again (RED at `333c1b7`: the first hit's `templateSearchCount` went 0 to 1 under the 409).
+
 **R3. F12 / F13 helpers, unchanged.** Reads use the F12 helpers as they are: `getById` (`get`) and
 `listAllRowsByFirm` + `asFirmScopedList` (`listByFirm`), and `requireCallerFirmId`. Following the F13 canonical-shape
 pattern (`readMatterClientSearchIndexRow`), a new validator `readDraftTemplateAnalyticsRow(id, data)` type-checks every
@@ -105,7 +115,7 @@ Next core sends `{ error, code, reason: "foreign_firm" | "malformed" }`; through
 receives `{ error: { code: "template_analytics_refused" } }` (the router forwards the code only). Compose: the draft is
 created first (as on main), then the analytics transaction refuses; the 409 carries the F10 `effectCommitted` signal
 (observed through the F02 router), so a retry with the same key is not taken for a fresh compose. Search: the GET
-answers 409 and writes nothing. Reason: the FA-F13-004 precedent
+answers 409 and counts no hit of the page, on the first attempt or on a retry (R2a). Reason: the FA-F13-004 precedent
 (`SearchIndexMalformedError`): a refused integrity check must never be taken for a missing row and silently replaced.
 Observed before this ruling (route e2e, production mode): compose answered 400 `invalid_request` and search 500
 `internal`, both misleading for a stored-state conflict; the e2e now pins 409 and the code. Devil's advocate: the compose

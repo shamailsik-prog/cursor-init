@@ -8,7 +8,9 @@ import {
 import { readMatterClientSearchIndexRow, SearchIndexMalformedError } from "@/platform/persistence/matterClientSearchIndex"
 import {
   draftTemplateAnalyticsId,
+  draftTemplateAnalyticsSearchHitIds,
   nextDraftTemplateAnalyticsRow,
+  nextDraftTemplateAnalyticsSearchRows,
   readDraftTemplateAnalyticsRow,
 } from "@/platform/persistence/draftTemplateAnalytics"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
@@ -2345,6 +2347,26 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
           const snap = await tx.get(ref)
           const next = nextDraftTemplateAnalyticsRow(firmId, template, snap.exists() ? snap.data() : null, change, opts)
           tx.set(ref, next)
+          return next
+        })
+      },
+      // PR #126 (Codex P2): one search page is ONE transaction. Every hit's row is read first, every next row is
+      // decided (one refusal throws and the transaction writes nothing), then every row is set. At most
+      // DRAFT_TEMPLATE_ANALYTICS_MAX_SEARCH_HITS (100) rows: within Firestore's 500 writes per transaction.
+      async recordSearchHits(firmId, templates, query, opts) {
+        const firm = requireCallerFirmId(firmId, "draftTemplateAnalytics.recordSearchHits")
+        const refs = draftTemplateAnalyticsSearchHitIds(firm, templates).map((id) => doc(db, "draft_template_analytics", id))
+        if (refs.length === 0) return []
+        return runTransaction(db, async (tx) => {
+          const snaps = await Promise.all(refs.map((ref) => tx.get(ref)))
+          const next = nextDraftTemplateAnalyticsSearchRows(
+            firm,
+            templates,
+            snaps.map((snap) => (snap.exists() ? snap.data() : null)),
+            query,
+            opts
+          )
+          next.forEach((row, i) => tx.set(refs[i] as (typeof refs)[number], row))
           return next
         })
       },
