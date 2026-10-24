@@ -1,9 +1,23 @@
+import { decryptDocumentObjectPayload } from "@/platform/documents/documentObjectStore"
 import type { SpineStore } from "@/platform/spine/store"
 import type { VersionedObjectAccess, ObjectVersionInfo } from "./s3"
 
 export type RestoreRow = { id: string; firmId: string; storagePath: string; contentHash: string; key: string }
 
 export type RestoreReport = { restored: string[]; unrecoverable: string[]; noop: boolean }
+
+export async function documentObjectIntegrityCheck(
+  row: RestoreRow,
+  body: Buffer,
+  store: SpineStore
+): Promise<boolean> {
+  try {
+    const plaintext = decryptDocumentObjectPayload(body)
+    return store.hashKey(row.firmId, plaintext) === row.contentHash
+  } catch {
+    return false
+  }
+}
 
 export async function pickIntactVersion(
   versions: ObjectVersionInfo[],
@@ -36,7 +50,7 @@ export async function restoreObjects(opts: {
     let picked: string | undefined
     for (const v of versions.filter((x) => !x.isDeleteMarker)) {
       const body = await opts.source.getVersion(row.key, v.versionId)
-      const ok = opts.check ? await opts.check(row, body) : body.length > 0
+      const ok = opts.check ? await opts.check(row, body) : await documentObjectIntegrityCheck(row, body, opts.store)
       if (ok) {
         picked = v.versionId
         const bytes = body
