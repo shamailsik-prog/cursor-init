@@ -17,7 +17,7 @@ import { onJobCreatedCore } from "../src/p2/functions"
 import { sweep } from "../src/p2/sweeper"
 import { viaApi } from "./api"
 import { budgetSpentAfterFirstPage } from "./checkerClock"
-import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { EMULATORS, mintIdToken } from "./emu"
 import { deleteFirmData } from "./firmCleanup"
 import { FakeClock, diagSpec, enqueueAt, newFirm, sweepOrigins, testDeps } from "./jobs"
 
@@ -60,8 +60,9 @@ const pageIds = async (alertId: string) => (await pagesOf(alertId)).map((p) => p
  * why no firm can ever have that id, spec R24.)
  */
 async function deletePlatformAlerts(): Promise<void> {
-  for (const col of ["ops_alerts", "ops_alert_notifications", "notifications"]) {
-    const snap = await adminDb().collection(col).where("firmId", "==", PLATFORM).select().get()
+  // Every collection: the alert, its pages, and the audit row of an operator's action on it.
+  for (const col of await adminDb().listCollections()) {
+    const snap = await col.where("firmId", "==", PLATFORM).select().get()
     if (snap.size === 0) continue
     const batch = adminDb().batch()
     for (const d of snap.docs) batch.delete(d.ref)
@@ -325,8 +326,20 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     expect(alert).toMatchObject({ condition: "ai.kill_switch_blocked", subjectKey: "killSwitch:platform", ref: "platform/p1", state: "open", level: 0, count: 1, escalateAt: null })
     expect([millis(alert.firstSeenAt), millis(alert.lastSeenAt)]).toEqual([T, T])
     expect(await pageIds(alert.id)).toEqual([`${alert.id}_e1_l0`])
-    // No partner of either firm sees or acts on it; the operator does.
     expect(JSON.stringify(alert)).not.toContain("Operator stop")
+    // No partner of either firm sees or acts on it; the operator does.
+    const partner = await mintIdToken({ firmId: a, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(partner.uid)
+    const route = { now: () => T + 31 * MIN }
+    expect((await viaApi<{ items: unknown[] }>("listAlerts", route)({ token: partner.token, data: { firmId: a } } as never)).items).toEqual([])
+    await expect(viaApi("acknowledgeAlert", route)({ token: partner.token, data: { firmId: a, alertId: alert.id } } as never)).rejects.toMatchObject({ status: 404, code: "not_found" })
+    const op = await operator()
+    alertOpsTestSeam.now = () => T + 31 * MIN
+    await viaApi("operatorAlertAction")({ token: op.token, data: { alertId: alert.id, action: "acknowledge" } } as never)
+    expect(await alertDoc(alert.id)).toMatchObject({ state: "acknowledged", acknowledgedBy: { uid: op.uid, role: "operator" } })
+    // While the switch stays on, the acknowledgment holds (spec R23): a refused call hours later writes nothing.
+    expect((await callP1(req(b), { now: () => T + 10 * HOUR })).blockReason).toBe("kill_switch_platform")
+    expect(await alertDoc(alert.id)).toMatchObject({ state: "acknowledged", episode: 1, count: 1 })
     await deletePlatformAlerts()
   })
 })

@@ -54,6 +54,7 @@ export const logAlertNotifier: AlertNotifier = {
       episode: page.episode,
       users: page.targets.filter((t) => t.kind === "user").length,
       fallback: page.fallback,
+      event: "ops_alert.notified",
     })
   },
 }
@@ -61,11 +62,21 @@ export const logAlertNotifier: AlertNotifier = {
 type PageSubject = { firmId: string; condition: AlertCondition; severity: Severity; episode: number }
 
 /**
- * Stages the page for `level` of `alertId` and its user notifications in `tx` (writes only). The id is deterministic,
- * so a transaction retry rewrites the same documents.
+ * Stages the page for `level` of `alertId` (or its `repage`-th re-page, spec R21) and its user notifications in `tx`
+ * (writes only). The id is deterministic, so a transaction retry rewrites the same documents.
  */
-export function stagePage(tx: Transaction, alertId: string, subject: PageSubject, level: number, ownerRole: OwnerRole, targets: PageTarget[], nowMs: number, fallback: "partners" | null = null): string {
-  const id = pageIdFor(alertId, subject.episode, level)
+export function stagePage(
+  tx: Transaction,
+  alertId: string,
+  subject: PageSubject,
+  level: number,
+  ownerRole: OwnerRole,
+  targets: PageTarget[],
+  nowMs: number,
+  fallback: "partners" | null = null,
+  repage = 0
+): string {
+  const id = pageIdFor(alertId, subject.episode, level, repage)
   const at = Timestamp.fromMillis(nowMs)
   const row: PageRow = {
     alertId,
@@ -153,7 +164,7 @@ export async function deliverPending(opts: { now: () => number; notifier: AlertN
       try {
         await opts.notifier.deliver(page)
       } catch (err) {
-        logger.error("ops_alert.pass_failed", { pass: "deliver", pageId: doc.id, code: errorCode(err) })
+        logger.error("ops_alert.pass_failed", { pass: "deliver", pageId: doc.id, code: errorCode(err), event: "ops_alert.pass_failed" })
         await doc.ref.update({ status: "pending", claimedUntil: null })
         continue
       }

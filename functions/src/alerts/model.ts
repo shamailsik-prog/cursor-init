@@ -30,6 +30,31 @@ export type Severity = (typeof SEVERITIES)[number]
 export const ACK_WINDOW_MS: Readonly<Record<Severity, number>> = { critical: 15 * 60_000, high: 30 * 60_000, warning: 4 * 3_600_000 }
 
 /**
+ * How long an acknowledgment holds (spec R18, re-audit FA-F43-R1-002): a raise this long or longer after the alert was
+ * acknowledged opens a new episode at level 0, with a page, instead of being counted into the acknowledged one.
+ */
+export const ACK_HOLD_MS = 4 * 3_600_000
+
+/**
+ * Conditions whose alerts never escalate (spec R23): a kill switch is only ever set by a deliberate act of a partner or
+ * a platform admin, so its alert pages the on-call operator once at level 0 and is not escalated to the people who set
+ * it; for the same reason an acknowledgment of it holds while the switch stays on.
+ */
+const NON_ESCALATING: ReadonlySet<AlertCondition> = new Set(["ai.kill_switch_blocked"])
+
+/** True when alerts of `condition` escalate up the owner ladder (every condition but a kill switch's). */
+export function escalates(condition: AlertCondition): boolean {
+  return !NON_ESCALATING.has(condition)
+}
+
+/**
+ * The `firmId` of an alert that belongs to the platform, not to a firm (spec R24): the platform kill switch. Firestore
+ * reserves document ids matching `__.*__`, so no firm can have this id, and no partner route, worklist or ladder reaches
+ * the alert; the operator acts on it.
+ */
+export const PLATFORM_ALERT_FIRM = "__platform__"
+
+/**
  * Who owns an alert at each escalation level (spec R4): the named on-call operator first (only the operator can repair
  * a queue, a store or the reconciler), then the firm's partners (their work is stalled; they can retry, cancel, raise a
  * budget or call the operator), then the firm administrator (the founding partner).
@@ -105,6 +130,12 @@ export type AlertSpec = {
   ref: string | null
   severity: Severity
   detail: Record<string, string | number>
+  /**
+   * Spec R24: a raise of an existing, live alert writes nothing (no count). For a subject shared by every firm, whose
+   * every raise would otherwise write one hot document inside the raising transactions; the alert is still created,
+   * and reopened, as any other.
+   */
+  observeOnly?: boolean
 }
 
 export type ActorRecord = { uid: string; role: "operator" | "partner" }
@@ -136,6 +167,13 @@ export type AlertRow = {
   acknowledgedBy: ActorRecord | null
   resolvedAt: Timestamp | null
   resolvedBy: ActorRecord | null
+  /**
+   * Spec R22: set when the checker read its whole query and no longer observed this derived condition; a cleared alert
+   * has no deadline (the escalator skips it) and stays open for a person to resolve. Absent on alerts written before.
+   */
+  clearedAt?: Timestamp | null
+  /** Spec R21: re-pages of the last level in this episode. Absent on alerts written before (read as 0). */
+  repages?: number
   createdAt: Timestamp
   updatedAt: Timestamp
 }
@@ -155,7 +193,7 @@ export function alertOutboxRef(): CollectionReference {
   return adminDb().collection(ALERT_OUTBOX)
 }
 
-/** The outbox row of one page: one per alert, episode and level. */
-export function pageIdFor(alertId: string, episode: number, level: number): string {
-  return `${alertId}_e${episode}_l${level}`
+/** The outbox row of one page: one per alert, episode and level, and one per re-page of the last level (spec R21). */
+export function pageIdFor(alertId: string, episode: number, level: number, repage = 0): string {
+  return repage > 0 ? `${alertId}_e${episode}_l${level}_r${repage}` : `${alertId}_e${episode}_l${level}`
 }

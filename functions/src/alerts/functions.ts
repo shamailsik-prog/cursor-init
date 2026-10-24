@@ -1,6 +1,6 @@
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
-import { CHECKER_BUDGET_MS, runAlertChecker } from "./checker"
+import { CHECKER_BUDGET_MS, CHECK_RAISE_GRACE_MS, runAlertChecker } from "./checker"
 import { ESCALATOR_BUDGET_MS, runAlertEscalator } from "./escalator"
 
 /**
@@ -12,7 +12,8 @@ import { ESCALATOR_BUDGET_MS, runAlertEscalator } from "./escalator"
 const ESCALATOR_TIMEOUT_SECONDS = 45
 const CHECKER_TIMEOUT_SECONDS = 60
 
-if (!(ESCALATOR_BUDGET_MS + 10_000 <= ESCALATOR_TIMEOUT_SECONDS * 1000) || !(CHECKER_BUDGET_MS + 10_000 <= CHECKER_TIMEOUT_SECONDS * 1000)) {
+// The checker's raises may run CHECK_RAISE_GRACE_MS past its scan budget (spec R20); that grace counts against the 10 s.
+if (!(ESCALATOR_BUDGET_MS + 10_000 <= ESCALATOR_TIMEOUT_SECONDS * 1000) || !(CHECKER_BUDGET_MS + CHECK_RAISE_GRACE_MS + 10_000 <= CHECKER_TIMEOUT_SECONDS * 1000)) {
   throw new Error("alert schedules: each run's budget must end at least 10 s before its function timeout")
 }
 

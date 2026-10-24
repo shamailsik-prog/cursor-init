@@ -1,4 +1,4 @@
-import type { AlertSpec } from "./model"
+import { PLATFORM_ALERT_FIRM, type AlertSpec } from "./model"
 import { detailInt, detailText } from "./raise"
 
 /**
@@ -106,15 +106,27 @@ export function p1CommitSpecs(o: P1Observation, crossings: readonly P1Crossing[]
     severity: c.threshold >= 90 ? "high" : "warning",
     detail: { monthKey: detailText(o.monthKey), threshold: detailInt(c.threshold), budgetMicroUsd: detailInt(c.budgetMicroUsd), spentMicroUsd: detailInt(c.spentMicroUsd) },
   }))
-  if (o.blockReason === "kill_switch_platform" || o.blockReason === "kill_switch_firm") {
-    const scope = o.blockReason === "kill_switch_platform" ? "platform" : "firm"
+  if (o.blockReason === "kill_switch_firm") {
     specs.push({
       condition: "ai.kill_switch_blocked",
       firmId: o.firmId,
-      subjectKey: `killSwitch:${scope}`,
-      ref: scope === "platform" ? "platform/p1" : safeRef("ai_config", o.firmId),
+      subjectKey: "killSwitch:firm",
+      ref: safeRef("ai_config", o.firmId),
       severity: "warning",
-      detail: { scope, model: detailText(o.model) },
+      detail: { scope: "firm", model: detailText(o.model) },
+    })
+  }
+  if (o.blockReason === "kill_switch_platform") {
+    // Spec R24 (re-audit FA-F43-R1-006): one alert for the platform's switch, not one per firm, and read-only once it
+    // exists, so the blocked calls of every firm do not all write one document in their commit transactions.
+    specs.push({
+      condition: "ai.kill_switch_blocked",
+      firmId: PLATFORM_ALERT_FIRM,
+      subjectKey: "killSwitch:platform",
+      ref: "platform/p1",
+      severity: "warning",
+      detail: { scope: "platform", model: detailText(o.model) },
+      observeOnly: true,
     })
   }
   if (o.blockReason === "reservation_failed") {

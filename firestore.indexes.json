@@ -245,6 +245,14 @@
       ]
     },
     {
+      "collectionGroup": "ai_reservations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "quarantinedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "p1_decisions",
       "queryScope": "COLLECTION",
       "fields": [
@@ -422,6 +430,15 @@
         { "fieldPath": "state", "order": "ASCENDING" },
         { "fieldPath": "lastSeenAt", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ops_alerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "condition", "order": "ASCENDING" },
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "clearedAt", "order": "ASCENDING" }
       ]
     },
     {
