@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const LAYER_FLAGS = ["CORE_ENABLED", "LEGACY_GOVERNANCE_CHAINS", "L17_2_ENABLED"]
 const RUNTIME_ACCOUNT = "sikander-functions@"
-const HTTP_ALLOW_ALL = ["api", "health"] as const
+// FA-D3C-002: p1CorpusEmbedding's caller is the corpus service in a separate cloud project (L17.12 step 65), so internal
+// ingress cannot reach it; it is ALLOW_ALL, IAM-private (invoker "private") and verifies its OIDC caller in code.
+const HTTP_ALLOW_ALL = ["api", "health", "p1CorpusEmbedding"] as const
 
 describe("F32 runtime options on every export", () => {
   const saved: Record<string, string | undefined> = {}
@@ -21,7 +23,7 @@ describe("F32 runtime options on every export", () => {
     vi.resetModules()
   })
 
-  it("pins memory, concurrency, identity, caps and ingress on all 14 exports", async () => {
+  it("pins memory, concurrency, identity, caps and ingress on all 15 exports", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<
       string,
@@ -54,6 +56,7 @@ describe("F32 runtime options on every export", () => {
       "ocrLegacySweep",
       "onEventCreated",
       "onJobCreated",
+      "p1CorpusEmbedding",
       "p1ReservationReconciler",
     ])
 
@@ -67,12 +70,13 @@ describe("F32 runtime options on every export", () => {
       expect([name, e!.serviceAccountEmail], name).toEqual([name, RUNTIME_ACCOUNT])
       expect([name, e!.timeoutSeconds], name).not.toEqual([name, null])
       if ((HTTP_ALLOW_ALL as readonly string[]).includes(name)) {
-        if (name === "health") expect([name, e!.ingressSettings]).toEqual([name, "ALLOW_ALL"])
+        if (name === "health" || name === "p1CorpusEmbedding") expect([name, e!.ingressSettings]).toEqual([name, "ALLOW_ALL"])
       } else {
         expect([name, e!.ingressSettings], name).toEqual([name, "ALLOW_INTERNAL_ONLY"])
       }
     }
 
     expect(index.jobWorker.__endpoint!.taskQueueTrigger!.invoker).toEqual([RUNTIME_ACCOUNT])
+    expect((index.p1CorpusEmbedding.__endpoint!.httpsTrigger as { invoker?: string[] }).invoker).toEqual(["private"])
   })
 })

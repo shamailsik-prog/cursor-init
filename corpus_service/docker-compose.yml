@@ -88,8 +88,11 @@ services:
     env_file: app.env
     environment:
       <<: *runtime-env
-      # Optional third-party key: empty disables embeddings (scraper/tasks/embeddings.py).
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # FA-D3C-002: embeddings go through the P1 gateway (Cloud Functions p1CorpusEmbedding); this service holds no
+      # provider key. Empty disables embeddings. Enabling them also needs the corpus service account's OIDC ID token
+      # at /run/secrets/p1_id_token (the default P1_ID_TOKEN_FILE): add the compose secret p1_id_token to this service
+      # in docker-compose.override.yml (README, "Embeddings through P1").
+      P1_EMBEDDING_URL: ${P1_EMBEDDING_URL:-}
     volumes:
       - ./live:/app/live
       - ./blackletter_state:/app/state

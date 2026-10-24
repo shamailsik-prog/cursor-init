@@ -197,6 +197,25 @@
       "schedule": "every 1 minutes"
     },
     {
+      "name": "p1CorpusEmbedding",
+      "kind": "https",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 90,
+      "minInstances": 0,
+      "maxInstances": 2,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_ALL",
+      "invoker": ["private"],
+      "env": ["P1_CORPUS_FIRM_ID", "P1_CORPUS_AUDIENCE", "P1_CORPUS_CALLERS", "AI_GATEWAY_API_KEY"],
+      "why": {
+        "maxInstances": "Cost ceiling: the corpus embedding worker calls one row at a time (FA-D3C-002)",
+        "ingress": "The caller is the corpus service in a separate cloud project (L17.12 step 65); internal ingress cannot reach it. IAM-private (grant roles/run.invoker on this function to the corpus service account only) and the handler verifies the OIDC caller against P1_CORPUS_CALLERS",
+        "invoker": "private: no public binding; the deployment grants the corpus service account roles/run.invoker on this function"
+      }
+    },
+    {
       "name": "auditOutboxReconciler",
       "kind": "schedule",
       "region": "asia-south1",
@@ -247,8 +266,10 @@
   "alerts": {
     "policies": [
       { "event": "deploy.contract_violation", "level": "ERROR", "surface": "functions", "files": ["functions/src/deployConfig.ts"], "runbook": "docs/deploy/RELEASE_RUNBOOK.md" },
-      { "event": "p1.reservation_exceeded", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts", "functions/src/p1/reconciler.ts"], "runbook": "functions/src/p1/README.md" },
-      { "event": "p1.usage_log_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.reservation_exceeded", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts", "functions/src/p1/reconciler.ts", "functions/src/p1/embedding.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.usage_log_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts", "functions/src/p1/embedding.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.corpus_embedding_not_configured", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/corpusEmbedding.ts"], "runbook": "functions/src/p1/README.md" },
+      { "event": "p1.corpus_embedding_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/corpusEmbedding.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.receipt_record_failed", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.overhead_learned", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },
       { "event": "p1.overhead_anomaly", "level": "ERROR", "surface": "functions", "files": ["functions/src/p1/gateway.ts"], "runbook": "functions/src/p1/README.md" },

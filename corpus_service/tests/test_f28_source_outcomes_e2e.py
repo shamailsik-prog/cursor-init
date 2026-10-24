@@ -24,7 +24,6 @@ test. Synthetic fixtures only; nothing leaves the machine.
 import asyncio
 import contextlib
 import logging
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 
@@ -33,7 +32,7 @@ import pytest
 from f25_servers import RecordingServer, client_tls_context, make_test_pki, server_tls_context, serving
 from test_f20_trust_policy_db import assert_migrated, execute, fetch, run
 
-PROVIDER_KEY = "sk-f28-synthetic-not-a-key"
+PROVIDER_KEY = "sk-f28-synthetic-not-a-key"  # FA-D3C-002: the corpus holds no provider key now; a sentinel no record may carry
 CASE_TEXT = "Synthetic F28 fixture judgment {n}. 2099 SCMR {n}01. Not a real judgment."
 BACKOFF = [300, 600, 1200]  # spec R7: min(300 * 2**attempt, 3600)
 
@@ -378,30 +377,24 @@ def _queue_one_statute():
 
 
 def install_provider(monkeypatch, *, fail):
-    """The OpenAI package as an in-process module: the provider is the job's external edge."""
-    from scraper import config
+    """The provider client as an in-process stand-in: the provider is the job's external edge. Since FA-D3C-002 the
+    batch gets it from ``scraper.p1_client.embedding_client`` (the P1 gateway), no longer from the OpenAI package."""
+    from scraper import p1_client
 
     calls = []
-    module = types.ModuleType("openai")
 
     class APIConnectionError(Exception):
         pass
 
     class _Embeddings:
-        async def create(self, model, input):
+        async def create(self, model, input, dimensions, operation_id):
             calls.append(model)
             if fail:
                 raise APIConnectionError("synthetic F28 provider outage")
             return types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[0.001] * 1536)])
 
-    class AsyncOpenAI:
-        def __init__(self, api_key):
-            self.embeddings = _Embeddings()
-
-    module.AsyncOpenAI = AsyncOpenAI
-    module.APIConnectionError = APIConnectionError
-    monkeypatch.setitem(sys.modules, "openai", module)
-    monkeypatch.setattr(config.settings, "OPENAI_API_KEY", PROVIDER_KEY)
+    client = types.SimpleNamespace(embeddings=_Embeddings())
+    monkeypatch.setattr(p1_client, "embedding_client", lambda: client)
     return calls
 
 
