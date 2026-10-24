@@ -148,10 +148,20 @@ export function extractAllowStatements(body: string): AllowStatement[] {
   return out
 }
 
+function normalizeBooleanLiteral(condition: string): string {
+  let n = normalizeRuleBody(condition)
+  for (;;) {
+    const wrapped = n.match(/^\(\s*(.+)\s*\)$/)
+    if (!wrapped) break
+    const inner = wrapped[1].trim()
+    if (inner === n) break
+    n = inner.replace(/\s+/g, " ").trim()
+  }
+  return n
+}
+
 function isUnconditionallyFalse(condition: string): boolean {
-  const n = normalizeRuleBody(condition)
-  if (n === "false") return true
-  return /^\(\s*false\s*\)$/.test(n)
+  return normalizeBooleanLiteral(condition) === "false"
 }
 
 /** Every allow in the block must be `if false` only (structural; equivalent spacing/order/split allows OK). */
