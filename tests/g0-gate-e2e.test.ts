@@ -151,7 +151,8 @@ function caseTree(base: string): string {
 const PW_IMPORT = 'import { chromium } from "playwright"\nexport const browser = chromium\n';
 const OPENAI_IMPORT = 'import OpenAI from "openai"\nexport const client = OpenAI\n';
 
-type GateCase = { name: string; rel: string; body: string; reports: string[] };
+/** `extra`: further files planted beside `rel` (a case that needs two files, such as the auditor's T4b). */
+type GateCase = { name: string; rel: string; body: string; reports: string[]; extra?: Record<string, string> };
 
 const PLANTED: GateCase[] = [
   // Re-audit defect 1: skip-anywhere.
@@ -202,6 +203,35 @@ const PLANTED: GateCase[] = [
     body: JSON.stringify({ dependencies: { openai: "4.0.0" } }),
     reports: ["functions/package.json: dependencies lists openai"],
   },
+  // Audit F34 R1-003, check [21]: the re-auditor's two planted ad-hoc send sites (re-audit evidence
+  // template-experiments.json T4 and T4b), which passed the call-site regex and G-0 at e37b115.
+  {
+    name: "F34 R1-003 T4: an alias of activeTransport() sending an unregistered system prompt from functions/src",
+    rel: "functions/src/p1/zzAuditAdhoc.ts",
+    body:
+      'import { activeTransport } from "./transport"\n\n' +
+      "export async function adhocSummary(text: string): Promise<string | undefined> {\n" +
+      "  const gw = activeTransport()\n" +
+      '  const reply = await gw?.send({ messages: [{ role: "system", content: "You are a helpful assistant. Summarise." }, { role: "user", content: text }], model: "anthropic/claude-opus-5.5", maxTokens: 512 })\n' +
+      "  return reply?.text\n" +
+      "}\n",
+    reports: ["FAIL: functions/src/p1/zzAuditAdhoc.ts: imports activeTransport from functions/src/p1/transport"],
+  },
+  {
+    name: "F34 R1-003 T4b: the send placed in platform/p1 and handed the transport from functions/src",
+    rel: "functions/src/p1/zzAuditAdhoc2.ts",
+    body:
+      'import { adhocSend } from "@/platform/p1/zzAuditAdhoc"\nimport { activeTransport } from "./transport"\n' +
+      "export const adhoc = (text: string) => adhocSend(activeTransport()!, text)\n",
+    extra: {
+      "platform/p1/zzAuditAdhoc.ts":
+        "type T = { send(r: { model: string; messages: { role: string; content: string }[]; maxTokens: number }): Promise<{ text?: unknown }> }\n" +
+        "export async function adhocSend(t: T, text: string) {\n" +
+        '  return t.send({ model: "anthropic/claude-opus-5.5", messages: [{ role: "system", content: "Ad hoc." }, { role: "user", content: text }], maxTokens: 512 })\n' +
+        "}\n",
+    },
+    reports: ["FAIL: functions/src/p1/zzAuditAdhoc2.ts: imports activeTransport from functions/src/p1/transport"],
+  },
 ];
 
 describe("Gate G-0 end to end (FA-CI-001)", () => {
@@ -211,11 +241,13 @@ describe("Gate G-0 end to end (FA-CI-001)", () => {
     base = buildBaseTree();
   }, GATE_TIMEOUT_MS);
 
+  // Every case copies the whole base tree (functions/src included), so removing them all can outrun the 15 s default
+  // hook timeout on a loaded runner; the cleanup gets the same allowance as a gate run.
   afterAll(() => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, GATE_TIMEOUT_MS);
 
   it(
     "control: the minimal tree with allowlisted and P1 uses passes G-0",
@@ -230,6 +262,8 @@ describe("Gate G-0 end to end (FA-CI-001)", () => {
       expect(result.out).toContain(
         "PASS: no AI SDK, provider SDK, provider key or provider host in the Next/eve runtime; no deploy surface binds a provider key",
       );
+      // Audit F34 R1-003, check [21]: the real send sites and the eval CLI are copied in with functions/src.
+      expect(result.out).toContain("PASS: P1 transports are imported only by their grants");
       expect(result.out).toContain("=== Gate G-0 PASSED (static) ===");
       expect(result.status).toBe(0);
     },
@@ -238,9 +272,10 @@ describe("Gate G-0 end to end (FA-CI-001)", () => {
 
   it.each(PLANTED)(
     "planted violation fails G-0: $name",
-    ({ rel, body, reports }) => {
+    ({ rel, body, reports, extra }) => {
       const dir = caseTree(base);
       plant(dir, rel, body);
+      for (const [extraRel, extraBody] of Object.entries(extra ?? {})) plant(dir, extraRel, extraBody);
       const result = runGate(dir);
       for (const report of reports) expect(result.out).toContain(report);
       expect(result.out).toContain("=== Gate G-0 FAILED ===");
