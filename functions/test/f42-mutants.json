@@ -81,6 +81,18 @@
     "why": "Functions listMatters must omit a tombstoned matter"
   },
   {
+    "id": "T8-next-document-get-keeps-tombstoned",
+    "area": "tombstone",
+    "file": "platform/persistence/firestoreSpineRepositories.ts",
+    "old": "        if (await rowIsTombstoned(db, \"documents\", id, data, firm)) return null\n",
+    "new": "",
+    "tests": [
+      "tests/f42-tombstone-next.e2e.firestore.test.ts"
+    ],
+    "runner": "root",
+    "why": "the Next documents.get (F13's direct read) must read a tombstoned matter's document as absent"
+  },
+  {
     "id": "A1-complete-on-any",
     "area": "acknowledgement",
     "file": "functions/src/retention/acks.ts",

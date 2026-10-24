@@ -501,6 +501,8 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         if (data.firmId !== firm) return null
         const parsed = readDocumentRecord(id, data)
         if (!parsed) throw new DocumentMalformedError(id)
+        // Audit F42: a document of a tombstoned matter reads as absent, as every other firm-scoped get (getById).
+        if (await rowIsTombstoned(db, "documents", id, data, firm)) return null
         return parsed
       },
       // Codex P2 on #99: the stored row and the merged result are both validated, in one transaction, BEFORE the write,
