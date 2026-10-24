@@ -63,17 +63,17 @@ async function provisionPartner(): Promise<Provisioned> {
 
 const goodRow = (firmId: string) => ({
   firmId,
-  matterId: null,
+  matterId: null as string | null,
   contentHash: "sha256:ab",
-  sourceChannel: "web",
-  classification: "internal",
+  sourceChannel: "web" as const,
+  classification: "internal" as const,
   storagePath: "firm/obj",
   isImmutable: true,
   byteSize: 12,
   mimeType: "application/pdf",
   objectVersion: 1,
   uploadedBy: "u_up",
-  objectBytesStatus: "available",
+  objectBytesStatus: "available" as const,
 })
 
 describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F13 FA-F13-026: documents GET drops cache on malformed stored firmId", () => {
