@@ -91,6 +91,7 @@ export default defineConfig({
             "tests/audit-f02-console-functions-auth.e2e.test.ts",
             "tests/audit-f02-functions-http-emulator.e2e.test.ts",
             "tests/f02-next-authority.e2e.firestore.test.ts",
+            "tests/f42-tombstone-next.e2e.firestore.test.ts",
           ]),
     ],
   },

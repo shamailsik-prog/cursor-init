@@ -20,6 +20,11 @@ A scheduled job is a cron tick that enqueues one run per firm per period. The ru
 | --- | --- | --- |
 | `d1.autoconfirm` | `15 2 * * *` | day |
 | `d1.conflict.reindex` | `35 2 * * *` | day |
+| `retention.apply` | `0 1 * * *` | day |
+
+Audit F42 also registers the deletion saga's two firm-level saga types, `retention.matter.prepare` and
+`retention.store.purge` (`functions/src/retention/saga.ts`), and the engine refuses any job whose `matterId` has a
+tombstone before its handler runs (permanent engine code `matter_deleted`). Runbook: `docs/runbooks/retention-deletion.md`.
 
 To add one: register its handler in `registry.ts`, add a `ScheduledJobSpec` to `SCHEDULED_JOBS` in `scheduled.ts`, and export `scheduledJobFunction(spec)` from `functions.ts` (and list the export in `NOT_TENANT_ENDPOINTS` in `functions/test/g2.cross-firm.test.ts`).
 

@@ -117,6 +117,14 @@ function buildBaseTree(): string {
     "scripts/deploy-preflight.sh",
     "app/api/p1/committee-brain/route.ts",
     "app/api/d1/documents/route.ts",
+    // Check [22] (audit F42): the data inventory gate finds stores in firestore.rules, Firestore collection literals,
+    // object key prefixes and Postgres tables; these three files name the collections, the object prefix and the tables
+    // found nowhere in the paths above, so no inventoried store reads as stale in the minimal tree.
+    "platform/persistence/firestoreSpineRepositories.ts",
+    "platform/documents/documentObjectStore.ts",
+    "corpus_service/scraper/models.py",
+    // Check [20] (audit F42): the runbook of the retention.deletion_unacknowledged alert.
+    "docs/runbooks/retention-deletion.md",
     // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
     "corpus_service/docker/postgres/provision-roles.sh",
     "services/d5-1/researchCorpus.ts",

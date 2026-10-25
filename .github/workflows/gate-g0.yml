@@ -202,7 +202,9 @@ jobs:
     name: Cloud Functions
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: on PR #128 (F42) the suite passed (2773 tests, 1753.9 s) but the job hit the 30-minute cap during
+    # emulator shutdown. Main 798cf56 took 23m46s for the whole job. The F42 retention e2e adds about 100 s locally.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
