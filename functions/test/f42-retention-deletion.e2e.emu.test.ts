@@ -1,5 +1,5 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import inventory from "@/infra/retention/inventory.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
@@ -11,6 +11,7 @@ import { enqueueJob } from "../src/p2/enqueue"
 import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi, ApiError } from "./api"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
+import { deleteFirmScopedData } from "./firmCleanup"
 import { FakeClock, testDeps } from "./jobs"
 
 /**
@@ -169,8 +170,16 @@ const PURGED = [
   "jobs",
 ]
 
+// Every firm and auth user this file creates, deleted in afterAll. The anonymised usage rows, vault tombstones and
+// acknowledgements the saga leaves by design (about 32,000 documents) would otherwise stay in the shared emulator and
+// slow every later suite's firm-scoped scans (fa-d3c-embedding's afterAll then ran past its 120 s hook timeout).
+// deleteFirmScopedData, not deleteFirmData: the latter's per-id range scans over this many rows took minutes.
+const firms: string[] = []
+const uids: string[] = []
+
 async function newFirm(): Promise<Firm> {
   const firmId = uniq("f42firm")
+  firms.push(firmId)
   await adminDb().collection("firms").doc(firmId).set({ name: "F42", plan: "internal", rateLimits: { general: 1000 } })
   const [P, Q, A, C, outsider] = [
     await mintIdToken(claims(firmId, "partner")),
@@ -179,6 +188,7 @@ async function newFirm(): Promise<Firm> {
     await mintIdToken(claims(firmId, "clerk")),
     await mintIdToken(claims(firmId, "partner")),
   ]
+  uids.push(P.uid, Q.uid, A.uid, C.uid, outsider.uid)
   const matterId = uniq("f42m")
   const otherMatterId = uniq("f42other")
   await seedMatter(firmId, matterId, TITLE, [P.uid, Q.uid, A.uid, C.uid])
@@ -233,6 +243,10 @@ async function f02Get(path: string, f: Firm, m: Member, query: Record<string, st
   )
   return { status: out.status, code: (out.body as { error?: { code?: string } } | undefined)?.error?.code }
 }
+
+afterAll(async () => {
+  if (EMULATORS) await deleteFirmScopedData(firms, uids)
+}, 120_000)
 
 afterEach(() => {
   delete retentionTestSeam.policy

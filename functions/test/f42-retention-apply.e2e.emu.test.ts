@@ -1,5 +1,5 @@
 import { Timestamp } from "firebase-admin/firestore"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, describe, expect, it } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { adminDb } from "../src/admin"
 import { alertIdFor } from "../src/alerts/model"
@@ -9,6 +9,7 @@ import { runRetentionWatch } from "../src/retention/watch"
 import { SCHEDULED_JOBS } from "../src/p2/scheduled"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
+import { deleteFirmScopedData } from "./firmCleanup"
 import { FakeClock, enqueueAt, testDeps } from "./jobs"
 
 /**
@@ -18,6 +19,18 @@ import { FakeClock, enqueueAt, testDeps } from "./jobs"
  */
 
 const DAY = 86_400_000
+
+// Every firm this file creates, deleted in afterAll so its rows do not stay in the shared emulator.
+const firms: string[] = []
+const firmFor = (prefix: string): string => {
+  const firmId = uniq(prefix)
+  firms.push(firmId)
+  return firmId
+}
+
+afterAll(async () => {
+  if (EMULATORS) await deleteFirmScopedData(firms)
+}, 120_000)
 
 function periodPolicy(): RetentionPolicy {
   const p = structuredClone(shippedPolicy) as unknown as RetentionPolicy
@@ -66,7 +79,7 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
   })
 
   it("the shipped policy deletes nothing", async () => {
-    const firmId = uniq("f42ret")
+    const firmId = firmFor("f42ret")
     const ids = await seed(firmId, uniq("m"), uniq("held"))
     expect(await runApply(firmId, "2026-10-24")).toBe("done")
     for (const key of Object.keys(ids)) expect(await exists(key.includes("Output") ? "committee_outputs" : "ai_usage_logs", ids[key]), key).toBe(true)
@@ -86,7 +99,7 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
 
   it("a test policy deletes and anonymises rows older than the period, keeps younger rows and spares a held matter", async () => {
     retentionTestSeam.policy = periodPolicy()
-    const firmId = uniq("f42ret")
+    const firmId = firmFor("f42ret")
     const matterId = uniq("m")
     const ids = await seed(firmId, matterId, uniq("held"))
     // F34's decision records age with the AI records, by `settledAt`.
@@ -105,14 +118,14 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     const run = (await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-25`).get()).data()
     expect(run).toMatchObject({ deleted: { firestore_committee_outputs: 1 }, anonymised: { firestore_ai_usage_logs: 1, firestore_p1_decisions: 1 }, skippedHeld: 1 })
     // Another firm's old rows are never touched by this firm's run.
-    const other = uniq("f42ret")
+    const other = firmFor("f42ret")
     const otherIds = await seed(other, uniq("m"), uniq("held"))
     expect(await runApply(firmId, "2026-10-26")).toBe("done")
     expect(await exists("committee_outputs", otherIds.oldOutput)).toBe(true)
   })
 
   it("the watch raises one F43 durable alert per overdue in-progress request, with ids and counts only", async () => {
-    const firmId = uniq("f42watch")
+    const firmId = firmFor("f42watch")
     const db = adminDb()
     const now = Date.now()
     const overdue = uniq("req")
@@ -150,7 +163,7 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
   })
 
   it("a request that falls overdue behind a full page of already-alerted ones is still alerted", async () => {
-    const firmId = uniq("f42watchpage")
+    const firmId = firmFor("f42watchpage")
     const db = adminDb()
     const now = Date.now()
     // 201 halted requests, overdue for years and alerted long ago: they stay in_progress (a hold halted them).
