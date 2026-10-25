@@ -12,6 +12,7 @@ import { p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
 import { setP1TransportForTests } from "../src/p1/transport"
 import { retentionTestSeam, type RetentionPolicy } from "../src/retention/config"
+import { enqueueJob } from "../src/p2/enqueue"
 import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi } from "./api"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
@@ -520,5 +521,29 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-001: a stored answer is not replayed for 
     await send(approveApi, f, f.Q, { requestId: (requested.body as { requestId: string }).requestId })
     const replayed = await postWithKey("/api/platform/retention/requestMatterDeletion", f.P, f.firmId, { matterId: f.matterId, reasonCode: "client_instruction" }, reqKey)
     expect(replayed).toMatchObject({ status: 200, body: { reused: true, status: "pending_approval" } })
+  })
+})
+
+
+const getJobApi = viaApi<Record<string, unknown>>("getJob")
+const listJobsApi = viaApi<{ items: Array<{ jobId: string }> }>("listJobs")
+const cancelJobApi = viaApi<Record<string, unknown>>("cancelJob")
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-009: a deleted matter's job rows are hidden", () => {
+  it("getJob, the firm queue (listJobs) and cancelJob no longer show the tombstoned matter's job; before the approval they do", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const { jobId } = await adminDb().runTransaction((tx) =>
+      enqueueJob(tx, { firmId: f.firmId, jobType: "platform.diagnostic", classification: "internal", matterId: f.matterId, payload: { behaviour: "succeed" }, idempotencyKey: uniq("k"), createdBy: f.P.uid }, { now: Date.now() })
+    )
+    // Control: the member partner sees the job in full, and the firm queue lists it.
+    expect((await send(getJobApi, f, f.P, { jobId })).matterId).toBe(f.matterId)
+    expect((await send(listJobsApi, f, f.P, { limit: "50" })).items.map((i) => i.jobId)).toContain(jobId)
+    await requestAndApprove(f)
+    // No saga job has run: every refusal below comes from the tombstone (the matter row and the job row are intact).
+    expect(`${(await apiErrorOf(send(getJobApi, f, f.P, { jobId }))).status}`).toBe("404")
+    expect((await send(listJobsApi, f, f.P, { limit: "50" })).items.map((i) => i.jobId)).not.toContain(jobId)
+    const cancel = await apiErrorOf(send(cancelJobApi, f, f.P, { jobId, note: "Cancelled after the matter was deleted." }))
+    expect(cancel.status).toBe(404)
   })
 })
