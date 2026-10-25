@@ -13,6 +13,11 @@ import {
   nextDraftTemplateAnalyticsSearchRows,
   readDraftTemplateAnalyticsRow,
 } from "@/platform/persistence/draftTemplateAnalytics"
+import {
+  nextCourtOpsAckRow,
+  readWorkflowOpsActivityRow,
+  refuseBlindCourtOpsAckWrite,
+} from "@/platform/persistence/courtOpsAcknowledgement"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -2440,15 +2445,35 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         ))
       },
     },
+    // FA-D4-001-FU1: a court-ops acknowledgement is written only by recordCourtOpsAcknowledgement, one transaction that
+    // reads the caller's own firm-qualified row, refuses another firm's or a malformed one, and writes the next row.
+    // Inside an idempotent request it is the F10 fenced transaction, so the claim check, the effect marker and the F11
+    // outbox entry commit with it. Legacy `ops:court_ops:ack:{queueType}:{id}` rows are never read or written here.
     workflowOpsActivity: {
       async upsert(row) {
+        refuseBlindCourtOpsAckWrite(row.id)
         await setDoc(doc(db, "workflow_ops_activity", row.id), row)
       },
+      async recordCourtOpsAcknowledgement(firmId, row) {
+        const firm = requireCallerFirmId(firmId, "workflowOpsActivity.recordCourtOpsAcknowledgement")
+        const ref = doc(db, "workflow_ops_activity", row.id)
+        return runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref)
+          const next = nextCourtOpsAckRow(firm, row, snap.exists() ? snap.data() : null)
+          tx.set(ref, next)
+          return next
+        })
+      },
       async get(id, firmId) {
-        return getById<WorkflowOpsActivityRow>(db, "workflow_ops_activity", id, firmId)
+        const row = await getById<WorkflowOpsActivityRow>(db, "workflow_ops_activity", id, firmId)
+        return row ? readWorkflowOpsActivityRow(id, row) : null
       },
       async listByFirm(firmId) {
-        return listByFirm<WorkflowOpsActivityRow>(db, "workflow_ops_activity", firmId)
+        const page = await listAllRowsByFirm<WorkflowOpsActivityRow>(db, "workflow_ops_activity", firmId)
+        const items = page.items
+          .map((row) => readWorkflowOpsActivityRow(row.id, row))
+          .filter((row): row is WorkflowOpsActivityRow => row !== null)
+        return asFirmScopedList({ ...page, items })
       },
     },
     workflowOpsAlertDigests: {

@@ -99,6 +99,54 @@ export function listCourtOpsQueue(
   }
 }
 
+/**
+ * FA-D4-001-FU1 (spec R4): the item an acknowledgement names is absent, another firm's, or not visible to the caller.
+ * One answer for all three (404), so the endpoint is no existence oracle across firms.
+ */
+export class CourtOpsItemNotFoundError extends Error {
+  readonly code = "court_ops_item_not_found"
+  constructor() {
+    super("court ops item not found")
+    this.name = "CourtOpsItemNotFoundError"
+  }
+}
+
+export type CourtOpsAckTarget = {
+  actor: OpsActor
+  documentId: string | null
+  followUpId: string | null
+}
+
+/**
+ * FA-D4-001-FU1 (spec R4): the queue item an acknowledgement names, resolved in the caller's firm and under the queue
+ * listing's own visibility (a follow-up: its matter's permission; a workflow item: its matter's permission when
+ * matter-bound, and its document readable). Any status: an item a colleague resolved a moment ago can still be
+ * acknowledged. Throws CourtOpsItemNotFoundError otherwise. The store must hold the caller firm's rows (the route's
+ * syncCourtOpsState).
+ */
+export function resolveCourtOpsAckItem(
+  store: SpineStore,
+  input: { actorId: string; queueType: "follow_up" | "workflow"; id: string }
+): CourtOpsAckTarget {
+  const actor = requireOpsActor(store, input.actorId)
+  if (input.queueType === "follow_up") {
+    const follow = store.followUps.find((row) => row.id === input.id)
+    if (!follow || follow.firmId !== actor.firmId || !canAccessMatter(store, actor.id, follow.matterId)) {
+      throw new CourtOpsItemNotFoundError()
+    }
+    return { actor, documentId: null, followUpId: follow.id }
+  }
+  const row = store.documentWorkflow.get(input.id)
+  if (!row || row.documentId !== input.id || row.firmId !== actor.firmId) throw new CourtOpsItemNotFoundError()
+  if (row.matterId && !canAccessMatter(store, actor.id, row.matterId)) throw new CourtOpsItemNotFoundError()
+  if (!canSeeDocument(store, actor.id, row.documentId)) throw new CourtOpsItemNotFoundError()
+  return { actor, documentId: row.documentId, followUpId: null }
+}
+
+/**
+ * The acknowledgement's audit row. FA-D4-001-FU1 (spec R7): the route calls this only AFTER the activity row committed,
+ * so a write that failed never leaves an "acknowledged" audit row behind.
+ */
 export function acknowledgeCourtOpsItem(
   store: SpineStore,
   input: {
