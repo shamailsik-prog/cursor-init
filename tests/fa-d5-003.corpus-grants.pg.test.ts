@@ -280,7 +280,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
       expect(readable.rows[0].names).toBe(AUTHORITY_READABLE.join(","))
     })
 
-    it("the inventory lists both research views (35 relations), so provisioning keeps them with the superuser", async () => {
+    it("the inventory lists research views and term tables (37 relations), so provisioning keeps them with the superuser", async () => {
       const inv = await db.admin.query("SELECT count(*)::int AS n, bool_and(r::text <> '') AS ok, array_agg(r::text ORDER BY r::text) AS names FROM corpus_contract_relations() r")
       expect(inv.rows[0].n).toBe(37)
       expect(inv.rows[0].names).toEqual(expect.arrayContaining(["v_research_judgment", "v_research_embedding"]))
