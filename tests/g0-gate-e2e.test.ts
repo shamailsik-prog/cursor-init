@@ -123,6 +123,10 @@ function buildBaseTree(): string {
     "platform/persistence/firestoreSpineRepositories.ts",
     "platform/documents/documentObjectStore.ts",
     "corpus_service/scraper/models.py",
+    // FA-F42-R1-008 (spec R28): a server-only collection must be named in code, not only in firestore.rules; these two
+    // files hold the constants (AUDIT_OUTBOX_COLLECTION, MATTER_TOMBSTONES) the copied Functions sources name them by.
+    "platform/persistence/auditOutboxContract.ts",
+    "platform/retention/tombstone.ts",
     // Check [20] (audit F42): the runbook of the retention.deletion_unacknowledged alert.
     "docs/runbooks/retention-deletion.md",
     // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
