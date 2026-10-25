@@ -728,6 +728,61 @@ const FAILING: Case[] = [
     },
     reports: [VIOLATION],
   },
+  {
+    name: "FA-F34-R7-002: cast setTimeout string codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (setTimeout as any)("require(\\"./transport\\")")\n' },
+    reports: ["generates code at run time (setTimeout with string argument)"],
+  },
+  {
+    name: "FA-F34-R7-002: cast setInterval string codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (setInterval as any)("require(\\"./transport\\")")\n' },
+    reports: ["generates code at run time (setInterval with string argument)"],
+  },
+  {
+    name: "FA-F34-R7-002: cast globalThis eval codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (globalThis as any).eval("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R7-001 W4: anon function on p1TestSeam captures transport.send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW4 = function () {\n  const transport = activeTransport()!\n  return transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)", "transport-capturing closure on sealed export"],
+  },
+  {
+    name: "FA-F34-R7-001 W5: object method on p1TestSeam captures transport.send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW5 = {\n  run() {\n    const transport = activeTransport()!\n    return transport.send({ model: "m", messages: [], maxTokens: 1 })\n  },\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)", "transport-capturing closure on sealed export"],
+  },
+  {
+    name: "FA-F34-R7-001 W5b: method shorthand on exported holder captures send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'const __zzHolder = {\n  sendAdhoc(x: string) {\n    const transport = activeTransport()!\n    return transport.send({ model: "m", messages: [{ role: "user", content: x }], maxTokens: 1 })\n  },\n}\n;(p1TestSeam as any).zzW5b = __zzHolder\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)"],
+  },
+  {
+    name: "FA-F34-R7-001 W5c: getter on p1TestSeam returns activeTransport()",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW5c = {\n  get gateway() {\n    return activeTransport()!\n  },\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "transport-capturing closure on sealed export"],
+  },
 ]
 
 describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {

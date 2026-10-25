@@ -314,9 +314,44 @@ function isTypeAliasToTransport(checker: ts.TypeChecker, node: ts.TypeAliasDecla
 function isSealedTarget(expr: ts.Expression, sealed: Set<string>): boolean {
   const e = unwrapExpression(expr)
   if (ts.isIdentifier(e) && sealed.has(e.text)) return true
-  if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && sealed.has(e.expression.text)) return true
-  if (ts.isElementAccessExpression(e) && ts.isIdentifier(e.expression) && sealed.has(e.expression.text)) return true
+  if (ts.isPropertyAccessExpression(e)) {
+    const base = unwrapExpression(e.expression)
+    if (ts.isIdentifier(base) && sealed.has(base.text)) return true
+  }
+  if (ts.isElementAccessExpression(e)) {
+    const base = unwrapExpression(e.expression)
+    if (ts.isIdentifier(base) && sealed.has(base.text)) return true
+  }
   return false
+}
+
+function objectLiteralEscapesTransport(
+  checker: ts.TypeChecker,
+  obj: ts.ObjectLiteralExpression,
+  tainted: Set<string>,
+): boolean {
+  return obj.properties.some((p) => {
+    if (ts.isMethodDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p)) {
+      return functionCapturesTainted(p, tainted)
+    }
+    if (ts.isPropertyAssignment(p)) {
+      const init = unwrapExpression(p.initializer)
+      if (isFunctionLike(init) && functionCapturesTainted(init, tainted)) return true
+      return expressionCapableOfTransport(checker, p.initializer, tainted)
+    }
+    return false
+  })
+}
+
+function rhsEscapesViaSealedHolder(
+  checker: ts.TypeChecker,
+  right: ts.Expression,
+  tainted: Set<string>,
+): boolean {
+  const u = unwrapExpression(right)
+  if (ts.isObjectLiteralExpression(u) && objectLiteralEscapesTransport(checker, u, tainted)) return true
+  if (isFunctionLike(u) && functionCapturesTainted(u, tainted)) return true
+  return exportLeaksTransport(checker, right, tainted) || expressionCapableOfTransport(checker, right, tainted)
 }
 
 function isEnvAssignmentTarget(expr: ts.Expression): boolean {
@@ -444,7 +479,11 @@ function checkExportBody(
     }
     if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       if (isSealedTarget(n.left, sealed)) {
-        findings.push(`${rel}: ${VIOLATION} (sealed export mutation)`)
+        if (rhsEscapesViaSealedHolder(checker, n.right, tainted)) {
+          findings.push(`${rel}: ${VIOLATION} (${exportName} attaches transport-capturing closure to sealed export)`)
+        } else {
+          findings.push(`${rel}: ${VIOLATION} (sealed export mutation)`)
+        }
       }
       if (ts.isPropertyAccessExpression(n.left) || ts.isElementAccessExpression(n.left)) {
         const rt = checker.getTypeAtLocation(n.right)
@@ -553,7 +592,11 @@ function checkSealedAndSideChannels(
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
     if (isSealedTarget(node.left, sealed)) {
-      findings.push(`${rel}: ${VIOLATION} (sealed export mutation)`)
+      if (rhsEscapesViaSealedHolder(checker, node.right, tainted)) {
+        findings.push(`${rel}: ${VIOLATION} (transport-capturing closure on sealed export)`)
+      } else {
+        findings.push(`${rel}: ${VIOLATION} (sealed export mutation)`)
+      }
     }
     if (isEnvAssignmentTarget(node.left) && expressionLeaksTransportForEnvWrite(checker, node.right, tainted)) {
       findings.push(`${rel}: ${VIOLATION} (forbidden environment write)`)

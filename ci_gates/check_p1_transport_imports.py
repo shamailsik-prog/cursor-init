@@ -1026,13 +1026,43 @@ def _mentions_type(c: Code, a: int, b: int) -> bool:
     return any(c.toks[k].kind == "id" and c.toks[k].value in TYPE_NAMES and not c.member(k) for k in range(a, b))
 
 
+def _control_flow_before_paren(c: Code, open_i: int) -> bool:
+    return c.word(open_i - 1, "if", "for", "while", "switch", "with", "catch", "else")
+
+
+def _function_body_after_param_close(c: Code, close_i: int) -> tuple[int, int] | None:
+    """A `{` body opened immediately after `)` of a parameter list (anon fn, method, ctor)."""
+    if not c.punct(close_i + 1, "{"):
+        return None
+    open_i = c.open.get(close_i)
+    if open_i is None or _control_flow_before_paren(c, open_i):
+        return None
+    body_open = close_i + 1
+    body_end = c.close.get(body_open, len(c.toks))
+    prev = open_i - 1
+    while prev >= 0 and c.toks[prev].kind == "punct" and c.toks[prev].value in ("!", "?", ".", "?.", ":", ">", "<"):
+        prev -= 1
+    if prev >= 0 and c.word(prev, "function"):
+        return body_open + 1, body_end
+    if prev >= 0 and c.toks[prev].kind == "id":
+        if c.word(prev - 1, "async", "get", "set") or c.punct(prev - 1, ".", ":", ",", "{", "=>", "="):
+            return body_open + 1, body_end
+    if c.punct(open_i - 1, "=", "(", ",", ":", "!", "?", "{") or c.word(open_i - 1, "return", "throw", "await", "else"):
+        return body_open + 1, body_end
+    return None
+
+
 def _executable_scopes(c: Code) -> list[tuple[int, int]]:
-    """Token ranges [start, end) for function bodies (declarations and `=>` bodies)."""
+    """Token ranges [start, end) for function bodies (declarations, arrows, anon fns, methods)."""
     ranges: list[tuple[int, int]] = []
     for _name, a, b, _exported in _functions(c):
         ranges.append((a, b))
     toks = c.toks
     for i, t in enumerate(toks):
+        if t.kind == "punct" and t.value == ")":
+            span = _function_body_after_param_close(c, i)
+            if span is not None:
+                ranges.append(span)
         if t.kind != "punct" or t.value != "=>":
             continue
         if c.punct(i + 1, "{"):
@@ -1200,10 +1230,30 @@ def _codegen_evasion_findings(c: Code, rel: str) -> list[str]:
     out: list[str] = []
     toks = c.toks
     for i, t in enumerate(toks):
+        if t.kind == "punct" and t.value == "(" and c.punct(i - 1, ")"):
+            inner_close = i - 1
+            inner_open = c.open.get(inner_close)
+            if inner_open is not None and c.ident(inner_open + 1) and c.toks[inner_open + 1].value in _TIMEOUT_NAMES:
+                folded, _ = _fold_string_from(c, i + 1)
+                if folded is not None:
+                    out.append(
+                        f"{rel}: generates code at run time ({c.toks[inner_open + 1].value} with string argument)",
+                    )
         if t.kind == "id" and t.value in _TIMEOUT_NAMES and c.punct(i + 1, "(") and not c.member(i):
             folded, _ = _fold_string_from(c, i + 2)
             if folded is not None:
                 out.append(f"{rel}: generates code at run time ({t.value} with string argument)")
+        if c.punct(i, ".") and c.word(i + 1, "eval", "Function"):
+            j = i - 1
+            while j >= 0 and c.punct(j, ")", "!", "?", "as"):
+                if c.punct(j, ")"):
+                    o = c.open.get(j)
+                    if o is not None and c.ident(o + 1) and c.toks[o + 1].value in ("globalThis", "global") and not c.member(o + 1):
+                        out.append(f"{rel}: generates code at run time ({c.toks[i + 1].value})")
+                        break
+                    j = o - 1
+                    continue
+                j -= 1
         if t.kind == "id" and t.value in ("globalThis", "global") and not c.member(i):
             if c.punct(i + 1, ".") and c.word(i + 2, "eval", "Function"):
                 out.append(f"{rel}: generates code at run time ({c.toks[i + 2].value})")
