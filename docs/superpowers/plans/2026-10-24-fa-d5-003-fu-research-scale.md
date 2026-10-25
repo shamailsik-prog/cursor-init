@@ -35,8 +35,8 @@ no main counterpart (main has no index).
 | Finding | Test (file) | Main (RED) | Branch (GREEN) |
 |---|---|---|---|
 | R1-001 | scale e2e `tests/fa-d5-003.scale.e2e.firestore.test.ts` (3) | 2 failed (answers, latency: 503 `row_cap`), 1 passed (corpus size) | 3/3 |
-| R1-001 | parity `tests/fa-d5-003.parity.pg.test.ts` (6 RED, 7 GREEN) | 5 failed (keyword 172/172, vector 40/40, blend 40/40 differ: `row_cap`; declassify; k = 50), 1 passed | 7/7, 0 diffs in 172 + 40 + 40 + 4 + 4 + 5 + 4 queries |
-| R1-001 | (G) parity: hidden citations and citation writes | n/a | in the 7 above |
+| R1-001 | parity `tests/fa-d5-003.parity.pg.test.ts` (6 at 61b4d3f, 8 at the head) | 5 failed (keyword 172/172, vector 40/40, blend 40/40 differ: `row_cap`; declassify; k = 50), 1 passed | 8/8 at 50157bf, 0 diffs in 172 + 40 + 40 + 4 + 4 + 5 + 4 + 4 queries |
+| R1-001 | (G) parity: hidden citations and citation writes; R4a outside the keyword top k (826c52f, written after M14 survived parity alone) | n/a | in the 8 above |
 | R1-001 | `tests/fa-d5-003.corpus-grants.pg.test.ts` (21 RED, 22 GREEN) | 7 failed for R1-001 (relations, views, inventory, index grants, `v_research_term`, read nothing else, bounds) | 22/22 |
 | R1-001 | (G) grants: 006 copies 004's rule verbatim | n/a | in the 22 above |
 | R1-001 | `tests/fa-d5-003.research-source.test.ts` R19, R23 (32 in file) | 2 failed | 32/32 |
@@ -44,7 +44,17 @@ no main counterpart (main has no index).
 | R1-001 | `tests/research-terms.golden.test.ts` (3), `corpus_service/tests/test_research_terms.py` (6) | 3/3, 6/6 (fold parity guard, committed with the RED tests) | 3/3, 6/6 |
 | R1-002 | `tests/fa-d5-003.research-corpus.e2e.firestore.test.ts` lock test (14 in file) | 1 failed (400, not 503) | 14/14 |
 | R1-002 | `tests/fa-d5-003.research-source.test.ts` R1-002 (2) | 2 failed | pass |
+| R1-002 | changed expectations in `tests/fa-d5.research-search.e2e.test.ts` (2 of 23: a lock breach is 503, not 400) | 2 failed (400) | pass |
 | R1-003 | corpus-grants R1-003 test (1) | 1 failed | pass |
 | R1-003 | `functions/test/d4.corpus-authority.pg.test.ts` new shapes (3 of 61) | 3 failed | 61/61; F05 four files 93/93 |
 | R1-004 | corpus-grants allowlist shapes, metadata, nocite and followed tests | pass on main code (missing tests); the audit's surviving mutants X08-X11, X13-X15 ported to the branch are killed (mutation table) | pass |
 | R1-005 | E-52 | n/a (document) | written |
+
+**Final verification, after merging origin/main @ 798cf56.** RED: the head's tests, helpers and harnesses on origin/main
+798cf56's production code, in this worktree (the eight production files the branch modifies checked out from main; 006
+and `research_index.py` removed; the two fold modules kept, as 61b4d3f carried them). Counts: scale e2e 2 failed, 1
+passed (3); research-corpus e2e 1 failed, 13 passed (14); parity 7 failed, 1 passed (8; keyword 172/172, vector 40/40,
+blend 40/40, declassify 4/4 and R4a outside k 4/4 differ); corpus-grants 9 failed, 13 passed (22: 8 for R1-001, 1 for
+R1-003); research-source 4 failed, 28 passed (32); `tests/fa-d5.research-search.e2e.test.ts` 2 failed, 21 passed (23,
+the R1-002 changed expectations); F05 `d4.corpus-authority.pg` 3 failed, 58 passed (61); the fold guards (golden 3,
+Python 6) pass. GREEN at the head, and the mutants rerun there: the evidence log and the PR body.

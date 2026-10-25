@@ -186,7 +186,8 @@ instruction; every ruling records its reason. Measured values are in §7.4.
 - **Parity** `tests/fa-d5-003.parity.pg.test.ts`: on 25,000+ judgments with dense vectors, keyword, vector and blend
   queries through `PgResearchCorpus` equal `rankResearchCorpus` over the whole corpus; after a `declassify()` that changes
   N without a publication; after promoted citations that research cannot see are added to the 20 smallest bail judgments
-  (R37); after a citation is deleted, moved and quarantined behind the index's back. RED on main: `row_cap`.
+  (R37); after a citation is deleted, moved and quarantined behind the index's back; and with a cited authority that 60
+  judgments outscore on keywords, through both R4a candidate paths (R24b). RED on main: `row_cap`.
 - **R1-002** in the FA-D5-003 e2e: a planted vector is 503; deleted, the same key is 200 with `reused: false`; at the seam,
   the memory source and the route answer the same way.
 - **R1-003 and R1-004** in `tests/fa-d5-003.corpus-grants.pg.test.ts` and the F05 suite (both shapes for both readers).
@@ -210,7 +211,8 @@ throughout (other agents' suites), Postgres 16 + pgvector 0.6 local, Node 22. Ev
 - **RED (main).** Every parity query fails `row_cap` (172/172 keyword, 40/40 vector, 40/40 blend); the scale e2e's answers
   and latency fail (503).
 - **Parity (GREEN).** 0 diffs: 172 keyword, 40 vector, 40 blend, 4 + 4 around a `declassify()`, 5 after hidden citations,
-  4 after citation writes; `k = 50` equal. In-process per search: keyword median 180 ms, max 471 ms; vector 67 / 113 ms;
+  4 after citation writes, 4 with the R4a authority outside the keyword top k (written after mutant M14 survived parity
+  alone); `k = 50` equal. In-process per search: keyword median 180 ms, max 471 ms; vector 67 / 113 ms;
   blend 150 / 304 ms.
 - **Scale e2e (GREEN), 39 searches per path.** Reader: median 165 ms, p90 462 ms, max 515 ms. Route: median 444 ms, p90
   687 ms, max 855 ms; the route's floor (a query that matches nothing) 277 ms. Two earlier runs against the original R35
