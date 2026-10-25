@@ -1,7 +1,6 @@
 import { Timestamp, type DocumentReference, type Transaction } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { ACK_WINDOW_MS, LAST_LEVEL, OWNER_LADDER, opsAlertsRef, raiseSeverity, type AlertRow, type OwnerRole } from "./model"
 import { deliverPending, logAlertNotifier, stagePage, type AlertNotifier, type PageTarget } from "./notifier"
 
@@ -96,7 +95,7 @@ async function escalateDue(now: () => number, spent: () => boolean): Promise<str
       try {
         if (await escalateOne(doc.ref, doc.get("level") as number, now())) escalated.push(doc.id)
       } catch (err) {
-        logger.error("ops_alert.pass_failed", { pass: "escalate", alertId: doc.id, code: errorCode(err) })
+        logRegisteredError("ops_alert.pass_failed", { pass: "escalate", alertId: doc.id, code: errorCode(err) })
       }
     }
     // A stepped alert's deadline moved past now, so the query is re-run (not cursored); stop on a short or idle page.
@@ -117,12 +116,12 @@ export async function runAlertEscalator(opts: EscalatorOptions = {}): Promise<{ 
   try {
     out.escalated = await escalateDue(now, spent)
   } catch (err) {
-    logger.error("ops_alert.pass_failed", { pass: "escalate", code: errorCode(err) })
+    logRegisteredError("ops_alert.pass_failed", { pass: "escalate", code: errorCode(err) })
   }
   try {
     out.delivered = await deliverPending({ now, notifier: opts.notifier ?? logAlertNotifier, spent })
   } catch (err) {
-    logger.error("ops_alert.pass_failed", { pass: "deliver", code: errorCode(err) })
+    logRegisteredError("ops_alert.pass_failed", { pass: "deliver", code: errorCode(err) })
   }
   return out
 }

@@ -7,6 +7,37 @@ import json
 import sys
 from pathlib import Path
 
+def _tf_policy_id(event: str) -> str:
+    return "log_" + event.replace(".", "_")
+
+
+def _log_alert_filter(event: str) -> str:
+    # Double-quoted HCL; match structured `event` (firebase-functions 6.6+ stack-traces `message` on ERROR).
+    inner = f'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.event="{event}"'
+    return inner.replace('"', '\\"')
+
+
+def _render_alert_policy(policy: dict) -> str:
+    event = policy["event"]
+    filt = _log_alert_filter(event)
+    return f'''resource "google_monitoring_alert_policy" "{_tf_policy_id(event)}" {{
+  display_name = "{event}"
+  combiner     = "OR"
+  conditions {{
+    display_name = "{event}"
+    condition_matched_log {{
+      filter = "{filt}"
+    }}
+  }}
+  alert_strategy {{
+    notification_rate_limit {{
+      period = "300s"
+    }}
+  }}
+  notification_channels = [google_monitoring_notification_channel.oncall.name]
+}}'''
+
+
 ALLOWED = {
     "terraform",
     "provider",
@@ -24,10 +55,7 @@ def render(manifest: dict) -> dict[str, str]:
         for i, r in enumerate(roles)
     )
     alerts = manifest.get("alerts", {}).get("policies", [])
-    alert_conditions = "\n".join(
-        f'  conditions {{\n    display_name = "{a["event"]}"\n    condition_matched_log {{\n      filter = \'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="{a["event"]}"\'\n    }}\n  }}'
-        for a in alerts
-    )
+    alert_policies = "\n\n".join(_render_alert_policy(a) for a in alerts)
     files = {
         "variables.tf": 'variable "project_id" { type = string }\nvariable "oncall_email" { type = string }\n',
         "iam.tf": f'''resource "google_service_account" "runtime" {{
@@ -58,12 +86,7 @@ resource "google_service_account_iam_member" "runtime_self_user" {{
   }}
 }}
 
-resource "google_monitoring_alert_policy" "functions_errors" {{
-  display_name = "Cloud Functions ERROR log events"
-  combiner     = "OR"
-{alert_conditions}
-  notification_channels = [google_monitoring_notification_channel.oncall.name]
-}}
+{alert_policies}
 ''',
     }
     return files
@@ -76,6 +99,8 @@ def validate_hcl(text: str) -> list[str]:
     for line in text.splitlines():
         if "roles/owner" in line or "roles/editor" in line:
             errors.append("primitive role in terraform output")
+        if "filter =" in line and "filter = '" in line:
+            errors.append("log alert filter must use double-quoted HCL strings")
     return errors
 
 

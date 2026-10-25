@@ -32,6 +32,12 @@ export type Severity = (typeof SEVERITIES)[number]
 export const ACK_WINDOW_MS: Readonly<Record<Severity, number>> = { critical: 15 * 60_000, high: 30 * 60_000, warning: 4 * 3_600_000 }
 
 /**
+ * After this long, an acknowledgment no longer suppresses paging on recurrence (FA-F43-R1-002): the next raise starts a
+ * new episode at level 0. Matches the longest acknowledgment window so a warning hold cannot outlive its ladder step.
+ */
+export const ACK_HOLD_MS = ACK_WINDOW_MS.warning
+
+/**
  * Who owns an alert at each escalation level (spec R4): the named on-call operator first (only the operator can repair
  * a queue, a store or the reconciler), then the firm's partners (their work is stalled; they can retry, cancel, raise a
  * budget or call the operator), then the firm administrator (the founding partner).

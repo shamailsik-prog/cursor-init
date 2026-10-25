@@ -13,7 +13,7 @@ from pathlib import Path
 
 PRIMITIVE_ROLES = {"roles/owner", "roles/editor", "roles/viewer"}
 EXPORT_RE = re.compile(r"^\s*export\s+\{([^}]+)\}\s+from", re.M)
-ERROR_EVENT_RE = re.compile(r'\.error\(\s*["\']([a-z][a-z0-9_.]+)["\']')
+ERROR_EVENT_RE = re.compile(r'(?:logRegisteredError|\.error)\(\s*["\']([a-z][a-z0-9_.]+)["\']')
 MAX_DURATION_RE = re.compile(r"export\s+const\s+maxDuration\s*=\s*(\d+)")
 
 
@@ -210,10 +210,13 @@ def _check_alert_lines(root: Path, manifest: dict) -> list[Finding]:
     registered |= {e["event"] for e in manifest.get("alerts", {}).get("exemptions", [])}
     src = root / "functions/src"
     for path in src.rglob("*.ts"):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        for event in ERROR_EVENT_RE.findall(text):
-            if event not in registered:
-                out.append(_fail("alert-lines", f"unregistered ERROR event {event} in {path.relative_to(root)}"))
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            for event in ERROR_EVENT_RE.findall(line):
+                if event not in registered:
+                    out.append(_fail("alert-lines", f"unregistered ERROR event {event} in {path.relative_to(root)}"))
     return out
 
 

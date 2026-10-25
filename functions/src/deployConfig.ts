@@ -1,4 +1,4 @@
-import { logger } from "firebase-functions"
+import { logRegisteredError } from "./log"
 
 /**
  * Deploy-time settings read from the environment (functions/.env.<projectId>),
@@ -76,7 +76,7 @@ export function deployContractViolations(env: Env, ctx: { deployed: boolean }): 
 function enforceContractAtLoad(): void {
   const codes = deployContractViolations(process.env, { deployed: isDeployedRuntime() })
   if (codes.length > 0) {
-    logger.error(CONTRACT_ALERT, { codes })
+    logRegisteredError(CONTRACT_ALERT, { codes })
     throw new DeployContractError(codes)
   }
 }

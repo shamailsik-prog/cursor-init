@@ -20,6 +20,7 @@ import { setFirestorePersistenceForTests } from "@/platform/persistence/runtimeR
 import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import type { AuditEntry } from "@/platform/spine/store"
 import { adminDb } from "@/tests/helpers/emulator-auth"
+import { spyRegisteredErrors } from "@/tests/registeredErrorLog"
 
 const HAS_FIRESTORE = Boolean(process.env.FIRESTORE_EMULATOR_HOST?.trim())
 const GRACE_MS = 10 * 60_000
@@ -54,6 +55,13 @@ function recordingLog(): Log & { lines: Array<{ level: string; message: string; 
     warn: (message, data) => void lines.push({ level: "warn", message, data }),
     error: (message, data) => void lines.push({ level: "error", message, data }),
   }
+}
+
+/** Injected reconcile log (info/warn) plus capture of `logRegisteredError` for manifest ERROR lines. */
+function reconcileLog() {
+  const log = recordingLog()
+  const registered = spyRegisteredErrors()
+  return { log, registered }
 }
 
 const db = (): Firestore => adminDb()
@@ -580,12 +588,13 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       const good = auditRow(firmId)
       const poisoned = { ...auditRow(firmId), action: "" }
       const entryId = await stageEntry(firmId, [good, poisoned])
-      const log = recordingLog()
+      const { log, registered } = reconcileLog()
       await reconcile({ db: db(), now: PAST_GRACE, log })
       expect((await auditLogOf(firmId)).map((r) => r.id).sort()).toEqual([good.id, `aud_outbox_${entryId}`].sort())
       const letters = await docsWhere("audit_dead_letter", "firmId", firmId)
       expect(letters.map((l) => [l.reason, (l.row as Row).id, l.outboxId])).toEqual([["row_malformed", poisoned.id, entryId]])
-      expect(log.lines.some((l) => l.level === "error" && l.message === "audit.outbox_row_dead_lettered")).toBe(true)
+      expect(registered.hasEvent("audit.outbox_row_dead_lettered")).toBe(true)
+      registered.restore()
       expect(await docsWhere("audit_outbox", "firmId", firmId)).toEqual([])
     })
 
@@ -607,14 +616,15 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       const firmId = newFirm()
       const malformed = await stageEntry(firmId, "not rows")
       const noFirm = await stageEntry(null, [auditRow(firmId)], { actorId: `f11-nofirm-${randomUUID()}` })
-      const log = recordingLog()
+      const { log, registered } = reconcileLog()
       const result = await reconcile({ db: db(), now: PAST_GRACE, log })
       expect(result.deadLettered).toEqual(expect.arrayContaining([malformed, noFirm]))
       const letters = [...(await docsWhere("audit_dead_letter", "outboxId", malformed)), ...(await docsWhere("audit_dead_letter", "outboxId", noFirm))]
       for (const letter of letters) created.push({ collection: "audit_dead_letter", id: letter.id })
       expect(letters.map((l) => l.reason).sort()).toEqual(["entry_malformed", "entry_no_firm"])
       expect(await auditLogOf(firmId)).toEqual([])
-      expect(log.lines.filter((l) => l.level === "error" && l.message === "audit.outbox_dead_lettered")).toHaveLength(2)
+      expect(registered.countEvent("audit.outbox_dead_lettered")).toBe(2)
+      registered.restore()
     })
 
     it("non-retryable failures are counted and the third dead-letters the entry; retryable ones never count", async () => {
@@ -674,10 +684,11 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       await db().collection("audit_outbox").doc(entryId).update({ stagedAt: FieldValue.delete() })
       // The cursor may sit anywhere: run until the sweep reaches the entry (the outbox holds only it after the drain).
       let fired: ReconcileResult | undefined
-      const log = recordingLog()
+      const { log, registered } = reconcileLog()
       for (let i = 0; i < 3 && !fired?.backlog.firing; i += 1) fired = await reconcile({ db: transactionsDown(db()), log })
       expect([fired?.backlog.firing, fired?.backlog.unreadable]).toEqual([true, 1])
-      expect(log.lines.some((l) => l.level === "error" && l.message === "audit.outbox_backlog_stale")).toBe(true)
+      expect(registered.hasEvent("audit.outbox_backlog_stale")).toBe(true)
+      registered.restore()
       const cleared = await reconcile({ db: db(), log: recordingLog() })
       expect(cleared.deadLettered).toContain(entryId)
       expect([cleared.backlog.firing, cleared.backlog.unreadable]).toEqual([false, 0])
@@ -779,23 +790,26 @@ describe.runIf(HAS_FIRESTORE)("F11 audit outbox on Firestore", { timeout: 120_00
       await stageEntry(firmId, [auditRow(firmId)], { stagedAt: new Date(Date.now() - ALERT_AGE_MS - 5 * 60_000) })
       const down = auditLogRefusing(db(), () => Object.assign(new Error("unavailable"), { code: 14 }))
 
-      const first = recordingLog()
-      const fired = await reconcile({ db: down, log: first })
+      const first = reconcileLog()
+      const fired = await reconcile({ db: down, log: first.log })
       expect([fired.backlog.firing, fired.backlog.transition]).toEqual([true, "fired"])
       expect(fired.backlog.oldestAgeMs).toBeGreaterThanOrEqual(ALERT_AGE_MS)
-      expect(first.lines.some((l) => l.level === "error" && l.message === "audit.outbox_backlog_stale")).toBe(true)
+      expect(first.registered.hasEvent("audit.outbox_backlog_stale")).toBe(true)
+      first.registered.restore()
       expect((await db().collection("platform").doc("auditOutboxBacklog").get()).data()?.firing).toBe(true)
 
-      const second = recordingLog()
-      const still = await reconcile({ db: down, log: second })
+      const second = reconcileLog()
+      const still = await reconcile({ db: down, log: second.log })
       expect([still.backlog.firing, still.backlog.transition]).toEqual([true, null])
-      expect(second.lines.some((l) => l.level === "error" && l.message === "audit.outbox_backlog_stale")).toBe(true)
+      expect(second.registered.hasEvent("audit.outbox_backlog_stale")).toBe(true)
+      second.registered.restore()
 
-      const third = recordingLog()
-      const cleared = await reconcile({ db: db(), log: third })
+      const third = reconcileLog()
+      const cleared = await reconcile({ db: db(), log: third.log })
       expect([cleared.backlog.firing, cleared.backlog.transition, cleared.backlog.oldestAgeMs]).toEqual([false, "cleared", null])
-      expect(third.lines.some((l) => l.level === "info" && l.message === "audit.outbox_backlog_cleared")).toBe(true)
-      expect(third.lines.some((l) => l.message === "audit.outbox_backlog_stale")).toBe(false)
+      expect(third.log.lines.some((l) => l.level === "info" && l.message === "audit.outbox_backlog_cleared")).toBe(true)
+      expect(third.registered.hasEvent("audit.outbox_backlog_stale")).toBe(false)
+      third.registered.restore()
       expect((await db().collection("platform").doc("auditOutboxBacklog").get()).data()?.firing).toBe(false)
     })
   })

@@ -268,17 +268,17 @@ describe("F34 R1-009 (R23): Opik turned off is told apart from Opik misconfigure
     ["unconfirmed", { OPIK_BASE_URL: "https://opik.example.com" }, "unconfirmed"],
     ["third_party_host", { OPIK_BASE_URL: "https://www.comet.com/opik/api", OPIK_SELF_HOSTED_CONFIRMED: "true" }, "third_party_host"],
   ] as const)("an export under a config that is %s logs the misconfiguration at ERROR when the URL is set, never the URL", async (_name, env, reason) => {
-    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const write = vi.spyOn(logger, "write").mockImplementation(() => undefined)
     try {
       const cfg = opikConfig(env as NodeJS.ProcessEnv)
       expect(cfg.enabled).toBe(false)
       expect(await exportTrace(record(), cfg)).toBe("disabled")
-      const lines = error.mock.calls.filter((c) => c[0] === "p1.opik_misconfigured")
-      expect(lines).toEqual(reason === null ? [] : [["p1.opik_misconfigured", { reason }]])
-      expect(JSON.stringify(error.mock.calls)).not.toContain("example.com")
-      expect(JSON.stringify(error.mock.calls)).not.toContain("comet")
+      const lines = write.mock.calls.filter((c) => (c[0] as { event?: string }).event === "p1.opik_misconfigured")
+      expect(lines.map((c) => c[0])).toEqual(reason === null ? [] : [{ severity: "ERROR", event: "p1.opik_misconfigured", reason }])
+      expect(JSON.stringify(write.mock.calls)).not.toContain("example.com")
+      expect(JSON.stringify(write.mock.calls)).not.toContain("comet")
     } finally {
-      error.mockRestore()
+      write.mockRestore()
     }
   })
 })

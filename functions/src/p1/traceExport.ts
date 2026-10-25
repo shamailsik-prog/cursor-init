@@ -4,7 +4,7 @@ import { logger } from "firebase-functions"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { isClassification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { DECISIONS_COLLECTION, HASH_WITHHELD_NO_OUTPUT_ROW, exportFields, nextExport, seedHashScrub, type ExportStep } from "./decisionRecord"
 import { OPIK_TIMEOUT_MS, exportTrace, opikConfig, type OpikConfig, type TraceRecord } from "./opik"
@@ -176,7 +176,7 @@ export async function reconcileTraceExports(opts: { now?: () => number; config?:
       .get()
     due = snap.docs.map((d) => d.ref)
   } catch (err) {
-    logger.error("p1.trace_export_reconcile_failed", { code: errorCode(err) })
+    logRegisteredError("p1.trace_export_reconcile_failed", { code: errorCode(err) })
     return result
   }
 
@@ -204,7 +204,7 @@ export async function reconcileTraceExports(opts: { now?: () => number; config?:
       if (step.state === "exported") result.exported.push(ref.id)
       else if (step.state === "failed") {
         result.abandoned.push(ref.id)
-        logger.error("p1.trace_export_abandoned", { firmId: data.firmId ?? null, usageLogId: ref.id, traceId: data.traceId ?? null, attempts: step.attempts, code: step.lastCode })
+        logRegisteredError("p1.trace_export_abandoned", { firmId: data.firmId ?? null, usageLogId: ref.id, traceId: data.traceId ?? null, attempts: step.attempts, code: step.lastCode })
       } else result.rescheduled.push(ref.id)
     } catch (err) {
       // The record keeps its state and its due time; a later run tries it again once any lease this run set has lapsed.
@@ -244,7 +244,7 @@ export async function withholdUnpublishedPromptHashes(opts: { now?: () => number
     due = snap.docs.map((d) => d.ref)
   } catch (err) {
     // The reconciler's own ERROR event (no new alert line: the manifest and alerts.tf already carry this one).
-    logger.error("p1.trace_export_reconcile_failed", { step: "prompt_hash_withhold", code: errorCode(err) })
+    logRegisteredError("p1.trace_export_reconcile_failed", { step: "prompt_hash_withhold", code: errorCode(err) })
     return result
   }
   for (const ref of due) {

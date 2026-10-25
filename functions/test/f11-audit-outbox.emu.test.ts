@@ -5,6 +5,7 @@ import { AUDIT_OUTBOX_ALERT_AGE_MS, AUDIT_OUTBOX_GRACE_MS } from "@/platform/per
 import { adminDb } from "../src/admin"
 import { BACKLOG_STATE_COLLECTION, BACKLOG_STATE_DOC, reconcileAuditOutbox, SWEEP_CURSOR_DOC, type ReconcileLog } from "../src/p5/auditOutbox"
 import { EMULATORS } from "./emu"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit F11: the audit-outbox reconciler on the Functions package's own firebase-admin (the one the deployed
@@ -100,9 +101,11 @@ describe.skipIf(!EMULATORS)("F11 audit-outbox reconciler (Functions firebase-adm
       },
     })
     const firing = recording()
+    const registered = spyRegisteredErrors()
     const fired = await reconcileAuditOutbox({ db: down, log: firing })
     expect([fired.deferred, fired.backlog.firing, fired.backlog.transition]).toEqual([[entryId], true, "fired"])
-    expect(firing.lines.some((l) => l.level === "error" && l.message === "audit.outbox_backlog_stale")).toBe(true)
+    expect(registered.fieldsOf("audit.outbox_backlog_stale").length).toBeGreaterThan(0)
+    registered.restore()
     expect((await real.collection("audit_outbox").doc(entryId).get()).get("attempts")).toBe(0)
 
     const clearing = recording()

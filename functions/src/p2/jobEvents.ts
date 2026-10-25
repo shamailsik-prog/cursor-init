@@ -1,6 +1,6 @@
 import { Timestamp, type Transaction } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
+import { logRegisteredError } from "../log"
 import type { JobRow } from "./enqueue"
 
 /**
@@ -19,7 +19,7 @@ export interface DeadLetterAlert {
 /** The default alert: a fixed log line that a log-based alert policy matches (L4.10 item is O-30). */
 export const logDeadLetterAlert: DeadLetterAlert = {
   deadLettered({ jobId, jobType, firmId, attempts, code }) {
-    logger.error("job.deadLettered", { jobId, jobType, firmId, attempts, code })
+    logRegisteredError("job.deadLettered", { jobId, jobType, firmId, attempts, code })
   },
 }
 
