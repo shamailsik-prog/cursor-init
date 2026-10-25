@@ -26,10 +26,19 @@ import {
 } from "@/services/d5-1/corpusUnavailable"
 import {
   acknowledgeCourtOpsItem,
+  CourtOpsItemNotFoundError,
   listCourtOpsQueue,
+  resolveCourtOpsAckItem,
   resolveFollowUp,
   resolveWorkflowBlocker,
+  type CourtOpsAckTarget,
 } from "@/services/d2-2/courtOps"
+import {
+  CourtOpsAckRefusedError,
+  courtOpsAckId,
+  courtOpsAckItemIdProblem,
+  isCourtOpsAckQueueType,
+} from "@/platform/persistence/courtOpsAcknowledgement"
 
 
 type WhatsAppBody = {
@@ -252,30 +261,74 @@ async function handlePost(request: Request) {
           { status: 400 }
         )
       }
+      // FA-D4-001-FU1 (spec R2, R3): the queue type and the item id are checked before any read or write.
+      if (!isCourtOpsAckQueueType(parsed.queueType)) {
+        return NextResponse.json(
+          { error: "queueType must be follow_up or workflow", code: "court_ops_queue_type_invalid" },
+          { status: 400 }
+        )
+      }
+      const idProblem = courtOpsAckItemIdProblem(parsed.id)
+      if (idProblem) {
+        return NextResponse.json({ error: idProblem, code: "court_ops_item_id_invalid" }, { status: 400 })
+      }
+      if (parsed.reason !== undefined && typeof parsed.reason !== "string") {
+        return NextResponse.json({ error: "reason must be a string", code: "court_ops_reason_invalid" }, { status: 400 })
+      }
       const repos = await syncCourtOpsState(store, parsed.actorId)
+      // Spec R4: the item must be the caller firm's and visible to the caller, or 404 with nothing written.
+      let target: CourtOpsAckTarget
+      try {
+        target = resolveCourtOpsAckItem(store, { actorId: parsed.actorId, queueType: parsed.queueType, id: parsed.id })
+      } catch (err) {
+        if (err instanceof CourtOpsItemNotFoundError) {
+          return NextResponse.json({ error: err.message, code: err.code }, { status: 404 })
+        }
+        throw err
+      }
+      const { actor } = target
+      const row = buildCourtOpsActivityRow({
+        id: courtOpsAckId(actor.firmId, parsed.queueType, parsed.id),
+        firmId: actor.firmId,
+        action: "court_ops_acknowledge",
+        actorId: actor.id,
+        classification: "internal",
+        matterId: null,
+        documentId: target.documentId,
+        followUpId: target.followUpId,
+        queueType: parsed.queueType,
+        status: "acknowledged",
+        detail: parsed.reason ?? "acknowledged by operator",
+      })
+      // Spec R6/R7: ONE transaction (inside this request's F10 fence: claim check, effect marker and F11 outbox entry
+      // commit with it) that refuses a row of another firm at the caller's own id. The audit row is pushed only after
+      // the commit, so a failed write never leaves an "acknowledged" audit row.
+      try {
+        await repos.workflowOpsActivity.recordCourtOpsAcknowledgement(actor.firmId, row)
+      } catch (err) {
+        if (err instanceof CourtOpsAckRefusedError) {
+          // Spec R8: a foreign or malformed row at a firm's own id is a planted row or a legacy collision. Ids only.
+          console.error("[court-ops] acknowledgement refused", { ackId: err.ackId, reason: err.reason })
+          return NextResponse.json(
+            { error: "court ops acknowledgement row refused", code: err.code, reason: err.reason },
+            { status: 409 }
+          )
+        }
+        // Nothing committed (an aborted transaction after the SDK's own bounded retries): the claim is released, so
+        // the same Idempotency-Key runs again. A commit whose answer was lost is turned into 409
+        // idempotency_effect_committed by the F10 settle (platform/http/idempotency.ts).
+        console.error("[court-ops] acknowledgement write failed", { ackId: row.id }, err)
+        return NextResponse.json(
+          { error: "court ops acknowledgement could not be recorded; retry with the same Idempotency-Key", code: "court_ops_ack_unavailable" },
+          { status: 503 }
+        )
+      }
       acknowledgeCourtOpsItem(store, {
         actorId: parsed.actorId,
         queueType: parsed.queueType,
         id: parsed.id,
         reason: parsed.reason,
       })
-      const actor = store.users.get(parsed.actorId)
-      if (!actor) throw new PublicError("unknown actor")
-      await repos.workflowOpsActivity.upsert(
-        buildCourtOpsActivityRow({
-          id: `ops:court_ops:ack:${parsed.queueType}:${parsed.id}`,
-          firmId: actor.firmId,
-          action: "court_ops_acknowledge",
-          actorId: actor.id,
-          classification: "internal",
-          matterId: null,
-          documentId: parsed.queueType === "workflow" ? parsed.id : null,
-          followUpId: parsed.queueType === "follow_up" ? parsed.id : null,
-          queueType: parsed.queueType,
-          status: "acknowledged",
-          detail: parsed.reason ?? "acknowledged by operator",
-        })
-      )
       const payload = {
         action: "acknowledge_item",
         queueType: parsed.queueType,
