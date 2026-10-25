@@ -7,13 +7,16 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
+import { GET as documentsGet } from "@/app/api/d1/documents/route"
 import { POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as committeeGet } from "@/app/api/p1/committee-brain/route"
 import { getDocumentTypes } from "@/lib/foundation-data"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
+import { resolveCommitteeScope } from "@/platform/p5/committeeScope"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
-import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
+import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { seedFirmARuntimeRecords } from "@/tests/helpers/firestore-runtime-seed"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
@@ -166,6 +169,26 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F42 R1 follow-up: the Next routes"
     expect(after.text).not.toContain("OF-GONE")
     expect(after.text).toContain("OF-LIVE")
     expect(after.text).toContain("NO-DOCUMENTS")
+  }, TIMEOUT)
+
+  it("FA-F42-R1-010: resolveCommitteeScope on its own, with the matter cached in-process, refuses the tombstoned matter (no route sync)", async () => {
+    const docId = await seedDocument(partner.firmId, deleted, partner.uid)
+    // Warm the in-process caches the way a route does: the documents GET syncs the firm's matters into the store.
+    await call(documentsGet, partner, `/api/d1/documents?userId=${partner.uid}&docId=${docId}`)
+    const store = getRuntimeStore()
+    const repos = await getRuntimeRepositories(store)
+    const actor = store.users.get(partner.uid)!
+    // Control: the matter is cached and, before the tombstone, the scope resolves.
+    expect(store.matters.has(deleted)).toBe(true)
+    await expect(resolveCommitteeScope(store, repos, actor, { matterId: deleted })).resolves.toMatchObject({ matterId: deleted })
+    await tombstone(partner.firmId, deleted)
+    const outcome = (input: { matterId: string; documentIds?: string[] }) =>
+      resolveCommitteeScope(store, repos, actor, input).then(() => "RESOLVED", (e: { status?: number; message?: string }) => `${e.status} ${e.message}`)
+    expect(await outcome({ matterId: deleted })).toBe("404 unknown matter")
+    expect(store.matters.has(deleted)).toBe(false)
+    expect(await outcome({ matterId: deleted, documentIds: [docId] })).toBe("404 unknown matter")
+    // A live matter of the firm still resolves.
+    expect(await outcome({ matterId: live })).toBe("RESOLVED")
   }, TIMEOUT)
 
   it("FA-F42-R1-001: a same-key replay of a compose answered 200 before the tombstone is refused 403 matter_deleted after it (F02 path)", async () => {
