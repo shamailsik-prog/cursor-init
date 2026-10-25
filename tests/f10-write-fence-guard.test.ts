@@ -166,10 +166,10 @@ describe("F10: every Next Firestore write goes through the fenced helpers (stati
     expect(writers.filter((w) => !w.consultsFence)).toEqual([])
   })
 
-  it("the durable idempotency store reaches only its own two collections", () => {
+  it("the durable idempotency store reaches only its own collections (F42 R1: tombstone read at replay)", () => {
     const code = codeOf(readFileSync(path.join(ROOT, "platform/http/durableIdempotency.ts"), "utf8"))
     const targets = [...code.matchAll(/\.collection\(\s*([^)]*)\)/g)].map((m) => m[1]!.trim())
     expect(targets.length).toBeGreaterThan(0)
-    expect([...new Set(targets)].sort()).toEqual(["EFFECTS_COLLECTION", "KEYS_COLLECTION"])
+    expect([...new Set(targets)].sort()).toEqual(["EFFECTS_COLLECTION", "KEYS_COLLECTION", "MATTER_TOMBSTONES"])
   })
 })
