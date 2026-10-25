@@ -239,6 +239,14 @@ class Planted(unittest.TestCase):
         self.write("tests/x.test.ts", NEXT + 'checkPermission(store, u, "bogus")\n')
         self.assertEqual(gate.scan(self.root), [])
 
+    def test_an_escape_spelled_entry_name_is_tracked(self) -> None:
+        # The engine binds `checkPermission` to checkPermission; js_lexer decodes it (G-0 [21]'s lexer).
+        self.assertFails("unknown_action", NEXT + 'check\\u0050ermission(store, u, "bogus")\n')
+
+    def test_an_escape_spelled_action_literal_is_decoded(self) -> None:
+        self.assertPasses(NEXT + 'checkPermission(store, u, "rese\\u0061rch")\n')
+        self.assertFails("unknown_action", NEXT + 'checkPermission(store, u, "re\\x73earch!")\n')
+
     def test_a_tsx_file_is_scanned(self) -> None:
         self.assertFails("unknown_action", NEXT + 'export const C = () => { checkPermission(store, u, "bogus"); return <div /> }\n', rel="components/x.tsx")
 

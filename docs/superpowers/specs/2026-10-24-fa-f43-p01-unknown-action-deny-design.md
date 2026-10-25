@@ -37,6 +37,13 @@ Counted from the call sites (the new gate's `--print-inventory` lists each one w
 | 5 firm-administration, 5 retention, 16 D1, 4 job, 2 alert, 4 AI, 6 draft, `doctype.read` | Functions only: 35 literal sites plus 3 direct `decide` literals, and typed forwards (`gateMatter`, entity `gate`, `requireMatterAction`, `requireStillPermitted`, `requirePartner`, `requirePermission`) | Yes, each by its family's role table | as the table rules |
 | any other string | no production call site; tests pass `read`, `read_matter`, `read_firm` | **No row.** Fall-through. | every role except accounts (`accounts-register-only`); with a matter named, every member who is cleared |
 
+Court-ops after main 4a12508 (FA-D4-001-FU1, merged into this branch): every court-ops entry (GET queue; POST
+`whatsapp_command`, `acknowledge_item`, `resolve_follow_up`, `resolve_workflow`) reaches P5 only through
+`services/d2-2/courtOps.ts` `canAccessMatter`, which passes the literal `research` with the item's matter, and through
+WhatsApp's `list_matters` / `research`. The new `acknowledge_item` path (`resolveCourtOpsAckItem`) resolves the item in the
+caller's firm and gates its matter through that same `research` check; the route's `requireOpsActor` refuses client,
+intern and accounts first. The count above is unchanged by the merge (the gate's inventory: 241 call sites).
+
 `alert.read` and `alert.ack`: the finding records that on an earlier main they fell through for associates, clerks, interns
 and clients. PR #120 (F43, 0d9af65) added `ALERT_ACTIONS` (partner only), so on 5840d3d they are decided by a row and the
 fall-through no longer reaches them. They stay GREEN on both main and the branch; they are not a RED case.
@@ -125,6 +132,11 @@ this was built (checked 2026-10-25 against every `claude/*`, `cursor/*` and `ant
 #108, #130, #131).
 
 - *Why Python:* G-0 runs before `node_modules` exists (the gates job's "Gate G-0 static" step), as every other G-0 check.
+- *Tokens:* from `ci_gates/js_lexer.py`, the lexer G-0 [21] reads with since main ba27912 (#132). The gate first had a
+  tokenizer of its own; once the shared lexer landed it was adopted (coordinator's suggestion, ruled here): one lexer for
+  both checks, and it decodes escape-spelled identifiers and strings (`checkPermission`, `"research"`), which the
+  first tokenizer missed (two fixtures, RED on the first tokenizer, GREEN on the lexer). The walker's token model is kept
+  through a small adapter, so its fixtures and mutants carried over unchanged.
 - *Scope:* every JS/TS file the G-0 walker yields (`g0_guard_common.iter_scan_files`: root `tests/` and `ci_gates/` are
   skipped), minus `functions/test/` and `functions/lib/`. Tests pass unknown actions on purpose.
 - *Entry points:* `checkPermission` from `platform/p5/checkPermission` (action = argument 3), `decide` from
@@ -163,8 +175,9 @@ purpose. Deferred (follow-up 2); the gate and the default deny close the finding
   to an intern and a client; the accounts register actions to every staff role).
 - GREEN (real routes, Auth + Firestore emulators, production persistence, Firebase sessions): POST `/api/g0/normalise`
   (`normalise_case_number`), POST and GET `/api/p1/committee-brain` (`committee_brain`, `committee_brain_read`), GET
-  `/api/d1/matters` (`list_matters`), GET `/api/d2/court-ops` (`research`, matter-level), GET `/api/d4/drafts` (`draft`), each
-  for its permitted roles and refused for the others as before. Lean: one firm, created in `beforeAll`, removed in `afterAll`.
+  `/api/d1/matters` (`list_matters`), GET `/api/d2/court-ops` and POST `acknowledge_item` (`research`, matter-level), GET
+  `/api/d4/drafts` (`draft`), each for its permitted roles and refused for the others as before. Lean: one firm, created in
+  `beforeAll`, removed in `afterAll`.
 - The gate's fixtures; the gate run against main's tree (it fails: no `DECIDE_ACTIONS`, an untyped forward).
 - Mutation: at least 10 mutants over the default deny, each new row and the gate's walker.
 

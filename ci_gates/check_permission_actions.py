@@ -17,6 +17,9 @@ The entry points (ENTRY_POINTS) and the argument that carries the action:
 Imports resolve by path (the `@/` alias, relative, a bare repository path; with or without a JS/TS extension or `/index`),
 `as` aliases included. The defining module's own calls count.
 
+Tokens come from ci_gates/js_lexer.py, the lexer G-0 [21] reads with (comments dropped; identifiers and string literals
+decoded, so an escape spelling such as `check\\u0050ermission` or `"rese\\u0061rch"` is read as the engine reads it).
+
 Scope: every JS/TS file the G-0 walker yields (g0_guard_common.iter_scan_files: root tests/ and ci_gates/ are skipped)
 except functions/test/ and functions/lib/; the tests pass unknown actions on purpose. A file is read only when its text
 holds "ermission" (every entry specifier and name does).
@@ -62,6 +65,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from g0_guard_common import JS_SUFFIXES, iter_scan_files, read_text  # noqa: E402
+from js_lexer import lex  # noqa: E402
 
 TABLE = "platform/p5/permissionDecision.ts"
 TABLE_MODULE = "platform/p5/permissionDecision"
@@ -107,167 +111,29 @@ class Finding:
 
 @dataclass(frozen=True)
 class Tok:
-    kind: str  # id | str | num | punct | regex | tpl | tplend
-    text: str  # identifier, punctuation, or a string literal's value
+    kind: str  # id | str | num | punct | regex | priv | tpl | tplend
+    text: str  # identifier, punctuation, or a string literal's value (decoded)
     pos: int
 
 
-_WS_RE = re.compile(r"\s+")
-_ID_RE = re.compile(r"[A-Za-z_$\u0080-￿][\w$\u0080-￿]*")
-_NUM_RE = re.compile(r"\d[\w.]*")
-_PUNCT_RE = re.compile(
-    r"\.\.\.|\?\.(?!\d)|=>|===|!==|\*\*=|<<=|>>>=|>>=|==|!=|<=|>=|&&=|\|\|=|\?\?=|&&|\|\||\?\?|\+\+|--|[-+*/%&|^]=|"
-    r"[-+*/%&|^!~<>=?:;,.(){}\[\]@#\\]"
-)
-_REGEX_PREV_PUNCT = frozenset(
-    "( , = : [ ! & | ? { } ; + - * % < > ~ ^ => == === != !== <= >= && || ?? += -= *= /= %= &= |= ^= ...".split()
-)
-_REGEX_PREV_WORD = frozenset("return typeof case do else in of instanceof new delete void throw yield await".split())
-
-
-def _scan_quoted(text: str, i: int) -> tuple[str, int]:
-    """A '…' or "…" literal starting at i: (value, index after it). An unterminated one ends at the line end."""
-    quote = text[i]
-    out: list[str] = []
-    j = i + 1
-    n = len(text)
-    while j < n:
-        c = text[j]
-        if c == "\\" and j + 1 < n:
-            out.append(text[j + 1])
-            j += 2
-            continue
-        if c == quote:
-            return "".join(out), j + 1
-        if c == "\n":
-            return "".join(out), j
-        out.append(c)
-        j += 1
-    return "".join(out), j
-
-
-def _scan_regex(text: str, i: int) -> int:
-    """A regex literal starting at the `/` at i: the index after its flags."""
-    j = i + 1
-    n = len(text)
-    in_class = False
-    while j < n:
-        c = text[j]
-        if c == "\\":
-            j += 2
-            continue
-        if c == "\n":
-            return j
-        if in_class:
-            if c == "]":
-                in_class = False
-        elif c == "[":
-            in_class = True
-        elif c == "/":
-            j += 1
-            while j < n and (text[j].isalnum() or text[j] in "_$"):
-                j += 1
-            return j
-        j += 1
-    return j
-
-
 def tokenize(text: str) -> list[Tok]:
-    """Tokens of JS/TS source with comments dropped. A template literal is `tpl`, its `${ … }` substitutions as their
-    own tokens between `${` and `}`, then `tplend`."""
+    """The tokens of JS/TS source, read by ci_gates/js_lexer.py (the lexer G-0 [21] reads with: comments dropped,
+    identifiers and string literals decoded, so `check\\u0050ermission` is checkPermission and `"rese\\u0061rch"` is
+    research). A template literal becomes `tpl`, each substitution's tokens between `${` and `}`, then `tplend`, so a
+    template argument is one bracketed group to this gate's argument split."""
     toks: list[Tok] = []
-    n = len(text)
-    i = 0
-    # Each entry: True for a template substitution's `${`, False for an ordinary `{`.
-    braces: list[bool] = []
-
-    def prev_allows_regex() -> bool:
-        if not toks:
-            return True
-        last = toks[-1]
-        if last.kind == "punct":
-            return last.text in _REGEX_PREV_PUNCT
-        if last.kind == "id":
-            return last.text in _REGEX_PREV_WORD
-        return last.kind in {"tpl"}
-
-    def scan_template(start: int, opening: bool) -> int:
-        """Scans template text from `start` (just after the backtick or the closing `}`), emitting `tpl` when it opens,
-        a `${` when a substitution starts (returning the index after it), or `tplend` at the closing backtick."""
-        if opening:
-            toks.append(Tok("tpl", "`", start - 1))
-        j = start
-        while j < n:
-            c = text[j]
-            if c == "\\":
-                j += 2
-                continue
-            if c == "`":
-                toks.append(Tok("tplend", "`", j))
-                return j + 1
-            if c == "$" and j + 1 < n and text[j + 1] == "{":
-                toks.append(Tok("punct", "${", j))
-                braces.append(True)
-                return j + 2
-            j += 1
-        toks.append(Tok("tplend", "`", n))
-        return n
-
-    while i < n:
-        m = _WS_RE.match(text, i)
-        if m:
-            i = m.end()
+    for t in lex(text):
+        if t.kind != "tpl":
+            toks.append(Tok(t.kind, t.value, t.start))
             continue
-        c = text[i]
-        if text.startswith("//", i):
-            nl = text.find("\n", i)
-            i = n if nl < 0 else nl
-            continue
-        if text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = n if end < 0 else end + 2
-            continue
-        if c in "'\"":
-            value, i2 = _scan_quoted(text, i)
-            toks.append(Tok("str", value, i))
-            i = i2
-            continue
-        if c == "`":
-            i = scan_template(i + 1, opening=True)
-            continue
-        if c == "}" and braces:
-            if braces.pop():
-                toks.append(Tok("punct", "}", i))
-                i = scan_template(i + 1, opening=False)
-                continue
-            toks.append(Tok("punct", "}", i))
-            i += 1
-            continue
-        if c == "/" and prev_allows_regex():
-            j = _scan_regex(text, i)
-            toks.append(Tok("regex", text[i:j], i))
-            i = j
-            continue
-        m = _ID_RE.match(text, i)
-        if m:
-            toks.append(Tok("id", m.group(), i))
-            i = m.end()
-            continue
-        m = _NUM_RE.match(text, i)
-        if m:
-            toks.append(Tok("num", m.group(), i))
-            i = m.end()
-            continue
-        m = _PUNCT_RE.match(text, i)
-        if m:
-            p = m.group()
-            if p == "{":
-                braces.append(False)
-            toks.append(Tok("punct", p, i))
-            i = m.end()
-            continue
-        toks.append(Tok("punct", c, i))
-        i += 1
+        if t.part in ("middle", "tail"):
+            toks.append(Tok("punct", "}", t.start))
+        if t.part in ("full", "head"):
+            toks.append(Tok("tpl", "`", t.start))
+        if t.part in ("head", "middle"):
+            toks.append(Tok("punct", "${", t.end - 2))
+        if t.part in ("full", "tail"):
+            toks.append(Tok("tplend", "`", t.end - 1))
     return toks
 
 

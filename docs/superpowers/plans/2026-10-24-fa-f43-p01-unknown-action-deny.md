@@ -99,13 +99,18 @@
 
 ## RED/GREEN ledger
 
-| # | Test | Main 5840d3d | Branch |
-|---|---|---|---|
-| 1 | `tests/fa-f43-p01-unknown-action.test.ts` | RED (count in PR body) | GREEN |
-| 2 | `functions/test/p5.permission.test.ts` FA-F43-R1-P01 describe (emulator) | RED | GREEN |
-| 3 | `ci_gates/test_check_permission_actions.py` + `tests/fa-f43-p01-permission-actions-gate.test.ts` | RED (no gate) | GREEN |
-| 4 | `ci_gates/check_permission_actions.py` on main's tree | RED (fails) | GREEN on the branch tree |
-| 5 | `tests/fa-f43-p01-next-routes.e2e.firestore.test.ts` (emulator) | GREEN (guard) | GREEN |
-| 6 | Changed expectations in the P5 suites | the old expectations pass on main | the new ones pass on the branch |
+Measured 2026-10-25 ("main" = main's three P5 production files, `platform/p5/permissionDecision.ts`,
+`platform/p5/committeeScope.ts`, `functions/src/p5/permission.ts`, put back over the branch; they are identical on 5840d3d
+and 4a12508).
 
-Exact counts are filled in the PR body from the runs.
+| # | Test | Main | Branch |
+|---|---|---|---|
+| 1 | `tests/fa-f43-p01-unknown-action.test.ts` | 28 of 39 fail | 39 of 39 pass |
+| 2 | `functions/test/p5.permission.test.ts` FA-F43-R1-P01 describe (emulator, audit_log rows) | 7 of 7 fail | 7 of 7 pass |
+| 3 | `tests/fa-f43-p01-permission-actions-gate.test.ts` | 3 of 3 fail | 3 of 3 pass |
+| 4 | `ci_gates/test_check_permission_actions.py` on main's tree | 2 of 30 fail (the shipped-tree cases; the 28 planted trees are tree-independent) | 30 of 30 pass; 32 of 32 after the two escape-spelling fixtures (RED 2 of 32 on the gate's first tokenizer, GREEN on `js_lexer`) |
+| 5 | `ci_gates/check_permission_actions.py` | main's tree: `no_table`; main's tree with the branch table: `computed_action` at `committeeScope.ts:79` | PASS, 241 call sites |
+| 6 | `tests/fa-f43-p01-next-routes.e2e.firestore.test.ts` (emulator) | 5 of 5 pass (guard) | 5 of 5 pass |
+| 7 | Changed expectations: parity, decision-table, committee-scope (root); security-gaps (Functions) | 14 + 2 + 1 + 2 fail | all pass |
+
+Mutation: 28 mutants (16 on the table and `canAccessMatter`, 12 on the gate's walker and its `js_lexer` adapter), 28 killed; G1-G12 rerun on the lexer-based gate after merging main ba27912.
