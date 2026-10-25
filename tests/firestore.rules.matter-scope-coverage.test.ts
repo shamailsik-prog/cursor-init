@@ -14,11 +14,18 @@ const dbd = readFileSync("platform/persistence/denyByDefaultWorkflowOpsRepositor
 
 const MEMBERSHIP = /isMember\(|memberReader\(|matterScoped\(|canAccessScope\(/
 
-function readCondition(coll: string): string {
+/**
+ * Every read condition of a collection's own block (`allow read`, or `allow get` and `allow list` split as FA-D4-001 and
+ * FA-D4-001-FU1 do), never a later block's: the block ends at the next `match /`.
+ */
+function readConditions(coll: string): string[] {
   const at = rules.indexOf(`match /${coll}/{`)
-  const start = rules.indexOf("allow read: if", at)
-  const end = rules.indexOf(";", start)
-  return rules.slice(start, end)
+  if (at < 0) return []
+  const next = rules.indexOf("match /", at + 1)
+  const block = rules.slice(at, next === -1 ? rules.length : next)
+  return [...block.matchAll(/allow (?:read|get|list)(?:,\s*(?:read|get|list|write|create|update|delete))*:\s*if ([^;]+);/g)].map(
+    (m) => (m[1] ?? "").trim()
+  )
 }
 
 function rowTypeHasMatterId(type: string): boolean | null {
@@ -62,7 +69,11 @@ describe("firestore.rules: matter-bound collections gate reads on membership", (
   it.each(bound.map((coll) => [coll.length > 90 ? `${coll.slice(0, 60)}…${coll.slice(-25)}` : coll, coll]))(
     "%s",
     (_label, coll) => {
-      expect(readCondition(coll)).toMatch(MEMBERSHIP)
+      const conditions = readConditions(coll)
+      expect(conditions.length, `no read condition in the ${coll} block`).toBeGreaterThan(0)
+      for (const condition of conditions) {
+        if (condition !== "false") expect(condition).toMatch(MEMBERSHIP)
+      }
     }
   )
 

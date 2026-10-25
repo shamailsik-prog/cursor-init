@@ -162,7 +162,6 @@ import type {
   WorkflowOpsAlertVarianceRemediationSlaBreachResolutionCheckpointExpiryAttestationQueueReentryComplianceDebtRetirementDisputeReconciliationClosureVerificationArchivalExportPartnerDeliveryTransportBoundaryReceiptReconciliationClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerOutboundRegistryAttestationLedgerRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationOutboundRegistryAttestationLedgerRow,
-  WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationOutboundRegistryAttestationLedgersExternalDistributionAuditLedgerReconciliationRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationClosureSealVerificationRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerReconciliationRow,
   WorkflowOpsAlertWaiverExpiryDisputeAdjudicationSloDebtBurndownSettlementArbitrationDispositionPublicationGovernanceExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerPartnerDeliveryReceiptFreezeOverrideSealVerificationArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationPartnerDeliveryReceiptFreezeOverrideSealVerificationsTransportBoundaryReceiptReconciliationsExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerRow,
@@ -188,6 +187,11 @@ import {
   type DraftTemplateAnalyticsChange,
 } from "@/platform/persistence/draftTemplateAnalytics"
 import type { TemplateSummary } from "@/services/d4-1/drafts"
+import {
+  nextCourtOpsAckRow,
+  readWorkflowOpsActivityRow,
+  refuseBlindCourtOpsAckWrite,
+} from "@/platform/persistence/courtOpsAcknowledgement"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
@@ -775,9 +779,23 @@ export type MatterReportRelevanceSnapshotRepository = {
   listByMatter(firmId: string, matterId: string): Promise<MatterReportRelevanceSnapshotRow[]>
 }
 
+/**
+ * FA-D4-001-FU1: court-ops acknowledgement rows are keyed `ops:court_ops:ack:{firmId}:{queueType}:{itemId}`
+ * (platform/persistence/courtOpsAcknowledgement.ts). `recordCourtOpsAcknowledgement` is their only writer; `upsert`
+ * refuses any id under that prefix.
+ */
 export type WorkflowOpsActivityRepository = {
+  /** Any activity row except a court-ops acknowledgement (throws CourtOpsAckIdError for an `ops:court_ops:ack:` id). */
   upsert(row: WorkflowOpsActivityRow): Promise<void>
+  /**
+   * One court-ops acknowledgement by `firmId`, in one transaction: reads the row at `row.id`, throws
+   * CourtOpsAckRefusedError when the stored row is another firm's or not canonical, otherwise writes `row` (which must
+   * itself be canonical and the caller firm's) and returns it (nextCourtOpsAckRow).
+   */
+  recordCourtOpsAcknowledgement(firmId: string, row: WorkflowOpsActivityRow): Promise<WorkflowOpsActivityRow>
+  /** The caller firm's row at `id`; an `ops:court_ops:ack:` row only when canonical. */
   get(id: string, firmId: string): Promise<WorkflowOpsActivityRow | null>
+  /** The caller firm's rows; `ops:court_ops:ack:` rows only when canonical (legacy ones wait for the backfill). */
   listByFirm(firmId: string): Promise<WorkflowOpsActivityRow[]>
 }
 
@@ -3352,13 +3370,25 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
     },
     workflowOpsActivity: {
       async upsert(row) {
+        refuseBlindCourtOpsAckWrite(row.id)
         store.workflowOpsActivity.set(row.id, row)
       },
+      // FA-D4-001-FU1: read, decide and write with no await in between, so the memory store is as atomic as the
+      // Firestore transaction.
+      async recordCourtOpsAcknowledgement(firmId, row) {
+        const next = nextCourtOpsAckRow(firmId, row, store.workflowOpsActivity.get(row.id) ?? null)
+        store.workflowOpsActivity.set(next.id, next)
+        return next
+      },
       async get(id, firmId) {
-        return firmScoped(store.workflowOpsActivity.get(id), firmId)
+        const row = firmScoped(store.workflowOpsActivity.get(id), firmId)
+        return row ? readWorkflowOpsActivityRow(id, row) : null
       },
       async listByFirm(firmId) {
-        return [...store.workflowOpsActivity.values()].filter((row) => row.firmId === firmId)
+        return [...store.workflowOpsActivity.entries()]
+          .filter(([, row]) => row.firmId === firmId)
+          .map(([id, row]) => readWorkflowOpsActivityRow(id, row))
+          .filter((row): row is WorkflowOpsActivityRow => row !== null)
       },
     },
     workflowOpsAlertDigests: {
