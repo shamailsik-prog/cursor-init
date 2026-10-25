@@ -1,6 +1,6 @@
 # FA-D5-003 R1 follow-up (R1-001 to R1-005): implementation plan
 
-Spec: `docs/superpowers/specs/2026-10-24-fa-d5-003-research-corpus-reader-design.md` §7 (rulings R19-R38).
+Spec: `docs/superpowers/specs/2026-10-24-fa-d5-003-research-corpus-reader-design.md` §7 (rulings R19-R40).
 Branch `claude/remediate-fa-d5-003-fu` from `origin/main` @ 0d9af65. Test-first: every new test ran on main first (RED),
 then on the branch (GREEN). Private resources: Postgres 16 + pgvector 0.6 on 127.0.0.1:55631 (data under
 `/tmp/pg-fa-d5-003-fu`, removed at the end); emulators firestore 8597, auth 9597, hub 4697, logging 4797, websocket 8598,
@@ -25,6 +25,9 @@ functions 5097, UI off, project `demo-fa-d5-003-fu`.
   (R29), the allowlist (R31); F05's allowlist (R31).
 - [x] 8. E-52 (R33); README and runbook (the `index-terms` step).
 - [x] 9. GREEN runs, mutation (12+ mutants), gates, PR body, evidence log.
+- [x] 10. After merging #128 (F42): 006's seven relations in `infra/retention/inventory.json` (R39; the merged tree
+  failed G-0 [22] with exactly these seven), and both FA-D5-003 emulator suites delete their firms in `afterAll` and
+  assert nothing is left (R40, `tests/helpers/emulator-firm-cleanup.ts`).
 
 ## RED/GREEN ledger
 
@@ -50,11 +53,12 @@ no main counterpart (main has no index).
 | R1-004 | corpus-grants allowlist shapes, metadata, nocite and followed tests | pass on main code (missing tests); the audit's surviving mutants X08-X11, X13-X15 ported to the branch are killed (mutation table) | pass |
 | R1-005 | E-52 | n/a (document) | written |
 
-**Final verification, after merging origin/main @ 798cf56.** RED: the head's tests, helpers and harnesses on origin/main
+**Verification after merging origin/main @ 798cf56.** RED: the head's tests, helpers and harnesses on origin/main
 798cf56's production code, in this worktree (the eight production files the branch modifies checked out from main; 006
 and `research_index.py` removed; the two fold modules kept, as 61b4d3f carried them). Counts: scale e2e 2 failed, 1
 passed (3); research-corpus e2e 1 failed, 13 passed (14); parity 7 failed, 1 passed (8; keyword 172/172, vector 40/40,
 blend 40/40, declassify 4/4 and R4a outside k 4/4 differ); corpus-grants 9 failed, 13 passed (22: 8 for R1-001, 1 for
 R1-003); research-source 4 failed, 28 passed (32); `tests/fa-d5.research-search.e2e.test.ts` 2 failed, 21 passed (23,
 the R1-002 changed expectations); F05 `d4.corpus-authority.pg` 3 failed, 58 passed (61); the fold guards (golden 3,
-Python 6) pass. GREEN at the head, and the mutants rerun there: the evidence log and the PR body.
+Python 6) pass. The branch then merged origin/main @ 5840d3d (#128); the final RED (on that main's code) and GREEN at
+the final head, and the mutants rerun there, are in the evidence log and the PR body.

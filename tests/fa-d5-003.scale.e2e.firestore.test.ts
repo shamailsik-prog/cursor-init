@@ -25,6 +25,7 @@ import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFi
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { searchResearch, type ResearchCorpus } from "@/services/d5-1/research"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
+import { deleteFirmTestData, remainingFirmTestData } from "@/tests/helpers/emulator-firm-cleanup"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import { FA_D5_003_BATCH, FA_D5_003_SUITE, type ResearchDb, createResearchDb } from "@/tests/helpers/fa-d5-003-corpus"
 import { loadTruthCorpus, seedScaleCorpus, truthSource, type ScaleCounts } from "@/tests/helpers/fa-d5-003-scale"
@@ -71,11 +72,17 @@ function restart(): void {
   resetProductionFirestoreForTests()
 }
 
+/** The firms and auth users this suite creates, deleted in afterAll (audit F42: an emulator e2e deletes its firms). */
+const createdFirms: string[] = []
+const createdUids: string[] = []
+
 async function provisionPartner(): Promise<Actor> {
   const ref = adminDb().collection("firms").doc()
+  createdFirms.push(ref.id)
   await ref.create({ name: `FA-D5-003 scale firm ${ref.id}`, dataResidency: "PK", plan: "internal", rateLimits: { general: 10_000 } })
   const firmId = ref.id
   const uid = adminDb().collection("users").doc().id
+  createdUids.push(uid)
   const email = `${uid.toLowerCase()}@example.test`
   const password = "emulator-pass-123"
   await adminAuth().createUser({ uid, email, password })
@@ -174,9 +181,14 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003 R1-001: /research over 25,000+ visibl
   }, SLOW)
 
   afterAll(async () => {
-    setResearchEnv(saved)
-    await resetResearchSource()
-    await db?.drop()
+    try {
+      await deleteFirmTestData(createdFirms, createdUids)
+      expect(await remainingFirmTestData(createdFirms, createdUids)).toEqual([])
+    } finally {
+      setResearchEnv(saved)
+      await resetResearchSource()
+      await db?.drop()
+    }
   }, SLOW)
 
   beforeEach(async () => {

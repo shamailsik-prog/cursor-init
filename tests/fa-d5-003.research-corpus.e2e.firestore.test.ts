@@ -20,6 +20,7 @@ import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
+import { deleteFirmTestData, remainingFirmTestData } from "@/tests/helpers/emulator-firm-cleanup"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import {
   FA_D5_003_BATCH,
@@ -76,14 +77,20 @@ function restart(): void {
   resetProductionFirestoreForTests()
 }
 
+/** The firms and auth users this suite creates, deleted in afterAll (audit F42: an emulator e2e deletes its firms). */
+const createdFirms: string[] = []
+const createdUids: string[] = []
+
 async function provisionFirm(): Promise<string> {
   const ref = adminDb().collection("firms").doc()
+  createdFirms.push(ref.id)
   await ref.create({ name: `FA-D5-003 firm ${ref.id}`, dataResidency: "PK", plan: "internal", rateLimits: { general: 1000 } })
   return ref.id
 }
 
 async function provisionUser(firmId: string, role: "partner" | "clerk" | "client"): Promise<Actor> {
   const uid = adminDb().collection("users").doc().id
+  createdUids.push(uid)
   const email = `${uid.toLowerCase()}@example.test`
   const password = "emulator-pass-123"
   await adminAuth().createUser({ uid, email, password })
@@ -181,10 +188,15 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003: /research reads the published Annex 
   }, 300_000)
 
   afterAll(async () => {
-    setResearchEnv(savedEnv)
-    await resetResearchSource()
-    await db?.drop()
-  }, 120_000)
+    try {
+      await deleteFirmTestData(createdFirms, createdUids)
+      expect(await remainingFirmTestData(createdFirms, createdUids)).toEqual([])
+    } finally {
+      setResearchEnv(savedEnv)
+      await resetResearchSource()
+      await db?.drop()
+    }
+  }, SLOW)
 
   beforeEach(async () => {
     vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
