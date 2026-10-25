@@ -9,6 +9,7 @@ import { logDeadLetterAlert } from "../src/p2/jobEvents"
 import { jobTestSeam, type JobHandler } from "../src/p2/registry"
 import { jobWorkerTestSeam } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 import {
   FakeClock,
   T0,
@@ -652,9 +653,10 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
   })
 
   it("the default alert logs job.deadLettered with codes only", async () => {
-    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const registered = spyRegisteredErrors()
     await logDeadLetterAlert.deadLettered({ jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
-    expect(error).toHaveBeenCalledWith("job.deadLettered", { jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" })
+    expect(registered.fieldsOf("job.deadLettered")).toEqual([{ jobId: "j1", jobType: "t", firmId: "f", attempts: 4, code: "internal" }])
+    registered.restore()
   })
 
   it("a raw error is sanitised to internal and its text is stored nowhere", async () => {

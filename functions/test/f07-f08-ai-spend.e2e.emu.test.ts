@@ -16,6 +16,7 @@ import { P1TransportError, setP1TransportForTests, type P1Transport } from "../s
 import { ApiError, viaApi } from "./api"
 import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit findings F07 and F08 (both HIGH, 2026-10-13), end to end over the Firestore and Auth emulators: the real
@@ -412,7 +413,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       // 50,000 input tokens for a 28-byte body: more than any byte-level tokenizer can bill, so beyond the reservation.
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       stubTransport({ text: "REPLY", inputTokens: 50_000, outputTokens: MAX_OUTPUT_TOKENS })
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       const r = await callP1(req(firmId), at(T))
       const charge = costMicroUsd(OPUS, 50_000, MAX_OUTPUT_TOKENS)!
       // What the provider billed is owed: it is recorded as it is, never capped.
@@ -420,9 +421,10 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(await reservationOf(r.usageLogId)).toMatchObject({ state: "settled", reservedMicroUsd: WORST, actualMicroUsd: charge, exceededMicroUsd: charge - WORST })
       const raised = (await byFirm("events", firmId)).filter((e) => e.data.name === "ai.reservation.exceeded")
       expect(raised.map((e) => [e.id, e.data.payload])).toEqual([[`${r.usageLogId}_reservation_exceeded`, { monthKey: MONTH, reservedMicroUsd: WORST, actualMicroUsd: charge, excessMicroUsd: charge - WORST }]])
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.reservation_exceeded").map((c) => c[1])).toEqual([
+      expect(registered.fieldsOf("p1.reservation_exceeded")).toEqual([
         { firmId, usageLogId: r.usageLogId, monthKey: MONTH, reservedMicroUsd: WORST, actualMicroUsd: charge, excessMicroUsd: charge - WORST },
       ])
+      registered.restore()
     })
 
     it("a kill switch set after the call's first read is honoured by the reservation transaction: refused, nothing sent", { timeout: 60_000 }, async () => {
@@ -488,18 +490,18 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
       const charge = costMicroUsd(OPUS, content + 2_000, MAX_OUTPUT_TOKENS)!
       stubTransport({ text: "REPLY", inputTokens: content + 2_000, outputTokens: MAX_OUTPUT_TOKENS })
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       const first = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       const breach = await callP1(req(first), at(T))
       // The breach is recorded in full, raised, and the learned overhead is kept for the model.
       expect(await reservationOf(breach.usageLogId)).toMatchObject({ actualMicroUsd: charge, exceededMicroUsd: charge - WORST, exceededInputTokens: 2_000 - OVERHEAD })
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.reservation_exceeded")).toHaveLength(1)
+      expect(registered.fieldsOf("p1.reservation_exceeded")).toHaveLength(1)
       expect((await db().collection("platform").doc("p1Overhead").get()).data()?.models).toMatchObject({ "anthropic_claude-opus-5_5": { inputTokens: 2_000, model: OPUS } })
       // Re-audit R3-D1: below the clamp the overhead is learned exactly, every raise is logged at ERROR, and it is no anomaly.
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_learned").map((c) => c[1])).toEqual([
+      expect(registered.fieldsOf("p1.overhead_learned")).toEqual([
         { usageLogId: breach.usageLogId, model: OPUS, inputTokens: 2_000, exceededInputTokens: 2_000 - OVERHEAD },
       ])
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly")).toEqual([])
+      expect(registered.fieldsOf("p1.overhead_anomaly")).toEqual([])
       expect((await byFirm("events", first)).filter((e) => e.data.name === "ai.usage.anomaly")).toEqual([])
       // A later call for the model reserves the learned overhead, so its charge fits: a budget of exactly that ceiling holds.
       const learnedCeiling = costMicroUsd(OPUS, content + 2_000, MAX_OUTPUT_TOKENS)!
@@ -512,6 +514,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       expect(refused.blockReason).toBe("budget_exhausted")
       const month = await monthOf(later)
       expect(spentOf(month) + reservedOf(month)).toBeLessThanOrEqual(learnedCeiling)
+      registered.restore()
     })
 
     // Re-audit R3-D1: what one breach may teach every firm is clamped to LEARNED_OVERHEAD_MAX_FACTOR (4) times the cost
@@ -521,7 +524,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
 
     it("a provider reporting 25,000,000 prompt tokens for a 28-byte body teaches at most the clamp: an uninvolved $50 firm is still admitted, and the anomaly is recorded (re-audit R3-D1)", async () => {
       const content = contentOf(Buffer.byteLength(BODY, "utf8")) // audit F16: the system message, the body and their per-message overheads
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       stubTransport({ text: "REPLY", inputTokens: 25_000_000, outputTokens: MAX_OUTPUT_TOKENS })
       const a = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       const breach = await callP1(req(a), at(T))
@@ -549,8 +552,9 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
           { monthKey: MONTH, model: OPUS, inputTokens: 25_000_000, bodyTokens: content, overheadTokens: 25_000_000 - content, learnedTokens: CLAMP, clampTokens: CLAMP },
         ],
       ])
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_anomaly").map((c) => (c[1] as { usageLogId: string }).usageLogId)).toEqual([breach.usageLogId])
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.overhead_learned").map((c) => (c[1] as { inputTokens: number }).inputTokens)).toEqual([CLAMP])
+      expect(registered.fieldsOf("p1.overhead_anomaly").map((f) => f.usageLogId)).toEqual([breach.usageLogId])
+      expect(registered.fieldsOf("p1.overhead_learned").map((f) => f.inputTokens)).toEqual([CLAMP])
+      registered.restore()
     })
 
     it("a provider reporting Number.MAX_SAFE_INTEGER prompt tokens cannot overflow the learned overhead: it stays at the clamp and a firm at the route's maximum budget is still admitted (re-audit R3-D1)", async () => {
@@ -899,12 +903,13 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       await monthRef(firmId, MONTH).set({ firmId, monthKey: MONTH, reservedMicroUsd: WORST })
       // No readable hold: the reconciler cannot know what to take off the month's reservedMicroUsd, so it must not guess.
       const id = await seedLapsedAttempt(firmId, { reservedMicroUsd: "unknown" })
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       for (let run = 1; run <= 3; run++) {
         expect(await reconcileFor(firmId, afterLease() + run * 60_000)).toEqual({ settled: [], released: [] })
       }
       expect(await reservationOf(id)).toMatchObject({ state: "reconcile_failed", reconcileFailures: 3 })
-      expect(errors.mock.calls.filter((c) => c[0] === "p1.reconcile_quarantined").map((c) => (c[1] as { usageLogId: string }).usageLogId)).toEqual([id])
+      expect(registered.fieldsOf("p1.reconcile_quarantined").map((f) => f.usageLogId)).toEqual([id])
+      registered.restore()
       // Fail closed: the hold stays on the books and the firm stays blocked until an operator settles it (README runbook).
       expect(reservedOf(await monthOf(firmId))).toBe(WORST)
       expect((await callP1(req(firmId), at(afterLease() + 300_000))).blockReason).toBe("accounting_indeterminate")
@@ -919,7 +924,7 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
       const firmId = await seedFirm({ monthlyBudgetMicroUsd: BIG_BUDGET })
       stubTransport()
       const id = await seedLapsedAttempt(firmId)
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       for (let run = 1; run <= 3; run++) {
         const hold = db()
           .runTransaction(async (tx) => {
@@ -933,10 +938,11 @@ describe.skipIf(!EMULATORS)("audit F07 and F08: AI spend is reserved before disp
         expect([run, held.state, held.reconcileFailures]).toEqual([run, "reserved", undefined])
         await hold
       }
-      const mine = (name: string) => errors.mock.calls.filter((c) => c[0] === name && (c[1] as { usageLogId?: string }).usageLogId === id).map((c) => c[1] as Record<string, unknown>)
+      const mine = (event: string) => registered.fieldsOf(event).filter((f) => f.usageLogId === id)
       expect(mine("p1.reconcile_quarantined")).toEqual([])
       // Each failure was logged by its code as transient, and not counted.
       expect(mine("p1.reconcile_failed").map((l) => [l.code, l.transient])).toEqual(Array(3).fill(["grpc_10", true]))
+      registered.restore()
       // Contention over: the next run settles it, and the firm is no longer blocked.
       expect(await reconcileFor(firmId, afterLease() + 240_000)).toEqual({ settled: [id], released: [] })
       expect((await callP1(req(firmId), at(afterLease() + 300_000))).outcome).toBe("ok")

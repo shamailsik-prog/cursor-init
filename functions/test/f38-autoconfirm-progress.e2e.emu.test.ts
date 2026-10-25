@@ -12,6 +12,7 @@ import { enqueueScheduledRuns, periodKey } from "../src/p2/scheduled"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
 import { FakeClock, enqueueAt, readJob, testDeps } from "./jobs"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit F38 (spec docs/superpowers/specs/2026-10-18-f38-auto-confirm-progress-design.md): the auto-confirm job
@@ -296,7 +297,7 @@ describe.skipIf(!EMULATORS)("F38 auto-confirm progress (audit F38)", () => {
     const firmId = await newFirm()
     await seedPairs(firmId, many("entity_missing", RUN_PAIRS + 1), HEAD_AT, "h")
     const tail = await seedPairs(firmId, many("eligible", 5), TAIL_AT, "t")
-    const error = vi.spyOn(logger, "error")
+    const registered = spyRegisteredErrors()
     const info = vi.spyOn(logger, "info")
     clock.set(T)
     const period = periodOf(T)
@@ -304,9 +305,10 @@ describe.skipIf(!EMULATORS)("F38 auto-confirm progress (audit F38)", () => {
     expect(await deliverChain(firmId, period, testDeps(clock))).toBe(2)
 
     // The first run left 1 head pair: its row became due at HEAD_AT + 480 ms + 30 days, far more than 36 h ago.
-    const stale = logged(error, "autoconfirm.backlog_stale")
+    const stale = registered.fieldsOf("autoconfirm.backlog_stale")
     expect(stale).toEqual([{ firmId, jobId: runIdOf(firmId, period, 0), source: "frontier", ageMs: T - (HEAD_AT + RUN_PAIRS + LINK_AUTO_CONFIRM_MS) }])
     expect((stale[0] as { ageMs: number }).ageMs).toBeGreaterThan(STALE_MS)
+    registered.restore()
     expect(logged(info, "autoconfirm.backlog_cleared")).toEqual([{ firmId, jobId: runIdOf(firmId, period, 1) }])
     expect((await confirmedOf(firmId, tail)).confirmed).toBe(5)
     expect(await progress(firmId)).toMatchObject({ backlog: { alert: null, pendingSince: null }, lastRun: { jobId: runIdOf(firmId, period, 1), outcome: "drained" } })

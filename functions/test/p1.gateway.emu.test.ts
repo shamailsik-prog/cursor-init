@@ -142,10 +142,20 @@ const reservationOf = async (id: string) => (await db().collection("ai_reservati
 const monthOf = async (firmId: string, mk = MONTH) => (await monthRef(firmId, mk).get()).data()
 
 /** Every call made to any logger method, as JSON, for the "no raw text in a log line" checks. */
-function spyLogs(): { all: () => string; warn: ReturnType<typeof vi.spyOn>; error: ReturnType<typeof vi.spyOn> } {
+function spyLogs(): {
+  all: () => string
+  warn: ReturnType<typeof vi.spyOn>
+  error: ReturnType<typeof vi.spyOn>
+  registeredOf: (event: string) => Record<string, unknown>[]
+} {
   const spies = (["debug", "info", "log", "warn", "error", "write"] as const).map((m) => [m, vi.spyOn(logger, m).mockImplementation(() => undefined)] as const)
   const by = Object.fromEntries(spies)
-  return { all: () => JSON.stringify(spies.map(([m, s]) => [m, s.mock.calls])), warn: by.warn, error: by.error }
+  const registeredOf = (event: string) =>
+    by.write.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((p) => p?.event === event)
+      .map(({ severity: _s, event: _e, ...fields }) => fields)
+  return { all: () => JSON.stringify(spies.map(([m, s]) => [m, s.mock.calls])), warn: by.warn, error: by.error, registeredOf }
 }
 
 /** Enables Opik (self-hosted, confirmed) with a fake fetch that captures each posted body; `status` is its answer. */
@@ -975,9 +985,9 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       const r: P1Result = await callP1(req(firmId, { body: "About Ali Raza 35202-1234567-1", partyNames: ["Ali Raza"] }), at)
 
       expect(r).toMatchObject({ outcome: "ok", text: "Answer for [PARTY]", costMicroUsd: 14000 })
-      const failed = logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")
+      const failed = logs.registeredOf("p1.usage_log_failed")
       expect(failed).toHaveLength(1)
-      expect(failed[0]![1]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, monthKey: MONTH, model: OPUS, trace: { id: r.traceId, status: "disabled" } })
+      expect(failed[0]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, monthKey: MONTH, model: OPUS, trace: { id: r.traceId, status: "disabled" } })
       expect(logs.all()).not.toContain("Ali Raza")
       expect(logs.all()).not.toContain("35202-1234567-1")
       expect(logs.all()).not.toContain("[PARTY]") // no text at all, masked or not
@@ -1012,9 +1022,9 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       const remaining = p1TestSeam.commitAttemptFailures.length
       expect(remaining).toBeGreaterThan(0) // it stopped before the attempts ran out
       expect(remaining).toBeLessThan(30) // after at least one attempt
-      const failed = logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")
+      const failed = logs.registeredOf("p1.usage_log_failed")
       expect(failed).toHaveLength(1)
-      expect(failed[0]![1]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, code: "commit_deadline" })
+      expect(failed[0]).toMatchObject({ usageLogId: r.usageLogId, firmId, outcome: "ok", costMicroUsd: 14000, code: "commit_deadline" })
       expect(await rowsOf(firmId)).toHaveLength(0)
       expect(await eventsOf(firmId)).toHaveLength(0)
       // The commit wrote nothing; the reservation made before the call still holds its worst case (audit F08).
@@ -1038,7 +1048,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
 
       expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 140_000, accounting: "settled" })
       expect(p1TestSeam.lostCommitAnswers).toEqual([])
-      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect(logs.registeredOf("p1.usage_log_failed")).toHaveLength(0)
       expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
       expect((await eventsOf(firmId, "ai.call.completed")).map((e) => e.id)).toEqual([`${r.usageLogId}_completed`])
       expect(await auditsOf(firmId, "ai.gateway.decision")).toHaveLength(1)
@@ -1061,7 +1071,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       const r = await callP1(req(firmId), at)
 
       expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
-      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect(logs.registeredOf("p1.usage_log_failed")).toHaveLength(0)
       expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
       expect((await monthOf(firmId))!).toMatchObject({ spentMicroUsd: 14000, calls: { ok: 1, failed: 0, blocked: 0 } })
     })
@@ -1078,7 +1088,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(Date.now() - t0).toBeLessThan(10_000)
       expect(r).toMatchObject({ outcome: "ok", costMicroUsd: 14000 })
       expect(p1TestSeam.commitAttemptFailures).toEqual([])
-      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect(logs.registeredOf("p1.usage_log_failed")).toHaveLength(0)
       expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
     }, 120_000)
 
@@ -1123,7 +1133,7 @@ describe.skipIf(!EMULATORS)("callP1 (P3-61, P3-63..P3-66, P3-69)", () => {
       expect(p1TestSeam.reserveAttemptFailures).toHaveLength(1)
       expect(p1TestSeam.attemptMarkFailures).toHaveLength(1)
       expect((await reservationOf(r.usageLogId))!.state).toBe("settled")
-      expect(logs.error.mock.calls.filter((c) => c[0] === "p1.usage_log_failed")).toHaveLength(0)
+      expect(logs.registeredOf("p1.usage_log_failed")).toHaveLength(0)
       expect((await rowsOf(firmId)).map((row) => row.id)).toEqual([r.usageLogId])
       expect((await monthOf(firmId))!.calls).toEqual({ ok: 1, failed: 0, blocked: 0 })
     })
