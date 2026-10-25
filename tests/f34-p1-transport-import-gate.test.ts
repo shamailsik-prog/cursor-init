@@ -1134,7 +1134,7 @@ describe("audit F34 round 2 (FA-F34-R2-001, -002, -005, -007): G-0 [21] has no o
       {
         "functions/src/p1/embedding.ts": overlayGranted(
           "functions/src/p1/embedding.ts",
-          'async function zzAnnotatedEmbed(): Promise<unknown> {\n  const t: ReturnType<typeof Object> | null = activeEmbeddingTransport()\n  return t === null ? null : t.embed({ model: "m", input: "x" })\n}\n',
+          'async function zzAnnotatedEmbed(): Promise<unknown> {\n  const zzT5: ReturnType<typeof Object> | null = activeEmbeddingTransport()\n  return zzT5 === null ? null : zzT5.embed({ model: "m", input: "x" })\n}\n',
         ),
       },
     ],
