@@ -16,7 +16,10 @@ export const COURT_OPS_ACK_PREFIX = "ops:court_ops:ack:"
 export const COURT_OPS_ACK_ACTION = "court_ops_acknowledge"
 export const COURT_OPS_ACK_QUEUE_TYPES = ["follow_up", "workflow"] as const
 export type CourtOpsAckQueueType = (typeof COURT_OPS_ACK_QUEUE_TYPES)[number]
-/** Ten times the longest real item id (`fu_<uuid>` is 39 characters); keeps the composite id far below 1,500 bytes. */
+/**
+ * Over six times the longest real item id (`doc_<uuid>` is 40 characters, `fu_<uuid>` 39; both from SpineStore.id);
+ * keeps the composite id far below 1,500 bytes.
+ */
 export const COURT_OPS_ACK_ITEM_ID_MAX_BYTES = 256
 
 export function isCourtOpsAckQueueType(value: unknown): value is CourtOpsAckQueueType {

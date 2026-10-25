@@ -14,7 +14,8 @@ characters in the id, or whether the item exists.
 
 Reproduced on main 6b186a0 through the real route (Auth and Firestore emulators, `SIKANDER_PERSISTENCE_MODE=firestore`,
 emulator ID tokens, F02 dispatch). The auditor's FU1 and FU1b cases were copied unchanged into a probe file in a
-detached main worktree. Log: `scratchpad/fu1/logs/probe-main-fu1.log`.
+detached main worktree. Log: `scratchpad/fu1/logs/probe-main-fu1.log`. After the merge of main 798cf56 the same cases
+were run again, unchanged, on 798cf56, with the same result (`scratchpad/fu1/logs/r2/probe-auditor-fu1-main-798cf56.log`).
 
 - **FU1.** Firm B acknowledges `{queueType: "workflow", id: X}` and gets 200. The row holds firm B. Firm A sends the same
   id and gets 200. The row now holds firm A, A's actor and A's text: B's row is gone.
@@ -58,8 +59,9 @@ its repositories. The e2e drives the real `POST` with a bearer in Firestore mode
 **R3. Item id.** The id must be a string of 1 to 256 UTF-8 bytes containing no `:` and no `/`. Anything else answers
 400 `court_ops_item_id_invalid` before any read or write.
 - `:` would make the composite id ambiguous, and `/` would make it a sub-path.
-- 256 bytes is ten times the longest real id (39 characters). The composite id stays far below Firestore's 1,500-byte
-  limit.
+- 256 bytes is over six times the longest real id: `doc_<uuid>` is 40 characters and `fu_<uuid>` 39 (both from
+  `SpineStore.id`). The composite id stays far below Firestore's 1,500-byte limit. (Corrected on 2026-10-25: this line
+  first said "ten times the longest real id (39 characters)", which missed the 40-character document ids.)
 - `reason`, when present, must be a string (400 `court_ops_reason_invalid`). A non-string reason would otherwise be
   stored as a non-string `detail`.
 
@@ -165,12 +167,23 @@ Exit codes:
   - `int_${parsed.matterId}_engagement` (matters `confirm_engagement`). This one is safe: `ensureMatterAccess` resolves
     the matter in the caller's firm first, and `confirmEngagement` writes it in a transaction keyed by a globally
     unique matter id.
-- `*Id(parsed.…)` finds the filings closure-chain ids. The sampled sites use them for lookups followed by a
-  `firmId !== actor.firmId` → 404 check.
+- `*Id(parsed.…)` finds the filings closure-chain ids: 36 call sites, 18 for each of two helpers. Every one is followed,
+  within 22 lines, by a `firmId !== actor.firmId` → 404 check on the row it looked up.
 - `functions/src` composite ids are either firm-prefixed (`${firmId}_…` counters, name index, budgets) or derived from
   server ids with `tx.create` (events), so they cannot overwrite.
-- The scan is a grep-level review. A data-flow proof across the 16k-line filings and 12k-line ops-reporting routes is
-  NOT DEMONSTRATED.
+- Two broader passes on the branch head (any interpolated `id: \`…\`` in `app/api`, and any `doc(<request field>)`)
+  add four sites, none unsafe:
+  - `ops:court_ops:follow_up:${updated.id}` (court-ops `resolve_follow_up`). `resolveFollowUp` first checks the
+    follow-up is the caller firm's and that the caller can access its matter, and `follow_ups/{id}` is one namespace,
+    so two firms cannot share the id. The write is still a blind `upsert`; that is recorded, not changed here.
+  - `functions/src/d4/drafts.ts` `matters().doc(input.matterId)`: a lookup, then `matter.firmId !== caller.firmId` →
+    not found.
+  - `functions/src/p1/ocrCall.ts` `p1_ocr_operations.doc(req.operationId)`: the id is the server's job id
+    (`p2/ocrJob.ts`), and a stored row of another firm is refused (`operation_conflict`).
+  - `functions/src/p1/corpusEmbedding.ts` takes `operationId` from the body of a service-only caller, but stores it only
+    as the field `corpusOperationId`; the usage row has an auto id.
+- The scan is a grep-level review. A data-flow proof across the 19,082-line filings route and the 32,900-line
+  ops-reporting route is NOT DEMONSTRATED. (Corrected on 2026-10-25: this line first said 16k and 12k lines.)
 
 **R15. Unchanged on purpose.**
 - `matterId` stays `null` on ack rows, as on main. Stamping the item's matter would narrow reads to members. That

@@ -63,8 +63,9 @@ Firestore rules, vitest under the Auth and Firestore emulators.
 
 ## RED/GREEN ledger
 
-Counts are filled from the runs. RED is run on the detached main worktree (6b186a0) with the new test files copied
-in, or on this branch before the source change. GREEN is run on this branch's head.
+Counts are filled from the runs. RED is run on the detached main worktree with the new test files copied in, or on
+this branch before the source change. RED was first taken on 6b186a0 and taken again on 798cf56 after the merge, with
+the same counts. GREEN is run on this branch's head.
 
 | Suite | RED on main | GREEN on branch |
 |---|---|---|
