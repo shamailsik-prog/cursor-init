@@ -11,7 +11,7 @@ Amendment No. 1); Layer 18 (Implementation Consolidation) with its errata E-15 t
 Erratum Set No. 1 (p. 336); a later layer for Phase 3 research and viewer work (p. 343).
 
 Proposed changes that are not yet signed live beside it as separate files. At present:
-`ERRATUM_SET_2_PROPOSED.md` (E-23 to E-51 and open items O-15 to O-76, PROPOSED, pending the partner's
+`ERRATUM_SET_2_PROPOSED.md` (E-23 to E-52 and open items O-15 to O-76, PROPOSED, pending the partner's
 signature). A proposed set does not govern until signed. The rulings behind the Phase 1 foundation work, one line
 each, are in `docs/superpowers/plans/2026-09-30-phase1-foundation-rulings.md`.
 

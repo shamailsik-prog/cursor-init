@@ -579,7 +579,7 @@ jobs:
     # The F20 trust-vocabulary tests run against this real Postgres (each test creates and drops
     # its own database); under CI, tests/conftest.py stops the run if CORPUS_TEST_DATABASE_URL is
     # missing, so they cannot pass by being skipped. The F19 publication tests apply the Annex A
-    # contract (postgres/ddl 001 + 003 + 004 + 005, in that order) to each per-test database; the step below applies it once
+    # contract (postgres/ddl 001 + 003 + 004 + 005 + 006, in that order) to each per-test database; the step below applies it once
     # (twice) to the service database first, which creates the cluster-global corpus roles once
     # (no concurrent CREATE ROLE) and proves idempotency with psql (plan D27).
     runs-on: ubuntu-latest

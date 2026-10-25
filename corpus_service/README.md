@@ -214,6 +214,27 @@ published, `2` usage error or a structurally invalid batch, `3` batch key reused
 content, `4` a superuser or a role that is not a `corpus_writer` member, `1` anything else (nothing
 is written).
 
+**The research term index (audit FA-D5-003 R1).** `postgres/ddl/006_research_terms.sql` stores each
+title's and each citation's research terms, pre-folded, and each judgment's size, so D5 research
+reads only the judgments that can reach a query's top k instead of the whole corpus. A trigger marks
+a row pending whenever its text (or, for a judgment's size, one of its citations) is written, by
+anyone. A publication indexes what it writes and clears those marks in its own transaction
+(`scraper/publication/research_index.py`, with the fold of `scraper/publication/research_terms.py`,
+pinned to the application's by `tests/fixtures/corpus/research-terms-golden.json`). Everything else
+(the whole corpus when 006 is first applied, rows a superuser or a bulk load wrote) is indexed by:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://<corpus_writer member>@<host>/<db> \
+  python -m scraper.publication.cli index-terms
+```
+
+stdout is one JSON object of counts (`titles`, `citations`, `unindexable`, `pending_titles`,
+`pending_citations`); exit `4` for a superuser or a role that is not a `corpus_writer` member and for
+a database without 006 (`research_index_missing`). Research folds a pending judgment itself, so it is
+exact whatever the index holds, but more than 2,000 pending visible judgments fail every search
+(`unindexed`) until this runs. A text the fold cannot reproduce exactly (a code point outside its
+domain) stays pending by design and counts in `unindexable`.
+
 **Who applies the DDL.** Annex A (001, 003, and 004's authority read views for the draft gate,
 audit F05) is applied by a superuser, always in that order: in the compose stack by
 `docker/postgres/apply-annex-a.sh` at postgres init and by `scripts/rotate_postgres_password.sh` on an
@@ -591,8 +612,9 @@ default, and all four differ.
   commands, cannot flush scripts/functions, and cannot switch databases.
 - **Annex A corpus contract (audit F19).** On a fresh volume the image's init runs `10-init.sql`
   (extensions), then `15-apply-annex-a.sh`, which applies `../postgres/ddl/001_corpus_contract.sql`,
-  `003_corpus_publication.sql`, `004_authority_read_views.sql` and `005_research_reader.sql` (mounted read-only) in one
-  transaction as the bootstrap superuser, then `20-provision-roles.sh`, which refuses to run without Annex A (005 included) or on PostgreSQL
+  `003_corpus_publication.sql`, `004_authority_read_views.sql`, `005_research_reader.sql` and `006_research_terms.sql`
+  (mounted read-only) in one transaction as the bootstrap superuser, then `20-provision-roles.sh`, which refuses to run without
+  Annex A (005 and 006 included) or on PostgreSQL
   older than 16, and refuses (before changing anything) an Annex A view the inventory does not list:
   re-applying 003 alone after 004 would otherwise hand 004's views to the migration role. Annex A stays the superuser's: provisioning leaves every relation that
   `corpus_contract_relations()` lists out of the move to the migration role and out of the runtime
