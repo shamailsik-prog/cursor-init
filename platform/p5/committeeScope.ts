@@ -10,6 +10,7 @@
  */
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
+import { resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
 import type { Matter, SpineStore, User } from "@/platform/spine/store"
 
@@ -106,8 +107,12 @@ export async function resolveCommitteeScope(
 
   const documentIds = [...new Set(input.documentIds ?? [])]
   for (const documentId of documentIds) {
-    const doc =
-      store.documents.get(documentId) ?? (await repos.documents.get(documentId, actor.firmId))
+    const stored = await repos.documents.get(documentId, actor.firmId)
+    // FA-F13-039: same contract as documents GET (FA-F13-036) — Firestore null is authoritative.
+    if (resolvePersistenceMode() === "firestore" && stored === null) {
+      store.documents.delete(documentId)
+    }
+    const doc = stored ?? store.documents.get(documentId) ?? null
     // Cross-firm documents are reported as unknown: no existence oracle.
     if (!doc || doc.firmId !== actor.firmId) {
       throw new CommitteeScopeError(404, "unknown document", "NOT_FOUND")
