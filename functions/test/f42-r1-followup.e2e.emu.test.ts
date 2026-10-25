@@ -638,6 +638,25 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // Control: Q, established and independent, approves.
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
   })
+
+  it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    // A, an established associate, is made partner by Q, then requests; Q may not approve it, P (independent of A) may.
+    await send(setUserClaimsApi, f, f.Q, { uid: f.A.uid, role: "partner" })
+    await ageUser(f.A.uid, { partnerSince: 400 })
+    const promoted = await signIn(f.A.uid, f.A.email!)
+    const req = await send(requestApi, f, promoted, { matterId: f.matterId, reasonCode: "client_instruction" })
+    expect((await apiErrorOf(send(approveApi, f, f.Q, { requestId: req.requestId }))).code).toBe("requester_promoted_by_approver")
+    // A partner whose account is ten days old at the request: younger than the PROPOSED 30 days.
+    const g = await newFirm()
+    const young = await member(g.firmId, "partner")
+    await ageUser(young.uid, { createdAt: 10 })
+    const byYoung = await send(requestApi, g, young, { matterId: g.matterId, reasonCode: "client_instruction" })
+    expect((await apiErrorOf(send(approveApi, g, g.Q, { requestId: byYoung.requestId }))).code).toBe("requester_tenure_too_short")
+    // Control: P, independent of A and established, approves A's request.
+    expect((await send(approveApi, f, f.P, { requestId: req.requestId })).status).toBe("in_progress")
+  })
 })
 
 describe.skipIf(!EMULATORS)("FA-F42-R1-012: the auditor's surviving mutants", () => {
