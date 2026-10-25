@@ -354,7 +354,7 @@ describe.skipIf(!EMULATORS)("FA-F34-R1-002: the corpus embedding path writes its
     const d = await decisionOf(usageLogId)
     expect(d, "an embedding leaves a decision record (R16)").toBeDefined()
     expect(d).toMatchObject({
-      recordVersion: "f34.2",
+      recordVersion: "f34.3",
       traceId: out.body.traceId,
       usageLogId,
       firmId,
