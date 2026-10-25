@@ -192,3 +192,84 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-005: no content enters the deletion trail
     expect(all.toLowerCase()).not.toContain("ayesha")
   })
 })
+
+const releaseApi = viaApi<Record<string, unknown>>("releaseLegalHold")
+const retryApi = viaApi<Record<string, unknown>>("retryFailedJob")
+const RETRY_NOTE = "Resumed after the legal hold on the matter was released."
+
+/** The processor request summaries of `requestId` (not its parts), with every id its parts hold. */
+async function processorRequests(requestId: string): Promise<Array<{ id: string; status: string; traceIds: string[] }>> {
+  const snap = await adminDb().collection("deletion_external_requests").where("requestId", "==", requestId).get()
+  const ids = snap.docs.filter((d) => typeof d.get("part") === "number").flatMap((d) => d.get("traceIds") as string[])
+  return snap.docs.filter((d) => typeof d.get("status") === "string").map((d) => ({ id: d.id, status: d.get("status") as string, traceIds: [...ids].sort() }))
+}
+
+/** Retries every dead-lettered retention job of the firm through the P5 route, as a partner does (P3-12). */
+async function retryDead(f: Firm, m: Member): Promise<number> {
+  const dead = await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("status", "==", "dead_lettered").get()
+  const jobs = dead.docs.filter((d) => String(d.get("jobType")).startsWith("retention."))
+  for (const d of jobs) await send(retryApi, f, m, { jobId: d.id, note: RETRY_NOTE })
+  return jobs.length
+}
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-004: a legal hold stops every remaining destructive step, the processor instruction included", () => {
+  it("a hold placed after the approval and before prepare: prepare halts before any instruction or purge; the release resumes it", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: "trace-held-1", status: "exported" }, createdAt: Timestamp.now() })
+    const { requestId, approved } = await requestAndApprove(f)
+    await send(holdApi, f, f.P, { matterId: f.matterId, reasonCode: "litigation_anticipated" })
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("dead_lettered")
+    const prep = (await adminDb().collection("jobs").doc(approved.jobId!).get()).data()!
+    expect(prep.lastError?.code).toBe("legal_hold_active")
+    // Nothing destructive happened: no instruction to the processor, no purge job, no acknowledgement.
+    expect(await processorRequests(requestId)).toEqual([])
+    expect((await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("jobType", "==", "retention.store.purge").get()).size).toBe(0)
+    const halted = await send(statusApi, f, f.P, { requestId })
+    expect(halted).toMatchObject({ status: "in_progress", halted: { code: "legal_hold_active" } })
+    expect(Object.keys(halted.acked)).toEqual([])
+    // Another partner releases the hold; a partner retries the halted job; the saga finishes and the instruction is issued.
+    await send(releaseApi, f, f.Q, { matterId: f.matterId })
+    expect(await retryDead(f, f.P)).toBe(1)
+    expect((await drain(f.firmId, clock, deps)).every((o) => o === "done")).toBe(true)
+    const done = await send(statusApi, f, f.P, { requestId })
+    expect(done).toMatchObject({ status: "completed", halted: null })
+    expect(await processorRequests(requestId)).toEqual([{ id: `${requestId}_opik`, status: "pending_operator", traceIds: ["trace-held-1"] }])
+  })
+
+  it("a hold placed after prepare holds the issued instruction at once, halts the purge, and its release returns the instruction", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: "trace-mid-1", status: "exported" }, createdAt: Timestamp.now() })
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["pending_operator"])
+    await send(holdApi, f, f.P, { matterId: f.matterId, reasonCode: "regulator_request" })
+    // The hold's own transaction moved the instruction to held, before any saga step noticed it.
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
+    expect(await drain(f.firmId, clock, deps)).toContain("dead_lettered")
+    expect((await send(statusApi, f, f.P, { requestId })).halted).toMatchObject({ code: "legal_hold_active" })
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
+    await send(releaseApi, f, f.Q, { matterId: f.matterId })
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["pending_operator"])
+    expect(await retryDead(f, f.P)).toBeGreaterThan(0)
+    expect((await drain(f.firmId, clock, deps)).every((o) => o === "done")).toBe(true)
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["pending_operator"])
+  })
+
+  it("a hold placed after the saga finished still stops the operator: the pending instruction moves to held", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: "trace-late-1", status: "exported" }, createdAt: Timestamp.now() })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    await send(holdApi, f, f.Q, { matterId: f.matterId, reasonCode: "court_order" })
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
+  })
+})

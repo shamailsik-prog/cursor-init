@@ -16,8 +16,9 @@ source of any period: every proposed value in the policy file is inert and its l
 ## Deleting a matter (once the owner has ratified a deleting policy)
 
 1. A partner whose clearance reaches the matter's label calls
-   `POST /api/platform/retention/requestMatterDeletion { matterId, reasonCode }` (`reasonCode`: a short code such as
-   `client_instruction`, never free text). The answer is `pending_approval`, or `refused` with the hold that refused it.
+   `POST /api/platform/retention/requestMatterDeletion { matterId, reasonCode }` (`reasonCode`: one of the policy's
+   `deletion.reasonCodes`, such as `client_instruction`; any other value is `400 invalid_reason_code`, so no name or fact
+   enters the trail). The answer is `pending_approval`, or `refused` with the hold that refused it.
 2. A **different** partner calls `POST /api/platform/retention/approveMatterDeletion { requestId }` within the approval
    window (PROPOSED 72 h). Past the window the request ends instead: the answer is `expired` (`approval_expired`),
    and a partner opens a new request (a new request also ends a lapsed one it finds, recorded as
@@ -41,14 +42,26 @@ every usage row whose call exported its trace, and every F34 decision record who
 `external_ids_over_limit` before anything is anonymised: the alert below fires, and the request needs an engineer.
 The Opik deletion call is **NOT DEMONSTRATED**).
 
+**Before acting on any `deletion_external_requests` row** (FA-F42-R1-004, spec R24), the operator checks, every time:
+
+1. the row's own `status`: act only on `pending_operator`; `held` means a legal hold stands on the matter;
+2. the request (`getDeletionRequest`): `halted` must be null;
+3. `legal_holds/{matterId}`: it must be absent or `active: false`.
+
+If any check fails, do nothing and leave the row as it is. A hold stops every remaining destructive step, instructions
+to third parties included: placing one moves the matter's `pending_operator` instructions to `held` in the hold's own
+transaction (also after the saga finished), and a saga step that finds one does the same when it halts.
+
 ## Legal holds
 
-- Place: `POST /api/platform/retention/placeLegalHold { matterId, reasonCode }` (any partner cleared for the matter).
-  A hold refuses new requests and approvals (`legal_hold_matter`) and, placed while a saga runs, halts it: the next
-  purge step fails permanently with `legal_hold_active`, the request records `halted`, and the job dead-letters
-  (`job.deadLettered`).
+- Place: `POST /api/platform/retention/placeLegalHold { matterId, reasonCode }` (any partner cleared for the matter;
+  `reasonCode` one of the policy's `legalHold.reasonCodes`). A hold refuses new requests and approvals
+  (`legal_hold_matter`) and, placed after an approval, halts the saga wherever it is: the next prepare or purge step
+  fails permanently with `legal_hold_active`, the request records `halted`, the job dead-letters (`job.deadLettered`),
+  and every `pending_operator` processor instruction of the matter moves to `held`.
 - Release: `POST /api/platform/retention/releaseLegalHold { matterId }` by a partner **other than** the one who placed
-  it. Releasing clears `halted`; a partner then retries the dead-lettered saga jobs (`retryFailedJob`, P3-12).
+  it. Releasing clears `halted` and returns `held` instructions to `pending_operator`; a partner then retries the
+  dead-lettered saga jobs (`retryFailedJob`, P3-12), which resume after their last committed step.
 
 ## Alert: retention.deletion_unacknowledged
 

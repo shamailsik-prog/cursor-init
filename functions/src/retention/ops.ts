@@ -11,6 +11,7 @@ import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../p
 import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
 import { RetentionConfigError, activePolicy, holdRefusal, inventory, planDeletion, type PlannedStore, type RetentionPolicy } from "./config"
+import { instructionsIn, moveInstructions } from "./instructions"
 import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
 
 /**
@@ -338,10 +339,13 @@ export const placeLegalHoldOp: FirmOperation<Record<string, unknown>> = {
     const at = Timestamp.fromMillis(now ?? Date.now())
     const out = await db().runTransaction(async (tx) => {
       const { label, hold } = await holdSubject(tx, caller, matterId)
+      const pending = await instructionsIn(tx, caller.firmId, matterId, "pending_operator")
       requireCleared(caller, label)
       if (hold && hold.firmId === caller.firmId && hold.active === true) throw new HttpError(409, "legal_hold_exists")
       const row = { firmId: caller.firmId, matterId, active: true, reasonCode, placedBy: caller.uid, placedAt: at, releasedBy: null, releasedAt: null }
       tx.set(holdsRef().doc(matterId), row)
+      // FA-F42-R1-004 (spec R24): the hold stops the processor instructions too, at once (also after the saga finished).
+      moveInstructions(tx, pending, "held", at)
       await audit.stage(tx, "allow", "ok")
       return holdView(matterId, row)
     })
@@ -365,12 +369,15 @@ export const releaseLegalHoldOp: FirmOperation<Record<string, unknown>> = {
     const out = await db().runTransaction(async (tx) => {
       const { label, hold } = await holdSubject(tx, caller, matterId)
       const halted = await tx.get(requestsRef().where("firmId", "==", caller.firmId).where("matterId", "==", matterId).where("status", "==", "in_progress").limit(5))
+      const held = await instructionsIn(tx, caller.firmId, matterId, "held")
       requireCleared(caller, label)
       if (!hold || hold.firmId !== caller.firmId || hold.active !== true) throw new HttpError(409, "no_active_hold")
       if (hold.placedBy === caller.uid) throw new HttpError(403, "second_partner_required")
       tx.update(holdsRef().doc(matterId), { active: false, releasedBy: caller.uid, releasedAt: at })
-      // A saga the hold halted may resume: a partner retries its dead-lettered jobs (P3-12).
+      // A saga the hold halted may resume: a partner retries its dead-lettered jobs (P3-12). The instructions the hold
+      // stopped are the operator's again (spec R24).
       for (const r of halted.docs) if (r.get("halted") !== null) tx.update(r.ref, { halted: null, updatedAt: at })
+      moveInstructions(tx, held, "pending_operator", at)
       await audit.stage(tx, "allow", "ok")
       return holdView(matterId, { ...hold, active: false, releasedBy: caller.uid, releasedAt: at })
     })

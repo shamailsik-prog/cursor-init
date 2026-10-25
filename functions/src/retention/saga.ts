@@ -9,6 +9,7 @@ import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import { type AckDetail, type AckInput, ackRefOf, requestRefOf, sha256, stageAcks } from "./acks"
 import { retentionTestSeam, storeByKey, storeKey, type InventoryStore } from "./config"
+import { instructionsIn, moveInstructions } from "./instructions"
 import {
   DELETION_EXTERNAL_REQUESTS_COLLECTION,
   PREPARE_JOB_TYPE,
@@ -219,10 +220,27 @@ export function purgeGroups(plan: Record<string, Treatment>, order: readonly str
 }
 
 async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
-  const { firmId, id: jobId } = ctx.job
+  const { firmId } = ctx.job
   const { requestId } = ctx.payload
   const req = await loadRequest(firmId, requestId)
   if (!req) return {}
+  try {
+    await prepareSteps(ctx, req)
+  } catch (err) {
+    if (err instanceof JobError && err.code === "legal_hold_active") await halt(ctx, req)
+    throw err
+  }
+  return {}
+}
+
+/**
+ * The prepare job's steps. FA-F42-R1-004 (spec R24): each one re-reads the matter's hold in its own transaction, as the
+ * purge job's do, so a hold placed between the approval and prepare stops the processor instruction and the enqueue
+ * too, not only the purge.
+ */
+async function prepareSteps(ctx: JobContext<PreparePayload>, req: Request): Promise<void> {
+  const { firmId, id: jobId } = ctx.job
+  const { requestId } = ctx.payload
   const approvedAtMs = req.approvedAt.toMillis()
   const statics: AckInput[] = []
   for (const key of req.expected) {
@@ -235,6 +253,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
   for (let i = 0; i < statics.length; i += 200) {
     const slice = statics.slice(i, i + 200)
     await step(ctx as JobContext<unknown>, `static-${i / 200}`, async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       await stageAcks(tx, requestId, slice, { jobId, nowMs: nowMs(ctx as JobContext<unknown>) })
     })
   }
@@ -244,6 +263,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
     const store = plannedStore(key)
     const ids = await exportedTraceIds(firmId, req.matterId, store)
     await step(ctx as JobContext<unknown>, `external-${sha256([key]).slice(0, 16)}`, async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       const parts = traceIdParts(ids)
       await stageAcks(tx, requestId, [{
         key,
@@ -264,6 +284,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
   const groups = purgeGroups(req.plan, req.expected, typeof req.groupSize === "number" ? req.groupSize : DEFAULT_GROUP_SIZE)
   if (groups.length > 0) {
     await step(ctx as JobContext<unknown>, "enqueue", async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       const specs: JobSpec[] = groups.map((storeKeys, i) => ({
         firmId,
         jobType: PURGE_JOB_TYPE,
@@ -276,7 +297,22 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
       await (await enqueue()).enqueueJobs(tx, specs, { now: nowMs(ctx as JobContext<unknown>) })
     })
   }
-  return {}
+}
+
+/**
+ * A hold halted the saga (spec R9, R24): in one step, the request records `halted`, and every processor instruction of
+ * the matter still `pending_operator` moves to `held`, so the operator never acts on one while the hold stands. The
+ * release moves them back and clears `halted`; a partner then retries the dead-lettered job (P3-12).
+ */
+async function halt(ctx: JobContext<unknown>, req: Request): Promise<void> {
+  const { firmId } = ctx.job
+  const { requestId } = ctx.payload as { requestId: string }
+  await step(ctx, `halt-${ctx.job.attempt}`, async (tx) => {
+    const pending = await instructionsIn(tx, firmId, req.matterId, "pending_operator")
+    const at = Timestamp.fromMillis(nowMs(ctx))
+    tx.update(requestRefOf(requestId), { halted: { code: "legal_hold_active", at } })
+    moveInstructions(tx, pending, "held", at)
+  })
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -438,11 +474,7 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
     }
     await acknowledge(ctx, req, stores, jobId, `ack-${part}`)
   } catch (err) {
-    if (err instanceof JobError && err.code === "legal_hold_active") {
-      await step(ctx as JobContext<unknown>, `halt-${ctx.job.attempt}`, async (tx) => {
-        tx.update(requestRefOf(requestId), { halted: { code: "legal_hold_active", at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)) } })
-      })
-    }
+    if (err instanceof JobError && err.code === "legal_hold_active") await halt(ctx as JobContext<unknown>, req)
     throw err
   }
   return {}
