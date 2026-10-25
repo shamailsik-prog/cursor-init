@@ -336,7 +336,7 @@ describe("FA-F42-R2-002: lateTraces part cache cannot drop recorded ids", () => 
             id: ref.id,
             get: (field: string) => (field === "traceIds" ? partData.get(ref.id) ?? [] : undefined),
           })) as never,
-      }) as Transaction
+      }) as unknown as Transaction
 
     await readLateIds(makeTx(64), "req", "opik")
     const read = await readLateIds(makeTx(65), "req", "opik")
@@ -361,7 +361,7 @@ describe("FA-F42-R2-002: lateTraces part cache cannot drop recorded ids", () => 
             id: ref.id,
             get: (field: string) => (field === "traceIds" ? partData.get(ref.id) ?? [] : undefined),
           })) as never,
-      }) as Transaction
+      }) as unknown as Transaction
 
     await readLateIds(makeTx(64), "req", "opik")
     const read = await readLateIds(makeTx(65), "req", "opik")
@@ -376,7 +376,7 @@ describe("FA-F42-R2-002: lateTraces part cache cannot drop recorded ids", () => 
       set: (_ref: unknown, data: Record<string, unknown>) => {
         sets.push(data)
       },
-    } as Transaction
+    } as unknown as Transaction
     expect(stageLateIds(tx, read, ["trace-0", "trace-64"], { firmId: "f", requestId: "req", matterId: "m" }, 1)).toBe(0)
     expect(updates).toHaveLength(0)
     expect(sets).toHaveLength(0)
