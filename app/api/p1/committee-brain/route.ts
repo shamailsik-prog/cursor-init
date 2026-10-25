@@ -109,10 +109,25 @@ async function handleGet(request: Request) {
       await syncFirmMatters(store, repos, actor.firmId)
     }
     const matterAccess = new Map<string, boolean>()
+    const documentLive = new Map<string, boolean>()
+    // Audit F42 (FA-F42-R1-002, spec R22): a legacy row names its matter only through its documents, so it is served
+    // only while every one of them still reads through the repository, which drops a tombstoned matter's documents
+    // (and a purged document is gone). A row with no documents is the author's own firm-level answer, as before.
+    const legacyLive = async (row: CommitteeBrainOutput): Promise<boolean> => {
+      for (const documentId of row.documentIds ?? []) {
+        let ok = documentLive.get(documentId)
+        if (ok === undefined) {
+          ok = (await repos.documents.get(documentId, actor.firmId)) !== null
+          documentLive.set(documentId, ok)
+        }
+        if (!ok) return false
+      }
+      return true
+    }
     const visible: CommitteeBrainOutput[] = []
     for (const row of cleared) {
       if (!row.matterId) {
-        if (row.actorId === actor.id) visible.push(row)
+        if (row.actorId === actor.id && (await legacyLive(row))) visible.push(row)
         continue
       }
       let allowed = matterAccess.get(row.matterId)

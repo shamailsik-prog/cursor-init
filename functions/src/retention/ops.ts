@@ -11,7 +11,8 @@ import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../p
 import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
 import { RetentionConfigError, activePolicy, holdRefusal, inventory, planDeletion, type PlannedStore, type RetentionPolicy } from "./config"
-import { PREPARE_JOB_TYPE, REASON_CODE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
+import { instructionsIn, moveInstructions } from "./instructions"
+import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
 
 /**
  * Audit F42: the deletion protocol's routes (spec R4, R5, R9; `/api/platform/retention/*`).
@@ -30,21 +31,73 @@ import { PREPARE_JOB_TYPE, REASON_CODE, acksRef, holdsRef, requestsRef, type Hol
  *   partner releases it. A hold may be placed on a tombstoned matter, which halts its saga.
  *
  * Every retention action is partner-only firm administration in the shared P5 table; membership is not required, so
- * the routes keep working after the approval revoked it. Reason codes are short codes, never free text.
+ * the routes keep working after the approval revoked it. Reason codes come from the policy's closed lists, never free text.
  */
 
 const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
 const db = () => adminDb()
 const matterRef = (id: string) => db().collection("matters").doc(id)
 const tombRef = (id: string) => db().collection(MATTER_TOMBSTONES).doc(id)
+const userRef = (uid: string) => db().collection("users").doc(uid)
+const millisOf = (v: unknown): number | null => (v instanceof Timestamp ? v.toMillis() : null)
+
+/**
+ * When a partner's account and partner role began, the later of the two (spec R26), or null when the store cannot
+ * tell. The role's start is `partnerSince`; without it, `createdAt` when the claims were never changed (no
+ * `claimsVersion`, no `updatedAt`), else the last claims change (`updatedAt`): later, so stricter.
+ */
+function partnerStartMs(user: DocumentData | undefined): number | null {
+  if (!user) return null
+  const account = millisOf(user.createdAt)
+  if (account === null) return null
+  const changed = user.claimsVersion !== undefined || user.updatedAt !== undefined
+  const role = millisOf(user.partnerSince) ?? (changed ? millisOf(user.updatedAt) : account)
+  return role === null ? null : Math.max(account, role)
+}
+
+/**
+ * Audit F42 (FA-F42-R1-006, spec R26): the requester and the approver must be two people the store can tell apart.
+ * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`): checked
+ * both ways, since a sole partner's puppet could otherwise file the request for its creator to approve. The approver's
+ * account and partner role must predate the request and be `approverMinTenureDays` old at the approval; the
+ * requester's must be that old at the request. A start the store cannot tell refuses (fail closed). Each refusal is a
+ * 403 with its own code, audited as a deny by the router.
+ */
+function requireIndependentPartners(
+  approver: DocumentData | undefined,
+  requester: DocumentData | undefined,
+  ids: { approver: string; requester: string },
+  times: { requestedAtMs: number | null; nowMs: number },
+  policy: RetentionPolicy
+): void {
+  // An unreadable request time would make every comparison below false (NaN): refuse instead (fail closed).
+  if (times.requestedAtMs === null || ids.requester === "") throw new HttpError(409, "request_invalid")
+  if (approver?.createdBy === ids.requester) throw new HttpError(403, "approver_created_by_requester")
+  if (approver?.partnerGrantedBy === ids.requester) throw new HttpError(403, "approver_promoted_by_requester")
+  if (requester?.createdBy === ids.approver) throw new HttpError(403, "requester_created_by_approver")
+  if (requester?.partnerGrantedBy === ids.approver) throw new HttpError(403, "requester_promoted_by_approver")
+  const tenure = policy.deletion.approverMinTenureDays * DAY_MS
+  const approverStart = partnerStartMs(approver)
+  if (approverStart === null) throw new HttpError(403, "approver_tenure_unknown")
+  if (approverStart >= times.requestedAtMs || times.nowMs - approverStart < tenure) throw new HttpError(403, "approver_tenure_too_short")
+  const requesterStart = partnerStartMs(requester)
+  if (requesterStart === null) throw new HttpError(403, "requester_tenure_unknown")
+  if (times.requestedAtMs - requesterStart < tenure) throw new HttpError(403, "requester_tenure_too_short")
+}
 
 function parseId(value: unknown, code: string): string {
   if (!isSafeDocId(value)) throw new HttpError(400, code)
   return value
 }
 
-function parseReason(value: unknown): string {
-  if (typeof value !== "string" || !REASON_CODE.test(value)) throw new HttpError(400, "invalid_reason_code")
+/**
+ * A reason code from the policy's closed list (spec R25): `deletion.reasonCodes` for a request, `legalHold.reasonCodes`
+ * for a hold. Anything else is 400 invalid_reason_code before anything is read or written (FA-F42-R1-005: a shape check
+ * alone let `client_<name>` into the permanent trail).
+ */
+function parseReason(value: unknown, allowed: readonly string[]): string {
+  if (typeof value !== "string" || !allowed.includes(value)) throw new HttpError(400, "invalid_reason_code")
   return value
 }
 
@@ -100,7 +153,7 @@ export const requestMatterDeletionOp: FirmOperation<RequestResult> = {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const matterId = parseId(data.matterId, "invalid_matter_id")
-    const reasonCode = parseReason(data.reasonCode)
+    const reasonCode = parseReason(data.reasonCode, loadPolicy().policy.deletion.reasonCodes)
     audit.target = `matters/${matterId}`
     await requirePermission(caller, "retention.request_deletion")
     const { policy, plan } = loadPolicy()
@@ -183,7 +236,14 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const req = (await tx.get(reqRef)).data()
       if (!req || req.firmId !== caller.firmId || typeof req.matterId !== "string") throw new HttpError(404, "not_found")
       const matterId = req.matterId
-      const [matterSnap, tombSnap, holdSnap] = await tx.getAll(matterRef(matterId), tombRef(matterId), holdsRef().doc(matterId))
+      const requester = typeof req.requestedBy === "string" && isSafeDocId(req.requestedBy) && req.requestedBy !== caller.uid ? req.requestedBy : null
+      const [matterSnap, tombSnap, holdSnap, approverSnap, requesterSnap] = await tx.getAll(
+        matterRef(matterId),
+        tombRef(matterId),
+        holdsRef().doc(matterId),
+        userRef(caller.uid),
+        ...(requester === null ? [] : [userRef(requester)])
+      )
       const limit = policy.deletion.maxMembersRevokedAtApproval
       const members = await tx.get(db().collection("matter_members").where("firmId", "==", caller.firmId).where("matterId", "==", matterId).limit(limit + 1))
       if (req.status !== "pending_approval") throw new HttpError(409, "request_not_pending")
@@ -191,6 +251,13 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const matter = readMatterDocument(matterSnap.data())
       requireCleared(caller, req.classification)
       if (matter) requireCleared(caller, matter.classification)
+      requireIndependentPartners(
+        approverSnap.data(),
+        requesterSnap?.data(),
+        { approver: caller.uid, requester: requester ?? "" },
+        { requestedAtMs: millisOf(req.requestedAt), nowMs },
+        policy
+      )
       if (lapsed(req, nowMs, policy)) {
         // Recorded like a refusal: the request ends, so it no longer holds the matter's one open request.
         tx.update(reqRef, expiryOf(at, caller.uid, null))
@@ -327,16 +394,19 @@ export const placeLegalHoldOp: FirmOperation<Record<string, unknown>> = {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const matterId = parseId(data.matterId, "invalid_matter_id")
-    const reasonCode = parseReason(data.reasonCode)
+    const reasonCode = parseReason(data.reasonCode, loadPolicy().policy.legalHold.reasonCodes)
     audit.target = `legal_holds/${matterId}`
     await requirePermission(caller, "retention.hold.place")
     const at = Timestamp.fromMillis(now ?? Date.now())
     const out = await db().runTransaction(async (tx) => {
       const { label, hold } = await holdSubject(tx, caller, matterId)
+      const pending = await instructionsIn(tx, caller.firmId, matterId, "pending_operator")
       requireCleared(caller, label)
       if (hold && hold.firmId === caller.firmId && hold.active === true) throw new HttpError(409, "legal_hold_exists")
       const row = { firmId: caller.firmId, matterId, active: true, reasonCode, placedBy: caller.uid, placedAt: at, releasedBy: null, releasedAt: null }
       tx.set(holdsRef().doc(matterId), row)
+      // FA-F42-R1-004 (spec R24): the hold stops the processor instructions too, at once (also after the saga finished).
+      moveInstructions(tx, pending, "held", at)
       await audit.stage(tx, "allow", "ok")
       return holdView(matterId, row)
     })
@@ -360,12 +430,15 @@ export const releaseLegalHoldOp: FirmOperation<Record<string, unknown>> = {
     const out = await db().runTransaction(async (tx) => {
       const { label, hold } = await holdSubject(tx, caller, matterId)
       const halted = await tx.get(requestsRef().where("firmId", "==", caller.firmId).where("matterId", "==", matterId).where("status", "==", "in_progress").limit(5))
+      const held = await instructionsIn(tx, caller.firmId, matterId, "held")
       requireCleared(caller, label)
       if (!hold || hold.firmId !== caller.firmId || hold.active !== true) throw new HttpError(409, "no_active_hold")
       if (hold.placedBy === caller.uid) throw new HttpError(403, "second_partner_required")
       tx.update(holdsRef().doc(matterId), { active: false, releasedBy: caller.uid, releasedAt: at })
-      // A saga the hold halted may resume: a partner retries its dead-lettered jobs (P3-12).
+      // A saga the hold halted may resume: a partner retries its dead-lettered jobs (P3-12). The instructions the hold
+      // stopped are the operator's again (spec R24).
       for (const r of halted.docs) if (r.get("halted") !== null) tx.update(r.ref, { halted: null, updatedAt: at })
+      moveInstructions(tx, held, "pending_operator", at)
       await audit.stage(tx, "allow", "ok")
       return holdView(matterId, { ...hold, active: false, releasedBy: caller.uid, releasedAt: at })
     })

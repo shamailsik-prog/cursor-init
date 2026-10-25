@@ -99,10 +99,13 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
     ids[collection] = id
     return id
   }
-  await put("documents", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${tag}-d1/v1`, contentHash: "a".repeat(64), title: TITLE })
-  await put("document_versions", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${tag}-d1/v2` })
-  await put("ocr_texts", { matterId, documentId: `${tag}-d1`, classification: "internal", text: `${TITLE} OCR` })
-  await put("p1_ocr_operations", { matterId, documentId: `${tag}-d1`, text: `${TITLE} OCR op` })
+  // The vault's own key shape for the row (FA-F42-R1-005, spec R25): `<scheme><firmId>/documents/<documentId>/v<n>`.
+  const docId = uniq(`${tag}-d1`)
+  ids.documentId = docId
+  await put("documents", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${docId}/v1`, contentHash: "a".repeat(64), title: TITLE }, docId)
+  await put("document_versions", { matterId, documentId: docId, classification: "internal", storagePath: `fs://${firmId}/documents/${docId}/v2` })
+  await put("ocr_texts", { matterId, documentId: docId, classification: "internal", text: `${TITLE} OCR` })
+  await put("p1_ocr_operations", { matterId, documentId: docId, text: `${TITLE} OCR op` })
   await put("committee_outputs", { matterId, actorId: "x", classification: "internal", text: OUTPUT_TEXT, outbound: { body: "masked" }, createdAt: Date.now() })
   await put("draft_gate_results", { matterId, draftId: "d", classification: "internal" })
   await put("draft_gate_overrides", { matterId, draftId: "d", reason: TITLE })
@@ -112,7 +115,7 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
   await put("workflow_ops_activity", { matterId, classification: "internal", detail: TITLE })
   await put("workflow_ops_alert_digests", { matterId, classification: "internal", recomputeReason: TITLE })
   await put("follow_ups", { matterId, raw: TITLE })
-  await put("jobs", { matterId, jobType: "ocr", documentId: `${tag}-d1`, classification: "internal" })
+  await put("jobs", { matterId, jobType: "ocr", documentId: docId, classification: "internal" })
   await put("matter_parties", { matterId, name: `${tag} Opposing Party` })
   await put("conflict_checks", { matterId, subjects: [] })
   const exported = await put("ai_usage_logs", { matterId, model: "m", costMicroUsd: 5, trace: { id: `trace-${tag}-1`, status: "exported" }, createdAt: Timestamp.now() })
@@ -189,6 +192,11 @@ async function newFirm(): Promise<Firm> {
     await mintIdToken(claims(firmId, "partner")),
   ]
   uids.push(P.uid, Q.uid, A.uid, C.uid, outsider.uid)
+  // Established accounts, made long before any request (FA-F42-R1-006, spec R26: an approval judges both partners'
+  // tenure, and an account with no readable start is refused).
+  for (const m of [P, Q, A, C, outsider]) {
+    await adminDb().collection("users").doc(m.uid).set({ createdAt: Timestamp.fromMillis(Date.now() - 400 * 86_400_000) }, { merge: true })
+  }
   const matterId = uniq("f42m")
   const otherMatterId = uniq("f42other")
   await seedMatter(firmId, matterId, TITLE, [P.uid, Q.uid, A.uid, C.uid])
@@ -252,7 +260,14 @@ afterEach(() => {
   delete retentionTestSeam.policy
   delete retentionTestSeam.afterStep
   delete retentionTestSeam.beforeAck
+  delete retentionTestSeam.limits
 })
+
+/**
+ * FA-F42-R1-013 (spec R32): 10-row chunks and a 5-step budget for the large-store cases, so each needs about 100 rows
+ * instead of 9,000 to 10,000; the production sizes are pinned in f42-retention.units.test.ts.
+ */
+const SMALL = { chunk: 10, chunkStepBudget: 5 } as const
 
 describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and acknowledgements", () => {
   it("the shipped policy refuses every deletion by legal hold, records the refusal and deletes nothing", async () => {
@@ -277,6 +292,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     const ids = await seedStores(f.firmId, f.matterId, "m")
     const keep = await seedStores(f.firmId, f.otherMatterId, "o")
     const otherFirm = uniq("f42x")
+    firms.push(otherFirm) // FA-F42-R1-015: its seeded rows are deleted in afterAll with the rest.
     const foreign = await seedStores(otherFirm, f.matterId, "x") // same matter id, another firm: never touched
     const { requestId, approved } = await requestAndApprove(f)
     expect(approved.status).toBe("in_progress")
@@ -332,7 +348,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     // The vault objects are tombstoned for the lifecycle. The Opik request lists every trace of the matter that was
     // exported (by the call, or by F34's reconciler) or may still be (pending); never a disabled or abandoned one.
     const vault = await adminDb().collection("vault_object_tombstones").where("requestId", "==", requestId).get()
-    expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/m-d1/v1`, `fs://${f.firmId}/documents/m-d1/v2`])
+    expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/${ids.documentId}/v1`, `fs://${f.firmId}/documents/${ids.documentId}/v2`])
     const external = (await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()
     expect(external).toMatchObject({ processor: "opik", count: 3, parts: 1, status: "pending_operator" })
     expect((await recordedTraceIds(requestId)).ids.sort()).toEqual(["trace-m-1", "trace-m-3", "trace-m-4"])
@@ -514,6 +530,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(crossFirm.status).toBe(403)
     // A partner of the firm whose clearance is below the matter's label cannot approve.
     const low = await mintIdToken({ firmId: f.firmId, role: "partner", clearanceLevel: "public" })
+    uids.push(low.uid) // FA-F42-R1-015: deleted in afterAll with the firm's other accounts.
     expect((await apiErrorOf(send(approveApi, f, low, { requestId: req.requestId }))).code).toBe("clearance")
     // The outsider partner (no membership) may approve: deletion is firm administration, not matter membership.
     const ok = await send(approveApi, f, f.outsider, { requestId: req.requestId })
@@ -562,11 +579,14 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
 
   it("Codex P2 (saga.ts runPurge): a purge job that passes its chunk budget after finishing a store acknowledges that store; its continuation finishes the rest", async () => {
     retentionTestSeam.policy = testPolicy()
+    retentionTestSeam.limits = SMALL
     const f = await newFirm()
-    // The first purge job holds documents, document_versions and the vault: one document, then 9,000 versions (45
-    // chunks of 200), so the job passes its 45-chunk budget inside the second store, after finishing the first.
+    // The first purge job holds documents, document_versions and the vault: one document, then a budget's worth of
+    // version chunks (5 of 10 here; 45 of 200 in production), so the job passes its budget inside the second store,
+    // after finishing the first.
+    const VERSIONS = SMALL.chunkStepBudget * SMALL.chunk
     await adminDb().collection("documents").doc(uniq("spill-doc")).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/spill/v1` })
-    await seedMany("document_versions", 9_000, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/spill/v${i + 2}` }])
+    await seedMany("document_versions", VERSIONS, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/spill/v${i + 2}` }])
     const { requestId } = await requestAndApprove(f)
     const outcomes = await drain(f.firmId, new FakeClock(Date.now()))
     expect(outcomes.every((o) => o === "done")).toBe(true)
@@ -577,9 +597,9 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(view.status).toBe("completed")
     const ack = (id: string) => view.acks.find((a) => a.storeId === id)
     expect(ack("firestore:documents")).toMatchObject({ outcome: "purged", count: 1 })
-    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: 9_000 })
+    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: VERSIONS })
     // The vault went on with the continuation: its acknowledgement counts every object, the continuation's too.
-    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 9_001 })
+    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: VERSIONS + 1 })
     expect((await adminDb().collection("document_versions").where("firmId", "==", f.firmId).where("matterId", "==", f.matterId).limit(1).get()).empty).toBe(true)
     const purgeJobs = await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("jobType", "==", "retention.store.purge").get()
     const parts = purgeJobs.docs.map((d) => String(d.get("payload.part")))
@@ -589,14 +609,18 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
 
   it("a purge job retried after a crash late in its chunk budget counts the steps it already recorded, continues and finishes", async () => {
     retentionTestSeam.policy = testPolicy()
+    retentionTestSeam.limits = SMALL
     const f = await newFirm()
+    // Five chunks past the budget (10 chunks of 10 here; 50 of 200 in production).
+    const VERSIONS = (SMALL.chunkStepBudget + 5) * SMALL.chunk
     await adminDb().collection("documents").doc(uniq("retry-doc")).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/retry/v1` })
-    await seedMany("document_versions", 10_000, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/retry/v${i + 2}` }])
-    // A crash after the first job's 44th committed chunk (the document, then the 43rd chunk of versions): the retry
-    // starts with 44 steps recorded on the job and 1,400 versions left.
+    await seedMany("document_versions", VERSIONS, (i) => [`${f.matterId}-v${i}`, { firmId: f.firmId, matterId: f.matterId, classification: "internal", storagePath: `fs://${f.firmId}/documents/retry/v${i + 2}` }])
+    // A crash after the first job's next-to-last committed chunk of its budget (the document, then the version chunk
+    // numbered budget - 3): the retry starts with budget - 1 steps recorded on the job.
+    const crashStep = new RegExp(`^chunk-1-[0-9a-f]{24}-${SMALL.chunkStepBudget - 3}$`)
     let crashed = false
     retentionTestSeam.afterStep = async (step) => {
-      if (!crashed && /^chunk-1-[0-9a-f]{24}-42$/.test(step)) {
+      if (!crashed && crashStep.test(step)) {
         crashed = true
         throw new Error("simulated crash after a committed step")
       }
@@ -611,14 +635,17 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(view.status).toBe("completed")
     const ack = (id: string) => view.acks.find((a) => a.storeId === id)
     expect(ack("firestore:documents")).toMatchObject({ outcome: "purged", count: 1 })
-    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: 10_000 })
-    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: 10_001 })
+    expect(ack("firestore:document_versions")).toMatchObject({ outcome: "purged", count: VERSIONS })
+    expect(ack("objects:documents")).toMatchObject({ outcome: "lock_pending", count: VERSIONS + 1 })
   }, 300_000)
 
-  it("Codex P2 (saga.ts external): more than 10,000 exported traces are all recorded, in bounded parts, before any usage row is anonymised", async () => {
+  it("Codex P2 (saga.ts external): more exported traces than two parts hold are all recorded, in bounded parts, before any usage row is anonymised", async () => {
     retentionTestSeam.policy = testPolicy()
+    // 40 ids a part (5,000 in production): 81 traces make the same three parts that 10,001 make in production.
+    const PER_PART = 40
+    retentionTestSeam.limits = { traceIdsPerPart: PER_PART }
     const f = await newFirm()
-    const N = 10_001
+    const N = 2 * PER_PART + 1
     const traceIds = Array.from({ length: N }, (_, i) => `trace-${f.matterId}-${String(i).padStart(5, "0")}`)
     await seedMany("ai_usage_logs", N, (i) => [`${f.matterId}-u${i}`, { firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: traceIds[i], status: "exported" }, createdAt: Timestamp.now() }])
     const { requestId, approved } = await requestAndApprove(f)
@@ -630,7 +657,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     const have = new Set(recorded.ids)
     expect(traceIds.filter((id) => !have.has(id))).toEqual([])
     expect(recorded.ids).toHaveLength(N)
-    expect(recorded.perDoc.every((n) => n >= 1 && n <= 5_000)).toBe(true)
+    expect(recorded.perDoc.every((n) => n >= 1 && n <= PER_PART)).toBe(true)
     expect((await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()).toMatchObject({ processor: "opik", count: N, parts: 3, idsSha256: sha256([...traceIds].sort()), status: "pending_operator" })
     // Nothing is anonymised yet: every usage row still names the matter.
     expect((await adminDb().collection("ai_usage_logs").where("firmId", "==", f.firmId).where("matterId", "==", f.matterId).select().get()).size).toBe(N)

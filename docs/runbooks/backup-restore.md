@@ -36,6 +36,12 @@ Production: enable PITR, scheduled backups, weekly export to a retention-locked 
 
 Emulator drills: export → encrypted bundle → import into a clean emulator.
 
+**Matter deletions survive a restore (audit F42, FA-F42-R1-014).** A restore brings back rows that an approved
+deletion removed, and a backup taken before an approval has no tombstone for the matter at all. Before any restore that
+will be put into service, follow "Restoring a backup" in `docs/runbooks/retention-deletion.md`: export the deletion
+trail first, restore, re-apply every tombstone and revoke the restored memberships before the database serves a request,
+then re-run the deletions. Not drilled (NOT DEMONSTRATED).
+
 ## Document vault
 
 S3-compatible: Object Lock GOVERNANCE + versioning (`ops/backup/objects/protection.ts`). Cloudflare R2: bucket lock API (no S3 versioning). Verify with `verifyDocumentObjects`; restore with `restoreObjects` from versioned secondary copy.
@@ -51,7 +57,7 @@ Requires PostgreSQL 16 (+ pgvector for full corpus seed), Java 21 + firebase-too
 
 ## NOT DEMONSTRATED
 
-Live Firestore PITR, export bucket lock, R2 bucket lock, off-account vault replica, compose `archive_mode` (F30), production-sized RTO, key custody review, independent SKB1 crypto review.
+Live Firestore PITR, export bucket lock, R2 bucket lock, off-account vault replica, compose `archive_mode` (F30), production-sized RTO, key custody review, independent SKB1 crypto review, the re-application of matter deletions after a restore (F42).
 
 ## Appendix: SKB1 envelope
 

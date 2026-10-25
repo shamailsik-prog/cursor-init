@@ -132,6 +132,11 @@ const IDEMPOTENCY_REFUSALS: ReadonlySet<string> = new Set([
   "idempotency_key_required",
   "idempotency_in_progress",
   "idempotency_key_reused",
+  // Audit F42 (FA-F42-R1-001, spec R21): a stored answer refused because its matter was deleted (or its matter list was
+  // cut short). Only the claim throws out of withIdempotency (execute turns a handler's error into a result), so a fresh
+  // call's own matter_deleted is audited once, by its handler, and never here.
+  "matter_deleted",
+  "idempotency_replay_unavailable",
 ])
 
 async function auditRefusal(op: Operation, uid: string, firmId: string, err: unknown): Promise<never> {

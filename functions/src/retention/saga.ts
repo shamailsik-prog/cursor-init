@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
 import { adminDb } from "../admin"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
@@ -8,7 +8,9 @@ import type { JobSpec } from "../p2/enqueue"
 import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import { type AckDetail, type AckInput, ackRefOf, requestRefOf, sha256, stageAcks } from "./acks"
-import { retentionTestSeam, storeByKey, storeKey, type InventoryStore } from "./config"
+import { retentionTestSeam, storeByKey, storeKey, type InventoryStore, type RetentionLimits } from "./config"
+import { instructionsIn, moveInstructions } from "./instructions"
+import { capturesFor, exportedIds, readLateIds, stageLateIds } from "./lateTraces"
 import {
   DELETION_EXTERNAL_REQUESTS_COLLECTION,
   PREPARE_JOB_TYPE,
@@ -181,6 +183,15 @@ const TRACE_IDS_PER_PART = 5_000
 const TRACE_PART_BYTES = 256 * 1024
 const MAX_TRACE_PARTS = 24
 
+/** The production sizes, pinned by a unit test. */
+const PRODUCTION_LIMITS: RetentionLimits = { chunk: CHUNK, chunkStepBudget: CHUNK_STEP_BUDGET, traceIdsPerPart: TRACE_IDS_PER_PART, maxTraceParts: MAX_TRACE_PARTS }
+
+/** The sizes in force: the production ones, or the test seam's outside production (FA-F42-R1-013, spec R32). */
+function limits(): RetentionLimits {
+  const seam = process.env.NODE_ENV === "production" ? undefined : retentionTestSeam.limits
+  return { ...PRODUCTION_LIMITS, ...seam }
+}
+
 const overLimit = () => new JobError("external_ids_over_limit", { permanent: true })
 
 /** The ids in order, in parts within both bounds; more than `MAX_TRACE_PARTS` parts is refused, never cut short. */
@@ -191,7 +202,7 @@ function traceIdParts(ids: readonly string[]): string[][] {
   for (const id of ids) {
     const size = Buffer.byteLength(id, "utf8") + 1
     if (size > TRACE_PART_BYTES) throw overLimit()
-    if (part.length === TRACE_IDS_PER_PART || bytes + size > TRACE_PART_BYTES) {
+    if (part.length === limits().traceIdsPerPart || bytes + size > TRACE_PART_BYTES) {
       parts.push(part)
       part = []
       bytes = 0
@@ -200,13 +211,18 @@ function traceIdParts(ids: readonly string[]): string[][] {
     bytes += size
   }
   if (part.length > 0) parts.push(part)
-  if (parts.length > MAX_TRACE_PARTS) throw overLimit()
+  if (parts.length > limits().maxTraceParts) throw overLimit()
   return parts
 }
 
-const DOCUMENT_FIRST = ["firestore:documents", "firestore:document_versions", "objects:documents"]
+/**
+ * The first purge group, in this order: the documents (whose purge first finds the legacy committee outputs through
+ * them, FA-F42-R1-002), their versions, the committee outputs (acknowledged only after that legacy purge, in the same
+ * job or its continuation, never by another group that might run first) and the vault (counted from both).
+ */
+const DOCUMENT_FIRST = ["firestore:documents", "firestore:document_versions", "firestore:committee_outputs", "objects:documents"]
 
-/** The purge jobs' store groups: the documents stores and the vault first, then the rest in plan order. */
+/** The purge jobs' store groups: the documents stores, the committee outputs and the vault first, then the rest in plan order. */
 export function purgeGroups(plan: Record<string, Treatment>, order: readonly string[], perJob: number): string[][] {
   const size = Math.max(1, Math.min(perJob, MAX_STORES_PER_JOB))
   const purge = order.filter((k) => ["purge", "anonymise", "lock"].includes(plan[k]))
@@ -219,10 +235,27 @@ export function purgeGroups(plan: Record<string, Treatment>, order: readonly str
 }
 
 async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
-  const { firmId, id: jobId } = ctx.job
+  const { firmId } = ctx.job
   const { requestId } = ctx.payload
   const req = await loadRequest(firmId, requestId)
   if (!req) return {}
+  try {
+    await prepareSteps(ctx, req)
+  } catch (err) {
+    if (err instanceof JobError && err.code === "legal_hold_active") await halt(ctx, req)
+    throw err
+  }
+  return {}
+}
+
+/**
+ * The prepare job's steps. FA-F42-R1-004 (spec R24): each one re-reads the matter's hold in its own transaction, as the
+ * purge job's do, so a hold placed between the approval and prepare stops the processor instruction and the enqueue
+ * too, not only the purge.
+ */
+async function prepareSteps(ctx: JobContext<PreparePayload>, req: Request): Promise<void> {
+  const { firmId, id: jobId } = ctx.job
+  const { requestId } = ctx.payload
   const approvedAtMs = req.approvedAt.toMillis()
   const statics: AckInput[] = []
   for (const key of req.expected) {
@@ -235,6 +268,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
   for (let i = 0; i < statics.length; i += 200) {
     const slice = statics.slice(i, i + 200)
     await step(ctx as JobContext<unknown>, `static-${i / 200}`, async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       await stageAcks(tx, requestId, slice, { jobId, nowMs: nowMs(ctx as JobContext<unknown>) })
     })
   }
@@ -244,6 +278,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
     const store = plannedStore(key)
     const ids = await exportedTraceIds(firmId, req.matterId, store)
     await step(ctx as JobContext<unknown>, `external-${sha256([key]).slice(0, 16)}`, async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       const parts = traceIdParts(ids)
       await stageAcks(tx, requestId, [{
         key,
@@ -264,6 +299,7 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
   const groups = purgeGroups(req.plan, req.expected, typeof req.groupSize === "number" ? req.groupSize : DEFAULT_GROUP_SIZE)
   if (groups.length > 0) {
     await step(ctx as JobContext<unknown>, "enqueue", async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
       const specs: JobSpec[] = groups.map((storeKeys, i) => ({
         firmId,
         jobType: PURGE_JOB_TYPE,
@@ -276,7 +312,22 @@ async function runPrepare(ctx: JobContext<PreparePayload>): Promise<JobResult> {
       await (await enqueue()).enqueueJobs(tx, specs, { now: nowMs(ctx as JobContext<unknown>) })
     })
   }
-  return {}
+}
+
+/**
+ * A hold halted the saga (spec R9, R24): in one step, the request records `halted`, and every processor instruction of
+ * the matter still `pending_operator` moves to `held`, so the operator never acts on one while the hold stands. The
+ * release moves them back and clears `halted`; a partner then retries the dead-lettered job (P3-12).
+ */
+async function halt(ctx: JobContext<unknown>, req: Request): Promise<void> {
+  const { firmId } = ctx.job
+  const { requestId } = ctx.payload as { requestId: string }
+  await step(ctx, `halt-${ctx.job.attempt}`, async (tx) => {
+    const pending = await instructionsIn(tx, firmId, req.matterId, "pending_operator")
+    const at = Timestamp.fromMillis(nowMs(ctx))
+    tx.update(requestRefOf(requestId), { halted: { code: "legal_hold_active", at } })
+    moveInstructions(tx, pending, "held", at)
+  })
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -320,12 +371,33 @@ async function assertNoHold(tx: Transaction, firmId: string, matterId: string): 
 const vaultKey = storeKey("objects:documents")
 const vaultTombId = (storagePath: string) => createHash("sha256").update(storagePath).digest("hex")
 
-type Progress = { count: number; chunks: string[] }
+/** The vault's own object key (platform/documents/documentObjectStore.ts buildDocumentStoragePath): scheme, firm, document, version. */
+const VAULT_PATH = /^(?:fs|s3):\/\/([A-Za-z0-9_-]{1,128})\/documents\/([A-Za-z0-9_-]{1,128})\/v[1-9][0-9]{0,8}$/
+const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
+
+/** The document a purged row's object belongs to: the row's own id for `documents`, else its `documentId` (id-shaped only). */
+function documentIdOf(snap: { id: string; ref: { parent: { id: string } } }, data: DocumentData): string | null {
+  const id: unknown = snap.ref.parent.id === "documents" ? snap.id : data.documentId
+  return typeof id === "string" && SAFE_ID.test(id) ? id : null
+}
+
+/**
+ * The storage path a vault tombstone may keep (spec R25, FA-F42-R1-005): only the vault's own shape for this row, with
+ * the row's firm and document. Anything else (a legacy path carrying a title, another firm's, a version suffix with
+ * text) is not copied into the permanent trail; the tombstone keeps its SHA-256 instead (its document id).
+ */
+export function vaultPathOf(path: string, firmId: string, documentId: string | null): string | null {
+  const m = VAULT_PATH.exec(path)
+  return m !== null && documentId !== null && m[1] === firmId && m[2] === documentId ? path : null
+}
+
+type Progress = { count: number; chunks: string[]; refusedPaths: number }
 
 function progressOf(data: DocumentData | undefined): Progress {
   return {
     count: typeof data?.count === "number" ? data.count : 0,
     chunks: Array.isArray(data?.chunks) ? (data.chunks as string[]) : [],
+    refusedPaths: typeof data?.refusedPaths === "number" ? data.refusedPaths : 0,
   }
 }
 
@@ -349,25 +421,38 @@ async function purgeChunk(
     const vaultRef = ackRefOf(ctx.payload.requestId, vaultKey)
     const [progressSnap, vaultSnap, ...snaps] = await tx.getAll(progressRef, vaultRef, ...rows.map((r) => r.ref))
     const progress = progressOf(progressSnap.data())
+    const treated = snaps.filter((snap) => pending(store, treatment, snap.data(), firmId))
+    // FA-F42-R1-007 (spec R27a): a trace source's rows lose the matter here, so any exported id among them that the
+    // processor request does not hold yet (a call that settled after prepare read the ids) is recorded first, in this
+    // same transaction. Reads, before the writes below.
+    const lateReads = await Promise.all(capturesFor(store.id, req.plan).map(async (cap) => ({ cap, read: await readLateIds(tx, ctx.payload.requestId, cap.processor) })))
+    for (const { cap, read } of lateReads) {
+      stageLateIds(tx, read, exportedIds(treated, cap.specs), { firmId, requestId: ctx.payload.requestId, matterId: req.matterId }, nowMs(ctx as JobContext<unknown>))
+    }
     let n = 0
     let objects = 0
-    snaps.forEach((snap) => {
-      const data = snap.data()
-      if (!pending(store, treatment, data, firmId)) return
+    let refused = 0
+    treated.forEach((snap) => {
+      const data = snap.data()!
       if (treatment === "anonymise") {
         tx.update(snap.ref, { ...(store.anonymise ?? {}), anonymisedBy: ctx.payload.requestId })
       } else {
         const path = data.storagePath
         if (writeVault && typeof path === "string" && path !== "") {
-          tx.set(adminDb().collection(VAULT_OBJECT_TOMBSTONES_COLLECTION).doc(vaultTombId(path)), {
+          const documentId = documentIdOf(snap, data)
+          const kept = vaultPathOf(path, firmId, documentId)
+          const tombId = vaultTombId(path)
+          tx.set(adminDb().collection(VAULT_OBJECT_TOMBSTONES_COLLECTION).doc(tombId), {
             firmId,
             requestId: ctx.payload.requestId,
-            documentId: snap.ref.parent.id === "documents" ? snap.id : (typeof data.documentId === "string" ? data.documentId : null),
-            storagePath: path,
+            documentId,
+            storagePath: kept,
+            ...(kept === null ? { storagePathSha256: tombId, pathShape: "refused" } : {}),
             lockUntil,
             at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)),
           })
           objects += 1
+          if (kept === null) refused += 1
         }
         tx.delete(snap.ref)
       }
@@ -375,11 +460,21 @@ async function purgeChunk(
     })
     // A write to a collection the conflict screen reads (the matter row) moves the firm's registry version with it.
     if (n > 0 && Object.hasOwn(REGISTRY_SCOPE, store.name)) bumpRegistryVersion(tx, firmId)
-    const base = { firmId, requestId: ctx.payload.requestId, matterId: req.matterId, acknowledged: false }
-    tx.set(progressRef, { ...base, storeId: store.id, storeKey: key, count: progress.count + n, chunks: [...progress.chunks, chunkHash] }, { merge: true })
+    // A store's first acknowledgement stands (spec R7): rows purged after it (rows that reappeared) are counted apart,
+    // in `afterAck`, and never flip the acknowledgement or change the count and hash it gave.
+    const base = { firmId, requestId: ctx.payload.requestId, matterId: req.matterId }
+    if (progressSnap.get("acknowledged") === true) {
+      tx.set(progressRef, { afterAck: FieldValue.increment(n) }, { merge: true })
+    } else {
+      tx.set(progressRef, { ...base, acknowledged: false, storeId: store.id, storeKey: key, count: progress.count + n, chunks: [...progress.chunks, chunkHash] }, { merge: true })
+    }
     if (objects > 0) {
       const vault = progressOf(vaultSnap.data())
-      tx.set(vaultRef, { ...base, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, lockUntil }, { merge: true })
+      if (vaultSnap.get("acknowledged") === true) {
+        tx.set(vaultRef, { afterAck: FieldValue.increment(objects), refusedAfterAck: FieldValue.increment(refused) }, { merge: true })
+      } else {
+        tx.set(vaultRef, { ...base, acknowledged: false, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, refusedPaths: vault.refusedPaths + refused, lockUntil }, { merge: true })
+      }
     }
   })
 }
@@ -397,11 +492,17 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
     for (let i = 0; i < stores.length; i += 1) {
       const { key, store } = stores[i]
       if (req.plan[key] !== "purge" && req.plan[key] !== "anonymise") continue
+      // FA-F42-R1-002: before any document row goes, the legacy outputs that name the matter only through them.
+      if (key === DOCUMENTS_KEY && req.plan[key] === "purge") {
+        const next = await purgeLegacyOutputs(ctx, req, chunks)
+        if (next === null) return await continueWith(ctx, req, stores, i, jobId)
+        chunks = next
+      }
       // An acknowledged store is purged again if rows reappeared (its first acknowledgement stands).
       for (let round = 0; ; round += 1) {
-        const rows = await matterRows(store, req.plan[key], firmId, req.matterId, CHUNK)
+        const rows = await matterRows(store, req.plan[key], firmId, req.matterId, limits().chunk)
         if (rows.length === 0) break
-        if (chunks >= CHUNK_STEP_BUDGET) return await continueWith(ctx, req, stores, i, jobId)
+        if (chunks >= limits().chunkStepBudget) return await continueWith(ctx, req, stores, i, jobId)
         const ids = rows.map((r) => r.id).sort()
         // A step id from the chunk's own ids; `round` keeps it new if the same ids come back (re-written since).
         const stepId = `chunk-${i}-${sha256(ids).slice(0, 24)}-${round}`
@@ -411,14 +512,66 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
     }
     await acknowledge(ctx, req, stores, jobId, `ack-${part}`)
   } catch (err) {
-    if (err instanceof JobError && err.code === "legal_hold_active") {
-      await step(ctx as JobContext<unknown>, `halt-${ctx.job.attempt}`, async (tx) => {
-        tx.update(requestRefOf(requestId), { halted: { code: "legal_hold_active", at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)) } })
-      })
-    }
+    if (err instanceof JobError && err.code === "legal_hold_active") await halt(ctx as JobContext<unknown>, req)
     throw err
   }
   return {}
+}
+
+const DOCUMENTS_KEY = storeKey("firestore:documents")
+const OUTPUTS_KEY = storeKey("firestore:committee_outputs")
+/** Firestore's limit on the values of one array-contains-any filter. */
+export const LEGACY_DOCUMENT_BATCH = 30
+/** The matter's document ids read per page while the legacy outputs are found. */
+const DOCUMENT_ID_PAGE = 300
+
+/** A committee output the legacy purge takes: one with no matter (null or absent), or the matter's own. */
+function legacyOf(data: DocumentData, matterId: string): boolean {
+  const m: unknown = data.matterId
+  return m === null || m === undefined || m === matterId
+}
+
+/**
+ * FA-F42-R1-002 (spec R22): committee outputs written before `matterId` was required name the matter only through
+ * `documentIds`. Before the first document row of the matter is deleted, this pages the matter's document ids and, for
+ * each batch of 30 (array-contains-any), deletes in fenced chunks every output of the firm that names one of them and has
+ * no matter of its own (an output of another matter is never touched). The rows count on `committee_outputs`'s progress,
+ * so that store's acknowledgement counts and hashes them too. Only when the plan purges `committee_outputs`. Returns the
+ * chunk count after it, or null when the budget ran out (the caller hands over at the documents store, and the
+ * continuation runs this again over the documents still there).
+ */
+async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
+  if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
+  const outputs = plannedStore(OUTPUTS_KEY)
+  const { firmId } = ctx.job
+  let used = chunks
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb().collection("documents").where("firmId", "==", firmId).where("matterId", "==", req.matterId).orderBy(FieldPath.documentId()).limit(DOCUMENT_ID_PAGE)
+    if (after !== null) page = page.startAfter(after)
+    const docs = (await page.select().get()).docs.map((d) => d.id)
+    for (let b = 0; b < docs.length; b += LEGACY_DOCUMENT_BATCH) {
+      const batch = docs.slice(b, b + LEGACY_DOCUMENT_BATCH)
+      let cursor: string | null = null
+      for (let round = 0; ; round += 1) {
+        let q = adminDb().collection(outputs.name).where("firmId", "==", firmId).where("documentIds", "array-contains-any", batch).orderBy(FieldPath.documentId()).limit(limits().chunk)
+        if (cursor !== null) q = q.startAfter(cursor)
+        const snap = await q.get()
+        if (snap.empty) break
+        cursor = snap.docs[snap.docs.length - 1].id
+        const rows = snap.docs.filter((d) => legacyOf(d.data(), req.matterId))
+        if (rows.length > 0) {
+          if (used >= limits().chunkStepBudget) return null
+          const ids = rows.map((r) => r.id).sort()
+          await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `legacy-${sha256(ids).slice(0, 24)}-${round}`)
+          used += 1
+        }
+        if (snap.size < limits().chunk) break
+      }
+    }
+    if (docs.length < DOCUMENT_ID_PAGE) return used
+    after = docs[docs.length - 1]
+  }
 }
 
 /** The distinct step ids the job has recorded, every attempt's (the worker's `fencedSteps`). */
@@ -510,7 +663,7 @@ async function acknowledge(
           outcome: "lock_pending",
           count: p.count,
           idsSha256: null,
-          detail: { lockUntilMax: lockUntil instanceof Timestamp ? lockUntil.toDate().toISOString() : null, lifecycle: "not_demonstrated" },
+          detail: { lockUntilMax: lockUntil instanceof Timestamp ? lockUntil.toDate().toISOString() : null, lifecycle: "not_demonstrated", refusedPaths: p.refusedPaths },
         })
       }
     }
@@ -535,4 +688,4 @@ export const retentionPurgeHandler: JobHandler<PurgePayload> = {
 }
 
 /** Exposed for the unit tests. */
-export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts }
+export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf, limits }

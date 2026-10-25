@@ -16,8 +16,9 @@ source of any period: every proposed value in the policy file is inert and its l
 ## Deleting a matter (once the owner has ratified a deleting policy)
 
 1. A partner whose clearance reaches the matter's label calls
-   `POST /api/platform/retention/requestMatterDeletion { matterId, reasonCode }` (`reasonCode`: a short code such as
-   `client_instruction`, never free text). The answer is `pending_approval`, or `refused` with the hold that refused it.
+   `POST /api/platform/retention/requestMatterDeletion { matterId, reasonCode }` (`reasonCode`: one of the policy's
+   `deletion.reasonCodes`, such as `client_instruction`; any other value is `400 invalid_reason_code`, so no name or fact
+   enters the trail). The answer is `pending_approval`, or `refused` with the hold that refused it.
 2. A **different** partner calls `POST /api/platform/retention/approveMatterDeletion { requestId }` within the approval
    window (PROPOSED 72 h). Past the window the request ends instead: the answer is `expired` (`approval_expired`),
    and a partner opens a new request (a new request also ends a lapsed one it finds, recorded as
@@ -41,14 +42,26 @@ every usage row whose call exported its trace, and every F34 decision record who
 `external_ids_over_limit` before anything is anonymised: the alert below fires, and the request needs an engineer.
 The Opik deletion call is **NOT DEMONSTRATED**).
 
+**Before acting on any `deletion_external_requests` row** (FA-F42-R1-004, spec R24), the operator checks, every time:
+
+1. the row's own `status`: act only on `pending_operator`; `held` means a legal hold stands on the matter;
+2. the request (`getDeletionRequest`): `halted` must be null;
+3. `legal_holds/{matterId}`: it must be absent or `active: false`.
+
+If any check fails, do nothing and leave the row as it is. A hold stops every remaining destructive step, instructions
+to third parties included: placing one moves the matter's `pending_operator` instructions to `held` in the hold's own
+transaction (also after the saga finished), and a saga step that finds one does the same when it halts.
+
 ## Legal holds
 
-- Place: `POST /api/platform/retention/placeLegalHold { matterId, reasonCode }` (any partner cleared for the matter).
-  A hold refuses new requests and approvals (`legal_hold_matter`) and, placed while a saga runs, halts it: the next
-  purge step fails permanently with `legal_hold_active`, the request records `halted`, and the job dead-letters
-  (`job.deadLettered`).
+- Place: `POST /api/platform/retention/placeLegalHold { matterId, reasonCode }` (any partner cleared for the matter;
+  `reasonCode` one of the policy's `legalHold.reasonCodes`). A hold refuses new requests and approvals
+  (`legal_hold_matter`) and, placed after an approval, halts the saga wherever it is: the next prepare or purge step
+  fails permanently with `legal_hold_active`, the request records `halted`, the job dead-letters (`job.deadLettered`),
+  and every `pending_operator` processor instruction of the matter moves to `held`.
 - Release: `POST /api/platform/retention/releaseLegalHold { matterId }` by a partner **other than** the one who placed
-  it. Releasing clears `halted`; a partner then retries the dead-lettered saga jobs (`retryFailedJob`, P3-12).
+  it. Releasing clears `halted` and returns `held` instructions to `pending_operator`; a partner then retries the
+  dead-lettered saga jobs (`retryFailedJob`, P3-12), which resume after their last committed step.
 
 ## Alert: retention.deletion_unacknowledged
 
@@ -78,6 +91,29 @@ Once every store has acknowledged (or the hold is released and the saga finishes
 deleting `periodicAction`, and no class-wide legal hold, it deletes or anonymises rows older than the period in the
 class's stores that declare an `ageField`, sparing rows of matters under a hold, and writes
 `retention_runs/{firmId}_{day}` (counts only). Backfill a day: `npm --prefix functions run jobs:backfill -- retention.apply <from> <to>`.
+
+## Restoring a backup (FA-F42-R1-014, spec R34)
+
+A restore (F33: PITR, a scheduled backup, an export) brings back every row a deletion removed, and a backup taken
+before an approval has no tombstone for the matter, so both API stacks and the rules would serve the matter again. A
+restored database is put into service only after these steps. None is drilled (NOT DEMONSTRATED); the command shapes
+below are the ones the F33 runbook uses, to be checked against the installed `gcloud` (**[REQUIRES VERIFICATION]**).
+
+1. **Before the restore**, export the deletion trail from the live database (it is the record of what was deleted and
+   must not be replaced by the backup's older copy): `matter_tombstones`, `deletion_requests`, `deletion_acks`,
+   `deletion_external_requests`, `vault_object_tombstones`, `legal_holds` (for example
+   `gcloud firestore export gs://<bucket>/pre-restore-<date> --collection-ids=matter_tombstones,deletion_requests,...`).
+2. Restore into a **new** database id (F33), never `(default)`.
+3. **Before the restored database serves any request:** import the exported trail over its own copies; then, for every
+   tombstoned matter, delete every `matter_members` row of the matter that the restore brought back (the approval had
+   revoked them, and membership-gated rules and routes read them). From then on both API stacks refuse the matter
+   (`403 matter_deleted`) and the rules refuse it on every path (R23).
+4. Re-run each deletion whose request is `in_progress` or `completed` in the trail, so the rows the restore brought
+   back are purged or anonymised again and the processor instructions re-checked. The saga's own jobs are deduplicated
+   by request, so this needs an engineer-run re-purge of the request's plan (FU-9, not built). Until it runs, the
+   restored rows stay unreadable through every path above, and the retention watch does not see them (their request is
+   already finished): record the restore and the matters it touched on the deletion requests' audit trail.
+5. Check `legal_holds`: a hold in the trail stands; nothing of a held matter is purged in step 4.
 
 ## Adding a store
 

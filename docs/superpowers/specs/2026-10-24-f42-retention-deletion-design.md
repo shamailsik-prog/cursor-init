@@ -304,7 +304,9 @@ hold a tombstone; the mechanism is Firestore-mode only.
 | `placeLegalHold` `{ matterId, reasonCode }` | POST | `retention.hold.place` | the hold |
 | `releaseLegalHold` `{ matterId }` | POST | `retention.hold.release` | the hold |
 
-`reasonCode` is a short code (`^[a-z][a-z0-9_]{2,63}$`), never free text, so no content enters the trail.
+`reasonCode` is one of the policy's closed lists (`deletion.reasonCodes`, `legalHold.reasonCodes`; R25), never free
+text, so no content enters the trail. (The first build accepted any `^[a-z][a-z0-9_]{2,63}$` code, which let a name in
+as snake case: FA-F42-R1-005.)
 
 ## 6. Deploy
 
@@ -375,8 +377,11 @@ misses copies. Revocation and read refusal are needed regardless.
   is a residual (RES-2).
 - *The legacy collections (about 180) make the saga long.* They are queried once each, 12 per job; an empty store costs
   one query and one acknowledgement.
-- *Client-SDK reads of the search index and of a client's own matter row do not depend on membership.* They end when
-  the saga purges those stores, not at once (RES-1); the API stacks refuse at once.
+- *Client-SDK reads that do not depend on membership* (a client's own matter row, the accounts role's intimation
+  register, a user's own notifications, the routing queue, a partner's registry rows, a legacy committee output with
+  no matter) refuse the tombstoned matter at once in `firestore.rules` (R23, correcting RES-1: the matter row is
+  anonymised, never purged, so that read did not end with the saga). The search index is membership-gated
+  (`memberReader`), so the approval's revocation ends it.
 - *Retaining the conflict register keeps party names of a deleted matter.* Deliberate (R8), and flagged for
   ratification.
 
@@ -386,11 +391,19 @@ lifecycle rule can honour per-object holds (NOT DEMONSTRATED); that Firestore TT
 
 ## 10. Residuals and follow-ups
 
-- RES-1: client-SDK reads that rules do not gate on membership (`matter_client_search_index`, a client reading its own
-  matter row) end when the saga purges them.
-- RES-2: a write that passed its checks before the tombstone and lands after its store's acknowledgement; likewise a
-  usage row of a call in flight at the approval, written after the prepare job read the trace ids: the purge
-  anonymises it, but its trace id is not in the Opik request.
+- RES-1 (corrected by R23, FA-F42-R1-003): the claim that these reads "end when the saga purges them" was wrong for
+  the client's own matter row, which is anonymised and kept. Every client-SDK read path that does not depend on
+  membership now carries a tombstone clause and refuses at once; the membership-gated ones end at the approval's
+  revocation. Nothing of RES-1 remains open.
+- RES-2 (corrected by R27, FA-F42-R1-007): a usage row or decision record of a P1 call in flight at the approval is
+  no longer lost. Written before its store is acknowledged, the purge finds it, and the anonymise chunk records any
+  trace id not yet in the Opik request in a new part in the same transaction. Written after (the call settles or the
+  reconciler settles it after the request finished), the P1 write seam (`stage`) reads the tombstone, writes the row
+  without the matter and records its trace in the request. A committee output published after the tombstone is
+  refused at its write (`matter_deleted`). What remains: a write by a P2 job already running at the approval that lands
+  after its store's acknowledgement (the worker refuses the job's next run, not a step already in flight), and Next
+  or D1 writers that do not re-check membership in their own transaction. Both are bounded by the job budget or the
+  request; neither is demonstrated here.
 - RES-3: vault objects stay until their COMPLIANCE lock ends (up to 2555 days); the lifecycle executor is not built.
 - RES-4: the Opik deletion is a recorded request, not a call.
 - RES-5: deleted rows live on in backups until the backup retention window ends.
@@ -398,3 +411,179 @@ lifecycle rule can honour per-object holds (NOT DEMONSTRATED); that Firestore TT
   F43) is done (R10). FU-4: the R2 lifecycle executor for `vault_object_tombstones`. FU-5: the Opik
   deletion call once its API is verified. FU-6: a partner-only cancel of a pending request, if the firm wants early
   withdrawal (ruled unnecessary, R4a).
+- FU-7 (R26): the platform operator's countersignature for a firm with no independent second partner (not built).
+- FU-8 (R31): periodic retention aged from the matter's closure, for the matter classes (not built; until then the
+  config refuses any deleting period on a matter class).
+- FU-9 (R34): an engineer-run re-purge of a finished request's plan after a backup restore (not built).
+- FU-10 (R32): cut the fixed cost of an e2e case that runs the whole saga (about 20-30 s each on a loaded host), for
+  example with a test-scoped inventory or several assertions per saga run (not built).
+
+## 11. R1 follow-up: the independent re-audit at 301e65d (FAIL 5/10)
+
+Branch `claude/remediate-f42-fu`, from main 5840d3d (the squash of #128). Findings FA-F42-R1-001 to R1-015 (issue #30).
+What held and must not regress: the tombstone choke points in both stacks, the saga fence, crash-resume, the
+continuation, the expiry races, G-2. Every period and every legal basis stays PROPOSED; no statute or rule is cited
+as authority; anything legal is **[REQUIRES VERIFICATION]**.
+
+**R21. A stored answer is not replayed for a deleted matter (R1-001).** An idempotent replay used to return the stored
+`{status, body}` before any authority or tombstone check, so a same-key retry of a `createDraft` (Functions) or a
+compose (Next) answered after the approval returned the deleted matter's draft, title included. Now each operation
+records the matters it touched, and a replay of any stored answer (2xx or a stored refusal) reads their tombstones
+first and refuses `403 matter_deleted`, exactly as a fresh call does; nothing about the record is changed (it expires
+under its TTL).
+
+- *Which matters.* (a) Every matter a permission check of the request named: Functions `evaluate`
+  (`functions/src/p5/permission.ts`) and Next `checkPermission` (`platform/p5/checkPermission.ts`) note the matter id in
+  the request's recording scope (`platform/retention/operationMatters.ts`, an AsyncLocalStorage chain, so a Next core
+  served inside the Functions F02 frame records into both the inner and the outer operation). (b) Every string
+  `matterId` / `linkedMatterId` in the stored body (depth 8, 50 ids), which covers an operation that creates its
+  matter (`openMatter`, whose check names no matter yet) and records stored before this change. Both lists are stored
+  on the record as `matterIds` (at most 50; more is `matterIdsTruncated: true`, and such a record never replays: 409
+  `idempotency_replay_unavailable`, fail closed).
+- *Audit.* The Functions router audits a refused replay (`matter_deleted`, `idempotency_replay_unavailable`) as a deny
+  row, as it audits every other idempotency refusal; the row names the action, actor and firm, never the matter's
+  content. A Next route in production runs inside the F02 frame, whose Functions claim refuses (and audits) first. The
+  Next core's own durable store, reached only without the frame (local insecure-dev), audits none of its idempotency
+  refusals, and this one follows that rule.
+- *Where.* Functions `withIdempotency` (every Functions route, the nine F02 POST routes included) and the Next durable
+  store (`DurableIdempotencyStore.begin`, every Next route that calls `beginIdempotentRequest`). The Next memory mode
+  has no tombstones (R15).
+- *Routes that store replays of matter-scoped operations.* Functions: `createDraft`, `saveDraftVersion`,
+  `restoreDraftVersion`, `overrideGate`, `approveDraft`, `gateDraft`, `openMatter`, `advanceStage`, `closeMatter`,
+  `committeeBrain` (resume), `retryFailedJob`, `cancelJob`, and the nine F02 POSTs (`/api/d1/matters`,
+  `/api/d1/documents`, `/api/d1/document-workflow`, `/api/d1/reporting`, `/api/d2/court-ops`, `/api/d2/ops-reporting`,
+  `/api/d4/drafts`, `/api/d4/filings`, `/api/p5/tenancy`). Next: the same nine routes plus `/api/d1/clients`,
+  `/api/p1/committee-brain` and `/api/g0/normalise` (their matter-scoped answers). The retention routes are firm
+  administration about the deletion itself and stay replayable (they name no matter in a permission check).
+- *Rejected alternative.* Deleting the matter's idempotency records in the approval transaction: the records carried no
+  matter, and their number within the 24 h window is unbounded, past a transaction's 500 writes.
+
+**R22. Legacy committee outputs are purged by their documents (R1-002).** Rows written before `matterId` was required
+carry only `documentIds`. In the first purge group, before any document row is deleted, the saga lists the matter's
+document ids (pages of 300) and deletes, in fenced chunks, every `committee_outputs` row of the firm whose
+`documentIds` array-contains-any of a batch of 30 of them (Firestore's limit) and whose `matterId` is null or absent.
+They count on the `committee_outputs` progress, so its acknowledgement's count and hash include them. Only when the
+plan purges `committee_outputs`. The Next GET drops a legacy row (no `matterId`) unless every one of its documents
+still reads through the repository (which drops a tombstoned matter's documents); the rules do the same for at most
+three documents (each exists, is of the row's firm, and its matter has no tombstone), and deny a legacy row naming more.
+
+**R23. The rules refuse a tombstoned matter wherever they do not use membership (R1-003).** `notDeleted(m)` is
+`!exists(/databases/$(database)/documents/matter_tombstones/$(m))`. The audit of every block (257 match blocks; the
+shapes are in the plan) found these clauses that admit a reader without membership on a matter-keyed row, and each now
+carries it: `matters` (the client-role own-matter read), `intimation_register` (the accounts role), `notifications`
+(read and the read-receipt update, when the row names a matter), `routing_queue` (staff), `matter_parties` and
+`conflict_checks` (the partner branch, when the row names a matter), `matterScoped` (the membership branch, used by
+`committee_outputs`, `workflow_ops_activity`, `workflow_ops_alert_digests`, `filing_escalation_policy_baselines`) and
+the legacy `committee_outputs` branch (R22). Every other clause on a matter-keyed store requires membership
+(`isMember`, `memberReader`, `canAccessScope` with a matter), which the approval revokes in its own transaction; they
+are not given a second check, which would cost an access call on every read for no case it closes. Cost: one more
+access call (one billed read) on each changed clause.
+
+**R24. A hold stops every remaining destructive step, instructions to third parties included (R1-004, the auditor's
+ruling, adopted).** `assertNoHold` runs inside every fenced step of the prepare job (static acknowledgements, the
+processor request, the enqueue), as it already did in the purge job. A hold found by either job halts the saga: the
+request records `halted`, and in the same step every processor request of the request that is `pending_operator` moves
+to `held`. Placing a hold moves them too, in the hold's own transaction (a hold placed after the saga finished still
+stops the operator). Releasing the hold returns them to `pending_operator` and clears `halted`; a partner then retries
+the dead-lettered saga job (P3-12), which resumes after its last committed step. The runbook tells the operator to
+check `halted` and `legal_holds/{matterId}` before acting on any `deletion_external_requests` row.
+
+**R25. No content can enter the deletion trail (R1-005).** Reason codes are a closed list in the policy
+(`deletion.reasonCodes` for a request, `legalHold.reasonCodes` for a hold, PROPOSED), validated in the code and in the
+gate; the regex is gone. A vault tombstone keeps a storage path only when it is the vault's own shape for the row:
+`fs://` or `s3://`, the row's firm, `documents`, the row's document id (the row's id for `documents`, its `documentId`
+otherwise) and `v<n>`. Any other path is not copied: the tombstone keeps its SHA-256 (the document id) and
+`pathShape: "refused"`, and the vault acknowledgement counts it (`detail.refusedPaths`); the lifecycle executor (FU-4)
+matches objects by that hash.
+
+**R26. The two partners must be independent of each other (R1-006).** Besides being another partner of the firm,
+the approver must not have been created by the requester (`users/{uid}.createdBy`, now written by `createFirmUser`)
+nor made partner by the requester (`partnerGrantedBy` with `partnerSince`, written by `setUserClaims` when a role
+becomes partner and by `createFirmUser` for a partner account, and removed when the role is left). The same holds the
+other way round: the requester must not have been created or made partner by the approver, else a sole partner's
+puppet files the request for its creator to approve (the reverse of the auditor's FP7). The approver's account and
+partner role must predate the request and be at least N days old at the approval; the requester's must be N days old
+at the request: N = `deletion.approverMinTenureDays`, PROPOSED 30. A partner whose start is unknown (no
+`partnerSince`) is judged by `createdAt` when their claims were never changed, else by the last claims change
+(`updatedAt`): later, so stricter. Refusals, each `403` with its own code and recorded as a deny audit row:
+`approver_created_by_requester`, `approver_promoted_by_requester`, `requester_created_by_approver`,
+`requester_promoted_by_approver`, `approver_tenure_too_short`, `approver_tenure_unknown`,
+`requester_tenure_too_short`, `requester_tenure_unknown` (no readable start, fail closed); a request with no readable
+time or requester is `409 request_invalid`. Ruling on a sole-partner firm: no rule inside a firm whose every account
+one person provisions can prove two people; a firm with no independent second partner cannot delete through this saga
+(its requests expire). The honest path is a platform operator's countersignature through the P5 platform-admin path,
+recorded as FU-7 and not built here. Cost of the two-way rule: in a two-partner firm where one partner provisioned the
+other's account, neither can delete through the saga, since the store cannot tell that second partner from a puppet;
+such a firm waits for FU-7 (or a third partner neither provisioned). Steelman against: a new real partner must wait 30
+days to co-sign; accepted for an irreversible act. Devil's advocate: a patient sole partner who creates an account
+through a second creator (P makes X, X makes Y) and waits 30 days still passes; this is the residual FU-7 closes, and
+the request, approval and audit rows name both partners for review.
+
+**R27. In-flight traces are recorded (R1-007, RES-2).** (a) The anonymise or purge chunk of a trace source
+(`ai_usage_logs`, `p1_decisions`), when the plan requests the processor, reads the processor request in its
+transaction, finds the chunk's exported ids not yet in any part, and records them in a new part `{requestId}_opik_p{n}`
+(the summary's `parts`, `count` and `lateIds` move with it) before the rows lose the matter. Existing parts are written
+once, so a job caches them between chunks. (b) A row that lands after its store's acknowledgement goes through the
+P1 write seam (`stage` in `functions/src/p1/gateway.ts`, shared by the call's commit and the lease reconciler): it
+reads the matter's tombstone, and when the tombstone's request is in progress or completed and that store is already
+acknowledged as anonymised or purged, writes the usage row and decision record with `matterId: null` and
+`anonymisedBy`, and records the exported trace id in the processor request (creating it if prepare found none). An
+active hold leaves the row as it is (preserve). Chosen over a sweeper: the seam has no window, costs one read per P1
+commit that names a matter, and needs no scan of past tombstones. (c) The committee output's publication reads the
+tombstone and refuses `403 matter_deleted`.
+
+**R28. The inventory scanner (R1-008).** The static scan now reads every source file of the tree (`.ts`, `.tsx`,
+`.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.sql`) outside tests, build output, docs and the gates, so
+`components/` and scripts are covered. A collection argument is resolved: a string or template literal, a constant of
+any name (the file's own, or an exported one), a `+` concatenation of those; a template with interpolation or an
+unresolved part is a dynamic name, and its static prefix must begin an inventoried collection or the gate fails.
+Calls recognised: `.collection(`, `.collectionGroup(`, Python's `.collection(` and `.collection_group(`, modular
+`collection(h, …)`, `collectionGroup(h, …)`, `doc(h, …)` with any handle (`this.db` included), and helper calls
+`(db, …)`. Names may be camelCase. Rules: every collection segment of a nested `match` path. Object prefixes: any
+expression naming a firm id (`${input.firmId}/seg/`, `firmId + "/seg/"`). SQL: `CREATE [TEMP|TEMPORARY|UNLOGGED]
+TABLE`, views, `SELECT … INTO` at top level, in any `.sql` file or a string of a `.py`/`.ts` file; a relation outside
+the `public` schema keeps its schema (`client_private.judgment` is not `judgment`). A server-only collection no longer
+depends on a rules block: the gate fails when an inventoried collection is found only through `firestore.rules`
+while its block is server-only (`allow read, write: if false`), since a server-only store must be visible in code.
+And a run-time check backs the static one: after the Functions emulator suite in CI, `--runtime` lists the emulator's
+root collections and fails on any that is not inventoried (a short, named list of test-only fixture collections
+excepted). Every one of the auditor's 33 plant shapes is a must-fail fixture.
+
+**R29. A deleted matter's jobs are hidden (R1-009).** `getJob`, `listJobs` (both the matter list and the firm queue)
+and the retry/cancel reads read the matter's tombstone with the matter; a job of a tombstoned matter has visibility
+`none`.
+
+**R30. Committee scope trusts the repository (R1-010).** In Firestore mode, a null from the matter repository evicts the
+cached matter and the scope answers 404 `unknown matter` (as FA-F13-039 does for documents); memory mode keeps the
+cache, which is its store.
+
+**R31. Periodic retention cannot be ratified incoherently (R1-011).** Each class carries `periodBasis`: `row_age` (a
+row ages from its own `ageField`) or `matter_closure` (Module 9 frames retention for closed matters, which ages from
+the matter's closure). Config validation (Functions `validatePolicy` and the gate) refuses a class with a deleting
+period (`periodDays` set, `periodicAction` purge or anonymise, held or not) when its basis is `matter_closure` (not
+built: FU-8) or when any store of the class is one `retention.apply` cannot age: only a Firestore store keyed by matter
+(doc id or field) with an `ageField` is aged, so the vault, Postgres, external, TTL, backup and unkeyed stores cannot
+sit in a class with a deleting period. The matter classes are `matter_closure`; `ai_record` is `row_age` (spend rows,
+aged by their own time; `ai_reservations` gains its `createdAt` ageField), the one class whose every store can take a
+period today. A run whose policy fails validation dead-letters at once, `retention_policy_invalid` (permanent), before
+any row is read. The shipped policy has no period, so it still deletes nothing. Devil's advocate: a firm that wants
+a period counted from each matter's closure cannot express it yet; that is FU-8, and refusing is safer than a period that
+silently deletes some of a matter's copies and keeps others.
+
+**R32. CI cost (R1-013).** The chunk size, the chunk-step budget, the part size and the part ceiling are read through
+`retentionTestSeam.limits` outside production, so the continuation, retry and many-traces cases run on 50, 100 and 81
+rows instead of 9,000, 10,000 and 10,001; one unit test pins the production values, and the trace-part unit tests
+still exercise the boundaries at them. The workflow comment is corrected: PR #128 added about six minutes to the
+Functions test step (22m49s on 798cf56, 28m56s at 301e65d). Measured here (the deletion e2e file, same emulator, a
+loaded host, before and after): the three cases took 31.8 s, 38.2 s and 36.5 s, then 31.8 s, 32.3 s and 27.4 s, while the
+file's other full-saga cases slowed by about 25% between the runs (host load); the file took 236 s, then 230 s. The rows
+were not the main cost: each case that runs the whole saga over every inventoried store costs about 20-30 s whatever
+its row count. Cutting that (a test-scoped inventory, or several assertions per saga run) is FU-10, not built.
+
+**R33. Mutants (R1-012).** Tests kill the auditor's survivors R07, R08, R09, R14, R16 and R21; R21 is a parity test that
+runs the TypeScript and Python store keys over every inventoried id and a set of long and odd ids.
+
+**R34. Backup restore (R1-014).** The runbook gains a restore step: export the deletion trail before restoring, then
+re-apply every tombstone and re-run every approved request against the restored data. Not drilled (NOT DEMONSTRATED).
+
+**R35. The e2e tests clean up everything they create (R1-015).**

@@ -49,6 +49,10 @@ export function strictestClassification(labels: Classification[]): Classificatio
  * is the fallback only when the repository has no row (in memory mode they are the same). The routes reconcile the
  * cache first (`syncFirmMatters`, Copilot C3), so a matter deleted or moved elsewhere is no longer cached for the
  * caller's firm and is unknown here; a stale copy of another firm's matter fails `checkPermission`'s firm check.
+ *
+ * Audit F42 (FA-F42-R1-010): in Firestore mode the repository's null is authoritative, as for documents (FA-F13-039): a
+ * matter tombstoned (or deleted) since this process cached it is evicted and unknown, so a caller that did not run the
+ * route sync first (a direct call of resolveCommitteeScope) cannot be scoped to it from the stale copy.
  */
 async function loadMatter(
   store: SpineStore,
@@ -56,7 +60,12 @@ async function loadMatter(
   matterId: string,
   firmId: string
 ): Promise<Matter | null> {
-  const matter = (await repos.matters.get(matterId, firmId)) ?? store.matters.get(matterId)
+  const stored = await repos.matters.get(matterId, firmId)
+  if (resolvePersistenceMode() === "firestore" && stored === null) {
+    store.matters.delete(matterId)
+    return null
+  }
+  const matter = stored ?? store.matters.get(matterId)
   if (matter) store.matters.set(matter.id, matter)
   return matter ?? null
 }

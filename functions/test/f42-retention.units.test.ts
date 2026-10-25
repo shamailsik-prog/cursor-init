@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { spawnSync } from "node:child_process"
+import path from "node:path"
+import { describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { decide } from "@/platform/p5/permissionDecision"
 import { isTombstoneFor, matterKeyOfRow } from "@/platform/retention/tombstone"
@@ -9,6 +11,7 @@ import {
   inventory,
   planDeletion,
   policyHolds,
+  retentionTestSeam,
   storeKey,
   treatmentOf,
   validatePolicy,
@@ -47,6 +50,45 @@ describe("F42 units: store keys", () => {
     expect(storeKey(`${long}b`)).not.toBe(key)
     // The same key ci_gates/check_data_inventory.py store_key computes (its collision check relies on it).
     expect(key).toBe("firestore_a_very_long_legacy_collection_name_a_v_hc50e0e6fda8a20890ca1122e")
+  })
+
+  it("FA-F42-R1-013 (spec R32): the saga's production sizes are pinned; the test seam lowers them only outside production", () => {
+    const { limits } = sagaInternals
+    const production = { chunk: 200, chunkStepBudget: 45, traceIdsPerPart: 5_000, maxTraceParts: 24 }
+    expect(limits()).toEqual(production)
+    try {
+      retentionTestSeam.limits = { chunk: 10, chunkStepBudget: 5 }
+      expect(limits()).toEqual({ ...production, chunk: 10, chunkStepBudget: 5 })
+      vi.stubEnv("NODE_ENV", "production")
+      expect(limits()).toEqual(production)
+    } finally {
+      vi.unstubAllEnvs()
+      delete retentionTestSeam.limits
+    }
+  })
+
+  it("FA-F42-R1-012 (R21): the TypeScript and Python store keys agree on every inventoried id and on long and odd ids", () => {
+    const odd = [
+      `firestore:${"a".repeat(71)}`, // 81 characters: one past the limit, so hashed
+      `firestore:${"x".repeat(1500)}`,
+      `firestore:${"b".repeat(60)}-${"c".repeat(9)}`, // 80 exactly: kept
+      "postgres:client_private.judgment",
+      "firestore:ünïcode_ñame",
+      "objects:documents",
+    ]
+    const ids = [...inventory().stores.map((s) => s.id), ...odd]
+    const script = [
+      "import json, sys",
+      "sys.path.insert(0, 'ci_gates')",
+      "import check_data_inventory as g",
+      "print(json.dumps([g.store_key(i) for i in json.load(sys.stdin)]))",
+    ].join("\n")
+    const out = spawnSync("python3", ["-c", script], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8", input: JSON.stringify(ids) })
+    expect(out.status, out.stderr).toBe(0)
+    expect(JSON.parse(out.stdout) as string[]).toEqual(ids.map(storeKey))
+    // Both forms are exercised: the long ids are hashed, the 80-character one is kept as it is.
+    expect(storeKey(odd[0])).toMatch(/_h[0-9a-f]{24}$/)
+    expect(storeKey(odd[2])).toBe(odd[2].replace(/[^A-Za-z0-9]/g, "_"))
   })
 
   it("every inventoried store has a distinct key of at most 80 characters", () => {
@@ -99,6 +141,15 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(policyHolds(p, planDeletion(p))).toBe(true)
   })
 
+  it("FA-F42-R1-012 (R16): a class hold on the vault or on the processor's traces alone holds the deletion", () => {
+    for (const name of ["vault_object", "third_party_trace"]) {
+      const p = purgePolicy()
+      p.classes[name].legalHold = true
+      expect(policyHolds(p, planDeletion(p)), name).toBe(true)
+      expect(holdRefusal(p, planDeletion(p), undefined, "f1"), name).toBe("legal_hold_policy")
+    }
+  })
+
   it("a matter hold of the firm refuses first; another firm's or an inactive hold does not", () => {
     const p = purgePolicy()
     const plan = planDeletion(p)
@@ -127,12 +178,96 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(() => validatePolicy(period, inv)).toThrow(RetentionConfigError)
   })
 
-  it("groups the documents stores and the vault into the first purge job, the rest by the group size", () => {
+  it("FA-F42-R1-005: validation refuses a reason-code list that is missing, empty, not code-shaped or repeated", () => {
+    const inv = inventory()
+    const cases: Array<[string, (p: RetentionPolicy) => void]> = [
+      ["deletion.reasonCodes", (p) => delete (p.deletion as { reasonCodes?: unknown }).reasonCodes],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = [])],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = ["client_instruction", "Client Ayesha"])],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = ["court_order", "court_order"])],
+      ["legalHold.reasonCodes", (p) => delete (p as { legalHold?: unknown }).legalHold],
+      ["legalHold.reasonCodes", (p) => (p.legalHold.reasonCodes = ["ok_code", "x"])],
+    ]
+    for (const [field, mutate] of cases) {
+      const p = purgePolicy()
+      mutate(p)
+      expect(() => validatePolicy(p, inv), field).toThrow(new RetentionConfigError(field))
+    }
+  })
+
+  it("FA-F42-R1-011: a deleting period is adoptable only aged by row, on a class whose every store retention.apply can age", () => {
+    const inv = inventory()
+    // The shipped policy names a basis for every class and has no period: it validates and deletes nothing.
+    const p0 = shipped()
+    for (const [name, c] of Object.entries(p0.classes)) expect(["row_age", "matter_closure"], name).toContain(c.periodBasis)
+    expect(() => validatePolicy(p0, inv)).not.toThrow()
+    const refused: Array<[string, (p: RetentionPolicy) => void]> = [
+      // No basis, or an unknown one.
+      ["class matter_content periodBasis", (p) => delete (p.classes.matter_content as { periodBasis?: unknown }).periodBasis],
+      ["class ai_record periodBasis", (p) => ((p.classes.ai_record as { periodBasis: unknown }).periodBasis = "created")],
+      // Aged from matter closure: not built (FU-8), so not adoptable, held or not.
+      ["class matter_content periodBasis matter_closure (FU-8)", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge" })],
+      ["class matter_content periodBasis matter_closure (FU-8)", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge", legalHold: true })],
+      // Aged by row on a class with a store retention.apply cannot age: a Firestore store with no ageField, the vault.
+      ["store firestore:custody_events period not applicable", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge", periodBasis: "row_age" })],
+      ["store objects:documents period not applicable", (p) => Object.assign(p.classes.vault_object, { periodDays: 30, periodicAction: "purge" })],
+      ["store firestore:audit_dead_letter period not applicable", (p) => Object.assign(p.classes.audit_trail, { periodDays: 3650, periodicAction: "purge" })],
+    ]
+    for (const [field, mutate] of refused) {
+      const p = shipped()
+      mutate(p)
+      expect(() => validatePolicy(p, inv), field).toThrow(new RetentionConfigError(field))
+    }
+    // A row-aged period on the AI records (every store with an ageField) validates; so does a period that only retains.
+    const ok = shipped()
+    Object.assign(ok.classes.ai_record, { periodDays: 30, periodicAction: "anonymise" })
+    Object.assign(ok.classes.matter_content, { periodDays: 30, periodicAction: "retain" })
+    expect(() => validatePolicy(ok, inv)).not.toThrow()
+  })
+
+  it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
+    const inv = inventory()
+    expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)
+    const cases: Array<(p: RetentionPolicy) => void> = [
+      (p) => delete (p.deletion as { approverMinTenureDays?: unknown }).approverMinTenureDays,
+      (p) => (p.deletion.approverMinTenureDays = 0),
+      (p) => (p.deletion.approverMinTenureDays = 1.5),
+      (p) => ((p.deletion as { approverMinTenureDays: unknown }).approverMinTenureDays = "30"),
+    ]
+    for (const mutate of cases) {
+      const p = purgePolicy()
+      mutate(p)
+      expect(() => validatePolicy(p, inv)).toThrow(new RetentionConfigError("deletion.approverMinTenureDays"))
+    }
+  })
+
+  it("FA-F42-R1-005: a vault path is kept only in the vault's own shape for its row's firm and document", () => {
+    const { vaultPathOf } = sagaInternals
+    expect(vaultPathOf("fs://firmA/documents/doc1/v1", "firmA", "doc1")).toBe("fs://firmA/documents/doc1/v1")
+    expect(vaultPathOf("s3://firmA/documents/doc1/v12", "firmA", "doc1")).toBe("s3://firmA/documents/doc1/v12")
+    for (const [path, firm, doc] of [
+      ["fs://firmA/documents/Ayesha Siddiqui v Khan/v1", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v1", "firmB", "doc1"],
+      ["fs://firmA/documents/doc1/v1", "firmA", "doc2"],
+      ["fs://firmA/documents/doc1/v1", "firmA", null],
+      ["fs://firmA/documents/doc1/v1-Ayesha", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v0", "firmA", "doc1"],
+      ["gs://firmA/documents/doc1/v1", "firmA", "doc1"],
+      ["fs://firmA/exports/doc1/v1", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v1/extra", "firmA", "doc1"],
+    ] as const) {
+      expect(vaultPathOf(path, firm, doc), path).toBeNull()
+    }
+  })
+
+  it("groups the documents stores, the committee outputs and the vault into the first purge job, the rest by the group size", () => {
     const p = purgePolicy()
     const plan = Object.fromEntries(planDeletion(p).map((x) => [x.key, x.treatment]))
     const order = planDeletion(p).map((x) => x.key)
     const groups = purgeGroups(plan, order, 12)
-    expect(groups[0]).toEqual(["firestore_documents", "firestore_document_versions", "objects_documents"])
+    // FA-F42-R1-002: committee outputs ride with the documents, after them, so their legacy rows (found through the
+    // documents) are purged before the store is acknowledged, whatever order the other groups run in.
+    expect(groups[0]).toEqual(["firestore_documents", "firestore_document_versions", "firestore_committee_outputs", "objects_documents"])
     expect(groups.slice(1).every((g) => g.length <= 12 && g.length > 0)).toBe(true)
     const purged = order.filter((k) => ["purge", "anonymise", "lock"].includes(plan[k]))
     expect(groups.flat().sort()).toEqual([...purged].sort())

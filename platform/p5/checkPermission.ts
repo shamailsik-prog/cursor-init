@@ -1,5 +1,6 @@
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { PublicError } from "@/platform/http/publicError"
+import { recordOperationMatter } from "@/platform/retention/operationMatters"
 import { rankOf, rankOfStoredOrMax, type Role, type SpineStore, type User } from "@/platform/spine/store"
 import {
   ACCOUNTS_REGISTER_ACTIONS,
@@ -31,6 +32,9 @@ export function checkPermission(
   matterId?: string,
   extra?: { scope?: "own_matters" }
 ): PermissionDecision {
+  // Audit F42 (FA-F42-R1-001, spec R21): the request's idempotent claims record the matter, so a later same-key replay
+  // of the stored answer is refused once the matter is tombstoned.
+  if (matterId !== undefined) recordOperationMatter(matterId)
   const decision = decide(store, userId, action, matterId, extra)
   try {
     appendPermissionAudit(store, userId, action, matterId, decision)

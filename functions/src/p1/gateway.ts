@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { MASK_POLICY_VERSION, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
 import { buildOutbound, residualCountsOfMessages, verifySystemMessage, type OutboundMessage, type SystemRecord } from "@/platform/p1/outboundPrompt"
@@ -12,6 +12,7 @@ import { isContentionAbort } from "../d1/contention"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { errorCode } from "../log"
 import { stageAudit } from "../p5/audit"
+import { readLateWrite, stageLateWrite, type SeamRow } from "../retention/lateTraces"
 import {
   THRESHOLDS,
   alertRef,
@@ -1514,14 +1515,24 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
       crossed.map((threshold) => ({ threshold, budgetMicroUsd: budget!, spentMicroUsd: after }))
     )
   )
+  // Audit F42 (FA-F42-R1-007, spec R27b): the call's rows may land after the matter's deletion acknowledged their stores
+  // (the call was in flight at the approval, or the reconciler settles it later). Then they are written without the
+  // matter and their trace is recorded in the deletion's processor request, in this transaction (its reads are here,
+  // before the writes). No tombstone, a hold, or a store not yet acknowledged: the rows are written as they are.
+  const seamRows: SeamRow[] = [
+    { storeId: "firestore:ai_usage_logs", data: r as unknown as DocumentData },
+    ...(a.decision ? [{ storeId: "firestore:p1_decisions", data: a.decision as DocumentData }] : []),
+  ]
+  const late = typeof r.matterId === "string" ? await readLateWrite(tx, r.firmId, r.matterId, seamRows) : null
   if (a.failCommit) throw new Error("p1TestSeam.failCommit")
 
   const now = FieldValue.serverTimestamp()
   const inc = (n: number) => FieldValue.increment(n)
-  tx.create(usageRef, { ...r, createdAt: now })
+  const [usageData, decisionData] = late ? stageLateWrite(tx, late, seamRows, a.nowMs ?? Date.now()) : seamRows.map((row) => row.data)
+  tx.create(usageRef, { ...usageData, createdAt: now })
   // Audit F34 (R1, R2): the decision record commits with the usage row; merged, so a publisher's or a reconciler's fields
   // written first are kept.
-  if (a.decision) tx.set(db.collection(DECISIONS_COLLECTION).doc(usageRef.id), { ...a.decision, settledAt: now }, { merge: true })
+  if (a.decision) tx.set(db.collection(DECISIONS_COLLECTION).doc(usageRef.id), { ...decisionData, settledAt: now }, { merge: true })
   // Spend and tokens move by the record's own figures, by one rule for every outcome: an ok call and a billed
   // failure add their charge (I1); a blocked call and an unbilled failure add 0, so only their `calls` counter moves.
   // A settled reservation's hold leaves `reservedMicroUsd` in the same write (F07).

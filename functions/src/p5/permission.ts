@@ -11,6 +11,7 @@ import {
   type PermissionDecision,
   type RetentionAction,
 } from "@/platform/p5/permissionDecision"
+import { recordOperationMatter } from "@/platform/retention/operationMatters"
 import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
@@ -97,6 +98,9 @@ async function evaluate(
   let matter: { firmId: string; classification: unknown; deleted?: boolean } | null | undefined
   let isMember = false
   if (matterId) {
+    // Audit F42 (FA-F42-R1-001, spec R21): the request's idempotent operation records the matter it touched, so a later
+    // same-key replay of its stored answer is refused once the matter is tombstoned.
+    recordOperationMatter(matterId)
     const db = adminDb()
     // Audit F42: the matter's tombstone is read with it. A tombstone of the caller's firm refuses the matter
     // (`matter-deleted`), also once the saga has purged the matter row itself.

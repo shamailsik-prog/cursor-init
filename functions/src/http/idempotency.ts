@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Transaction } from "firebase-admin/firestore"
+import { matterIdsToCheck, recordedMatterFields, runRecordingMatters } from "@/platform/retention/operationMatters"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
 import { logFailure } from "../log"
@@ -201,7 +203,9 @@ export class IdempotentOperation {
     readonly claimId: string,
     readonly scope: { firmId: string; uid: string; route: string; requestHash: string; redact?: boolean; expiresAt: Timestamp; now: number },
     /** `resume` mode: the marker an earlier attempt of this operation committed; null when none did. */
-    readonly prior: DocumentData | null
+    readonly prior: DocumentData | null,
+    /** Audit F42 (spec R21): the matters this operation's permission checks named, stored with its answer. */
+    readonly matters: Set<string> = new Set()
   ) {
     this.ref = adminDb().collection("idempotency_keys").doc(docId)
     this.markerRef = effectMarkerRef(docId)
@@ -251,7 +255,8 @@ export class IdempotentOperation {
 
   /** Stages the stored answer in `tx` (after `read` in the same transaction): the answer commits with the effect. */
   stageAnswer(tx: Transaction, result: HttpResult): void {
-    tx.update(this.ref, { status: "done", response: storedForm(result, this.scope.redact), answeredAt: FieldValue.serverTimestamp() })
+    const response = storedForm(result, this.scope.redact)
+    tx.update(this.ref, { status: "done", response, ...recordedMatterFields(this.matters, response.body), answeredAt: FieldValue.serverTimestamp() })
   }
 }
 
@@ -260,6 +265,22 @@ type Claim =
   | { kind: "replay"; response: HttpResult }
   | { kind: "in_progress" }
   | { kind: "reused" }
+  | { kind: "matter_deleted" }
+  | { kind: "replay_unavailable" }
+
+/**
+ * Audit F42 (FA-F42-R1-001, spec R21): whether a stored answer may still be replayed. It names the matters its operation
+ * touched (the record's `matterIds`, and every matter id in the stored body, which also covers a record written before
+ * the list existed); one of them tombstoned for the firm refuses the replay as a fresh call is refused. A list that was
+ * cut short is never replayed (fail closed). Reads only (the claim transaction's reads come before its writes).
+ */
+async function replayVerdict(tx: Transaction, firmId: string, record: DocumentData, response: HttpResult): Promise<"replay" | "matter_deleted" | "replay_unavailable"> {
+  const { ids, truncated } = matterIdsToCheck(record, response.body)
+  if (truncated) return "replay_unavailable"
+  if (ids.length === 0 || firmId === "") return "replay"
+  const tombs = await tx.getAll(...ids.map((id) => adminDb().collection(MATTER_TOMBSTONES).doc(id)))
+  return tombs.some((t, i) => isTombstoneFor(t.data(), firmId, ids[i])) ? "matter_deleted" : "replay"
+}
 
 function isHttpResult(value: unknown): value is HttpResult {
   const r = value as HttpResult | undefined
@@ -331,7 +352,10 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
         if (existing.uid !== scope.uid || existing.route !== scope.route || existing.requestHash !== hash) {
           return { kind: "reused" }
         }
-        if (existing.status === "done" && isHttpResult(existing.response)) return { kind: "replay", response: existing.response }
+        if (existing.status === "done" && isHttpResult(existing.response)) {
+          const verdict = await replayVerdict(tx, scope.firmId, existing, existing.response)
+          return verdict === "replay" ? { kind: "replay", response: existing.response } : { kind: verdict }
+        }
         if (existing.status !== "in_progress") return { kind: "in_progress" }
         const leaseEnded = existing.resumable === true || existing.released === true
         if (!leaseEnded && scope.now - claimedAtMs(existing) <= IDEMPOTENCY_LEASE_MS) return { kind: "in_progress" }
@@ -394,6 +418,8 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
   }
   if (claim.kind === "reused") throw new HttpError(422, "idempotency_key_reused")
   if (claim.kind === "in_progress") throw new HttpError(409, "idempotency_in_progress")
+  if (claim.kind === "matter_deleted") throw new HttpError(403, "matter_deleted")
+  if (claim.kind === "replay_unavailable") throw new HttpError(409, "idempotency_replay_unavailable")
   if (claim.kind === "replay") {
     const body = { ...claim.response.body, reused: true }
     // Stored results keep no headers (storedForm). A committed-write refusal
@@ -411,11 +437,12 @@ export async function withIdempotency(scope: IdempotencyScope, handler: (op: Ide
     claim.operationId,
     claimId,
     { firmId: scope.firmId, uid: scope.uid, route: scope.route, requestHash: hash, redact: scope.redact, expiresAt: claim.expiresAt, now: scope.now },
-    claim.prior
+    claim.prior,
+    new Set<string>()
   )
   let result: HttpResult
   try {
-    result = await handler(op)
+    result = await runRecordingMatters(op.matters, () => handler(op))
   } catch (err) {
     if ((await settle(op, undefined)) === "terminal") return effectCommittedResult(op.operationId)
     throw err
@@ -466,7 +493,7 @@ async function settle(op: IdempotentOperation, response: HttpResult | undefined)
         if (recordSnap!.get("claimId") !== op.claimId) return "lost"
         if (recordSnap!.get("status") === "done") return "answered"
         if (response) {
-          tx.update(op.ref, { status: "done", response, answeredAt: FieldValue.serverTimestamp() })
+          tx.update(op.ref, { status: "done", response, ...recordedMatterFields(op.matters, response.body), answeredAt: FieldValue.serverTimestamp() })
           return "stored"
         }
         // Any unexpired marker is a committed effect of the key's operation (Codex P1 on PR #58), whichever attempt wrote it.

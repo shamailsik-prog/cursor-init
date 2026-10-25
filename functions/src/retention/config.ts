@@ -12,11 +12,19 @@ import type { HoldRefusal, Treatment } from "./model"
 export type PolicyAction = "retain" | "purge" | "anonymise" | "expiry" | "external" | "lock"
 export type PeriodicAction = "retain" | "purge" | "anonymise"
 
+/**
+ * What a class's period ages from (FA-F42-R1-011, spec R31): `row_age`, each row's own `ageField` (what
+ * retention.apply executes); `matter_closure`, the matter's closure (Module 9 frames retention for closed matters; not
+ * built, FU-8).
+ */
+export type PeriodBasis = "row_age" | "matter_closure"
+
 export type ClassPolicy = {
   onMatterDeletion: PolicyAction
   legalHold: boolean
   periodDays: number | null
   periodicAction: PeriodicAction
+  periodBasis: PeriodBasis
   basis: string
   proposed?: unknown
 }
@@ -27,9 +35,25 @@ export type RetentionPolicy = {
   ratifiedBy: string | null
   ratifiedAt: string | null
   note?: string
-  deletion: { approvalWindowHours: number; ackDeadlineHours: number; maxMembersRevokedAtApproval: number; storesPerPurgeJob: number; proposed?: string }
+  deletion: {
+    approvalWindowHours: number
+    ackDeadlineHours: number
+    maxMembersRevokedAtApproval: number
+    storesPerPurgeJob: number
+    /** Days a partner's account and partner role must have run before they may request or approve (spec R26). */
+    approverMinTenureDays: number
+    /** The closed list of codes a deletion request may give (spec R25). */
+    reasonCodes: string[]
+    reasonCodesNote?: string
+    proposed?: string
+  }
+  /** Legal holds: the closed list of codes a hold may give (spec R25). */
+  legalHold: { reasonCodes: string[]; note?: string }
   classes: Record<string, ClassPolicy>
 }
+
+/** The deletion saga's sizes (spec R32): rows per chunk, chunk steps per purge job, ids per trace part, trace parts. */
+export type RetentionLimits = { chunk: number; chunkStepBudget: number; traceIdsPerPart: number; maxTraceParts: number }
 
 export type StoreKey =
   | { kind: "docId" }
@@ -75,6 +99,13 @@ export type PlannedStore = { key: string; store: InventoryStore; retentionClass:
 export const retentionTestSeam: {
   policy?: RetentionPolicy
   afterStep?: (stepId: string) => Promise<void>
+  /** retention.apply: runs after a page is read and before its chunk's transaction (a hold placed here is a race). */
+  beforeApplyChunk?: (storeKey: string) => Promise<void>
+  /**
+   * FA-F42-R1-013 (spec R32): smaller saga sizes, so a test of a continuation, a retry late in the budget or many traces
+   * needs about 100 rows instead of 10,000. Each one left out keeps its production value.
+   */
+  limits?: Partial<RetentionLimits>
   beforeAck?: (part: string) => Promise<void>
 } = {}
 
@@ -103,8 +134,23 @@ export class RetentionConfigError extends Error {
 const ACTIONS: ReadonlySet<string> = new Set(["retain", "purge", "anonymise", "expiry", "external", "lock"])
 const PERIODIC: ReadonlySet<string> = new Set(["retain", "purge", "anonymise"])
 const MATTER_KEYED: ReadonlySet<StoreKey["kind"]> = new Set(["docId", "field", "objects", "traceExport"])
+const PERIOD_BASES: ReadonlySet<string> = new Set(["row_age", "matter_closure"])
+
+/** Whether a class has a period that deletes (purge or anonymise), held or not. */
+const deletingPeriod = (c: ClassPolicy): boolean => c.periodDays !== null && c.periodicAction !== "retain"
+
+/** Whether retention.apply can age `s`: a Firestore store keyed by matter (doc id or field) with an ageField. */
+export const ageable = (s: InventoryStore): boolean => s.kind === "firestore" && (s.key.kind === "docId" || s.key.kind === "field") && s.ageField !== undefined
 
 const positiveInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
+
+/** The shape of one reason code: lower case, a letter first, 3 to 64 characters (spec R25). */
+export const REASON_CODE_SHAPE = /^[a-z][a-z0-9_]{2,63}$/
+
+/** A closed list of reason codes: non-empty, each code-shaped, no duplicate. */
+function reasonCodeList(v: unknown): v is string[] {
+  return Array.isArray(v) && v.length > 0 && v.every((c) => typeof c === "string" && REASON_CODE_SHAPE.test(c)) && new Set(v).size === v.length
+}
 
 /** Checks the policy the code relies on (the CI gate checks the same file more fully); throws RetentionConfigError. */
 export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
@@ -113,9 +159,15 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
   if (!d || !positiveInt(d.approvalWindowHours) || !positiveInt(d.ackDeadlineHours) || !positiveInt(d.maxMembersRevokedAtApproval) || !positiveInt(d.storesPerPurgeJob)) {
     throw new RetentionConfigError("deletion")
   }
+  if (!positiveInt(d.approverMinTenureDays)) throw new RetentionConfigError("deletion.approverMinTenureDays")
+  if (!reasonCodeList(d.reasonCodes)) throw new RetentionConfigError("deletion.reasonCodes")
+  if (!p.legalHold || !reasonCodeList(p.legalHold.reasonCodes)) throw new RetentionConfigError("legalHold.reasonCodes")
   for (const [name, c] of Object.entries(p.classes ?? {})) {
     if (!ACTIONS.has(c.onMatterDeletion) || typeof c.legalHold !== "boolean" || !PERIODIC.has(c.periodicAction)) throw new RetentionConfigError(`class ${name}`)
     if (c.periodDays !== null && !positiveInt(c.periodDays)) throw new RetentionConfigError(`class ${name} periodDays`)
+    // FA-F42-R1-011 (spec R31): every class names what its period ages from; aging from matter closure is not built.
+    if (!PERIOD_BASES.has(c.periodBasis)) throw new RetentionConfigError(`class ${name} periodBasis`)
+    if (deletingPeriod(c) && c.periodBasis === "matter_closure") throw new RetentionConfigError(`class ${name} periodBasis matter_closure (FU-8)`)
   }
   for (const s of inv.stores) {
     const cls = classOfStore(s, inv, p)
@@ -124,6 +176,9 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
     if (needsAnon && (s.anonymise === undefined || Object.keys(s.anonymise).length === 0)) throw new RetentionConfigError(`store ${s.id} anonymise`)
     // An anonymised row of a field-keyed store must leave the matter's query, or the saga would find it again.
     if (s.anonymise !== undefined && s.key.kind === "field" && s.anonymise[s.key.field] !== null) throw new RetentionConfigError(`store ${s.id} anonymise key`)
+    // FA-F42-R1-011 (spec R31): a deleting period covers every store of its class, or it is not adoptable: a store
+    // retention.apply cannot age would keep rows the period was ratified to remove.
+    if (deletingPeriod(cls) && !ageable(s)) throw new RetentionConfigError(`store ${s.id} period not applicable`)
   }
 }
 
