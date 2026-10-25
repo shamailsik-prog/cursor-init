@@ -13,6 +13,12 @@ import {
   readCourtOpsAckRow,
   readLegacyCourtOpsAckRow,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import {
+  courtOpsAckBackfillExitCode,
+  decideCourtOpsAckMove,
+  formatCourtOpsAckBackfillDryRun,
+  planCourtOpsAckBackfill,
+} from "@/platform/persistence/courtOpsAckBackfill"
 import { createMemoryRepositories } from "@/platform/persistence/spineRepositories"
 import { SpineStore, type WorkflowOpsActivityRow } from "@/platform/spine/store"
 
@@ -177,5 +183,93 @@ describe("memory repository workflowOpsActivity (R6, R11)", () => {
     expect(await repos.workflowOpsActivity.get(legacy.id, F)).toBeNull()
     expect(await repos.workflowOpsActivity.get(event.id, F)).toEqual(event)
     expect((await repos.workflowOpsActivity.listByFirm(F)).map((r) => r.id).sort()).toEqual([canonical.id, event.id].sort())
+  })
+})
+
+describe("backfill plan, move decision and exit code (R12, R13)", () => {
+  const legacy = (firmId: string, queueType: "workflow" | "follow_up", item: string, extra: Partial<WorkflowOpsActivityRow> = {}) => ({
+    id: legacyCourtOpsAckId(queueType, item),
+    data: { ...ackRow(firmId, queueType, item, extra) } as Record<string, unknown>,
+  })
+  const canonical = (firmId: string, queueType: "workflow" | "follow_up", item: string, extra: Partial<WorkflowOpsActivityRow> = {}) => {
+    const row = ackRow(firmId, queueType, item, extra)
+    return { id: row.id, data: { ...row } as Record<string, unknown> }
+  }
+
+  it("classifies each ack row: move, canonical, item_not_in_firm, malformed, target_conflict, nested; other rows are ignored", () => {
+    const rows = [
+      legacy(F, "workflow", "w1"),
+      canonical(F, "workflow", "w9"),
+      legacy(F, "follow_up", "fu2"),
+      legacy(F, "workflow", "w3"),
+      { id: legacyCourtOpsAckId("zz", "i"), data: { ...ackRow(F, "workflow", "i"), queueType: "zz", documentId: null } },
+      legacy(F, "workflow", "w4"),
+      { id: courtOpsAckId(F, "workflow", "w4"), data: { ...ackRow(G, "workflow", "w4") } },
+      legacy(F, "follow_up", "fu5"),
+      canonical(F, "follow_up", "fu5", { createdAt: 50 }),
+      { id: "ops:workflow_event:e1", data: { firmId: F } },
+    ]
+    const itemFirms = new Map<string, string | null>([
+      ["workflow:w1", F],
+      ["follow_up:fu2", G],
+      ["workflow:w3", null],
+      ["workflow:w4", F],
+      ["follow_up:fu5", F],
+    ])
+    const plan = planCourtOpsAckBackfill(rows, [{ path: "workflow_ops_activity/ops:court_ops:ack:workflow:p/sub/d" }], itemFirms)
+    expect(plan.moves.map((m) => [m.from, m.to])).toEqual([
+      [legacyCourtOpsAckId("workflow", "w1"), courtOpsAckId(F, "workflow", "w1")],
+      [legacyCourtOpsAckId("follow_up", "fu5"), courtOpsAckId(F, "follow_up", "fu5")],
+    ])
+    expect(plan.canonical.sort()).toEqual(
+      [`workflow_ops_activity/${courtOpsAckId(F, "follow_up", "fu5")}`, `workflow_ops_activity/${courtOpsAckId(F, "workflow", "w9")}`].sort()
+    )
+    expect(plan.needsOperator).toEqual([
+      { path: `workflow_ops_activity/${legacyCourtOpsAckId("follow_up", "fu2")}`, reason: "item_not_in_firm", firmIds: [F, G].sort() },
+      { path: `workflow_ops_activity/${legacyCourtOpsAckId("workflow", "w3")}`, reason: "item_not_in_firm", firmIds: [F] },
+      { path: `workflow_ops_activity/${legacyCourtOpsAckId("zz", "i")}`, reason: "malformed", firmIds: [F] },
+      { path: `workflow_ops_activity/${legacyCourtOpsAckId("workflow", "w4")}`, reason: "target_conflict", firmIds: [F, G].sort() },
+      // A firm-qualified id holding another firm's row is reported too (it is malformed at that id).
+      { path: `workflow_ops_activity/${courtOpsAckId(F, "workflow", "w4")}`, reason: "malformed", firmIds: [G] },
+      { path: "workflow_ops_activity/ops:court_ops:ack:workflow:p/sub/d", reason: "nested" },
+    ])
+    expect(courtOpsAckBackfillExitCode(plan)).toBe(2)
+    expect(formatCourtOpsAckBackfillDryRun(plan)).not.toContain("seen")
+  })
+
+  it("decides a move from the two rows read in its transaction", () => {
+    const planned = planCourtOpsAckBackfill([legacy(F, "workflow", "w1", { createdAt: 300 })], [], new Map([["workflow:w1", F]])).moves[0]!
+    const stored = legacy(F, "workflow", "w1", { createdAt: 300 }).data
+    expect(decideCourtOpsAckMove(planned, null, null).outcome).toEqual({ status: "rejected", reason: "legacy_gone" })
+    expect(decideCourtOpsAckMove(planned, { ...stored, detail: "changed" }, null).outcome).toEqual({ status: "rejected", reason: "legacy_changed" })
+    expect(decideCourtOpsAckMove(planned, stored, null)).toEqual({ outcome: { status: "moved" }, write: planned.snapshot })
+    expect(decideCourtOpsAckMove(planned, stored, ackRow(G, "workflow", "w1")).outcome).toEqual({ status: "rejected", reason: "target_foreign_firm" })
+    expect(decideCourtOpsAckMove(planned, stored, { ...ackRow(F, "workflow", "w1"), tags: "x" }).outcome).toEqual({
+      status: "rejected",
+      reason: "target_malformed",
+    })
+    const earlier = ackRow(F, "workflow", "w1", { createdAt: 200, detail: "target" })
+    const later = ackRow(F, "workflow", "w1", { createdAt: 400, detail: "target" })
+    expect(decideCourtOpsAckMove(planned, stored, earlier)).toEqual({ outcome: { status: "merged" }, write: planned.snapshot })
+    expect(decideCourtOpsAckMove(planned, stored, later)).toEqual({ outcome: { status: "merged" }, write: later })
+    const tie = ackRow(F, "workflow", "w1", { createdAt: 300, detail: "target" })
+    expect(decideCourtOpsAckMove(planned, stored, tie).write).toEqual(tie)
+  })
+
+  it("exit code: 0 only when clean, 1 when a rerun can finish, 2 when an operator must act (2 wins)", () => {
+    const clean = planCourtOpsAckBackfill([], [], new Map())
+    const empty = { moved: [], merged: [], retry: [], needsOperator: [], failed: [] }
+    expect(courtOpsAckBackfillExitCode(clean)).toBe(0)
+    expect(courtOpsAckBackfillExitCode(clean, empty)).toBe(0)
+    expect(courtOpsAckBackfillExitCode(clean, { ...empty, failed: [{ path: "p", message: "m" }] })).toBe(1)
+    expect(courtOpsAckBackfillExitCode(clean, { ...empty, retry: [{ path: "p", reason: "legacy_changed" }] })).toBe(1)
+    expect(courtOpsAckBackfillExitCode(clean, { ...empty, needsOperator: [{ path: "p", reason: "target_foreign_firm" }] })).toBe(2)
+    expect(
+      courtOpsAckBackfillExitCode(clean, {
+        ...empty,
+        failed: [{ path: "p", message: "m" }],
+        needsOperator: [{ path: "q", reason: "target_malformed" }],
+      })
+    ).toBe(2)
   })
 })
