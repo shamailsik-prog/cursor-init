@@ -591,6 +591,11 @@ describe("audit F34 round 2 (FA-F34-R2-001, -002, -005, -007): G-0 [21] has no o
           'import { activeTransport } from "./transport"\ntype Phases = {\n  first: number\n  transport: number\n}\nexport const PHASES: Phases = {\n  first: 1,\n  transport: 60,\n}\nexport async function run() {\n  const transport = activeTransport()\n  return { transport: transport === null ? null : 1, reply: await transport?.send({ model: "m", messages: [], maxTokens: 1 }) }\n}\n',
       },
     ],
+    // R30: a declaration file emits no code, so Next's generated next-env.d.ts may import `.next/types/...`.
+    [
+      "Next's generated next-env.d.ts importing .next/types",
+      { "next-env.d.ts": '/// <reference types="next" />\nimport "./.next/types/routes.d.ts";\nimport "./.next/types/root-params.d.ts";\n', ".next/types/routes.d.ts": "export {}\n" },
+    ],
     // An annotated const holding the call.
     ["an annotated transport const", { "functions/src/p1/embedding.ts": 'import { activeEmbeddingTransport } from "./embeddingTransport"\nimport type { P1EmbeddingTransportError } from "./embeddingTransport"\nexport async function run(): Promise<unknown> {\n  const t: ReturnType<typeof Object> | null = activeEmbeddingTransport()\n  return t === null ? null : t.embed({ model: "m", input: "x" })\n}\nexport type E = P1EmbeddingTransportError\n' }],
   ])("passes: %s", (_name, files) => {

@@ -18,9 +18,7 @@ so a `/` after it starts a regular expression; JavaScript itself needs the parse
 object literal is read as a regular expression up to the end of its line. A string that reaches a line break unclosed ends
 there. Neither case can join two lines of code.
 
-`lex(text)` returns the tokens and `blank(text, tokens)` the text a line-based check reads: comments removed, identifiers
-decoded, and the contents of every string, template and regular-expression literal replaced by spaces (the quotes, the
-template's `${` and `}` and the code inside a substitution stay).
+`lex(text)` returns the tokens; ci_gates/check_p1_transport_imports.py reads them (G-0 [21]).
 """
 from __future__ import annotations
 
@@ -312,56 +310,3 @@ def lex(text: str) -> list[Tok]:
         nl = False
         i = j
     return toks
-
-
-def _sep(prev: Tok, t: Tok) -> str:
-    """What stands between two tokens in the rebuilt text: a line break where the source had one, nothing where they
-    touched (so `a.b` stays `a.b`), else one space."""
-    if t.nl:
-        return "\n"
-    return "" if prev.end == t.start else " "
-
-
-def blank(tokens: list[Tok]) -> str:
-    """The text a line-based check reads (see the module comment): one line per source line, comments gone, identifiers
-    decoded, literal contents blanked. Line breaks between tokens are kept, so `^export` and same-line reads still work."""
-    out: list[str] = []
-    prev: Tok | None = None
-    for t in tokens:
-        if prev is not None:
-            out.append(_sep(prev, t))
-        prev = t
-        if t.kind == "str":
-            out.append('"' + " " * len(t.value) + '"')
-        elif t.kind == "tpl":
-            body = " " * len(t.value)
-            out.append({"full": f"`{body}`", "head": f"`{body}${{", "middle": f"}}{body}${{", "tail": f"}}{body}`"}[t.part])
-        elif t.kind == "regex":
-            out.append("/" + " " * max(len(t.value) - 2, 0) + "/")
-        elif t.kind == "priv":
-            out.append("#" + t.value)
-        else:
-            out.append(t.value)
-    return "".join(out)
-
-
-def normalized(tokens: list[Tok]) -> str:
-    """The text with comments gone and identifiers and plain string literals decoded (a literal whose decoded value holds a
-    quote, a backslash or a line break keeps a safe spelling), for checks that read specifiers with a regex."""
-    out: list[str] = []
-    prev: Tok | None = None
-    for t in tokens:
-        if prev is not None:
-            out.append(_sep(prev, t))
-        prev = t
-        if t.kind == "str":
-            v = t.value
-            out.append('"' + v + '"' if not any(ch in v for ch in "\"'`\\\n\r") else '"' + "?" * len(v) + '"')
-        elif t.kind == "tpl":
-            body = t.value if not any(ch in t.value for ch in "`\\$") else "?" * len(t.value)
-            out.append({"full": f"`{body}`", "head": f"`{body}${{", "middle": f"}}{body}${{", "tail": f"}}{body}`"}[t.part])
-        elif t.kind == "priv":
-            out.append("#" + t.value)
-        else:
-            out.append(t.value)
-    return "".join(out)

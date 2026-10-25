@@ -34,7 +34,7 @@ It fails on:
   Anywhere in scope (R29, R30):
   - an import, re-export or load whose specifier resolves into a tree the scan does not read (UNSCANNED: functions/test/,
     functions/lib/, the root tests/, ci_gates/, _superseded/ and .eve/, and node_modules or .next by a path): a wrapper
-    there would hand a transport on unseen;
+    there would hand a transport on unseen. A declaration file (`.d.ts`) is exempt: it emits no code;
   - a `#...` specifier (a package.json subpath import, which the gate cannot resolve);
   - outside a grant, a named import or an `export { } from` re-export of a restricted name (type-only included; `as`
     resolved to the original name);
@@ -142,6 +142,7 @@ COMPUTED_SCOPE = ("functions/src/", "platform/", "services/")
 # any depth) and the two this guard skips. An import into one of them from a scanned file would hand on what it pleases.
 UNSCANNED_PREFIXES = tuple(sorted({*EXCLUDED_PREFIXES, *(f"{d}/" for d in ROOT_ONLY_SKIP_DIRS)}))
 _UNSCANNED_SEGMENTS = ("node_modules", ".next")
+_DECLARATION_RE = re.compile(r"\.d\.[cm]?ts$", re.I)
 
 _JS_EXT_RE = re.compile(r"\.(?:d\.)?(?:[cm]?[jt]sx?)$", re.I)
 _RESOLVE_EXTS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts", ".json")
@@ -159,9 +160,6 @@ _OPERATOR_WORDS = frozenset({"typeof", "new", "delete", "void", "await", "in", "
 _CONDITION_PUNCT = frozenset({".", "?.", "!", "===", "!==", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "??", "?", ":"})
 _CONDITION_WORDS_BANNED = frozenset({"function", "class", "return", "yield", "await", "new", "delete", "void", "as", "satisfies", "import", "require", "async", "get", "set", "static"})
 _NULLISH = frozenset({"null", "undefined"})
-
-_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
-
 
 def strip_comments(text: str) -> str:
     """The text with `//` and `/* */` comments blanked (newlines kept), outside '...', "..." and `...` literals. Used to
@@ -1141,6 +1139,9 @@ def file_findings(rel: str, text: str, resolver: Resolver) -> list[str]:
     reading = read_refs(c, rel)
     out.extend(reading.loader_findings)
     in_scope = rel.startswith(COMPUTED_SCOPE)
+    # A declaration file emits no code, so its imports put nothing in the bundle (R30): Next's generated next-env.d.ts
+    # imports `.next/types/...`.
+    declaration = _DECLARATION_RE.search(rel) is not None
     for i in reading.unreadable:
         out.append(f"{rel}: an import statement the gate cannot read (line {text.count(chr(10), 0, c.toks[i].start) + 1})")
     value_locals: dict[str, str] = {}
@@ -1165,7 +1166,7 @@ def file_findings(rel: str, text: str, resolver: Resolver) -> list[str]:
             continue
         if module == EVAL_SET and ref.kind == "import":
             live_eval.update(local for original, local in ref.names if original == "runLiveEvaluation" and local)
-        if _unscanned(module) and ref.kind != "export-list":
+        if _unscanned(module) and ref.kind != "export-list" and not declaration:
             out.append(f"{rel}: imports {module} from an unscanned directory (G-0 does not read it)")
         if module not in RESTRICTED:
             continue
