@@ -6,19 +6,26 @@
 // can finish the job, 2 when an operator must act, and "rerun to retry" is never printed for those.
 // Firestore emulator, Admin SDK (the operator script's own loader and store).
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import type { CourtOpsAckBackfillStore } from "@/platform/persistence/courtOpsAckBackfill"
 import { adminCourtOpsAckBackfillStore, readCourtOpsAckBackfillInput } from "@/scripts/lib/courtOpsAckBackfillAdmin"
 import { runCourtOpsAckBackfill } from "@/scripts/lib/courtOpsAckBackfillCli"
 import { adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
+import { deleteFirmRows } from "@/tests/helpers/firm-cleanup"
 
 const E2E_TIMEOUT_MS = 120_000
 const COLL = "workflow_ops_activity"
 const SECRET = "SECRET-DETAIL-do-not-print"
 
 const short = () => randomUUID().replaceAll("-", "").slice(0, 10)
-const firm = () => `fu1bf-firm-${short()}`
+/** The firms and nested documents this suite creates; afterAll deletes them (audit F42: an emulator e2e cleans up its firms). */
+const created = { firmIds: new Set<string>(), paths: new Set<string>() }
+const firm = () => {
+  const id = `fu1bf-firm-${short()}`
+  created.firmIds.add(id)
+  return id
+}
 const ackId = (firmId: string, queueType: string, item: string) => `ops:court_ops:ack:${firmId}:${queueType}:${item}`
 const legacyId = (queueType: string, item: string) => `ops:court_ops:ack:${queueType}:${item}`
 
@@ -76,6 +83,12 @@ function depsFor(ids: string[], tag: string, store: CourtOpsAckBackfillStore = a
 }
 
 describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops acknowledgement backfill", { timeout: E2E_TIMEOUT_MS }, () => {
+  afterAll(async () => {
+    const left = await deleteFirmRows({ firmIds: created.firmIds, paths: created.paths })
+    expect(left.deleted, "the cleanup found this suite's rows").toBeGreaterThan(0)
+    expect(left.remaining, "rows of this suite's firms left after cleanup").toBe(0)
+  }, E2E_TIMEOUT_MS)
+
   it("the dry run names every class (ids only), predicts the target conflict, writes nothing, and exits 2", async () => {
     const [f, g, tag] = [firm(), firm(), short()]
     const [w1, w3, w4] = [await workflowItem(f), `doc_fu1bf_absent_${short()}`, await workflowItem(f)]
@@ -91,6 +104,7 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: legacy court-ops ac
       await seed(legacyId("follow_up", fu5), ack(f, "follow_up", fu5)),
       await seed(ackId(f, "follow_up", fu5), ack(f, "follow_up", fu5, { createdAt: 500, detail: "later" })),
     ]
+    created.paths.add(`${COLL}/ops:court_ops:ack:workflow:p${tag}/sub/d${tag}`)
     await adminDb().doc(`${COLL}/ops:court_ops:ack:workflow:p${tag}/sub/d${tag}`).set(ack(f, "workflow", `p${tag}`))
     const before = await Promise.all(ids.map(data))
     const { lines, deps } = depsFor(ids, tag)

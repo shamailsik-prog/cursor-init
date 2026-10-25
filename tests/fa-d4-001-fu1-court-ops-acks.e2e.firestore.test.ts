@@ -9,7 +9,7 @@
 // seeded through the Admin SDK as the repositories read them: follow_ups, document_workflow and documents rows of
 // the actor's own firm and matter. Spec: docs/superpowers/specs/2026-10-24-fa-d4-001-fu1-firm-qualified-court-ops-acks-design.md.
 import { randomUUID } from "node:crypto"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { F02_AUTHORITY_HEADER } from "@/platform/authority/f02Routes"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
@@ -18,6 +18,7 @@ import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFi
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
+import { deleteFirmRows } from "@/tests/helpers/firm-cleanup"
 
 requireAuthFirestoreEmulators("FA-D4-001-FU1 court-ops acknowledgement e2e")
 
@@ -40,6 +41,8 @@ function restart(): void {
 }
 
 type Actor = { firmId: string; uid: string; token: string; matterId: string }
+/** The firms and auth users this suite creates; afterAll deletes them (audit F42: an emulator e2e cleans up its firms). */
+const created = { firmIds: new Set<string>(), uids: new Set<string>() }
 const short = () => randomUUID().replaceAll("-", "").slice(0, 10)
 
 /** A partner of a new firm, signed in on the Auth emulator, and a matter of that firm the partner is a member of. */
@@ -47,7 +50,9 @@ async function provisionActor(): Promise<Actor> {
   const ref = adminDb().collection("firms").doc()
   await ref.create({ name: `FU1 firm ${ref.id}`, dataResidency: "PK", plan: "internal" })
   const firmId = ref.id
+  created.firmIds.add(firmId)
   const uid = adminDb().collection("users").doc().id
+  created.uids.add(uid)
   const email = `${uid.toLowerCase()}@example.test`
   const password = "emulator-pass-123"
   await adminAuth().createUser({ uid, email, password })
@@ -160,6 +165,11 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1: court-ops acknowled
     vi.unstubAllEnvs()
     restart()
   })
+  afterAll(async () => {
+    const left = await deleteFirmRows({ firmIds: created.firmIds, uids: created.uids })
+    expect(left.deleted, "the cleanup found this suite's rows").toBeGreaterThan(0)
+    expect(left.remaining, "rows of this suite's firms left after cleanup").toBe(0)
+  }, E2E_TIMEOUT_MS)
 
   it("FU1: firm A sending firm B's item id answers 404 and leaves B's acknowledgement row as it was", async () => {
     const [a, b] = [await provisionActor(), await provisionActor()]
