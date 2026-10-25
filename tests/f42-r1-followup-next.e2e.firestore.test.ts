@@ -4,13 +4,17 @@
  * over the Auth and Firestore emulators. Each check has its control (the same read before the tombstone, or of a live
  * matter), so a probe whose control fails is inconclusive, not a pass.
  */
+import { randomUUID } from "node:crypto"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Timestamp } from "firebase-admin/firestore"
+import { POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as committeeGet } from "@/app/api/p1/committee-brain/route"
+import { getDocumentTypes } from "@/lib/foundation-data"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
+import { seedFirmARuntimeRecords } from "@/tests/helpers/firestore-runtime-seed"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
 
@@ -94,6 +98,12 @@ const call = async (handler: (r: Request) => Promise<Response>, a: Actor, path: 
   const res = await handler(new Request(`http://127.0.0.1${path}`, { method: "GET", headers: { Authorization: `Bearer ${a.token}`, "X-Firm-Id": a.firmId } }))
   return { status: res.status, text: await res.text() }
 }
+const post = async (handler: (r: Request) => Promise<Response>, a: Actor, path: string, body: unknown, key: string) => {
+  const res = await handler(
+    new Request(`http://127.0.0.1${path}`, { method: "POST", headers: { Authorization: `Bearer ${a.token}`, "X-Firm-Id": a.firmId, "content-type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) })
+  )
+  return { status: res.status, text: await res.text() }
+}
 
 afterAll(async () => {
   if (!HAS_AUTH_FIRESTORE_EMULATORS) return
@@ -156,5 +166,69 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F42 R1 follow-up: the Next routes"
     expect(after.text).not.toContain("OF-GONE")
     expect(after.text).toContain("OF-LIVE")
     expect(after.text).toContain("NO-DOCUMENTS")
+  }, TIMEOUT)
+
+  it("FA-F42-R1-001: a same-key replay of a compose answered 200 before the tombstone is refused 403 matter_deleted after it (F02 path)", async () => {
+    const key = randomUUID()
+    const body = { action: "compose", actorId: partner.uid, matterId: deleted, templateId: getDocumentTypes()[0]!.id, title: TITLE, body: `${TITLE} body text`, classification: "internal", citedJudgmentIds: [], temporalCitations: [] }
+    const first = await post(draftsPost, partner, "/api/d4/drafts", body, key)
+    expect(first.status).toBeLessThan(300)
+    // Control: before the tombstone the key replays (reused).
+    const again = await post(draftsPost, partner, "/api/d4/drafts", body, key)
+    expect(again.status).toBeLessThan(300)
+    expect(again.text).toContain('"reused":true')
+    await tombstone(partner.firmId, deleted)
+    const fresh = await post(draftsPost, partner, "/api/d4/drafts", body, randomUUID())
+    const replay = await post(draftsPost, partner, "/api/d4/drafts", body, key)
+    expect(fresh.status).toBe(403)
+    expect(replay.status).toBe(403)
+    expect(replay.text).toContain("matter_deleted")
+    expect(replay.text).not.toContain(TITLE)
+  }, TIMEOUT)
+})
+
+describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F42 R1 follow-up: the Next durable idempotency store on its own (the core without the F02 frame)", () => {
+  // The local insecure-dev mode (tests/setup/auth-mode.ts) with Firestore persistence and no bearer: the core runs
+  // directly, so its own durable store (platform/http/durableIdempotency.ts) answers the replay.
+  const savedMode = process.env.SIKANDER_PERSISTENCE_MODE
+  let matterId = ""
+  const keys: string[] = []
+
+  beforeEach(async () => {
+    process.env.GCLOUD_PROJECT ??= "demo-sikander"
+    process.env.FIREBASE_PROJECT_ID ??= process.env.GCLOUD_PROJECT
+    restartAll()
+    process.env.SIKANDER_PERSISTENCE_MODE = "firestore"
+    await seedFirmARuntimeRecords()
+    matterId = adminDb().collection("matters").doc().id
+    await put("matters", matterId, { id: matterId, firmId: "firmA", clientId: "client_a", title: TITLE, courtId: "SHC", caseNumber: null, caseNumberStatus: "pending", status: "live", classification: "internal" })
+    await put("matter_members", `${matterId}_partner_a`, { matterId, userId: "partner_a", firmId: "firmA" })
+  }, TIMEOUT)
+
+  afterEach(async () => {
+    if (savedMode === undefined) delete process.env.SIKANDER_PERSISTENCE_MODE
+    else process.env.SIKANDER_PERSISTENCE_MODE = savedMode
+    restartAll()
+    for (const c of ["drafts", "draft_versions", "draft_gate_results"]) {
+      const snap = await adminDb().collection(c).where("matterId", "==", matterId).get()
+      await Promise.all(snap.docs.map((d) => d.ref.delete()))
+    }
+  }, TIMEOUT)
+
+  it("FA-F42-R1-001: the core's own replay of a stored compose is refused 403 matter_deleted once the matter is tombstoned", async () => {
+    const key = randomUUID()
+    keys.push(key)
+    const body = { action: "compose", actorId: "partner_a", matterId, templateId: getDocumentTypes()[0]!.id, title: TITLE, body: `${TITLE} body text`, classification: "internal", citedJudgmentIds: [], temporalCitations: [] }
+    const send = () => draftsPost(new Request("http://127.0.0.1/api/d4/drafts", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) }))
+    const first = await send()
+    expect(first.status).toBeLessThan(300)
+    const again = await send()
+    expect(((await again.json()) as { reused?: boolean }).reused).toBe(true)
+    await tombstone("firmA", matterId)
+    const replay = await send()
+    const text = await replay.text()
+    expect(replay.status).toBe(403)
+    expect(text).toContain("matter_deleted")
+    expect(text).not.toContain(TITLE)
   }, TIMEOUT)
 })

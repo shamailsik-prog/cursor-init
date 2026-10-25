@@ -1,10 +1,12 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore"
+import { randomUUID } from "node:crypto"
+import { FieldValue, Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests } from "../src/d4/authority"
+import { ROUTES, createRouter } from "../src/http/router"
 import { firmConfigRef } from "../src/p1/config"
 import { p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
@@ -12,7 +14,7 @@ import { setP1TransportForTests } from "../src/p1/transport"
 import { retentionTestSeam, type RetentionPolicy } from "../src/retention/config"
 import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi } from "./api"
-import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
 import { deleteFirmScopedData } from "./firmCleanup"
 import { FakeClock, testDeps } from "./jobs"
 
@@ -435,5 +437,88 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-007: the trace of a P1 call in flight at 
     expect(summary).toMatchObject({ count: 1, lateIds: 1, status: "pending_operator" })
     // The answer was refused at its publication: no committee output names the deleted matter.
     expect((await adminDb().collection("committee_outputs").where("firmId", "==", f.firmId).get()).size).toBe(0)
+  })
+})
+
+/** A POST through the router with a fixed Idempotency-Key (FA-F42-R1-001: to replay it). */
+async function postWithKey(path: string, m: Member, firmId: string, body: Record<string, unknown>, key: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { res, out } = mockRes()
+  await createRouter(ROUTES)(
+    {
+      method: "POST",
+      path,
+      headers: { authorization: `Bearer ${m.token}`, "x-firm-id": firmId, "content-type": "application/json", "idempotency-key": key, "x-forwarded-for": `198.18.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}` },
+      body,
+      query: {},
+      ip: "127.0.0.1",
+    } as never,
+    res as never
+  )
+  return { status: out.status as number, body: (out.body ?? {}) as Record<string, unknown> }
+}
+
+const CREATE_DRAFT = "/api/d4/drafting/createDraft"
+const draftBody = (f: Firm) => ({ matterId: f.matterId, documentTypeId: "constitutional_petition_199", title: TITLE, body: "IN THE HIGH COURT. F42R1 replay body." })
+const idempotencyRecord = async (firmId: string, key: string) => (await adminDb().collection("idempotency_keys").doc(`${firmId}_${key.toLowerCase()}`).get()).data()
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-001: a stored answer is not replayed for a deleted matter", () => {
+  it("createDraft: a same-key replay after the approval is refused 403 matter_deleted, as a fresh call is; before it, it replays", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const key = randomUUID()
+    const first = await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)
+    expect(first.status).toBe(200)
+    // Control: before the tombstone the key replays its stored answer.
+    const again = await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)
+    expect(again).toMatchObject({ status: 200, body: { reused: true } })
+    // The record names the matter its operation touched.
+    expect((await idempotencyRecord(f.firmId, key))?.matterIds).toEqual([f.matterId])
+    await requestAndApprove(f)
+    const fresh = await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), randomUUID())
+    expect(`${fresh.status} ${JSON.stringify(fresh.body)}`).toBe('403 {"error":{"code":"matter_deleted"}}')
+    const denies = async () =>
+      (await adminDb().collection("audit_log").where("action", "==", "draft.create").where("actorId", "==", f.P.uid).get()).docs
+        .map((d) => d.data())
+        .filter((r) => r.decision === "deny" && r.reason === "matter_deleted")
+    const beforeReplay = (await denies()).length
+    const replay = await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)
+    expect(`${replay.status} ${JSON.stringify(replay.body)}`).toBe('403 {"error":{"code":"matter_deleted"}}')
+    expect(JSON.stringify(replay.body)).not.toContain(TITLE)
+    // The refused replay is audited as a deny like every other idempotency refusal (spec R21), naming no matter content.
+    const afterReplay = await denies()
+    expect(afterReplay).toHaveLength(beforeReplay + 1)
+    expect(afterReplay.map((r) => r.firmId)).toContain(f.firmId)
+    expect(JSON.stringify(afterReplay)).not.toContain(TITLE)
+    // Nothing was rewritten: the record keeps its answer until its TTL deletes it.
+    expect((await idempotencyRecord(f.firmId, key))?.status).toBe("done")
+  })
+
+  it("a record stored before this change (no matter list) is judged by the matter ids in its stored answer", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const key = randomUUID()
+    expect((await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)).status).toBe(200)
+    await adminDb().collection("idempotency_keys").doc(`${f.firmId}_${key}`).update({ matterIds: FieldValue.delete(), matterIdsTruncated: FieldValue.delete() })
+    await requestAndApprove(f)
+    expect((await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)).status).toBe(403)
+  })
+
+  it("a record whose matter list was cut short never replays (fail closed); a retention route's answer still replays", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const key = randomUUID()
+    expect((await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)).status).toBe(200)
+    await adminDb().collection("idempotency_keys").doc(`${f.firmId}_${key}`).update({ matterIdsTruncated: true })
+    const cut = await postWithKey(CREATE_DRAFT, f.P, f.firmId, draftBody(f), key)
+    expect(`${cut.status} ${(cut.body.error as { code?: string } | undefined)?.code}`).toBe("409 idempotency_replay_unavailable")
+    const unavailable = await adminDb().collection("audit_log").where("action", "==", "draft.create").where("actorId", "==", f.P.uid).where("reason", "==", "idempotency_replay_unavailable").get()
+    expect(unavailable.docs.map((d) => d.data().decision)).toEqual(["deny"])
+    // Firm administration about the deletion itself names no matter in a permission check: its answer replays.
+    const reqKey = randomUUID()
+    const requested = await postWithKey("/api/platform/retention/requestMatterDeletion", f.P, f.firmId, { matterId: f.matterId, reasonCode: "client_instruction" }, reqKey)
+    expect(requested.status).toBe(200)
+    await send(approveApi, f, f.Q, { requestId: (requested.body as { requestId: string }).requestId })
+    const replayed = await postWithKey("/api/platform/retention/requestMatterDeletion", f.P, f.firmId, { matterId: f.matterId, reasonCode: "client_instruction" }, reqKey)
+    expect(replayed).toMatchObject({ status: 200, body: { reused: true, status: "pending_approval" } })
   })
 })

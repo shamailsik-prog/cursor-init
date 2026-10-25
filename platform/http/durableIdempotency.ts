@@ -20,6 +20,8 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { AUDIT_OUTBOX_COLLECTION } from "@/platform/persistence/auditOutboxContract"
+import { matterIdsToCheck, recordedMatterFields } from "@/platform/retention/operationMatters"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import type { FenceTransaction, OutboxStage, WriteFence } from "@/platform/persistence/firestoreDbModular"
 
 export const KEYS_COLLECTION = "idempotency_keys"
@@ -90,9 +92,22 @@ export type DurableBegin =
   | { kind: "terminal"; operationId: string }
   | { kind: "reused" }
   | { kind: "in_progress" }
+  | { kind: "matter_deleted" }
 
 /** How an attempt ended: completed with its payload, or not (with the refusal the route answered, when it is storable). */
-export type SettleInput = { completed: true; json: string | null } | { completed: false; refusal?: { status: number; json: string } }
+export type SettleInput =
+  | { completed: true; json: string | null; matters?: readonly string[] }
+  | { completed: false; refusal?: { status: number; json: string }; matters?: readonly string[] }
+
+/** The parsed body of a stored JSON answer, for its matter ids (null when it is not JSON). */
+function bodyOf(json: string | null | undefined): unknown {
+  if (typeof json !== "string") return null
+  try {
+    return JSON.parse(json) as unknown
+  } catch {
+    return null
+  }
+}
 
 /**
  * How a settle ended: the completed answer `stored`; the route's refusal kept after an effect (`refused`); the terminal
@@ -189,7 +204,19 @@ export class DurableIdempotencyStore {
       })
       if (record && live) {
         if (record.uid !== scope.userId || record.route !== scope.route || record.requestHash !== scope.requestHash) return { kind: "reused" }
-        if (record.status === "done") return answerOf(record.response)
+        if (record.status === "done") {
+          const answer = answerOf(record.response)
+          if (answer.kind !== "replay" && answer.kind !== "refusal") return answer
+          // Audit F42 (FA-F42-R1-001, spec R21): a stored answer of a matter deleted since is refused, as a fresh call is;
+          // one whose matter list was cut short is never replayed (fail closed).
+          const { ids, truncated } = matterIdsToCheck(record, answer.body)
+          if (truncated) return { kind: "unavailable" }
+          for (const id of ids) {
+            const tomb = (await tx.get(this.db.collection(MATTER_TOMBSTONES).doc(id))) as Snap
+            if (tomb.exists && isTombstoneFor(tomb.data(), scope.firmId, id)) return { kind: "matter_deleted" }
+          }
+          return answer
+        }
         if (record.status !== "in_progress") return { kind: "in_progress" }
         if (record.released !== true && now - millisOf(record.claimedAt) <= this.limits.leaseMs) return { kind: "in_progress" }
         // A lapsed lease, or a taken-over attempt that ended without an effect (`released`): take the claim over,
@@ -282,7 +309,7 @@ export class DurableIdempotencyStore {
       if (!record || record.claimId !== claim.claimId || record.status !== "in_progress") return "lost"
       if (outcome.completed) {
         const response = outcome.json === null ? { status: 200, omitted: true } : { status: 200, json: outcome.json }
-        tx.set(refs.record, { ...withoutReleased(record), status: "done", response, answeredAt: nowDate })
+        tx.set(refs.record, { ...withoutReleased(record), status: "done", response, ...recordedMatterFields(outcome.matters ?? [], bodyOf(outcome.json)), answeredAt: nowDate })
         return "stored"
       }
       if (markerCounts(markerSnap, nowDate.getTime())) {
@@ -292,7 +319,7 @@ export class DurableIdempotencyStore {
           // The route refused after a write of its own (for example a recomputed digest): its refusal is the answer,
           // kept with the operation it belongs to, so every replay can say the effect committed (spec ruling 15).
           const response = { status: outcome.refusal.status, json: outcome.refusal.json, operationId }
-          tx.set(refs.record, { ...withoutReleased(record), status: "done", response, answeredAt: nowDate })
+          tx.set(refs.record, { ...withoutReleased(record), status: "done", response, ...recordedMatterFields(outcome.matters ?? [], bodyOf(outcome.refusal.json)), answeredAt: nowDate })
           return "refused"
         }
         tx.set(refs.record, { ...withoutReleased(record), status: "done", response: terminalResponse(operationId), answeredAt: nowDate })

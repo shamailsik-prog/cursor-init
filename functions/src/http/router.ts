@@ -42,7 +42,9 @@ import { createRouter, type Route } from "./routerRuntime"
  * its per-minute limit, then 429) → per-user rate limit (429 + Retry-After) →
  * idempotency for POST/PUT (400 / 409 / 422, each audited as a deny; a replay
  * is not audited, nor is 409 idempotency_effect_committed, the stored answer of
- * an operation whose effect committed: audit F09) → handler.
+ * an operation whose effect committed: audit F09; a replay refused because its
+ * matter was deleted, 403 matter_deleted or 409 idempotency_replay_unavailable,
+ * is audited as a deny: audit F42 R21) → handler.
  *
  * Responses: 2xx → the operation's JSON result; errors → `{ error: { code } }`.
  * A CommittedEffectError (a Next core wrote, then returned 4xx) also sends

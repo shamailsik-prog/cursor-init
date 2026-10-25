@@ -437,6 +437,11 @@ under its TTL).
   matter (`openMatter`, whose check names no matter yet) and records stored before this change. Both lists are stored
   on the record as `matterIds` (at most 50; more is `matterIdsTruncated: true`, and such a record never replays: 409
   `idempotency_replay_unavailable`, fail closed).
+- *Audit.* The Functions router audits a refused replay (`matter_deleted`, `idempotency_replay_unavailable`) as a deny
+  row, as it audits every other idempotency refusal; the row names the action, actor and firm, never the matter's
+  content. A Next route in production runs inside the F02 frame, whose Functions claim refuses (and audits) first. The
+  Next core's own durable store, reached only without the frame (local insecure-dev), audits none of its idempotency
+  refusals, and this one follows that rule.
 - *Where.* Functions `withIdempotency` (every Functions route, the nine F02 POST routes included) and the Next durable
   store (`DurableIdempotencyStore.begin`, every Next route that calls `beginIdempotentRequest`). The Next memory mode
   has no tombstones (R15).
