@@ -32,7 +32,7 @@ const NINE_PROMOTED_VIEWS = [
 ]
 const RESEARCH_READABLE = [
   "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_treatment", "v_research_embedding",
-  "v_research_judgment",
+  "v_research_judgment", "corpus_research_term", "corpus_research_term_df",
 ]
 const AUTHORITY_READABLE = [
   "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_section_version", "v_authority_treatment",
@@ -215,7 +215,7 @@ describe.runIf(FA_D5_003_SUITE)("FA-DATA-003 and the research reader on real Pos
   })
 
   describe("the research reader role", () => {
-    it("corpus_research_reader logs in as nothing, holds no attribute or membership, and reads exactly six relations", async () => {
+    it("corpus_research_reader logs in as nothing, holds no attribute or membership, and reads exactly eight relations", async () => {
       const role = await db.admin.query(
         `SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit,
                 (SELECT count(*)::int FROM pg_auth_members m WHERE m.member = r.oid) AS memberships,

@@ -36,7 +36,11 @@ export default defineConfig({
       // SIKANDER_POSTGRES_URL or emulator fails the run instead of skipping it.
       ...(process.env.FA_D5_003_SUITE === "1"
         ? []
-        : ["tests/fa-d5-003.research-corpus.e2e.firestore.test.ts", "tests/fa-d5-003.corpus-grants.pg.test.ts"]),
+        : [
+            "tests/fa-d5-003.research-corpus.e2e.firestore.test.ts",
+            "tests/fa-d5-003.corpus-grants.pg.test.ts",
+            "tests/fa-d5-003.research-scale.pg.test.ts",
+          ]),
       // The S3 vault suites need MinIO (and the e2e also the Auth and Firestore emulators); they run
       // through `npm run test:document-object-s3`.
       ...(process.env.SIKANDER_DOCUMENT_OBJECT_S3_ENDPOINT

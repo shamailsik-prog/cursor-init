@@ -623,7 +623,7 @@ jobs:
         run: |
           set -euo pipefail
           for pass in 1 2; do
-            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql postgres/ddl/005_research_reader.sql; do
+            for f in postgres/ddl/001_corpus_contract.sql postgres/ddl/003_corpus_publication.sql postgres/ddl/004_authority_read_views.sql postgres/ddl/005_research_reader.sql postgres/ddl/006_research_terms.sql; do
               docker exec -i "${{ job.services.postgres.id }}" \
                 psql -v ON_ERROR_STOP=1 --no-psqlrc -q -U postgres -d corpus_ci < "$f"
             done

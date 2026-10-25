@@ -29,6 +29,7 @@ export const ANNEX_A_DDL: readonly string[] = [
   "003_corpus_publication.sql",
   "004_authority_read_views.sql",
   "005_research_reader.sql",
+  "006_research_terms.sql",
 ]
 
 export const LIVE_MODEL = "text-embedding-3-small"
@@ -58,6 +59,8 @@ export type ResearchDb = {
   admin: pg.Client
   /** The research login's URL (loopback plaintext, as non-production allows). */
   researchUrl: string
+  /** The writer login's URL (corpus_writer member; for term refresh and publication). */
+  writerUrl: string
   researchUser: string
   writerUser: string
   urlAs(user?: string, password?: string): string
@@ -171,7 +174,18 @@ export async function createResearchDb(suite: string): Promise<ResearchDb> {
     }
   }
 
-  return { name, admin, researchUrl: urlAs(researchUser, researchPassword), researchUser, writerUser, urlAs, createLogin, publish, drop }
+  return {
+    name,
+    admin,
+    researchUrl: urlAs(researchUser, researchPassword),
+    writerUrl,
+    researchUser,
+    writerUser,
+    urlAs,
+    createLogin,
+    publish,
+    drop,
+  }
 }
 
 /** Judgment ids by item key from a CLI summary. */
@@ -223,6 +237,74 @@ export async function insertUnpublishedJudgment(
 }
 
 /** One vector per judgment id under `model` (the superuser stands in for the corpus side's embedding writer). */
+/** Rebuild the research term index (writer session; needs 006 applied). */
+export async function refreshResearchTerms(writerUrl: string): Promise<void> {
+  const python = process.env.SIKANDER_CORPUS_PYTHON?.trim() || "python3"
+  const dsn = new URL(writerUrl)
+  dsn.protocol = "postgresql+asyncpg:"
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      python,
+      [
+        "-c",
+        `import asyncio
+from sqlalchemy import text
+from scraper.database import engine
+from scraper.publication.research_terms import refresh_research_terms
+async def main():
+  async with engine.begin() as conn:
+    await conn.execute(text("SET LOCAL ROLE corpus_writer"))
+    await refresh_research_terms(conn)
+asyncio.run(main())`,
+      ],
+      {
+        cwd: CORPUS_SERVICE,
+        env: { ...process.env, DATABASE_URL: dsn.toString(), REDIS_URL: "", ENVIRONMENT: "development", SKIP_DIR_CREATE: "1" },
+        timeout: 600_000,
+      },
+      (err, _stdout, stderr) => (err ? reject(new Error(String(stderr).slice(-2000))) : resolve())
+    )
+  })
+}
+
+/**
+ * Promoted, visible judgments for scale tests (superuser; one shared finished publication). Each title embeds
+ * `marker` and a unique ordinal so keyword search can target one row among 25k+.
+ */
+export async function bulkInsertVisibleJudgments(admin: pg.Client, count: number, marker: string): Promise<void> {
+  const pub = await admin.query(
+    `INSERT INTO corpus_publication (id, batch_key, input_sha256, source_kind, actor_id, publisher_session_user, finished_at)
+     VALUES ($1, $2, $3, 'curated', 'fa-d5-003-bulk', current_user, now()) RETURNING id`,
+    [randomUUID(), `curated/fa-d5-003-bulk-${randomBytes(4).toString("hex")}`, "b".repeat(64)]
+  )
+  const publicationId = pub.rows[0].id as string
+  const source = await admin.query(
+    `INSERT INTO source_provenance (source_name, source_url, fetched_at, content_hash, extraction_method, extractor_version)
+     VALUES ('fa-d5-003-bulk', 'https://fa-d5-003.example.invalid/bulk', '2099-03-04T05:06:07Z', $1, 'manual', 'fa-d5-003-fixture-1')
+     RETURNING id`,
+    ["c".repeat(64)]
+  )
+  const sourceId = source.rows[0].id as string
+  const chunk = 2000
+  for (let start = 0; start < count; start += chunk) {
+    const end = Math.min(start + chunk, count) - 1
+    await admin.query(
+      `WITH ins AS (
+         INSERT INTO judgment (case_title, bench_type, classification, source_id, review_status, publication_id)
+         SELECT 'Synthetic ' || $1 || ' judgment ordinal ' || g, 'single', 'public', $2, 'promoted', $3
+           FROM generate_series($4::int, $5::int) AS g
+         RETURNING id, case_title
+       )
+       INSERT INTO citation (judgment_id, citation_text, source_id, review_status, publication_id)
+       SELECT id,
+              'PLD 2099 SC ' || substring(case_title from 'ordinal ([0-9]+)$'),
+              $2, 'promoted', $3
+         FROM ins`,
+      [marker, sourceId, publicationId, start, end]
+    )
+  }
+}
+
 export async function insertEmbeddings(admin: pg.Client, ids: readonly string[], model = LIVE_MODEL, rank = 0): Promise<void> {
   let i = 0
   for (const id of ids) {

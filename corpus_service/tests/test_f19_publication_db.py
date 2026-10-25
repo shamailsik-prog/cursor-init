@@ -192,7 +192,7 @@ def test_f19_contract_inventory_lists_every_annex_a_relation(corpus_db):
     inventory = [r[0] for r in admin_fetch(corpus_db, "SELECT CAST(r AS text) FROM corpus_contract_relations() AS r")]
     # 003's 29 relations, 004's four authority read views (audit F05) and 005's two research views (audit
     # FA-D5-003); each of 004 and 005 re-defines the function.
-    assert len(inventory) == 35 and len(set(inventory)) == 35
+    assert len(inventory) == 37 and len(set(inventory)) == 37
     assert {"v_authority_citation", "v_authority_treatment", "v_authority_section_version",
             "v_authority_pending_adverse", "v_research_judgment", "v_research_embedding"} <= set(inventory)
     assert relations == set(inventory)
@@ -969,7 +969,7 @@ def test_f19_migrate_as_owner_succeeds_after_annex_a_and_leaves_it_with_the_supe
         "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c "
         "WHERE c.oid IN (SELECT r FROM corpus_contract_relations() AS r)",
     )
-    assert len(owners) == 35  # 003's 29, 004's four authority read views (F05) and 005's two research views (FA-D5-003)
+    assert len(owners) == 37  # 003's 29, 004's four authority views (F05), 005's two research views, 006's two term tables
     assert {row[1] for row in owners} == {admin_user}
     app_tables = admin_fetch(corpus_db, "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'scraper_staging'")
     assert app_tables == [(owner,)]

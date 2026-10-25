@@ -78,6 +78,9 @@ export type ResearchDocument = {
 /** corpus_metadata as research reads it. */
 export type ResearchCorpusMeta = { embeddingModel: string; embeddingDim: string }
 
+/** Whole-corpus inverse document frequency (FA-D5-003-R1-001): document frequencies from the published term index. */
+export type ResearchWholeCorpusIdf = { judgmentCount: number; docFreq: ReadonlyMap<string, number> }
+
 /** A corpus read model in one snapshot (spec R6-R8). */
 export type ResearchCorpus = ResearchCorpusMeta & {
   documents: readonly ResearchDocument[]
@@ -87,13 +90,19 @@ export type ResearchCorpus = ResearchCorpusMeta & {
   vectors: ReadonlyMap<string, readonly number[]> | null
   /** The Module 33 verdict of each judgment id asked about. */
   verdicts(ids: readonly string[]): ReadonlyMap<string, CitationVerdict>
+  /** When set, keyword IDF uses these corpus-wide counts instead of the loaded document sample (R6 scale). */
+  wholeCorpusIdf?: ResearchWholeCorpusIdf
 }
 
 /** Called once per load with the snapshot's metadata: validates a query vector, and says whether vectors are needed. */
 export type ResearchLoadPlan = (meta: ResearchCorpusMeta) => { vectors: boolean }
 
 /** Where research reads its corpus: one snapshot per load. A failure to read it throws CorpusUnavailableError. */
-export type ResearchSource = { load(plan: ResearchLoadPlan): Promise<ResearchCorpus> }
+export type ResearchSource = {
+  load(plan: ResearchLoadPlan): Promise<ResearchCorpus>
+  /** Indexed Postgres path: candidates, whole-corpus IDF, treatments for the top k only (FA-D5-003-R1-001). */
+  searchPrepared?(prepared: PreparedResearchQuery): Promise<ResearchResult>
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -268,11 +277,14 @@ export function rankResearchCorpus(corpus: ResearchCorpus, query: PreparedResear
   const mode: ResearchResult["mode"] = terms && unitQuery ? "blended" : terms ? "keyword" : "semantic"
   const documents = corpus.documents
   const docTerms = documents.map(termsOfDocument)
+  const corpusN = corpus.wholeCorpusIdf?.judgmentCount ?? documents.length
 
   // BM25 idf over the candidate judgments: always positive, so a term absent from the corpus still counts.
   const idf = (terms ?? []).map((term) => {
-    const df = docTerms.reduce((n, set) => n + (set.has(term) ? 1 : 0), 0)
-    return Math.log(1 + (documents.length - df + 0.5) / (df + 0.5))
+    const df =
+      corpus.wholeCorpusIdf?.docFreq.get(term) ??
+      docTerms.reduce((n, set) => n + (set.has(term) ? 1 : 0), 0)
+    return Math.log(1 + (corpusN - df + 0.5) / (df + 0.5))
   })
 
   // Only a judgment is a hit (R1); the first live-model row of each entity is its vector.
@@ -391,6 +403,9 @@ export function searchCorpus(store: SpineStore, query: ResearchQuery): ResearchR
 export async function searchResearch(source: ResearchSource, query: unknown): Promise<ResearchResult> {
   const prepared = prepareResearchQuery(query)
   const vector: { unit: number[] | null; model: string | null } = { unit: null, model: null }
+  if (prepared.text !== null && source.searchPrepared) {
+    return source.searchPrepared(prepared)
+  }
   const corpus = await source.load((meta) => {
     if (prepared.embedding !== undefined) {
       vector.unit = parseResearchEmbedding(meta.embeddingModel, prepared.embedding)
