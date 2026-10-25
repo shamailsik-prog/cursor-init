@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { withF02Authority } from "@/platform/authority/f02Gate"
 import { snapshotF02CoresForTests } from "@/platform/authority/f02Registry"
-import { F02_MATTERS } from "@/platform/authority/f02Routes"
+import { F02_MATTERS, F02_ROUTE_PATHS, type F02RoutePath } from "@/platform/authority/f02Routes"
 import type { HandlerSession } from "@/platform/http/withSession"
 
 const session: HandlerSession = {
@@ -21,8 +21,8 @@ const session: HandlerSession = {
   mode: "firebase",
 }
 
-function privilegedWrite(): Request {
-  return new Request("http://127.0.0.1/api/d1/matters", {
+function privilegedWrite(path: F02RoutePath = F02_MATTERS): Request {
+  return new Request(`http://127.0.0.1${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -31,6 +31,10 @@ function privilegedWrite(): Request {
       title: "sealed advice",
     }),
   })
+}
+
+function readWithoutBearer(path: F02RoutePath): Request {
+  return new Request(`http://127.0.0.1${path}?userId=user-1&limit=1&cursor=0`, { method: "GET" })
 }
 
 describe("F02 privileged writes without a bearer", () => {
@@ -72,6 +76,38 @@ describe("F02 privileged writes without a bearer", () => {
     const res = await handler(privilegedWrite(), { ...session, mode: "insecure-dev" })
     expect(res.status).toBe(503)
     expect(await res.json()).toMatchObject({ code: "AUTH_MISCONFIGURED" })
+    expect(calls).toBe(0)
+  })
+
+  it.each(F02_ROUTE_PATHS)("POST %s does not enter the core without a bearer in firebase production", async (path) => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    let calls = 0
+    restore = snapshotF02CoresForTests()
+    const handler = withF02Authority(path, "POST", async () => {
+      calls += 1
+      return Response.json({ wrote: true })
+    })
+    const res = await handler(privilegedWrite(path), session)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toMatchObject({ code: "AUTH_REQUIRED" })
+    expect(calls).toBe(0)
+  })
+
+  it.each(F02_ROUTE_PATHS)("GET %s does not enter the core without a bearer in firebase production", async (path) => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("SIKANDER_AUTH_MODE", "firebase")
+    vi.stubEnv("SIKANDER_PERSISTENCE_MODE", "firestore")
+    let calls = 0
+    restore = snapshotF02CoresForTests()
+    const handler = withF02Authority(path, "GET", async () => {
+      calls += 1
+      return Response.json({ items: [] })
+    })
+    const res = await handler(readWithoutBearer(path), session)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toMatchObject({ code: "AUTH_REQUIRED" })
     expect(calls).toBe(0)
   })
 

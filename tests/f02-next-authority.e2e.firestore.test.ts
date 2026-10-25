@@ -10,12 +10,12 @@
 import { randomUUID } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GET as mattersGet, POST as mattersPost } from "@/app/api/d1/matters/route"
-import { GET as documentsGet } from "@/app/api/d1/documents/route"
+import { GET as documentsGet, POST as documentsPost } from "@/app/api/d1/documents/route"
 import { GET as workflowGet } from "@/app/api/d1/document-workflow/route"
 import { GET as reportingGet } from "@/app/api/d1/reporting/route"
-import { GET as courtOpsGet } from "@/app/api/d2/court-ops/route"
+import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as opsReportingGet } from "@/app/api/d2/ops-reporting/route"
-import { GET as draftsGet } from "@/app/api/d4/drafts/route"
+import { GET as draftsGet, POST as draftsPost } from "@/app/api/d4/drafts/route"
 import { GET as filingsGet } from "@/app/api/d4/filings/route"
 import { GET as tenancyGet } from "@/app/api/p5/tenancy/route"
 import { registerF02Core, snapshotF02CoresForTests } from "@/platform/authority/f02Registry"
@@ -232,6 +232,56 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("F02: Next domain routes use the Fu
     ["tenancy", (actor: Actor) => tenancyGet(new Request(`http://127.0.0.1/api/p5/tenancy?view=memberships&firmId=${actor.firmId}&limit=10&cursor=0`, { headers: authHeaders(actor) }))],
   ] as const)("%s GET is authorised on the functions path", async (_name, call) => {
     const res = await call(actor)
+    expect(res.status).toBeLessThan(500)
+    expect(res.headers.get(AUTHORITY_HEADER)).toBe("functions")
+  }, E2E_TIMEOUT_MS)
+
+  it.each([
+    [
+      "documents",
+      () =>
+        documentsPost(
+          new Request("http://127.0.0.1/api/d1/documents", {
+            method: "POST",
+            headers: authHeaders(actor, {
+              "content-type": "application/json",
+              "idempotency-key": randomUUID(),
+            }),
+            body: JSON.stringify({}),
+          })
+        ),
+    ],
+    [
+      "drafts",
+      () =>
+        draftsPost(
+          new Request("http://127.0.0.1/api/d4/drafts", {
+            method: "POST",
+            headers: authHeaders(actor, {
+              "content-type": "application/json",
+              "idempotency-key": randomUUID(),
+            }),
+            body: JSON.stringify({}),
+          })
+        ),
+    ],
+    [
+      "court-ops",
+      () =>
+        courtOpsPost(
+          new Request("http://127.0.0.1/api/d2/court-ops", {
+            method: "POST",
+            headers: authHeaders(actor, {
+              "content-type": "application/json",
+              "idempotency-key": randomUUID(),
+            }),
+            body: JSON.stringify({}),
+          })
+        ),
+    ],
+  ] as const)("%s POST is authorised on the functions path before the core runs", async (_name, call) => {
+    const res = await call()
+    expect(res.status).toBeGreaterThanOrEqual(400)
     expect(res.status).toBeLessThan(500)
     expect(res.headers.get(AUTHORITY_HEADER)).toBe("functions")
   }, E2E_TIMEOUT_MS)
