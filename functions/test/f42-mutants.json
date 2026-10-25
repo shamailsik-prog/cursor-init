@@ -1,0 +1,462 @@
+[
+  {
+    "id": "T1-table-ignores-deleted",
+    "area": "tombstone",
+    "file": "platform/p5/permissionDecision.ts",
+    "old": "if (matter.deleted === true) return deny(\"matter-deleted\")",
+    "new": "if (false) return deny(\"matter-deleted\")",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the shared table must refuse a deleted matter"
+  },
+  {
+    "id": "T2-functions-reads-no-tombstone",
+    "area": "tombstone",
+    "file": "functions/src/p5/permission.ts",
+    "old": "const deleted = isTombstoneFor(tombSnap.data(), caller.firmId, matterId)",
+    "new": "const deleted = false",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the Functions permission check must read the tombstone"
+  },
+  {
+    "id": "T3-tombstone-ignores-firm",
+    "area": "tombstone",
+    "file": "platform/retention/tombstone.ts",
+    "old": "row.firmId === firmId && row.matterId === matterId",
+    "new": "row.matterId === matterId",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "another firm's tombstone must refuse nothing"
+  },
+  {
+    "id": "T4-next-lists-keep-tombstoned",
+    "area": "tombstone",
+    "file": "platform/persistence/matterTombstones.ts",
+    "old": "return rows.filter((_row, i) => keys[i] === null || !dead.has(keys[i] as string))",
+    "new": "return rows",
+    "tests": [
+      "tests/f42-tombstone-next.e2e.firestore.test.ts"
+    ],
+    "runner": "root",
+    "why": "Next lists must drop rows of a tombstoned matter"
+  },
+  {
+    "id": "T5-next-getbyid-keeps-tombstoned",
+    "area": "tombstone",
+    "file": "platform/persistence/firestoreSpineRepositories.ts",
+    "old": "if (await rowIsTombstoned(db, collectionName, id, data, firm)) return null",
+    "new": "if (false) return null",
+    "tests": [
+      "tests/f42-tombstone-next.e2e.firestore.test.ts"
+    ],
+    "runner": "root",
+    "why": "a Next firm-scoped get must read a tombstoned matter's row as absent"
+  },
+  {
+    "id": "T6-worker-runs-deleted-matter-job",
+    "area": "tombstone",
+    "file": "functions/src/p2/worker.ts",
+    "old": "if (row.matterId !== null && (await matterTombstoned(row.firmId, row.matterId)))",
+    "new": "if (false)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "no P2 job of a tombstoned matter may run"
+  },
+  {
+    "id": "T7-listmatters-keeps-tombstoned",
+    "area": "tombstone",
+    "file": "functions/src/d1/matter/ops.ts",
+    "old": "docs.filter((d) => !deleted.has(d.id))",
+    "new": "docs",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "Functions listMatters must omit a tombstoned matter"
+  },
+  {
+    "id": "T8-next-document-get-keeps-tombstoned",
+    "area": "tombstone",
+    "file": "platform/persistence/firestoreSpineRepositories.ts",
+    "old": "        if (await rowIsTombstoned(db, \"documents\", id, data, firm)) return null\n",
+    "new": "",
+    "tests": [
+      "tests/f42-tombstone-next.e2e.firestore.test.ts"
+    ],
+    "runner": "root",
+    "why": "the Next documents.get (F13's direct read) must read a tombstoned matter's document as absent"
+  },
+  {
+    "id": "A1-finish-on-any-ack",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/acks.ts",
+    "old": "return expected.every((key) =>",
+    "new": "return expected.some((key) =>",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a request finishes only when every store has acknowledged"
+  },
+  {
+    "id": "A2-finish-without-completeness",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/acks.ts",
+    "old": "const finished = req.status === \"in_progress\" && isComplete(req.expected as unknown[], acked)",
+    "new": "const finished = req.status === \"in_progress\"",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the first acknowledgement must not finish the request"
+  },
+  {
+    "id": "A3-ack-despite-leftovers",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (left) throw new JobError(\"purge_incomplete\")",
+    "new": "if (false) throw new Error()",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a store is acknowledged only once no row of the matter is left in it"
+  },
+  {
+    "id": "A4-watch-filters-after-read",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/watch.ts",
+    "old": "    .where(\"alertedAt\", \"==\", null)\n",
+    "new": "",
+    "tests": [
+      "test/f42-retention-apply.e2e.emu.test.ts"
+    ],
+    "why": "a page of already-alerted halted requests must not hide a new overdue one from the unacknowledged-deletion alert"
+  },
+  {
+    "id": "A5-opik-reads-first-source-only",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/saga.ts",
+    "old": "  for (const src of k.sources) {\n",
+    "new": "  for (const src of k.sources.slice(0, 1)) {\n",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the Opik request must list the traces F34's decision records exported, not only the usage rows'"
+  },
+  {
+    "id": "A6-pending-export-not-requested",
+    "area": "acknowledgement",
+    "file": "infra/retention/inventory.json",
+    "old": "\"exportedValues\": [\"exported\", \"pending\"]",
+    "new": "\"exportedValues\": [\"exported\"]",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a decision record whose export is still pending may yet be exported: its trace id belongs in the request"
+  },
+  {
+    "id": "A7-watch-stamps-without-alert",
+    "area": "acknowledgement",
+    "file": "functions/src/retention/watch.ts",
+    "old": "        stageAlert(tx, prepared, nowMs)\n",
+    "new": "",
+    "tests": [
+      "test/f42-retention-apply.e2e.emu.test.ts"
+    ],
+    "why": "the watch must leave an F43 durable alert in the transaction that stamps the request alerted"
+  },
+  {
+    "id": "H1-matter-hold-ignored",
+    "area": "legal hold",
+    "file": "functions/src/retention/config.ts",
+    "old": "if (hold && hold.active === true && hold.firmId === firmId) return \"legal_hold_matter\"",
+    "new": "if (false) return \"legal_hold_matter\"",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a matter hold must refuse requests and approvals"
+  },
+  {
+    "id": "H2-policy-hold-ignored",
+    "area": "legal hold",
+    "file": "functions/src/retention/config.ts",
+    "old": "p.classes[ps.retentionClass]?.legalHold === true)",
+    "new": "false)",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the shipped policy's hold must refuse every deletion"
+  },
+  {
+    "id": "H3-saga-ignores-hold",
+    "area": "legal hold",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (hold && hold.firmId === firmId && hold.active === true) throw new JobError(\"legal_hold_active\", { permanent: true })",
+    "new": "if (false) throw new Error()",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a hold placed mid-saga must halt it"
+  },
+  {
+    "id": "H4-retention-ignores-class-hold",
+    "area": "legal hold",
+    "file": "functions/src/retention/apply.ts",
+    "old": "if (!cls || cls.legalHold || cls.periodDays === null",
+    "new": "if (!cls || cls.periodDays === null",
+    "tests": [
+      "test/f42-retention-apply.e2e.emu.test.ts"
+    ],
+    "why": "a class under legal hold ages nothing out"
+  },
+  {
+    "id": "Z1-retention-not-partner-only",
+    "area": "authorisation",
+    "file": "platform/p5/permissionDecision.ts",
+    "old": "if (isFirmAdminAction(action) || isRetentionAction(action)) {",
+    "new": "if (isFirmAdminAction(action)) {",
+    "tests": [
+      "test/f42-retention.units.test.ts",
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "retention actions are partner only"
+  },
+  {
+    "id": "Z2-requester-may-approve",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "if (req.requestedBy === caller.uid) throw new HttpError(403, \"second_partner_required\")",
+    "new": "if (false) throw new HttpError(403, \"second_partner_required\")",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the approval must come from a second partner"
+  },
+  {
+    "id": "Z3-clearance-inverted",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "rankOf(caller.clearanceLevel) < rankOf(label)",
+    "new": "rankOf(caller.clearanceLevel) > rankOf(label)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "the partner's clearance must reach the matter's label"
+  },
+  {
+    "id": "Z4-window-inverted",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "return nowMs - requestedAt > policy.deletion.approvalWindowHours * HOUR_MS",
+    "new": "return nowMs - requestedAt < policy.deletion.approvalWindowHours * HOUR_MS",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "an approval is accepted only within the window"
+  },
+  {
+    "id": "Z5-placer-may-release",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "if (hold.placedBy === caller.uid) throw new HttpError(403, \"second_partner_required\")",
+    "new": "if (false) throw new HttpError(403, \"second_partner_required\")",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts"
+    ],
+    "why": "a hold is released by a partner other than the one who placed it"
+  },
+  {
+    "id": "G1-uninventoried-passes",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "            if name not in inv[kind]:",
+    "new": "            if False:",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "an uninventoried store must fail"
+  },
+  {
+    "id": "G2-stale-passes",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "            if not pending:",
+    "new": "            if False:",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "a stale entry must fail"
+  },
+  {
+    "id": "G3-tests-scanned",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "    return name.endswith((\".test.ts\", \".test.tsx\", \".spec.ts\")) or name.endswith(\".d.ts\")",
+    "new": "    return name.endswith(\".d.ts\")",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "test files are not stores"
+  },
+  {
+    "id": "G4-helper-literal-missed",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "    re.compile(r\"\\(\\s*db\\s*,\\s*[\\\"']([a-z][a-z0-9_]*)[\\\"']\"),",
+    "new": "    re.compile(r\"(?!)\"),",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "a collection named through a (db, \"x\") helper call must be found"
+  },
+  {
+    "id": "G5-trace-source-not-field-keyed",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": " or (src.get(\"key\") or {}).get(\"kind\") != \"field\":",
+    "new": ":",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "an external store's sources must be field-keyed Firestore stores, or the saga cannot find the matter's copies"
+  },
+  {
+    "id": "G6-views-not-scanned",
+    "area": "inventory gate",
+    "file": "ci_gates/check_data_inventory.py",
+    "old": "for pattern in (DDL_TABLE_RE, DDL_VIEW_RE):",
+    "new": "for pattern in (DDL_TABLE_RE,):",
+    "tests": [
+      "ci_gates/test_check_data_inventory.py"
+    ],
+    "runner": "python",
+    "why": "a Postgres view is a relation of the store and must be inventoried (FA-D5-003's research views)"
+  },
+  {
+    "id": "C1-continuation-skips-finished-stores",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (finished.length > 0) await acknowledge(",
+    "new": "if (false) await acknowledge(",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "chunk budget after finishing a store"
+    ],
+    "why": "Codex P2 (saga.ts runPurge): a job that passes its budget must acknowledge the stores it finished"
+  },
+  {
+    "id": "C2-vault-not-carried",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "const rest = stores.filter((s, j) => j >= i || !purged(s.key)).map((s) => s.key)",
+    "new": "const rest = stores.filter((s, j) => j >= i && purged(s.key)).map((s) => s.key)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "chunk budget after finishing a store"
+    ],
+    "why": "the continuation must carry the vault lock, or the vault is never acknowledged"
+  },
+  {
+    "id": "C3-budget-ignores-recorded-steps",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "let chunks = await recordedSteps(jobId)",
+    "new": "let chunks = 0",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "retried after a crash late in its chunk budget"
+    ],
+    "why": "a retried purge job must count the steps earlier attempts recorded, or it passes P2's 50-step limit"
+  },
+  {
+    "id": "C4-continuation-part-saturates",
+    "area": "saga",
+    "file": "functions/src/retention/saga.ts",
+    "old": "return m ? `${m[1]}${Number(m[2]) + 1}` : `${part}c1`",
+    "new": "return `${part}c`.slice(0, 20)",
+    "tests": [
+      "test/f42-retention.units.test.ts"
+    ],
+    "why": "every continuation needs a new part, or its enqueue dedupes to an old job and the purge stops"
+  },
+  {
+    "id": "E1-trace-ids-cut-at-two-parts",
+    "area": "external",
+    "file": "functions/src/retention/saga.ts",
+    "old": "parts.forEach((traceIds, n) =>",
+    "new": "parts.slice(0, 2).forEach((traceIds, n) =>",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "more than 10,000 exported traces"
+    ],
+    "why": "Codex P2 (saga.ts external): every exported trace id is recorded, never only the first 10,000"
+  },
+  {
+    "id": "E2-part-size-unbounded",
+    "area": "external",
+    "file": "functions/src/retention/saga.ts",
+    "old": "if (part.length === TRACE_IDS_PER_PART || bytes + size > TRACE_PART_BYTES) {",
+    "new": "if (bytes + size > TRACE_PART_BYTES) {",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "more than 10,000 exported traces"
+    ],
+    "why": "each part of the processor request stays within its id bound"
+  },
+  {
+    "id": "X1-guard-counts-lapsed-request",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "if (expired.length < open.size) throw new HttpError(409, \"deletion_request_open\")",
+    "new": "if (open.size > 0) throw new HttpError(409, \"deletion_request_open\")",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "Codex P2 (ops.ts): a request past its approval window must not block a new request"
+  },
+  {
+    "id": "X2-approval-leaves-lapsed-pending",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "tx.update(reqRef, expiryOf(at, caller.uid, null))",
+    "new": "void expiryOf(at, caller.uid, null)",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "an approval past the window ends the request (expired), not leaves it pending"
+  },
+  {
+    "id": "X3-expiry-unaudited",
+    "area": "authorisation",
+    "file": "functions/src/retention/ops.ts",
+    "old": "        stageAudit({\n          firmId: caller.firmId,\n          actorId: caller.uid,\n          action: \"retention.request_expired\",",
+    "new": "        void ({\n          firmId: caller.firmId,\n          actorId: caller.uid,\n          action: \"retention.request_expired\",",
+    "tests": [
+      "test/f42-retention-deletion.e2e.emu.test.ts",
+      "-t",
+      "approval window lapsed"
+    ],
+    "why": "the expiry of a lapsed request has its own audit row"
+  }
+]

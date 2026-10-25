@@ -30,7 +30,7 @@ import {
   SearchIndexMalformedError,
 } from "@/platform/persistence/matterClientSearchIndex"
 import { syncFirmUsers } from "@/platform/persistence/userSync"
-import { syncFirmMatters } from "@/platform/persistence/memberSync"
+import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 
 const RELEVANCE_FRESH_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -298,6 +298,11 @@ async function handleGet(request: Request) {
   // Audit F14 NEW-1: the shared matter sync (reconciles the cache as every other route does) in place of this route's
   // own upsert loop; its listing is reused below.
   const matters = await syncFirmMatters(store, repos, refreshedActor.firmId)
+  // Audit F42 (spec R12): a matter-keyed row is shown only to a member of its matter (R-2: membership is the access
+  // source, no role exempt), so a member whose access is revoked loses the matter from search and reports at once.
+  await syncFirmMembers(store, repos, refreshedActor.firmId)
+  const isMemberOf = (matterId: string | null): boolean =>
+    typeof matterId === "string" && matterId !== "" && store.members.has(store.memberKey(matterId, refreshedActor.id))
 
   if (view === "search") {
     const rowType = parseRowType(getQuery(REPORTING_SURFACE, url, "rowType"))
@@ -331,6 +336,7 @@ async function handleGet(request: Request) {
     }
     const all = indexed
       .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
+      .filter((row) => row.rowType !== "matter" || isMemberOf(row.linkedMatterId ?? row.referenceId))
       .filter((row) => (rowType ? row.rowType === rowType : true))
       .filter((row) => terms.every((term) => row.tags.includes(term)))
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
@@ -367,6 +373,7 @@ async function handleGet(request: Request) {
       freshnessStatus: asFreshnessStatus(row.recomputedAt, now),
     }))
     .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
+    .filter((row) => isMemberOf(row.matterId))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => (scoreBand ? row.scoreBand === scoreBand : true))
     .filter((row) => (freshnessStatus ? row.freshnessStatus === freshnessStatus : true))
@@ -388,6 +395,7 @@ async function handleGet(request: Request) {
   const relevanceByMatter = new Map(normalizedRelevance.map((row) => [row.matterId, row]))
   const exportRows = (await repos.matterReportExportAnalytics.listByFirm(refreshedActor.firmId))
     .filter((row) => rankOf(refreshedActor.clearanceLevel) >= rankOfStoredOrMax(row.classification))
+    .filter((row) => isMemberOf(row.matterId))
     .filter((row) => (matterId ? row.matterId === matterId : true))
     .filter((row) => {
       const relevance = relevanceByMatter.get(row.matterId)

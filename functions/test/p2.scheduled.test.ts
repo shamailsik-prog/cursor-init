@@ -72,6 +72,7 @@ describe("P2 scheduled jobs: period keys and range (P3-16)", () => {
     expect(SCHEDULED_JOBS).toEqual([
       { jobType: "d1.autoconfirm", cron: "15 2 * * *", period: "day" },
       { jobType: "d1.conflict.reindex", cron: "35 2 * * *", period: "day" },
+      { jobType: "retention.apply", cron: "0 1 * * *", period: "day" },
     ])
   })
 })
