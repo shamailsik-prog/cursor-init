@@ -149,6 +149,12 @@ describe("route table", () => {
         "POST /api/d4/drafting/approveDraft general",
         "POST /api/d4/intelligence/gateDraft general",
         "GET /api/d4/intelligence/getVerificationReport general",
+        // Audit F42: matter deletion and legal holds.
+        "POST /api/platform/retention/requestMatterDeletion general",
+        "POST /api/platform/retention/approveMatterDeletion general",
+        "GET /api/platform/retention/getDeletionRequest general",
+        "POST /api/platform/retention/placeLegalHold general",
+        "POST /api/platform/retention/releaseLegalHold general",
         "GET /api/d1/matters general",
         "POST /api/d1/matters general",
         "GET /api/d1/documents general",

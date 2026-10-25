@@ -272,6 +272,36 @@
       "why": {
         "schedule": "Audit F43: thresholds are 15 to 60 minutes; a 5-minute scan reads at most 2,500 rows per run"
       }
+    },
+    {
+      "name": "retentionApplyTick",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 60,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "0 1 * * *",
+      "timeZone": "Asia/Karachi",
+      "retryConfig": { "retryCount": 3, "minBackoffSeconds": 60, "maxBackoffSeconds": 600 },
+      "why": { "schedule": "Audit F42: one retention.apply run per firm per PKT day (the architecture's autoPurgeExpired slot); the shipped policy deletes nothing" }
+    },
+    {
+      "name": "retentionDeletionWatch",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 120,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 15 minutes",
+      "why": { "schedule": "Audit F42: raises one F43 durable alert per deletion request whose stores are not all acknowledged by the deadline" }
     }
   ],
   "firebase": {

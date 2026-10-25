@@ -19,6 +19,8 @@ export const ALERT_CONDITIONS = [
   "ai.kill_switch_blocked",
   "ai.reservation_failed",
   "ai.reservation_unresolved",
+  // Audit F42: a matter deletion whose stores are not all acknowledged by the deadline (functions/src/retention/watch.ts).
+  "retention.deletion_unacknowledged",
 ] as const
 export type AlertCondition = (typeof ALERT_CONDITIONS)[number]
 

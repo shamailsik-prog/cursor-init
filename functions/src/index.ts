@@ -27,6 +27,8 @@ export { p1TraceExportReconciler } from "./p1/traceExport"
 export { p1CorpusEmbedding } from "./p1/corpusEmbedding"
 // Audit F11: the audit-outbox reconciler, every minute; publishes the audit of Next requests that died after an effect.
 export { auditOutboxReconciler } from "./p5/auditOutboxReconciler"
+// Audit F42: the daily retention run (01:00 Asia/Karachi, one P2 run per firm) and the unacknowledged-deletion watch (every 15 minutes).
+export { retentionApplyTick, retentionDeletionWatch } from "./retention/functions"
 // Audit F43: the alert escalator (every minute: escalate open alerts past their deadline, deliver pending pages) and the
 // alert checker (every five minutes: queue age, saga age and unresolved AI spend, derived from the rows).
 export { alertEscalator, alertChecker } from "./alerts/functions"

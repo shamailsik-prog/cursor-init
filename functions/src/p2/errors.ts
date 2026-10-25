@@ -36,6 +36,7 @@ export const ENGINE_CODES = [
   "internal",
   "invalid_fenced_step",
   "fenced_step_limit",
+  "matter_deleted",
 ] as const
 export type EngineCode = (typeof ENGINE_CODES)[number]
 
@@ -48,13 +49,14 @@ export const JOB_ERROR_MESSAGES: Readonly<Record<EngineCode, string>> = {
   internal: "The job failed with an internal error.",
   invalid_fenced_step: "The job used an invalid step id.",
   fenced_step_limit: "The job exceeded its step limit.",
+  matter_deleted: "The job's matter was deleted.",
 }
 
 export type SanitizedError = { code: string; message: string; permanent: boolean }
 
 const CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/
 /** Engine codes that never benefit from an automatic retry. */
-const ALWAYS_PERMANENT: ReadonlySet<string> = new Set(["invalid_payload", "unknown_job_type", "invalid_fenced_step", "fenced_step_limit"])
+const ALWAYS_PERMANENT: ReadonlySet<string> = new Set(["invalid_payload", "unknown_job_type", "invalid_fenced_step", "fenced_step_limit", "matter_deleted"])
 
 function isEngineCode(code: string): code is EngineCode {
   return (ENGINE_CODES as readonly string[]).includes(code)
