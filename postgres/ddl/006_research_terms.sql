@@ -29,7 +29,19 @@ REVOKE ALL ON public.corpus_research_term, public.corpus_research_term_df FROM P
 REVOKE ALL ON public.corpus_research_term, public.corpus_research_term_df
   FROM corpus_writer, corpus_declassify, corpus_reader, corpus_authority_reader, corpus_research_reader;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON public.corpus_research_term, public.corpus_research_term_df TO corpus_writer;
+GRANT SELECT ON public.classification_rank TO corpus_writer;
 GRANT SELECT ON public.corpus_research_term, public.corpus_research_term_df TO corpus_research_reader;
+
+CREATE OR REPLACE FUNCTION public.corpus_research_term_clear()
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  TRUNCATE public.corpus_research_term, public.corpus_research_term_df;
+$$;
+REVOKE ALL ON FUNCTION public.corpus_research_term_clear() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.corpus_research_term_clear() TO corpus_writer;
 
 -- 4. Inventory (37 relations; was 35 after 005).
 CREATE OR REPLACE FUNCTION public.corpus_contract_relations() RETURNS SETOF regclass

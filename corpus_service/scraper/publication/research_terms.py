@@ -81,7 +81,7 @@ async def refresh_research_terms(conn: AsyncConnection) -> None:
             )
         )
     ).all()
-    await conn.execute(text("TRUNCATE public.corpus_research_term, public.corpus_research_term_df"))
+    await conn.execute(text("SELECT public.corpus_research_term_clear()"))
     df: dict[str, int] = {}
     batch: list[dict[str, object]] = []
     for judgment_id, title, citations in rows:
