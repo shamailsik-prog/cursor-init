@@ -100,7 +100,11 @@ function postgresSource(config: CorpusReaderConfig): ResearchSource {
   const current = pgSource.source
   return logged({
     load: async (plan) => (await current).load(plan),
-    searchPrepared: async (prepared) => (await current).searchPrepared(prepared),
+    searchPrepared: async (prepared) => {
+      const store = await current
+      if (!store.searchPrepared) throw new Error("research: postgres source missing searchPrepared")
+      return store.searchPrepared(prepared)
+    },
   })
 }
 

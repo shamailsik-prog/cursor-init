@@ -529,7 +529,7 @@ export class PgResearchCorpus implements ResearchSource {
     client: pg.PoolClient,
     benchById: ReadonlyMap<string, Bench>,
     ids: readonly string[]
-  ): Promise<Map<string, CitationVerdict>> {
+  ): Promise<ReadonlyMap<string, CitationVerdict>> {
     if (ids.length === 0) return new Map()
     const rows = (await this.run(client, TREATMENTS_FOR_IDS_SQL, [ids])).rows as Array<{
       k: unknown
