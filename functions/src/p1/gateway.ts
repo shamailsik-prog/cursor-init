@@ -30,9 +30,9 @@ import {
   spentOf,
 } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
-import { DECISIONS_COLLECTION, DECISION_RECORD_VERSION, anchorsOf, exportAfterCall, exportFields, type RetrievalAnchor } from "./decisionRecord"
+import { DECISIONS_COLLECTION, DECISION_RECORD_VERSION, PROMPT_HASH_WITHHOLD_AFTER_MS, anchorsOf, exportAfterCall, exportFields, type RetrievalAnchor } from "./decisionRecord"
 import { monthKeyPkt } from "./month"
-import { OPIK_TIMEOUT_MS, exportTrace, opikConfig, opikDisabledReason } from "./opik"
+import { OPIK_TIMEOUT_MS, TRACE_TEXT_MAX_RANK, exportTrace, opikConfig, opikDisabledReason } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
 import { TRANSPORT_ERROR, type BlockReason, type LedgerTaskType, type P1Accounting, type P1Outcome, type ReservationState, type TaskType, type UsageOutcome } from "./types"
 import { uuidv7 } from "./uuidv7"
@@ -620,6 +620,10 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
     hash: hashOfPrompt,
     hashAlgorithm: PROMPT_HASH_ALGORITHM,
     messageCount: messages.length,
+    // Round 2 (FA-F34-R2-003, spec R37): above rank 1 the text never rides to Opik, so the bare hash is kept only while the
+    // masked body is stored beside it; the publication removes this time, and a record still unpublished at it has its
+    // hash withheld by the export reconciler. On the seed too, so a lease-reconciled record carries it.
+    ...(classificationRank(classification) > TRACE_TEXT_MAX_RANK ? { hashWithholdAtMs: startMs + PROMPT_HASH_WITHHOLD_AFTER_MS } : {}),
   }
   const transportId = transport === null ? null : (transport.id ?? "unidentified")
   const decisionsRecord = (reservationVerdict: string, attemptRecord: string) => ({
