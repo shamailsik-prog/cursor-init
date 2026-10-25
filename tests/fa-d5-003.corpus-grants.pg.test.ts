@@ -31,8 +31,14 @@ const NINE_PROMOTED_VIEWS = [
   "v_statute_section_version", "v_treatment",
 ]
 const RESEARCH_READABLE = [
-  "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_treatment", "v_research_embedding",
-  "v_research_judgment", "corpus_research_term", "corpus_research_term_df",
+  "corpus_metadata",
+  "corpus_research_term",
+  "corpus_research_term_df",
+  "v_authority_citation",
+  "v_authority_pending_adverse",
+  "v_authority_treatment",
+  "v_research_embedding",
+  "v_research_judgment",
 ]
 const AUTHORITY_READABLE = [
   "corpus_metadata", "v_authority_citation", "v_authority_pending_adverse", "v_authority_section_version", "v_authority_treatment",

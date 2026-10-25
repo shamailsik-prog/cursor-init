@@ -273,8 +273,8 @@ asyncio.run(main())`,
  */
 export async function bulkInsertVisibleJudgments(admin: pg.Client, count: number, marker: string): Promise<void> {
   const pub = await admin.query(
-    `INSERT INTO corpus_publication (id, batch_key, input_sha256, source_kind, actor_id, publisher_session_user, finished_at)
-     VALUES ($1, $2, $3, 'curated', 'fa-d5-003-bulk', current_user, now()) RETURNING id`,
+    `INSERT INTO corpus_publication (id, batch_key, input_sha256, source_kind, actor_id, publisher_session_user)
+     VALUES ($1, $2, $3, 'curated', 'fa-d5-003-bulk', current_user) RETURNING id`,
     [randomUUID(), `curated/fa-d5-003-bulk-${randomBytes(4).toString("hex")}`, "b".repeat(64)]
   )
   const publicationId = pub.rows[0].id as string
@@ -303,6 +303,19 @@ export async function bulkInsertVisibleJudgments(admin: pg.Client, count: number
       [marker, sourceId, publicationId, start, end]
     )
   }
+  const promoted = count * 2
+  await admin.query(
+    `UPDATE corpus_publication
+        SET finished_at = now(),
+            item_count = $2,
+            promoted_count = $2,
+            quarantined_count = 0,
+            updated_count = 0,
+            unchanged_count = 0,
+            rejected_count = 0
+      WHERE id = $1`,
+    [publicationId, promoted]
+  )
 }
 
 export async function insertEmbeddings(admin: pg.Client, ids: readonly string[], model = LIVE_MODEL, rank = 0): Promise<void> {
