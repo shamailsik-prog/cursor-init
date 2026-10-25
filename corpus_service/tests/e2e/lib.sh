@@ -210,7 +210,7 @@ annex_a_checks() {
     as_superuser_local "select count(*) filter (where t.tgenabled = 'O') || '/' || count(*) from pg_trigger t
       join pg_class c on c.oid = t.tgrelid
       where not t.tgisinternal and t.tgname = c.relname || '_publication_guard' and c.relnamespace = 'public'::regnamespace"
-  expect_out "$p: corpus_contract_routines() lists the 12 Annex A routines" '^12$' \
+  expect_out "$p: corpus_contract_routines() lists the 14 Annex A routines" '^14$' \
     as_superuser_local "select count(*) from public.corpus_contract_routines()"
   expect_out "$p: every Annex A relation and routine is owned by the bootstrap superuser" '^0$' \
     as_superuser_local "select (select count(*) from public.corpus_contract_relations() r join pg_class c on c.oid = r
