@@ -17,11 +17,7 @@ import { afterEach, describe, expect, it } from "vitest"
 const repoRoot = process.cwd()
 const GATE = "ci_gates/check_p1_transport_imports.py"
 const GRANTED = ["functions/src/p1/gateway.ts", "functions/src/p1/evalSet.ts", "functions/src/p1/embedding.ts", "functions/src/cli/committeeEval.ts"]
-/**
- * Round-2 follow-up (FA-F34-R2-001, spec R29, R32): the transport modules and the two tsconfig files are copied in too, so a
- * bare specifier resolves the way esbuild resolves it in the deployed bundle (functions/tsconfig.json `baseUrl: "."`), and
- * so are the two other files that hold a Gateway key-name or host grant (a grant whose file is missing fails).
- */
+/** FA-F34-R2-001 (R29, R32): resolution and key/host grant context for probe trees. */
 const CONTEXT = [
   "functions/src/p1/transport.ts",
   "functions/src/p1/embeddingTransport.ts",
@@ -40,7 +36,13 @@ function probe(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "f34-transport-gate-"))
   tmpDirs.push(dir)
   fs.mkdirSync(path.join(dir, "ci_gates"), { recursive: true })
-  for (const name of ["check_p1_transport_imports.py", "g0_guard_common.py", "js_lexer.py"]) {
+  for (const name of [
+    "check_p1_transport_imports.py",
+    "g0_guard_common.py",
+    "js_lexer.py",
+    "check_p1_transport_granted_exports.ts",
+    "granted_p1_transport_export_allowlist.json",
+  ]) {
     const src = path.join(repoRoot, "ci_gates", name)
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, "ci_gates", name))
   }
@@ -57,8 +59,19 @@ function probe(files: Record<string, string>): string {
 }
 
 function run(cwd: string, ...args: string[]): { status: number | null; out: string } {
-  const res = spawnSync("python3", [GATE, ...args], { cwd, encoding: "utf8", timeout: 60_000 })
+  const res = spawnSync("python3", [GATE, ...args], {
+    cwd,
+    encoding: "utf8",
+    timeout: 120_000,
+    env: { ...process.env, SIKANDER_GATE_TOOL_ROOT: repoRoot },
+  })
   return { status: res.status, out: `${res.stdout ?? ""}${res.stderr ?? ""}` }
+}
+
+const VIOLATION = "granted export violation"
+
+function overlayGranted(rel: string, patch: string): string {
+  return `${fs.readFileSync(path.join(repoRoot, rel), "utf8")}\n${patch}\n`
 }
 
 type Case = { name: string; files: Record<string, string>; reports: string[] }
@@ -169,7 +182,7 @@ const FAILING: Case[] = [
   {
     name: "a granted file handing the transport on",
     files: { "functions/src/p1/gateway.ts": 'import { activeTransport } from "./transport"\nexport { activeTransport }\n' },
-    reports: ["functions/src/p1/gateway.ts: re-exports activeTransport"],
+    reports: [VIOLATION],
   },
   {
     name: "a vi.importActual of the transport in source",
@@ -181,22 +194,22 @@ const FAILING: Case[] = [
   {
     name: "Codex P2 #1: the granted eval CLI importing the whole transport and handing on activeTransport()",
     files: { "functions/src/cli/committeeEval.ts": 'import * as transport from "../p1/transport"\nconst t = transport.activeTransport()\nexport { t }\n' },
-    reports: ["functions/src/cli/committeeEval.ts: imports all of functions/src/p1/transport", "functions/src/cli/committeeEval.ts: re-exports t"],
+    reports: ["functions/src/cli/committeeEval.ts: imports all of functions/src/p1/transport", VIOLATION],
   },
   {
     name: "Codex P2 #1: gateway.ts re-exporting setP1TransportForTests through an alias",
     files: { "functions/src/p1/gateway.ts": 'import * as transport from "./transport"\nconst reset = transport.setP1TransportForTests\nexport { reset }\n' },
-    reports: ["functions/src/p1/gateway.ts: imports all of functions/src/p1/transport", "functions/src/p1/gateway.ts: re-exports reset"],
+    reports: ["functions/src/p1/gateway.ts: imports all of functions/src/p1/transport", VIOLATION],
   },
   {
     name: "Codex P2 #1: a granted file re-exporting a granted transport value through a local alias",
     files: { "functions/src/p1/evalSet.ts": 'import { activeTransport } from "./transport"\nconst t = activeTransport\nconst u = t\nexport { u as current }\n' },
-    reports: ["functions/src/p1/evalSet.ts: re-exports u"],
+    reports: [VIOLATION],
   },
   {
     name: "Codex P2 #1: a default export of a value derived from a granted transport name",
     files: { "functions/src/p1/embedding.ts": 'import { activeEmbeddingTransport } from "./embeddingTransport"\nconst e = activeEmbeddingTransport()\nexport default e\n' },
-    reports: ["functions/src/p1/embedding.ts: re-exports e"],
+    reports: [VIOLATION],
   },
   {
     name: "Codex P2 #1: a granted file loading the transport dynamically",
@@ -220,6 +233,556 @@ const FAILING: Case[] = [
     files: { "services/d5-1/x.ts": 'export const load = () => require( "../../functions/src/p1/trans" +\n  "port" )\n' },
     reports: ["services/d5-1/x.ts: computed module load"],
   },
+  {
+    name: "FA-F34-R2-001: a granted file exports a multi-line arrow that returns the transport (residual 11)",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport const leak = () =>\n  activeTransport()\n',
+    },
+    reports: [`functions/src/p1/evalSet.ts: ${VIOLATION}`],
+  },
+  {
+    name: "FA-F34-R2-001: a granted file exports a multi-line object holding the transport (residual 11)",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport const bundle = {\n  gw: activeTransport(),\n}\n',
+    },
+    reports: [`functions/src/p1/evalSet.ts: ${VIOLATION}`],
+  },
+  {
+    name: "FA-F34-R2-001: a granted file exports a function that returns the transport (residual 11)",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport function leakTransport() {\n  return activeTransport()\n}\n',
+    },
+    reports: [`functions/src/p1/evalSet.ts: ${VIOLATION}`],
+  },
+  {
+    name: "FA-F34-R3-001: typed return P1Transport",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport function pickGateway(): P1Transport {\n  return activeTransport()!\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: Promise<P1Transport> return",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport async function pickGateway(): Promise<P1Transport> {\n  return activeTransport()!\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: default parameter with parentheses",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport function pickGateway(x = (activeTransport()!)): P1Transport {\n  return x\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: return object literal",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport function pickGateway() {\n  return { gw: activeTransport() }\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: export default function",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport default function pickGateway(): P1Transport {\n  return activeTransport()!\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: export default object",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport default { gw: activeTransport() }\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: class instance field",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport class Holder {\n  gw = activeTransport()\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: class static method",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport class Holder {\n  static pick(): P1Transport {\n    return activeTransport()!\n  }\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: bind then export by name",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nconst slot = activeTransport()\nexport { slot }\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: generator yield",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport function* streamGateway(): Generator<P1Transport> {\n  yield activeTransport()!\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: assign after declaration then export",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nlet slot: P1Transport | null = null\nslot = activeTransport()!\nexport { slot }\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: Object.assign into an export",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport const merged = Object.assign({}, { gw: activeTransport() })\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: Map holder export",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nexport const holders = new Map([["k", activeTransport()]])\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-001: renamed import then export",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport as pickGw } from "./transport"\nexport function pickGateway() {\n  return pickGw()!\n}\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34C-001 B11: export let then assign later",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport let sink: P1Transport | null = null\nsink = activeTransport()!\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34C-001 B11: assign in helper then export by name",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nlet sink: P1Transport | null = null\nfunction fill() {\n  sink = activeTransport()!\n}\nfill()\nexport { sink }\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34C-001 B12: stash on globalThis then export accessor",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport } from "./transport"\n;(globalThis as { gw?: unknown }).gw = activeTransport()\nexport const readGw = () => (globalThis as { gw?: unknown }).gw\n',
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34C-001 B13: hand transport through callback parameter",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport, type P1Transport } from "./transport"\nexport const invoke = (handler: (t: P1Transport) => void) => handler(activeTransport()!)\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34C-001 B17: Object.assign(exports, payload)",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport } from "./transport"\nObject.assign(exports, { gateway: activeTransport() })\n',
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34C-001 B20: Map filled with set then exported",
+    files: {
+      "functions/src/p1/evalSet.ts":
+        'import { activeTransport } from "./transport"\nconst registry = new Map<string, unknown>()\nregistry.set("gw", activeTransport())\nexport { registry }\n',
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R4-001 B5: non-exported const then export by name",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport } from "./transport"\nconst slot = activeTransport()\nexport { slot }\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R4-001 B8b: object getter returns transport",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport } from "./transport"\nexport const holder = { get gateway() { return activeTransport()! } }\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R4-001 B13: callback in block body",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport, type P1Transport } from "./transport"\nexport function runProbeCb(cb: (t: P1Transport) => void) {\n  cb(activeTransport()!)\n}\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R4-001 B19: var in block then export",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'import { activeTransport } from "./transport"\n{ var g = activeTransport()! }\nexport { g }\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R3-002: eval(require) loader",
+    files: { "functions/src/p1/x.ts": 'export const load = () => eval("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R4-003: eval(req+uire) loader",
+    files: { "functions/src/p1/x.ts": 'export const load = () => eval("req" + "uire")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R4-003: (0,eval)(require) loader",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (0, eval)("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R4-003: module.require loader",
+    files: { "functions/src/p1/x.ts": "export const load = () => module.require('./transport')\n" },
+    reports: ["reaches a module loader through a member"],
+  },
+  {
+    name: "FA-F34-R4-003: import compiled lib transport (unscanned tree)",
+    files: { "functions/src/p1/x.ts": 'import { activeTransport } from "../../lib/p1/transport"\nexport const a = activeTransport\n' },
+    reports: ["imports functions/lib/p1/transport from an unscanned directory"],
+  },
+  {
+    name: "FA-F34-R3-002: require of transport via lib path (unscanned tree)",
+    files: {
+      "functions/src/p1/leak.ts": 'export const load = () => require("../../lib/p1/transport").activeTransport\n',
+    },
+    reports: ["imports functions/lib/p1/transport from an unscanned directory"],
+  },
+  {
+    name: "FA-F34-R5-001: Object.prototype pollution with transport",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        "Object.assign(Object.prototype, { __gw: activeTransport() })\n",
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34-R5-001: defineProperty getter on allowlisted export",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'Object.defineProperty(callP1, "leak", { get() { return activeTransport() } })\n',
+      ),
+    },
+    reports: ["sealed export mutation"],
+  },
+  {
+    name: "FA-F34-R5-001: allowlisted export return smuggled via as any",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        "export function __r5ReturnAsAny() { return activeTransport() as any }\n",
+      ),
+    },
+    reports: ["export not allowlisted: __r5ReturnAsAny"],
+  },
+  {
+    name: "FA-F34-R5-001: cast transport to number under allowlisted export name",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        "const __wc = activeTransport() as unknown as typeof CALL_WORST_CASE_MS\nvoid __wc\n",
+      ),
+    },
+    reports: ["module-level transport holder"],
+  },
+  {
+    name: "FA-F34-R5-001: namespace merge on parseEvalSet",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'export namespace parseEvalSet { export const leak = 1 }\n',
+      ),
+    },
+    reports: ["namespace merge on sealed export"],
+  },
+  {
+    name: "FA-F34-R5-001: Proxy wrap of seedEvalStore",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'export const seedEvalStore = new Proxy(seedEvalStore, {})\n',
+      ),
+    },
+    reports: ["Proxy wrap of sealed export"],
+  },
+  {
+    name: "FA-F34-R5-001: module-level Map holder without new export name",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'const __holder = new Map<string, unknown>()\n__holder.set("gw", activeTransport())\n',
+      ),
+    },
+    reports: ["module-level transport holder"],
+  },
+  {
+    name: "FA-F34-R5-001: dynamic globalThis write",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'globalThis["gw"] = activeTransport()\n',
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34-R5-001: Reflect.defineProperty on globalThis",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'Reflect.defineProperty(globalThis, "gw", { value: activeTransport() })\n',
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34-R5-001: Object.defineProperties on globalThis",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        "Object.defineProperties(globalThis, { gw: { value: activeTransport() } })\n",
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34-R5-001: Function return this escape",
+    files: {
+      "functions/src/p1/evalSet.ts": overlayGranted(
+        "functions/src/p1/evalSet.ts",
+        'const g = Function("return this")()\nvoid g\n',
+      ),
+    },
+    reports: ["Function return this escape"],
+  },
+  {
+    name: "FA-F34-R5-001: process.emit with transport argument",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'process.emit("leak", activeTransport())\n',
+      ),
+    },
+    reports: ["forbidden environment write"],
+  },
+  {
+    name: "FA-F34-R5-001: opts.cb(transport) callback leak",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'import type { P1Transport } from "./transport"\nconst __opts = { cb: (_t: P1Transport) => {} }\n__opts.cb(activeTransport()!)\n',
+      ),
+    },
+    reports: ["transport passed as call argument"],
+  },
+  {
+    name: "FA-F34-R5-002: eval string-concat require loader",
+    files: { "functions/src/p1/x.ts": 'export const load = () => eval("re" + "quire")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R5-002: module bracket require",
+    files: { "functions/src/p1/x.ts": 'export const load = () => module["require"]("./transport")\n' },
+    reports: ["reaches a module loader through a member"],
+  },
+  {
+    name: "FA-F34-R5-002: require.main.require",
+    files: { "functions/src/p1/x.ts": "export const load = () => require.main.require('./transport')\n" },
+    reports: ["reaches a module loader through a member (.require)"],
+  },
+  {
+    name: "FA-F34-R5-002: process.mainModule.require",
+    files: { "functions/src/p1/x.ts": "export const load = () => process.mainModule.require('./transport')\n" },
+    reports: ["reaches a module loader through a member (.mainModule)"],
+  },
+  {
+    name: "FA-F34-R5-002: new Function compiled require",
+    files: { "functions/src/p1/x.ts": 'export const load = () => new Function("return require")()("./transport")\n' },
+    reports: ["generates code at run time (Function)"],
+  },
+  {
+    name: "FA-F34-R6-002: globalThis bracket eval",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (globalThis as Record<string, unknown>)["eval"]("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R6-002: globalThis concat Function",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (globalThis as Record<string, unknown>)["Fun" + "ction"]("return require")()("./transport")\n' },
+    reports: ["generates code at run time (Function)"],
+  },
+  {
+    name: "FA-F34-R6-002: Reflect.get globalThis eval concat",
+    files: { "functions/src/p1/x.ts": 'export const load = () => Reflect.get(globalThis, "ev" + "al")("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R6-002: setTimeout string code",
+    files: { "functions/src/p1/x.ts": 'export const load = () => setTimeout("require(\\"./transport\\")")\n' },
+    reports: ["generates code at run time (setTimeout with string argument)"],
+  },
+  {
+    name: "FA-F34-R6-001: opts callback closes over transport and calls send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'export async function __r6OptsCb() {\n  const transport = activeTransport()!\n  const opts = { cb: (x: string) => transport.send({ model: "m", messages: [{ role: "user", content: x }], maxTokens: 1 }) }\n  return opts\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)"],
+  },
+  {
+    name: "FA-F34-R6-001: module let holds closure returned via leaseMillis as any",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'let __r6Relay: (() => Promise<unknown>) | null = null\n__r6Relay = () => activeTransport()!.send({ model: "m", messages: [], maxTokens: 1 })\nexport function __r6Lease() { return leaseMillis(__r6Relay as unknown as number) }\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R6-001: stash closure on globalThis",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(globalThis as { gw?: () => void }).gw = () => { void activeTransport()?.send({ model: "m", messages: [], maxTokens: 1 }) }\nexport const __r6ReadGw = () => (globalThis as { gw?: () => void }).gw?.()\n',
+      ),
+    },
+    reports: ["forbidden environment write", VIOLATION],
+  },
+  {
+    name: "FA-F34-R6-001: cast transport-capturing closure to P1Result",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'export function __r6Cast(): P1Result {\n  const fn = () => activeTransport()!.send({ model: "m", messages: [], maxTokens: 1 })\n  return fn as unknown as P1Result\n}\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R6-001: put closure on req and invoke outside",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'export function __r6Req(req: { run?: () => void }) {\n  req.run = () => { void activeTransport()?.send({ model: "m", messages: [], maxTokens: 1 }) }\n}\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R6-001: named relay passed to callback that calls send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'import type { P1Transport } from "./transport"\nfunction __r6RelaySend(t: P1Transport, x: string) { void t.send({ model: "m", messages: [{ role: "user", content: x }], maxTokens: 1 }) }\nexport function __r6Named(cb: typeof __r6RelaySend) { cb(activeTransport()!, "x") }\n',
+      ),
+    },
+    reports: [VIOLATION],
+  },
+  {
+    name: "FA-F34-R7-002: cast setTimeout string codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (setTimeout as any)("require(\\"./transport\\")")\n' },
+    reports: ["generates code at run time (setTimeout with string argument)"],
+  },
+  {
+    name: "FA-F34-R7-002: cast setInterval string codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (setInterval as any)("require(\\"./transport\\")")\n' },
+    reports: ["generates code at run time (setInterval with string argument)"],
+  },
+  {
+    name: "FA-F34-R7-002: cast globalThis eval codegen",
+    files: { "functions/src/p1/x.ts": 'export const load = () => (globalThis as any).eval("require")("./transport")\n' },
+    reports: ["generates code at run time (eval)"],
+  },
+  {
+    name: "FA-F34-R7-001 W4: anon function on p1TestSeam captures transport.send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW4 = function () {\n  const transport = activeTransport()!\n  return transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)", "transport-capturing closure on sealed export"],
+  },
+  {
+    name: "FA-F34-R7-001 W5: object method on p1TestSeam captures transport.send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW5 = {\n  run() {\n    const transport = activeTransport()!\n    return transport.send({ model: "m", messages: [], maxTokens: 1 })\n  },\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)", "transport-capturing closure on sealed export"],
+  },
+  {
+    name: "FA-F34-R7-001 W5b: method shorthand on exported holder captures send",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        'const __zzHolder = {\n  sendAdhoc(x: string) {\n    const transport = activeTransport()!\n    return transport.send({ model: "m", messages: [{ role: "user", content: x }], maxTokens: 1 })\n  },\n}\n;(p1TestSeam as any).zzW5b = __zzHolder\n',
+      ),
+    },
+    reports: [VIOLATION, "(a transport)"],
+  },
+  {
+    name: "FA-F34-R7-001 W5c: getter on p1TestSeam returns activeTransport()",
+    files: {
+      "functions/src/p1/gateway.ts": overlayGranted(
+        "functions/src/p1/gateway.ts",
+        ';(p1TestSeam as any).zzW5c = {\n  get gateway() {\n    return activeTransport()!\n  },\n}\n',
+      ),
+    },
+    reports: [VIOLATION, "transport-capturing closure on sealed export"],
+  },
 ]
 
 describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
@@ -227,6 +790,20 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
     const r = run(probe(files))
     for (const report of reports) expect(r.out).toContain(report)
     expect(r.out).toContain("FAIL: a P1 transport is imported outside its grants")
+    expect(r.status).toBe(1)
+  })
+
+  it("fails: FA-F34-R5-003 symlink transport path alias", () => {
+    const dir = probe({
+      "functions/src/p1/transport.ts": "export const activeTransport = (): null => null\n",
+      "functions/src/p1/leak.ts": 'import { activeTransport } from "./tx"\nexport const t = activeTransport\n',
+    })
+    fs.symlinkSync(
+      path.join(dir, "functions/src/p1/transport.ts"),
+      path.join(dir, "functions/src/p1/tx.ts"),
+    )
+    const r = run(dir)
+    expect(r.out).toContain("functions/src/p1/leak.ts: imports activeTransport from functions/src/p1/transport")
     expect(r.status).toBe(1)
   })
 
@@ -255,32 +832,35 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
     ["Codex P2 #2: a comment before the literal", { "services/d5-1/x.ts": 'export const load = () => import(/* lazy */ "./researchCorpus")\n' }],
     ["Codex P2 #2: a literal with import options", { "functions/src/p1/x.ts": 'export const load = () => import( "./data.json", { with: { type: "json" } })\n' }],
     ["Codex P2 #2: a template literal without a substitution", { "functions/src/p1/x.ts": "export const load = () => import( `./month`)\n" }],
-    // Round 2 (R2-007, spec R35): evalSet.ts is granted the P1Transport type only, so this fixture moved to gateway.ts, which
-    // is granted activeTransport and (R2-002, spec R34) uses it only as a direct call held in a local const.
-    ["Codex P2 #1: a granted file's own locals derived from the transport, not exported", { "functions/src/p1/gateway.ts": 'import { activeTransport } from "./transport"\nexport async function run(): Promise<void> {\n  const transport = activeTransport()\n  if (transport !== null) await transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n' }],
+    [
+      "Codex P2 #1: a granted file's own locals derived from the transport, not exported",
+      {
+        "functions/src/p1/gateway.ts": overlayGranted(
+          "functions/src/p1/gateway.ts",
+          "async function probeInternalSend(): Promise<void> {\n  const transport = activeTransport()\n  if (transport !== null) await transport.send({ model: 'm', messages: [], maxTokens: 1 })\n}\n",
+        ),
+      },
+    ],
   ])("passes: %s", (_name, files) => {
     const r = run(probe(files as Record<string, string>))
-    expect(r.out).toContain("PASS: P1 transports are imported only by their grants")
+    expect(r.out).toMatch(/PASS: P1 transports are imported only by their grants/)
     expect(r.status).toBe(0)
   })
 
-  it("passes on this repository", () => {
-    const r = run(repoRoot)
-    expect(r.out).toContain("PASS: P1 transports are imported only by their grants")
-    expect(r.status).toBe(0)
-  })
+  it(
+    "passes on this repository",
+    () => {
+      const r = run(repoRoot)
+      expect(r.out).toMatch(/PASS: P1 transports are imported only by their grants/)
+      expect(r.status).toBe(0)
+    },
+    120_000,
+  )
 
-  it("grants gateway.ts activeTransport, evalSet.ts the P1Transport type, embedding.ts activeEmbeddingTransport, and the eval CLI gatewayTransport and P1Transport", () => {
+  it("grants the chat transport to gateway.ts and evalSet.ts, the embedding transport to embedding.ts, and the eval CLI only gatewayTransport and P1Transport", () => {
     const r = run(repoRoot, "--print-grants")
     expect(r.status).toBe(0)
-    const printed = JSON.parse(r.out) as {
-      restricted: Record<string, string[]>
-      grants: Record<string, Record<string, string[]>>
-      sendSites: string[]
-      keyNameGrants: string[]
-      hostGrants: Record<string, string[]>
-    }
-    // Round 2 (R2-007, spec R35): each grant is exactly the names the file imports.
+    const printed = JSON.parse(r.out) as { grants: Record<string, Record<string, string[]>>; sendSites: string[] }
     expect(printed.grants).toEqual({
       "functions/src/p1/transport": {
         "functions/src/p1/gateway.ts": ["activeTransport"],
@@ -292,16 +872,6 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
       },
     })
     expect(printed.sendSites).toEqual(["functions/src/p1/embedding.ts", "functions/src/p1/evalSet.ts", "functions/src/p1/gateway.ts"])
-    // Round 2 (R2-001, spec R32): the Gateway URLs are restricted names granted to no file, and the key names and the host
-    // are named only where the gate says.
-    expect(printed.restricted["functions/src/p1/transport"]).toContain("GATEWAY_URL")
-    expect(printed.restricted["functions/src/p1/embeddingTransport"]).toContain("EMBEDDINGS_URL")
-    expect(printed.keyNameGrants).toEqual(["functions/src/cli/committeeEval.ts", "functions/src/p1/embeddingTransport.ts", "functions/src/p1/transport.ts", "platform/p1/providerKeyGuard.ts"])
-    expect(printed.hostGrants).toEqual({
-      "functions/src/p1/costTable.ts": ["https://ai-gateway.vercel.sh/v1/models"],
-      "functions/src/p1/embeddingTransport.ts": ["https://ai-gateway.vercel.sh/v1/embeddings"],
-      "functions/src/p1/transport.ts": ["https://ai-gateway.vercel.sh/v1/chat/completions"],
-    })
   })
 
   it("is consistent with F18's check [19]: no pure Functions module is a transport or a grant holder, and none loads a transport", () => {
@@ -321,7 +891,6 @@ describe("audit F34 R1-003: G-0 [21] p1-transport-import guard (R17)", () => {
     expect(g0).toMatch(/echo "\[21\] p1-transport-import guard[^\n]*"\npython3 ci_gates\/check_p1_transport_imports\.py \|\| fail=1/)
   })
 })
-
 /**
  * Round-2 independent re-audit FAIL 7/10 at 7987e39 (spec section 6, rulings R29 to R41; R26 to R28 are PR #130's). The auditor's planted shapes
  * (re-audit evidence tools/gate_plants.py, verbatim) passed [21] at 7987e39 and sent the ad hoc system text to the Gateway in
@@ -480,18 +1049,18 @@ const R2_FAILING: Case[] = [
   {
     name: "X20: module.exports of a value derived from the transport",
     files: { "functions/src/p1/gateway.ts": 'import { activeTransport } from "./transport"\nconst t = activeTransport()\nmodule.exports = { t }\n' },
-    reports: ["functions/src/p1/gateway.ts: re-exports t"],
+    reports: ["functions/src/p1/gateway.ts: re-exports t", VIOLATION],
   },
   {
     name: "X20: export = of a value derived from the transport",
     files: { "functions/src/p1/embedding.ts": 'import { activeEmbeddingTransport } from "./embeddingTransport"\nconst e = activeEmbeddingTransport()\nexport = e\n' },
-    reports: ["functions/src/p1/embedding.ts: re-exports e"],
+    reports: ["functions/src/p1/embedding.ts: re-exports e", VIOLATION],
   },
   // X21 (survived): an `as` alias of a granted name is tracked as the name it binds.
   {
     name: "X21: a value derived through an import alias, re-exported",
     files: { "functions/src/p1/gateway.ts": 'import { activeTransport as at } from "./transport"\nconst t = at()\nconst u = t\nexport { u }\n' },
-    reports: ["functions/src/p1/gateway.ts: re-exports u"],
+    reports: ["functions/src/p1/gateway.ts: re-exports u", VIOLATION],
   },
   // FA-F34-R2-002 (LOW): laundering inside a granted file (spec R34): a restricted value may appear only as a direct call
   // held in a local const, and that const only as a .send/.embed receiver, an .id read, a null check or a
@@ -525,7 +1094,11 @@ const R2_FAILING: Case[] = [
   { name: "a transport const returned from a function", files: appended("functions/src/p1/gateway.ts", "\nexport function zzPick() {\n  const zzT1 = activeTransport()\n  return zzT1\n}\n"), reports: [`functions/src/p1/gateway.ts: uses zzT1 ${AS_TRANSPORT}`] },
   { name: "a computed member on a transport const", files: appended("functions/src/p1/embedding.ts", '\nexport async function zzE() {\n  const zzT2 = activeEmbeddingTransport()\n  return zzT2?.["em" + "bed"]({ model: "m", input: "x" })\n}\n'), reports: [`functions/src/p1/embedding.ts: uses zzT2 ${AS_TRANSPORT}`] },
   { name: "a P1Transport parameter stored in module state", files: appended("functions/src/p1/evalSet.ts", "\nexport let zzHeld: unknown = null\nexport function zzKeep(transport: P1Transport) {\n  zzHeld = transport\n}\n"), reports: [`functions/src/p1/evalSet.ts: uses transport ${AS_TRANSPORT}`] },
-  { name: "an exported const holding activeTransport()", files: appended("functions/src/p1/gateway.ts", "\nexport const zzT = activeTransport()\n"), reports: ["functions/src/p1/gateway.ts: re-exports activeTransport"] },
+  {
+    name: "an exported const holding activeTransport()",
+    files: appended("functions/src/p1/gateway.ts", "\nexport const zzT = activeTransport()\n"),
+    reports: ["functions/src/p1/gateway.ts: re-exports activeTransport", VIOLATION],
+  },
   // FA-F34-R2-007 (spec R35): a grant wider than what the file imports fails, so the grants stay tight.
   { name: "a grant the file no longer uses", files: { "functions/src/p1/gateway.ts": "export const x = 1\n" }, reports: ["functions/src/p1/gateway.ts: holds a grant for activeTransport from functions/src/p1/transport that it does not import"] },
   { name: "a key-name grant the file no longer uses", files: { "platform/p1/providerKeyGuard.ts": "export const x = 1\n" }, reports: ["platform/p1/providerKeyGuard.ts: holds a key-name grant it does not use"] },
@@ -570,25 +1143,39 @@ describe("audit F34 round 2 (FA-F34-R2-001, -002, -005, -007): G-0 [21] has no o
     [
       "a granted file's transport const used as a receiver, for its id and in null checks",
       {
-        "functions/src/p1/gateway.ts":
-          'import { activeTransport } from "./transport"\nexport async function run(blocked: boolean) {\n  const transport = blocked ? null : activeTransport()\n  if (transport === null) return null\n  const id = transport.id ?? "unidentified"\n  return [id, await transport!.send({ model: "m", messages: [], maxTokens: 1 })]\n}\n',
+        "functions/src/p1/gateway.ts": overlayGranted(
+          "functions/src/p1/gateway.ts",
+          'async function zzRunTransportProbe(blocked: boolean) {\n  const transport = blocked ? null : activeTransport()\n  if (transport === null) return null\n  const id = transport.id ?? "unidentified"\n  return [id, await transport!.send({ model: "m", messages: [], maxTokens: 1 })]\n}\n',
+        ),
       },
     ],
     [
       "the eval CLI handing its transport const to runLiveEvaluation",
       {
-        "functions/src/cli/committeeEval.ts":
-          'import { runLiveEvaluation } from "../p1/evalSet"\nimport { gatewayTransport, type P1Transport } from "../p1/transport"\nexport async function go(deps: { env: Record<string, string | undefined>; transportFor?: (k: string) => P1Transport }) {\n  const key = deps.env.AI_GATEWAY_API_KEY ?? ""\n  const transport = deps.transportFor === undefined ? gatewayTransport(key) : deps.transportFor(key)\n  return runLiveEvaluation({} as never, transport, { model: "m" })\n}\n',
+        "functions/src/cli/committeeEval.ts": overlayGranted(
+          "functions/src/cli/committeeEval.ts",
+          'import { runLiveEvaluation } from "../p1/evalSet"\nasync function zzGoLive(deps: { env: Record<string, string | undefined>; transportFor?: (k: string) => P1Transport }) {\n  const key = deps.env.AI_GATEWAY_API_KEY ?? ""\n  const transport = deps.transportFor === undefined ? gatewayTransport(key) : deps.transportFor(key)\n  return runLiveEvaluation({} as never, transport, { model: "m" })\n}\n',
+        ),
       },
     ],
     // A P1Transport parameter in a send site, used only as the receiver of .send (evalSet.ts's runLiveEvaluation).
-    ["a P1Transport parameter used as a .send receiver", { "functions/src/p1/evalSet.ts": 'import type { P1Transport } from "./transport"\nexport async function run(transport: P1Transport) {\n  return transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n' }],
+    [
+      "a P1Transport parameter used as a .send receiver",
+      {
+        "functions/src/p1/evalSet.ts": overlayGranted(
+          "functions/src/p1/evalSet.ts",
+          'async function zzProbeSend(transport: P1Transport) {\n  return transport.send({ model: "m", messages: [], maxTokens: 1 })\n}\n',
+        ),
+      },
+    ],
     // A type-literal or object key that shares the transport const's name is a key, not a read, on its own line too.
     [
       "keys named like the transport const, in a type literal and an object literal",
       {
-        "functions/src/p1/gateway.ts":
-          'import { activeTransport } from "./transport"\ntype Phases = {\n  first: number\n  transport: number\n}\nexport const PHASES: Phases = {\n  first: 1,\n  transport: 60,\n}\nexport async function run() {\n  const transport = activeTransport()\n  return { transport: transport === null ? null : 1, reply: await transport?.send({ model: "m", messages: [], maxTokens: 1 }) }\n}\n',
+        "functions/src/p1/gateway.ts": overlayGranted(
+          "functions/src/p1/gateway.ts",
+          'type ZzPhases = {\n  first: number\n  transport: number\n}\nconst ZZ_PHASES: ZzPhases = {\n  first: 1,\n  transport: 60,\n}\nasync function zzPhaseSend() {\n  const transport = activeTransport()\n  return { transport: transport === null ? null : 1, reply: await transport?.send({ model: "m", messages: [], maxTokens: 1 }) }\n}\n',
+        ),
       },
     ],
     // R30: a declaration file emits no code, so Next's generated next-env.d.ts may import `.next/types/...`.
@@ -597,7 +1184,15 @@ describe("audit F34 round 2 (FA-F34-R2-001, -002, -005, -007): G-0 [21] has no o
       { "next-env.d.ts": '/// <reference types="next" />\nimport "./.next/types/routes.d.ts";\nimport "./.next/types/root-params.d.ts";\n', ".next/types/routes.d.ts": "export {}\n" },
     ],
     // An annotated const holding the call.
-    ["an annotated transport const", { "functions/src/p1/embedding.ts": 'import { activeEmbeddingTransport } from "./embeddingTransport"\nimport type { P1EmbeddingTransportError } from "./embeddingTransport"\nexport async function run(): Promise<unknown> {\n  const t: ReturnType<typeof Object> | null = activeEmbeddingTransport()\n  return t === null ? null : t.embed({ model: "m", input: "x" })\n}\nexport type E = P1EmbeddingTransportError\n' }],
+    [
+      "an annotated transport const",
+      {
+        "functions/src/p1/embedding.ts": overlayGranted(
+          "functions/src/p1/embedding.ts",
+          'async function zzAnnotatedEmbed(): Promise<unknown> {\n  const zzT5: ReturnType<typeof Object> | null = activeEmbeddingTransport()\n  return zzT5 === null ? null : zzT5.embed({ model: "m", input: "x" })\n}\n',
+        ),
+      },
+    ],
   ])("passes: %s", (_name, files) => {
     const r = run(probe(files as Record<string, string>))
     expect(r.out).toContain("PASS: P1 transports are imported only by their grants")

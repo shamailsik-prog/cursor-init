@@ -28,15 +28,31 @@ describe("F34 R3: the only P1 transport call sites build their prompt from the r
   // alias (`const gw = activeTransport(); await gw?.send(...)`). The rule is now an import rule, G-0 check [21]: only
   // gateway.ts and evalSet.ts (and the eval CLI, which hands evalSet.ts the Gateway transport and never sends) may import
   // a P1 transport. tests/f34-p1-transport-import-gate.test.ts plants the shapes it must fail on.
-  it("only the granted send sites import a P1 transport (G-0 [21], ci_gates/check_p1_transport_imports.py)", () => {
-    const res = spawnSync("python3", ["ci_gates/check_p1_transport_imports.py"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" })
-    expect(`${res.stdout}${res.stderr}`).toContain("PASS: P1 transports are imported only by their grants")
-    expect(res.status).toBe(0)
-    const grants = JSON.parse(
-      spawnSync("python3", ["ci_gates/check_p1_transport_imports.py", "--print-grants"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).stdout
-    ) as { sendSites: string[] }
-    expect(grants.sendSites).toEqual(["functions/src/p1/embedding.ts", "functions/src/p1/evalSet.ts", "functions/src/p1/gateway.ts"])
-  })
+  it(
+    "only the granted send sites import a P1 transport (G-0 [21], ci_gates/check_p1_transport_imports.py)",
+    () => {
+      const repoRoot = path.resolve(__dirname, "../..")
+      const env = { ...process.env, SIKANDER_GATE_TOOL_ROOT: repoRoot }
+      const res = spawnSync("python3", ["ci_gates/check_p1_transport_imports.py"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env,
+        timeout: 120_000,
+      })
+      expect(`${res.stdout}${res.stderr}`).toContain("PASS: P1 transports are imported only by their grants")
+      expect(res.status).toBe(0)
+      const grants = JSON.parse(
+        spawnSync("python3", ["ci_gates/check_p1_transport_imports.py", "--print-grants"], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          env,
+          timeout: 120_000,
+        }).stdout,
+      ) as { sendSites: string[] }
+      expect(grants.sendSites).toEqual(["functions/src/p1/embedding.ts", "functions/src/p1/evalSet.ts", "functions/src/p1/gateway.ts"])
+    },
+    120_000,
+  )
 
   it("each of them builds the messages it sends with buildOutbound and sends those messages", () => {
     for (const file of ["p1/evalSet.ts", "p1/gateway.ts"]) {
