@@ -7,7 +7,7 @@
  *   POST /api/g0/normalise           normalise_case_number   partner, associate, clerk, intern
  *   POST + GET /api/p1/committee-brain committee_brain(_read) partner, associate, clerk (members)
  *   GET  /api/d1/matters              list_matters            staff members, the matter's client
- *   GET  /api/d2/court-ops            research (matter-level) partner, associate, clerk (members)
+ *   GET + POST /api/d2/court-ops      research (matter-level) partner, associate, clerk (members); acknowledge_item
  *   GET  /api/d4/drafts               draft (matter-level)    partner, associate, clerk (members)
  *
  * A regression guard: it passes on main 5840d3d too (every refusal here is made by the route or by a row main already
@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { POST as normalisePost } from "@/app/api/g0/normalise/route"
 import { GET as committeeGet, POST as committeePost } from "@/app/api/p1/committee-brain/route"
 import { GET as mattersGet } from "@/app/api/d1/matters/route"
-import { GET as courtOpsGet } from "@/app/api/d2/court-ops/route"
+import { GET as courtOpsGet, POST as courtOpsPost } from "@/app/api/d2/court-ops/route"
 import { GET as draftsGet } from "@/app/api/d4/drafts/route"
 import { resetIdempotencyForTests } from "@/platform/http/idempotency"
 import * as session from "@/platform/p5/session"
@@ -257,6 +257,21 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-F43-R1-P01: the Next routes tha
     const res = await get(courtOpsGet, outsider, `/api/d2/court-ops?userId=${outsider.uid}&limit=50&cursor=0`)
     expect(res.status).toBe(200)
     expect(res.body.items).toEqual([])
+    // acknowledge_item (FA-D4-001-FU1, main 4a12508) resolves the item under the same `research` matter check: a member
+    // clerk acknowledges it; a clerk of the firm who is not a member is answered as if it did not exist.
+    const ack = (a: Actor) =>
+      call(courtOpsPost, new Request("http://127.0.0.1/api/d2/court-ops", {
+        method: "POST",
+        headers: post(a),
+        body: JSON.stringify({ action: "acknowledge_item", actorId: a.uid, queueType: "follow_up", id: followUpId, reason: "seen" }),
+      }))
+    const acked = await ack(actor.clerk)
+    expect(acked.status, JSON.stringify(acked.body)).toBe(200)
+    expect(acked.body.result).toMatchObject({ action: "acknowledge_item", queueType: "follow_up", id: followUpId })
+    const refused = await ack(outsider)
+    expect(refused.status, JSON.stringify(refused.body)).toBe(404)
+    const code = (refused.body as { code?: unknown; error?: { code?: unknown } }).code ?? (refused.body.error as { code?: unknown } | undefined)?.code
+    expect(code).toBe("court_ops_item_not_found")
   }, TIMEOUT)
 
   it("GET /api/d4/drafts (draft, matter-level): members partner, associate, clerk see the draft; an intern and a non-member do not", async () => {
