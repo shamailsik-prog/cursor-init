@@ -63,6 +63,8 @@ describe("F32 runtime options on every export", () => {
       "p1CorpusEmbedding",
       "p1ReservationReconciler",
       "p1TraceExportReconciler",
+      "retentionApplyTick",
+      "retentionDeletionWatch",
     ])
 
     for (const name of names) {

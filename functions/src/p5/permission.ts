@@ -1,5 +1,17 @@
 import type { Classification } from "@/platform/p1/types"
-import { decide, type AiAction, type AlertAction, type D1Action, type DocTypeAction, type DraftAction, type FirmAdminAction, type JobAction, type PermissionDecision } from "@/platform/p5/permissionDecision"
+import {
+  decide,
+  type AiAction,
+  type AlertAction,
+  type D1Action,
+  type DocTypeAction,
+  type DraftAction,
+  type FirmAdminAction,
+  type JobAction,
+  type PermissionDecision,
+  type RetentionAction,
+} from "@/platform/p5/permissionDecision"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
 import { HttpError } from "../http/errors"
 import { appendAudit } from "./audit"
@@ -13,7 +25,8 @@ type Evaluation = PermissionDecision & { classification: Classification }
 /**
  * P5 permission check (Layer 18 §4.5) for Cloud Functions: the shared decision table
  * (platform/p5/permissionDecision.ts — the same one the Next.js checkPermission evaluates,
- * I-3 / U-2) over matters/{id} and matter_members/{matterId}_{uid} read from Firestore.
+ * I-3 / U-2) over matters/{id} and matter_members/{matterId}_{uid} read from Firestore, with the
+ * matter's tombstone (matter_tombstones/{id}, audit F42: a deleted matter is refused `matter-deleted`).
  * Fails closed: a malformed matterId denies with "invalid-matter-id", a read error denies with
  * "store-unavailable"; every decision is audited (one audit_log row: action, decision, reason),
  * and if the audit write fails the result is deny "audit_unavailable".
@@ -61,7 +74,7 @@ export async function checkPermission(
  */
 export async function requirePermission(
   caller: Caller,
-  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction | AlertAction,
+  action: FirmAdminAction | D1Action | JobAction | AiAction | DraftAction | DocTypeAction | RetentionAction | AlertAction,
   matterId?: string
 ): Promise<void> {
   const decision = await checkPermission(caller, action, matterId)
@@ -81,13 +94,24 @@ async function evaluate(
   matterId: string | undefined,
   extra: { scope?: "own_matters" } | undefined
 ): Promise<Evaluation> {
-  let matter: { firmId: string; classification: unknown } | null | undefined
+  let matter: { firmId: string; classification: unknown; deleted?: boolean } | null | undefined
   let isMember = false
   if (matterId) {
     const db = adminDb()
-    const data = (await db.collection("matters").doc(matterId).get()).data()
-    matter = data ? { firmId: data.firmId as string, classification: data.classification } : null
-    if (matter && matter.firmId === caller.firmId) {
+    // Audit F42: the matter's tombstone is read with it. A tombstone of the caller's firm refuses the matter
+    // (`matter-deleted`), also once the saga has purged the matter row itself.
+    const [matterSnap, tombSnap] = await Promise.all([
+      db.collection("matters").doc(matterId).get(),
+      db.collection(MATTER_TOMBSTONES).doc(matterId).get(),
+    ])
+    const data = matterSnap.data()
+    const deleted = isTombstoneFor(tombSnap.data(), caller.firmId, matterId)
+    matter = data
+      ? { firmId: data.firmId as string, classification: data.classification, deleted }
+      : deleted
+        ? { firmId: caller.firmId, classification: tombSnap.data()?.classification, deleted }
+        : null
+    if (matter && matter.firmId === caller.firmId && !deleted) {
       isMember = (await db.collection("matter_members").doc(`${matterId}_${caller.uid}`).get()).exists
     }
   }

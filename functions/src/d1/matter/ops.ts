@@ -9,6 +9,7 @@ import {
   type MatterStage,
 } from "@/platform/d1/matterDocument"
 import { decide } from "@/platform/p5/permissionDecision"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../../admin"
 import { HttpError } from "../../http/errors"
 import { contentionDeadline, isContentionAbort } from "../contention"
@@ -515,8 +516,11 @@ export const listMattersOp: FirmOperation<Page<Record<string, unknown>>> = {
       const snap = await q.limit(SCAN_BATCH).get()
       const ids = snap.docs.map((d) => d.data().matterId).filter((id): id is string => isSafeDocId(id))
       const docs = ids.length > 0 ? await adminDb().getAll(...ids.map((id) => matters().doc(id))) : []
+      // Audit F42: a tombstoned matter is never listed, from the moment its deletion is approved.
+      const tombs = ids.length > 0 ? await adminDb().getAll(...ids.map((id) => adminDb().collection(MATTER_TOMBSTONES).doc(id))) : []
+      const deleted = new Set(tombs.filter((t) => isTombstoneFor(t.data(), caller.firmId, t.id)).map((t) => t.id))
       // Audit F13: each row through the shared validator; a malformed one is never listed.
-      const byId = new Map(docs.map((d) => [d.id, readMatterDocument(d.data())]))
+      const byId = new Map(docs.filter((d) => !deleted.has(d.id)).map((d) => [d.id, readMatterDocument(d.data())]))
       for (const m of snap.docs) {
         const matterId = m.data().matterId
         const row = typeof matterId === "string" ? byId.get(matterId) : undefined

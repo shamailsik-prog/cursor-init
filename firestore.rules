@@ -379,6 +379,16 @@ service cloud.firestore {
     match /audit_dead_letter/{id} { allow read, write: if false; }
     // Audit F11: a request's audit rows staged in each effect write's own commit, drained by the reconciler; server only.
     match /audit_outbox/{id} { allow read, write: if false; }
+    // Audit F42: the deletion protocol (matter tombstones, deletion requests and their per-store acknowledgements, legal
+    // holds, the trace processor's deletion requests, vault object tombstones, retention run summaries). Written by Cloud
+    // Functions only and served by /api/platform/retention; ids, codes, counts and hashes, never content. Server only.
+    match /matter_tombstones/{id} { allow read, write: if false; }
+    match /deletion_requests/{id} { allow read, write: if false; }
+    match /deletion_acks/{id} { allow read, write: if false; }
+    match /legal_holds/{id} { allow read, write: if false; }
+    match /deletion_external_requests/{id} { allow read, write: if false; }
+    match /vault_object_tombstones/{id} { allow read, write: if false; }
+    match /retention_runs/{id} { allow read, write: if false; }
     match /tenancy_session_references/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_dispute_attestations/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }
     match /tenancy_lineage_reconciliation_digests/{id} { allow read: if sameFirm() && isPartner(); allow write: if false; }

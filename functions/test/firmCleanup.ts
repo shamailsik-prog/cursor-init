@@ -42,6 +42,40 @@ export async function deleteFirmData(firmIds: readonly string[], uids: readonly 
   return all.length
 }
 
+/**
+ * The cleanup for suites that leave tens of thousands of rows (the F42 saga's anonymised usage rows, vault tombstones
+ * and acknowledgements): every document of every top-level collection whose `firmId` is one of `firmIds`, found with
+ * one `in` query per collection per 30 firms, the firm docs themselves, and the auth users `uids`. Returns the number of
+ * documents deleted.
+ *
+ * Unlike deleteFirmData it skips two sweeps that cost minutes at this volume on the emulator, which answers one query
+ * at a time. The first is the per-id range scan of every collection for id-prefixed rows: still running after more
+ * than 20 minutes with about 33,000 rows. The second lists every job row's subcollections: 171 job rows took 64 s, and
+ * nothing in functions/src or the tests writes a subcollection under a job row. A user's rate-limit windows
+ * (`rate_limits/{uid}_…`, which expire) are left in place.
+ */
+export async function deleteFirmScopedData(firmIds: readonly string[], uids: readonly string[] = []): Promise<number> {
+  const db = adminDb()
+  const ids = [...new Set(firmIds)]
+  const refs = new Map<string, DocumentReference>()
+  if (ids.length > 0) {
+    for (const col of await db.listCollections()) {
+      for (let i = 0; i < ids.length; i += 30) {
+        const page = await col.where("firmId", "in", ids.slice(i, i + 30)).select().get()
+        for (const d of page.docs) refs.set(d.ref.path, d.ref)
+      }
+    }
+    for (const id of ids) {
+      const firm = db.collection("firms").doc(id)
+      refs.set(firm.path, firm)
+    }
+  }
+  const all = [...refs.values()]
+  await deleteAll(all)
+  if (uids.length > 0) await adminAuth().deleteUsers([...new Set(uids)])
+  return all.length
+}
+
 async function deleteAll(refs: readonly DocumentReference[]): Promise<void> {
   const db = adminDb()
   for (let i = 0; i < refs.length; i += 400) {

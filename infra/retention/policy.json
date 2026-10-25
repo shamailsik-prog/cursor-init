@@ -1,0 +1,157 @@
+{
+  "policyVersion": "2026-10-24.default-retain-1",
+  "status": "PROPOSED, owner ratification required",
+  "ratifiedBy": null,
+  "ratifiedAt": null,
+  "note": "Audit F42. The firm's legal decisions, not engineering ones. Every class retains and matter content is under legal hold until the owner ratifies values. No statute, rule or regulation is cited as the source of any period; every proposed value below is inert and its legal basis is [REQUIRES VERIFICATION].",
+  "deletion": {
+    "approvalWindowHours": 72,
+    "ackDeadlineHours": 24,
+    "maxMembersRevokedAtApproval": 400,
+    "storesPerPurgeJob": 12,
+    "proposed": "PROPOSED, owner ratification required: a partner requests, a second partner approves within 72 h; every store acknowledges within 24 h of approval or the watch alerts."
+  },
+  "classes": {
+    "matter_record": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "[REQUIRES VERIFICATION] The matter row itself. No retention period is adopted.",
+      "proposed": {
+        "onMatterDeletion": "anonymise",
+        "anonymiseNote": "PROPOSED, owner ratification required. Anonymise (title and case number cleared) rather than purge: the conflict screen reads matter rows by client and by opposing party (functions/src/d1/conflict/candidates.ts), so a purged row would blind future conflict checks; the tombstone keeps every read refused.",
+        "periodDays": 2190,
+        "note": "PROPOSED, owner ratification required. Architecture O-8 proposes six years (2190 days) pending the firm's confirmation of the applicable rule; Module 9 states seven years for closed matters (2555 days, the F33 vault lock). The two figures conflict; neither is adopted. Legal basis [REQUIRES VERIFICATION]."
+      }
+    },
+    "matter_access": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Access-control rows, not content. An approved deletion revokes them in the approval transaction regardless of this action (spec R5).",
+      "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
+    },
+    "matter_content": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "[REQUIRES VERIFICATION] Documents, OCR text, drafts, evidence, AI outputs and filing records of a matter.",
+      "proposed": {
+        "onMatterDeletion": "purge",
+        "periodDays": 2190,
+        "note": "PROPOSED, owner ratification required. Same conflict as matter_record (six years at O-8, seven years at Module 9). Legal basis [REQUIRES VERIFICATION]."
+      }
+    },
+    "derived_index": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Search and reporting rows derived from matter records; they should follow the records they derive from.",
+      "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
+    },
+    "ai_record": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "[REQUIRES VERIFICATION] P1 spend and attempt metadata (no text). Spend totals are kept separately in ai_usage_months.",
+      "proposed": {
+        "onMatterDeletion": "anonymise",
+        "periodDays": 365,
+        "note": "PROPOSED, owner ratification required. Anonymise on matter deletion (drop matterId, keep spend). One year mirrors the architecture's Opik note ('90 days full, 1 year summarised', cost section); that note is about cost, not a legal basis."
+      }
+    },
+    "job_record": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "P2 job rows of a matter (ids, codes, payload ids).",
+      "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
+    },
+    "legacy_matter_ops": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Legacy Next workflow-ops and filing-escalation rows; rows that carry matterId are matter records.",
+      "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
+    },
+    "conflict_register": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Kept so that future conflict screens still see whom the firm acted for and against (spec R8). Any professional-conduct basis is [REQUIRES VERIFICATION].",
+      "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
+    },
+    "audit_trail": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "The audit trail, including the trail of the deletion itself, survives (ids, codes and hashes only).",
+      "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
+    },
+    "operational_ttl": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Operational keys and counters under Firestore TTL (F32). An idempotency effect may hold a response body until its TTL deletes it.",
+      "proposed": { "onMatterDeletion": "retain", "note": "Expiry under TTL is not a policy choice; recorded for completeness." }
+    },
+    "identity_platform": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Firm, user, MFA and platform rows; not keyed by matter.",
+      "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
+    },
+    "firm_governance": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Firm-level governance, configuration and aggregates; not keyed by matter.",
+      "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
+    },
+    "vault_object": {
+      "onMatterDeletion": "retain",
+      "legalHold": true,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "F03 document vault objects under the F33 COMPLIANCE lock (infra/backup/document-vault.json); no deletion is possible before the lock ends.",
+      "proposed": { "onMatterDeletion": "lock", "note": "PROPOSED, owner ratification required: tombstone each object and delete it after its lock by a hold-aware lifecycle rule (NOT DEMONSTRATED)." }
+    },
+    "third_party_trace": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Self-hosted Opik traces (masked prompt and response at ranks 0 to 3).",
+      "proposed": { "onMatterDeletion": "external", "note": "PROPOSED, owner ratification required: record a deletion request for the operator (the Opik call is NOT DEMONSTRATED)." }
+    },
+    "backup": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "F33 backups; a deleted row lives on until the backup expires under its own retention.",
+      "proposed": { "onMatterDeletion": "expiry", "note": "Expiry under the backup retention is not a policy choice; recorded for completeness." }
+    },
+    "public_corpus": {
+      "onMatterDeletion": "retain",
+      "legalHold": false,
+      "periodDays": null,
+      "periodicAction": "retain",
+      "basis": "Public law corpus and its vectors; holds no client or matter data. Out of scope of matter deletion.",
+      "proposed": { "onMatterDeletion": "retain", "note": "Out of scope." }
+    }
+  }
+}
