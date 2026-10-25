@@ -87,7 +87,14 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
   const uids: string[] = []
   let delivered: Delivered[]
   const notifier = { deliver: async (p: Delivered) => void delivered.push({ id: p.id, level: p.level }) }
-  const escalate = (ms: number): Promise<EscalatorRun> => runAlertEscalator({ now: () => ms, notifier: notifier as never }) as Promise<EscalatorRun>
+  /**
+   * One escalator run at `ms`, its results scoped to `alertId`: the emulator is shared with every other suite, whose
+   * leftover alerts may be due at the same instant (this file's own are deleted after each test).
+   */
+  const escalate = async (ms: number, alertId: string): Promise<EscalatorRun> => {
+    const r = (await runAlertEscalator({ now: () => ms, notifier: notifier as never })) as EscalatorRun
+    return { escalated: r.escalated.filter((x) => x === alertId), repaged: (r.repaged ?? []).filter((x) => x === alertId), delivered: r.delivered.filter((x) => x.startsWith(`${alertId}_`)) }
+  }
 
   const firm = async (): Promise<string> => {
     const f = await newFirm()
@@ -147,7 +154,7 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     const [alert, ...more] = await alertsOf(firmId)
     expect(more).toEqual([])
     expect(alert).toMatchObject({ condition: "job.dispatch_stalled", state: "open", episode: 1, level: 0, count: 1 })
-    expect((await escalate(T0 + 211_000)).delivered).toEqual([`${alert.id}_e1_l0`])
+    expect((await escalate(T0 + 211_000, alert.id)).delivered).toEqual([`${alert.id}_e1_l0`])
 
     // The operator acknowledges at T0 + 5 minutes, through the real router.
     const ACK = T0 + 5 * MIN
@@ -161,7 +168,7 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     const held = await alertDoc(alert.id)
     expect([held.state, held.episode, held.count, held.totalCount, held.level, held.escalateAt]).toEqual(["acknowledged", 1, 2, 2, 0, null])
     expect(await pageIds(alert.id)).toEqual([`${alert.id}_e1_l0`])
-    const quiet = await escalate(ACK + 2 * HOUR)
+    const quiet = await escalate(ACK + 2 * HOUR, alert.id)
     expect([quiet.escalated, quiet.delivered]).toEqual([[], []])
 
     // Four hours after the acknowledgment the recurrence is a new incident: episode 2, level 0, a fresh deadline, a page.
@@ -171,9 +178,9 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     expect(reopened).toMatchObject({ state: "open", episode: 2, level: 0, ownerRole: "operator", count: 1, totalCount: 3, acknowledgedAt: null, acknowledgedBy: null, escalations: [] })
     expect([millis(reopened.firstSeenAt), millis(reopened.escalateAt)]).toEqual([ACK + HOLD, ACK + HOLD + 30 * MIN])
     expect(await pageIds(alert.id)).toEqual([`${alert.id}_e1_l0`, `${alert.id}_e2_l0`].sort())
-    expect((await escalate(ACK + HOLD + MIN)).delivered).toEqual([`${alert.id}_e2_l0`])
+    expect((await escalate(ACK + HOLD + MIN, alert.id)).delivered).toEqual([`${alert.id}_e2_l0`])
     // And it escalates again if nobody acknowledges the new episode.
-    expect((await escalate(ACK + HOLD + 30 * MIN)).escalated).toEqual([alert.id])
+    expect((await escalate(ACK + HOLD + 30 * MIN, alert.id)).escalated).toEqual([alert.id])
     // The acknowledgment of episode 1 stays in the alert's history.
     expect(reopened.actions.map((a: DocumentData) => [a.action, a.role, millis(a.at)])).toEqual([["acknowledge", "operator", ACK]])
   })
@@ -200,15 +207,15 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     await adminDb().collection("platform_onboarding").doc(founder.uid).set({ firmId, at: Timestamp.fromMillis(T0) })
     const spec: AlertSpec = { condition: "job.queue_age", firmId, subjectKey: "jobType:platform.diagnostic", ref: null, severity: "high", detail: { waiting: 1 } }
     const { id } = await raiseAlert(spec, T0)
-    expect((await escalate(T0 + 30 * MIN)).escalated).toEqual([id])
-    expect((await escalate(T0 + 45 * MIN)).escalated).toEqual([id])
+    expect((await escalate(T0 + 30 * MIN, id)).escalated).toEqual([id])
+    expect((await escalate(T0 + 45 * MIN, id)).escalated).toEqual([id])
     const l2 = await alertDoc(id)
     expect([l2.level, l2.ownerRole, l2.severity, millis(l2.escalateAt)]).toEqual([2, "firm_admin", "critical", T0 + 60 * MIN])
 
     // One critical window later, unacknowledged: one re-page of level 2 (not a step: the ladder has no level 3).
-    const early = await escalate(T0 + 60 * MIN - 1)
+    const early = await escalate(T0 + 60 * MIN - 1, id)
     expect([early.escalated, early.repaged]).toEqual([[], []])
-    const [r1, r1b] = await Promise.all([escalate(T0 + 60 * MIN), escalate(T0 + 60 * MIN)])
+    const [r1, r1b] = await Promise.all([escalate(T0 + 60 * MIN, id), escalate(T0 + 60 * MIN, id)])
     expect([...r1.escalated, ...r1b.escalated]).toEqual([])
     expect([...(r1.repaged ?? []), ...(r1b.repaged ?? [])]).toEqual([id])
     const after1 = await alertDoc(id)
@@ -219,13 +226,13 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     expect((await notesOf(id)).map((n) => n.id).sort()).toEqual([`${id}_e1_l1_${founder.uid}`, `${id}_e1_l2_${founder.uid}`, `${id}_e1_l2_r1_${founder.uid}`].sort())
 
     // Long after, a single re-page (the next deadline is computed from now, so no catch-up burst).
-    const late = await escalate(T0 + 10 * HOUR)
+    const late = await escalate(T0 + 10 * HOUR, id)
     expect(late.repaged).toEqual([id])
     expect([(await alertDoc(id)).repages, millis((await alertDoc(id)).escalateAt)]).toEqual([2, T0 + 10 * HOUR + 15 * MIN])
 
     // The firm administrator acknowledges: the re-pages stop.
     await viaApi("acknowledgeAlert", { now: () => T0 + 10 * HOUR + MIN })({ token: founder.token, data: { firmId, alertId: id } } as never)
-    const quiet = await escalate(T0 + 30 * HOUR)
+    const quiet = await escalate(T0 + 30 * HOUR, id)
     expect([quiet.escalated, quiet.repaged]).toEqual([[], []])
     expect(await pageIds(id)).toEqual([`${id}_e1_l0`, `${id}_e1_l1`, `${id}_e1_l2`, `${id}_e1_l2_r1`, `${id}_e1_l2_r2`].sort())
     await adminDb().collection("platform_onboarding").doc(founder.uid).delete()
@@ -251,7 +258,7 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     const list = await viaApi<{ items: Array<Record<string, unknown>> }>("listAlerts", { now: () => T0 + 67 * MIN })({ token: partner.token, data: { firmId } } as never)
     expect(list.items.map((i) => [i.alertId, i.state, i.clearedAt, i.escalateAt])).toEqual([[alert.id, "open", new Date(T0 + 66 * MIN).toISOString(), null]])
     // Past its old deadline the escalator leaves it alone.
-    expect((await escalate(T0 + 2 * HOUR)).escalated).toEqual([])
+    expect((await escalate(T0 + 2 * HOUR, alert.id)).escalated).toEqual([])
     expect((await alertDoc(alert.id)).level).toBe(0)
 
     // The saga sticks again: counted, no longer cleared, and a deadline at its level again.
@@ -259,7 +266,7 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     await runAlertChecker({ now: () => T0 + 3 * HOUR, passes: ["sagas"] })
     const resumed = await alertDoc(alert.id)
     expect([resumed.state, resumed.clearedAt, resumed.count, resumed.episode, millis(resumed.escalateAt)]).toEqual(["open", null, 2, 1, T0 + 3 * HOUR + 30 * MIN])
-    expect((await escalate(T0 + 3 * HOUR + 30 * MIN)).escalated).toEqual([alert.id])
+    expect((await escalate(T0 + 3 * HOUR + 30 * MIN, alert.id)).escalated).toEqual([alert.id])
   })
 
   it("R1-006a: a run that reads only part of a query clears nothing", LONG, async () => {
@@ -302,7 +309,7 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
     const [alert, ...more] = await alertsOf(firmId)
     expect(more).toEqual([])
     expect(alert).toMatchObject({ condition: "ai.kill_switch_blocked", subjectKey: "killSwitch:firm", state: "open", level: 0, escalateAt: null })
-    expect((await escalate(T + 24 * HOUR)).escalated).toEqual([])
+    expect((await escalate(T + 24 * HOUR, alert.id)).escalated).toEqual([])
     expect(await alertDoc(alert.id)).toMatchObject({ level: 0, ownerRole: "operator" })
 
     alertOpsTestSeam.now = () => T + 24 * HOUR
