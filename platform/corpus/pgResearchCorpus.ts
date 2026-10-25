@@ -42,7 +42,7 @@ import {
 export const RESEARCH_MAX_JUDGMENTS = 20_000
 export const RESEARCH_MAX_TREATMENTS = 20_000
 export const RESEARCH_MAX_VECTORS = 5_000
-/** Keyword candidate cap (FA-D5-003-R1-001): exact term conjunction over the index, then ranked in memory. */
+/** Keyword candidate cap (FA-D5-003-R1-001): union of judgments matching any query term, then ranked in memory. */
 export const RESEARCH_MAX_CANDIDATES = 10_000
 /** Distinct (model, dimension) pairs a sane corpus can hold; more breaks the contract. */
 const MAX_VECTOR_SHAPES = 100
@@ -210,13 +210,11 @@ const VECTORS_SQL = `SELECT judgment_id::text AS id, embedding::text AS v
  LIMIT $2`
 const TERM_DF_SQL = `SELECT term, doc_freq FROM public.corpus_research_term_df ORDER BY term COLLATE "C"`
 const JUDGMENT_COUNT_SQL = `SELECT value FROM public.corpus_metadata WHERE key = 'research_judgment_count'`
-const CANDIDATES_SQL = `SELECT t.judgment_id::text AS id
+const CANDIDATES_SQL = `SELECT DISTINCT t.judgment_id::text AS id
   FROM public.corpus_research_term t
  WHERE t.term = ANY ($1::text[])
- GROUP BY t.judgment_id
- HAVING count(DISTINCT t.term) = $2
  ORDER BY t.judgment_id
- LIMIT $3`
+ LIMIT $2`
 const DOCUMENTS_BY_ID_SQL = `SELECT j.judgment_id::text AS id, j.case_title AS title, j.bench_type,
        coalesce(array_agg(c.citation_text ORDER BY c.citation_text COLLATE "C") FILTER (WHERE c.citation_text IS NOT NULL),
                 '{}'::text[]) AS citations
@@ -340,13 +338,24 @@ export class PgResearchCorpus implements ResearchSource {
         | { value: unknown }
         | undefined
       if (typeof refresh?.value !== "string") throw unavailable("contract_missing")
-      const wholeCorpusIdf = await this.wholeCorpusIdf(client, refresh.value)
       const unitQuery =
         prepared.embedding === undefined ? null : parseResearchEmbedding(meta.embeddingModel, prepared.embedding)
+      if (!(await this.termIndexWarm(client))) {
+        await this.run(client, "ROLLBACK", [])
+        committed = true
+        client.release()
+        client = undefined
+        const corpus = await this.load((m) => ({ vectors: unitQuery !== null }))
+        if (unitQuery !== null && corpus.embeddingModel !== meta.embeddingModel) {
+          throw new Error("search refuses: embedding_model mismatch")
+        }
+        return rankResearchCorpus(corpus, prepared, unitQuery)
+      }
+      const wholeCorpusIdf = await this.wholeCorpusIdf(client, refresh.value)
       const candidateRows = await this.rowsUnder<{ id: unknown }>(
         client,
         CANDIDATES_SQL,
-        [terms, terms.length, RESEARCH_MAX_CANDIDATES + 1],
+        [terms, RESEARCH_MAX_CANDIDATES + 1],
         RESEARCH_MAX_CANDIDATES
       )
       const candidateIds = candidateRows.map((r) => {
@@ -458,6 +467,17 @@ export class PgResearchCorpus implements ResearchSource {
     if (refreshed - wall > FUTURE_SKEW_MS || wall - refreshed > this.maxStalenessMs) throw unavailable("stale")
     if (typeof meta.embedding_model !== "string" || typeof meta.embedding_dim !== "string") throw unavailable("contract_missing")
     return { embeddingModel: meta.embedding_model, embeddingDim: meta.embedding_dim }
+  }
+
+  /** True when a finished publication has stamped the term index (006 cold-start: missing until first refresh). */
+  private async termIndexWarm(client: pg.PoolClient): Promise<boolean> {
+    const countRow = (await this.run(client, JUDGMENT_COUNT_SQL, [])).rows[0] as { value: unknown } | undefined
+    if (typeof countRow?.value !== "string") return false
+    const judgmentCount = Number(countRow.value)
+    if (!Number.isSafeInteger(judgmentCount) || judgmentCount < 0) return false
+    if (judgmentCount === 0) return true
+    const probe = await this.run(client, `SELECT 1 AS n FROM public.corpus_research_term_df LIMIT 1`, [])
+    return probe.rows.length > 0
   }
 
   private async wholeCorpusIdf(client: pg.PoolClient, refreshKey: string): Promise<ResearchWholeCorpusIdf> {

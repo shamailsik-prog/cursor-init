@@ -1,33 +1,47 @@
 """Rebuild the published research term index (FA-D5-003-R1-001).
 
-Tokenisation matches services/d5-1/research.ts ``termsOf`` / ``termsOfDocument``: NFKD fold, lowercase,
-Unicode letters and numbers, the same stop-word set, and the same lone-letter rule.
+Tokenisation matches services/d5-1/research.ts ``termsOf`` / ``termsOfDocument``: ``normaliseDraftText`` fold,
+lowercase, Unicode letters and numbers, the same stop-word set, and the same lone-letter rule.
 """
 from __future__ import annotations
 
-import re
+import json
 import unicodedata
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from scraper.publication.research_text_fold import normalise_research_draft_text
+
 _STOP_WORDS = frozenset(
     "a an and are as at be by for in is of on or the to v vs versus was with".split()
 )
-_TERM_RE = re.compile(r"[\w\d]+", re.UNICODE)
+
+
+def _is_token_char(ch: str) -> bool:
+    if not ch:
+        return False
+    cat = unicodedata.category(ch)
+    return cat.startswith("L") or cat == "Nd" or ch.isascii() and ch.isalnum()
 
 
 def research_terms_of(text: str) -> list[str]:
-    folded = unicodedata.normalize("NFKD", text)
-    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
-    folded = folded.lower()
+    folded = normalise_research_draft_text(text).lower()
     out: list[str] = []
     seen: set[str] = set()
-    for match in _TERM_RE.finditer(folded):
-        term = match.group(0)
+    i = 0
+    while i < len(folded):
+        if not _is_token_char(folded[i]):
+            i += 1
+            continue
+        j = i + 1
+        while j < len(folded) and _is_token_char(folded[j]):
+            j += 1
+        term = folded[i:j]
+        i = j
         if term in _STOP_WORDS:
             continue
-        if len(term) < 2 and not term.isdigit():
+        if len(term) < 2 and not (len(term) == 1 and term.isdigit()):
             continue
         if term in seen:
             continue
@@ -81,32 +95,18 @@ async def refresh_research_terms(conn: AsyncConnection) -> None:
             )
         )
     ).all()
-    await conn.execute(text("SELECT public.corpus_research_term_clear()"))
     df: dict[str, int] = {}
-    batch: list[dict[str, object]] = []
+    postings: list[dict[str, str]] = []
     for judgment_id, title, citations in rows:
         terms = terms_for_judgment(title or "", list(citations or []))
         for term in terms:
-            batch.append({"judgment_id": judgment_id, "term": term})
+            postings.append({"judgment_id": str(judgment_id), "term": term})
             df[term] = df.get(term, 0) + 1
-    if batch:
-        await conn.execute(
-            text("INSERT INTO public.corpus_research_term (judgment_id, term) VALUES (:judgment_id, :term)"),
-            batch,
-        )
-    if df:
-        await conn.execute(
-            text("INSERT INTO public.corpus_research_term_df (term, doc_freq) VALUES (:term, :doc_freq)"),
-            [{"term": t, "doc_freq": n} for t, n in sorted(df.items())],
-        )
     count = len(rows)
+    df_payload = [{"term": t, "doc_freq": n} for t, n in sorted(df.items())]
     await conn.execute(
         text(
-            """
-            INSERT INTO public.corpus_metadata (key, value, updated_at) VALUES
-              ('research_judgment_count', :count, pg_catalog.now())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
-            """
+            "SELECT public.corpus_research_term_apply(:count, CAST(:postings AS jsonb), CAST(:df AS jsonb))"
         ),
-        {"count": str(count)},
+        {"count": count, "postings": json.dumps(postings), "df": json.dumps(df_payload)},
     )

@@ -43,6 +43,36 @@ $$;
 REVOKE ALL ON FUNCTION public.corpus_research_term_clear() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.corpus_research_term_clear() TO corpus_writer;
 
+-- 3b. Whole index replace under corpus_writer: truncate postings/df and stamp research_judgment_count on
+--     corpus_metadata (writer has no direct DML on metadata; F19 refresh runs inside SET LOCAL ROLE corpus_writer).
+CREATE OR REPLACE FUNCTION public.corpus_research_term_apply(
+  p_judgment_count integer,
+  p_postings jsonb,
+  p_df jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  PERFORM public.corpus_research_term_clear();
+  INSERT INTO public.corpus_research_term (judgment_id, term)
+  SELECT (e->>'judgment_id')::uuid, e->>'term'
+    FROM jsonb_array_elements(coalesce(p_postings, '[]'::jsonb)) AS e
+   WHERE e->>'judgment_id' IS NOT NULL AND btrim(e->>'term') <> '';
+  INSERT INTO public.corpus_research_term_df (term, doc_freq)
+  SELECT e->>'term', (e->>'doc_freq')::integer
+    FROM jsonb_array_elements(coalesce(p_df, '[]'::jsonb)) AS e
+   WHERE btrim(e->>'term') <> '' AND (e->>'doc_freq')::integer > 0;
+  INSERT INTO public.corpus_metadata (key, value, updated_at) VALUES
+    ('research_judgment_count', p_judgment_count::text, pg_catalog.now())
+  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.corpus_research_term_apply(integer, jsonb, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.corpus_research_term_apply(integer, jsonb, jsonb) TO corpus_writer;
+
 -- 4. Inventory (37 relations; was 35 after 005).
 CREATE OR REPLACE FUNCTION public.corpus_contract_relations() RETURNS SETOF regclass
 LANGUAGE sql STABLE

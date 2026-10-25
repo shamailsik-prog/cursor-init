@@ -2096,7 +2096,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     const research = await admin.query("SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'corpus_research_reader'");
     expect(research.rows[0].n).toBe(1);
     expect(await readable("corpus_research_reader")).toEqual({
-      names: "corpus_metadata,v_authority_citation,v_authority_pending_adverse,v_authority_treatment,v_research_embedding,v_research_judgment,corpus_research_term,corpus_research_term_df",
+      names: "corpus_metadata,corpus_research_term,corpus_research_term_df,v_authority_citation,v_authority_pending_adverse,v_authority_treatment,v_research_embedding,v_research_judgment",
       writes: false,
     });
     const reader = roleClient("corpus_reader", "reader");
