@@ -32,6 +32,7 @@ Spec: `docs/superpowers/specs/2026-10-24-f43-durable-alert-delivery-design.md` s
   - `f43-alerts-fu` R1-006b: its escalator run at 2001-02-11 also stepped 6 alerts other suites had left open, which broke an exact `escalated: []`. Every escalator result in that file is now scoped to the test's own alert. Reproduced by planting a stray open alert due in 1990: the stray was stepped, and the scoped test passed.
 
 - [x] Merged main 798cf56 (#127, F13; no Functions, infra or alert file) as f5e602c, then main 5840d3d (#128, F42) as d0c50ab. At the second merge the G-2 route probe keeps main's one limit, 120 s (spec R25), and the comment on F42's deletion alert states R21's level-2 re-page (spec R27). The final-head RED/GREEN, mutation, full-suite and G-2 runs are recorded in the PR body and the builder's evidence log; this ledger keeps the runs at the commits it names.
+- [x] Merged main 4a12508 (#131; no shared file) as 8716d27 and main ba27912 (#132, F34 R2) as 83c8e54; at the second, #132's new `p1.trace_export_reconcile_failed` line (`prompt_hash_withhold`) gained `event` (spec R27). Test hygiene (53d4dc3): `deleteFirmlessRowsOf` removes the firm-less rows the alert routes' callers write, so the F43 files leave none.
 
 ## RED/GREEN ledger
 
