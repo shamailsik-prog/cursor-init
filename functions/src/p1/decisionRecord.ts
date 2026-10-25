@@ -1,4 +1,4 @@
-import { Timestamp, type DocumentData, type DocumentReference, type Firestore } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Firestore } from "firebase-admin/firestore"
 import { PROMPT_TEMPLATE_PINS, promptHash, sha256Hex } from "@/platform/p1/promptTemplates"
 import { systemPolicyText } from "@/platform/p1/systemPolicy"
 import type { Bench, TreatmentFact } from "@/services/d4-2/citationVerdict"
@@ -18,6 +18,9 @@ import { plainId } from "./transport"
  * - `decisions`: the kill-switch, system-message, route, mask, budget, reservation and credential verdicts (R6);
  * - `phases`: the time each stage took (R7); `cost`: the charge and the spend records it moved (R8);
  * - `approval` (R9), `output` (the committee output it was published as), `export` (R11), `settledBy`, `settledAt`.
+ * - Round 2 (FA-F34-R2-003, spec R37): `prompt.hashWithholdAtMs` on a record above rank 1 until its output is published,
+ *   and `prompt.hashWithheld` with `prompt.hash: null` once that time passed with no output row (`withholdUnpublishedPromptHashes`
+ *   in traceExport.ts).
  *
  * It is staged in the call's commit transaction (gateway.ts `stage`), or by the lease reconciler from the reservation's
  * `decisionSeed` when the call never committed (R2); the publisher and the export reconciler merge their fields in their
@@ -28,9 +31,38 @@ export const DECISIONS_COLLECTION = "p1_decisions"
 /**
  * The record's own format version; also stamped on every trace (R10). f34.2 (re-audit R1 follow-up, spec section 5) adds
  * `decisions.mask.policyVersion` (R25), `export.disabledReason` (R23), `decisions.fromSeed` on a reconciled record (R21) and
- * the embedding path's records with `caller` and `corpusOperationId` (R16).
+ * the embedding path's records with `caller` and `corpusOperationId` (R16). f34.3 (round-2 follow-up, spec section 6, R37)
+ * adds `prompt.hashWithholdAtMs` and, once withheld, `prompt.hashWithheld` with a null `prompt.hash`.
  */
-export const DECISION_RECORD_VERSION = "f34.2"
+export const DECISION_RECORD_VERSION = "f34.3"
+
+/**
+ * Audit F34 round 2 (FA-F34-R2-003, spec ruling R37). R15 keeps a bare SHA-256 of the masked prompt in the server-only
+ * record because the masked body it hashes is stored in clear beside it: in the output row, or, while a failed publication
+ * may still be retried, in the request's idempotency marker. A chat call above rank 1 (whose text never rides to Opik)
+ * whose output row is never written loses both once the marker's TTL passes, and the bare hash is then the only trace of
+ * a short, guessable body: a dictionary oracle. So such a record carries `prompt.hashWithholdAtMs` (its start plus this
+ * much, the marker's TTL: `IDEMPOTENCY_TTL_MS`, held equal by a unit test), the publication removes it, and the export
+ * reconciler's pass nulls the hash of any record still unpublished at that time (`hashWithheld: "no_output_row"`).
+ */
+export const PROMPT_HASH_WITHHOLD_AFTER_MS = 24 * 60 * 60 * 1000
+export const HASH_WITHHELD_NO_OUTPUT_ROW = "no_output_row"
+
+/**
+ * PR #132 review, Codex P1 (thread 4369851302; spec ruling R42). The reservation's `decisionSeed` carries a copy of the
+ * prompt record, hash included, so the lease reconciler can write the record of a call that never commits (R2, R16). That
+ * copy is needed only while the reservation is open. Every transition out of `reserved` clears it in the same transaction:
+ * a settlement that writes or follows the decision record (the call's commit, the embedding's, the lease reconciler's)
+ * records `hashWithheld: "in_record"`; the lease reconciler's release, which writes no record and after which nothing was
+ * sent, records `"released"`; and the export reconciler's withholding (R37) records `"no_output_row"` on the seed too.
+ */
+export const SEED_HASH_IN_RECORD = "in_record"
+export const SEED_HASH_RELEASED = "released"
+
+/** The fields that clear a reservation's seed hash (`seedPrompt`: its `decisionSeed.prompt`); none when it holds no seed. */
+export function seedHashScrub(seedPrompt: unknown, reason: string): Record<string, unknown> {
+  return seedPrompt !== null && typeof seedPrompt === "object" ? { "decisionSeed.prompt.hash": null, "decisionSeed.prompt.hashWithheld": reason } : {}
+}
 
 /**
  * The hash an embedding's record keeps of what was sent (re-audit R1-002, spec ruling R16): the SHA-256 of the masked input
@@ -270,6 +302,8 @@ export function publicationFields(p: {
     retrieval: { verification: { anchors: p.anchors.map((x) => ({ ...x })), groundingStatus: p.grounding.status, groundingRules: p.grounding.rules, omitted: p.grounding.omitted } },
     output: { collection: "committee_outputs", outputId: p.outputId, advisory: p.advisory, groundingStatus: p.grounding.status },
     approval: { state: "no_approval_path", ref: null },
+    // R37: the masked body is now stored in clear in the output row, so the hash withholds nothing and need not be withheld.
+    prompt: { hashWithholdAtMs: FieldValue.delete() },
   }
 }
 
@@ -331,12 +365,14 @@ export function joinDecision(p: DecisionParts): Reconstruction {
     const text = system ? systemPolicyText(system.policyId, system.version) : null
     const body = p.output!.outbound?.body
     promptHashMatchesOutput =
-      text !== null && typeof body === "string" && typeof prompt?.hash === "string"
-        ? promptHash([
-            { role: "system", content: text },
-            { role: "user", content: body },
-          ]) === prompt.hash
-        : false
+      prompt?.hash === null && typeof prompt?.hashWithheld === "string"
+        ? null // R37: withheld, so not checkable (not a mismatch)
+        : text !== null && typeof body === "string" && typeof prompt?.hash === "string"
+          ? promptHash([
+              { role: "system", content: text },
+              { role: "user", content: body },
+            ]) === prompt.hash
+          : false
   }
   return {
     key: { usageLogId: p.usageLogId, traceId },

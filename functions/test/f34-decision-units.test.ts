@@ -2,10 +2,14 @@ import { createHash } from "node:crypto"
 import { logger } from "firebase-functions"
 import { describe, expect, it, vi } from "vitest"
 import { AGENT_INSTRUCTIONS_SHA256 } from "@/platform/p1/agentInstructions"
-import { MASK_POLICY_VERSION, maskOutboundPII } from "@/platform/p1/maskOutboundPII"
+import { MASK_POLICY_VERSION, REDACTION_KINDS, maskOutboundPII, type RedactionKind } from "@/platform/p1/maskOutboundPII"
 import { PROMPT_HASH_ALGORITHM, PROMPT_TEMPLATE_PINS, promptHash, promptTemplateOf } from "@/platform/p1/promptTemplates"
 import { SYSTEM_POLICIES, SYSTEM_POLICY_IDS, SYSTEM_POLICY_VERSION, systemPolicyText } from "@/platform/p1/systemPolicy"
+import { FieldValue } from "firebase-admin/firestore"
+import { IDEMPOTENCY_TTL_MS } from "../src/http/idempotency"
 import {
+  HASH_WITHHELD_NO_OUTPUT_ROW,
+  PROMPT_HASH_WITHHOLD_AFTER_MS,
   TRACE_EXPORT_BACKOFF_MS,
   TRACE_EXPORT_MAX_ATTEMPTS,
   authorityFactsSha256,
@@ -13,6 +17,7 @@ import {
   exportFields,
   joinDecision,
   nextExport,
+  publicationFields,
   reconciledDecision,
   type DecisionParts,
 } from "../src/p1/decisionRecord"
@@ -204,7 +209,7 @@ describe("F34 R10: what a trace may carry", () => {
         promptTemplateId: "committee-brain",
         promptTemplateVersion: SYSTEM_POLICY_VERSION,
         modelReported: "claude-opus-5.5",
-        decisionRecordVersion: "f34.2",
+        decisionRecordVersion: "f34.3",
         usageLogId: "usage-1",
       })
     }
@@ -232,6 +237,12 @@ describe("F34 R10: what a trace may carry", () => {
       ["anthropic/claude-opus-5.5", "zanzibar-quokka-restricted-strategy", "unrecognised"],
       ["anthropic/claude-opus-5.5", "claude-opus-5.4", "unrecognised"],
       ["anthropic/claude-opus-5.5", "opus-5.5", "unrecognised"],
+      // Round 2 (FA-F34-R2-005, auditor mutant X25): a report that only starts with the configured id, or with its alias,
+      // or that the configured id only starts with, is not recognised.
+      ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5.5-zanzibar", "unrecognised"],
+      ["anthropic/claude-opus-5.5", "claude-opus-5.5-zanzibar", "unrecognised"],
+      ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5", "unrecognised"],
+      ["anthropic/claude-opus-5.5", "claude-opus-5", "unrecognised"],
       ["anthropic/claude-opus-5.5", null, null],
       ["openai/text-embedding-3-small", "text-embedding-3-small", "text-embedding-3-small"],
     ]
@@ -276,13 +287,24 @@ describe("F34 R1-011 (R25): the mask policy version", () => {
   // A golden set: if what the mask redacts changes, these outputs change, and MASK_POLICY_VERSION must be bumped with them.
   it("is f34.1, and the mask still gives the outputs that version named", () => {
     expect(MASK_POLICY_VERSION).toBe("f34.1")
-    const golden: [string, string[], string][] = [
-      ["CNIC 35202-1234567-1 on file.", [], "CNIC [CNIC] on file."],
-      ["Call 0300-1234567 or write to a.b@example.com.", [], "Call [PHONE] or write to [EMAIL]."],
-      ["Tariq Zarvani asks about bail.", ["Tariq Zarvani"], "[PARTY] asks about bail."],
-      ["Draft a reply to the notice.", [], "Draft a reply to the notice."],
+    // Round 2 (FA-F34-R2-006, spec R39): one golden entry per RedactionKind at least, each tagged with the kinds it shows
+    // and checked against the redaction counts, so a kind the set misses (iban, ntn and passport were) fails below.
+    const golden: [RedactionKind[], string, string[], string][] = [
+      [["cnic"], "CNIC 35202-1234567-1 on file.", [], "CNIC [CNIC] on file."],
+      [["phone", "email"], "Call 0300-1234567 or write to a.b@example.com.", [], "Call [PHONE] or write to [EMAIL]."],
+      [["party"], "Tariq Zarvani asks about bail.", ["Tariq Zarvani"], "[PARTY] asks about bail."],
+      [["iban"], "Pay into IBAN PK36 SCBL 0000 0011 2345 6702 today.", [], "Pay into IBAN [IBAN] today."],
+      [["ntn"], "Tax: NTN No. 1234567-8 issued.", [], "Tax: [NTN] issued."],
+      [["passport"], "Passport No. AB1234567 issued.", [], "[PASSPORT] issued."],
+      [[], "Draft a reply to the notice.", [], "Draft a reply to the notice."],
     ]
-    for (const [text, partyNames, masked] of golden) expect(maskOutboundPII(text, { partyNames }).masked, text).toBe(masked)
+    for (const [kinds, text, partyNames, masked] of golden) {
+      const result = maskOutboundPII(text, { partyNames })
+      expect(result.masked, text).toBe(masked)
+      expect(result.redactions.filter((r) => r.count > 0).map((r) => r.kind).sort(), text).toEqual([...kinds].sort())
+    }
+    expect([...new Set(golden.flatMap(([kinds]) => kinds))].sort()).toEqual([...REDACTION_KINDS].sort())
+    expect(REDACTION_KINDS).toEqual(["cnic", "phone", "party", "email", "iban", "ntn", "passport"])
   })
 })
 
@@ -307,6 +329,33 @@ describe("F34 R1-007 and R16: the lease reconciler's record", () => {
     expect(d.export).toEqual({ state: "disabled", attempts: 0 })
   })
 
+  // Round 2 (FA-F34-R2-005, auditor mutant X14): with no provider attempt on the reservation, the record keeps the seed's
+  // attemptRecord; it never says "recorded".
+  it("keeps the seed's attemptRecord when the reservation holds no provider attempt (R21)", () => {
+    const d = reconciledDecision({ usageLogId: "u-1", traceId: "t-1", seed, attempt: null, record: RECONCILED_RECORD, nowMs: 9, tracing: false })
+    expect(d.decisions).toEqual({ ...seed.decisions, attemptRecord: "not_attempted", fromSeed: true })
+    expect((d.decisions as Record<string, unknown>).attemptRecord).not.toBe("recorded")
+    expect((d.phases as Record<string, unknown>).transportMs).toBeNull()
+  })
+
+  // PR #132 review, Codex P1 (spec R42): a seed whose hash was withheld gives a record that says so, and the
+  // reconstruction reads it as not checkable, never as a mismatch.
+  it("a seed whose hash was withheld gives a record with the hash withheld, which the join reads as not checkable (R42)", () => {
+    const withheldSeed = { ...seed, prompt: { ...seed.prompt, hash: null, hashWithheld: "no_output_row" } }
+    const d = reconciledDecision({ usageLogId: "u-1", traceId: "t-1", seed: withheldSeed, attempt: { outcome: "returned" }, record: RECONCILED_RECORD, nowMs: 9, tracing: false })
+    expect(d.prompt).toEqual({ ...seed.prompt, hash: null, hashWithheld: "no_output_row" })
+    const joined = joinDecision({
+      usageLogId: "u-1",
+      decision: d,
+      usage: null,
+      reservation: { traceId: "t-1", state: "settled", decisionSeed: withheldSeed },
+      output: { id: "o-1", usageLogId: "u-1", traceId: "t-1", outbound: { body: "Draft a reply.", system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION } } },
+      eventNames: [],
+    })
+    expect(joined.checks.promptHashMatchesOutput).toBeNull()
+    expect(JSON.stringify(joined)).not.toContain("b".repeat(64))
+  })
+
   it("carries the embedding's caller and corpus operation, and the reason tracing was off (R16, R23)", () => {
     const d = reconciledDecision({
       usageLogId: "u-1",
@@ -318,7 +367,7 @@ describe("F34 R1-007 and R16: the lease reconciler's record", () => {
       tracing: false,
       disabledReason: "unset",
     })
-    expect(d).toMatchObject({ caller: "corpus@example.iam.gserviceaccount.com", corpusOperationId: "c".repeat(64), recordVersion: "f34.2", export: { state: "disabled", disabledReason: "unset" } })
+    expect(d).toMatchObject({ caller: "corpus@example.iam.gserviceaccount.com", corpusOperationId: "c".repeat(64), recordVersion: "f34.3", export: { state: "disabled", disabledReason: "unset" } })
     const chat = reconciledDecision({ usageLogId: "u-2", traceId: "t-2", seed, attempt: {}, record: { ...RECONCILED_RECORD, taskType: "committee" }, nowMs: 9, tracing: true })
     expect(chat).not.toHaveProperty("caller")
     expect(chat).not.toHaveProperty("corpusOperationId")
@@ -352,6 +401,14 @@ describe("F34 R13: the reconstruction join", () => {
     expect(JSON.stringify(r)).not.toContain(BODY)
   })
 
+  // Round 2 (FA-F34-R2-003, spec R37): a hash the export reconciler withheld cannot be checked, which is not a mismatch.
+  it("reads a withheld hash as not checkable (null), never as a mismatch (R37)", () => {
+    const base = parts()
+    const withheld = { ...base.decision!, prompt: { ...base.decision!.prompt, hash: null, hashWithheld: "no_output_row" } }
+    expect(joinDecision({ ...base, decision: withheld }).checks.promptHashMatchesOutput).toBeNull()
+    expect(joinDecision({ ...base, decision: { ...withheld, prompt: { ...withheld.prompt, hashWithheld: undefined } } }).checks.promptHashMatchesOutput).toBe(false)
+  })
+
   it("flags a stored body that does not hash to the record, a template hash that is not the pin, and records that do not join", () => {
     const base = parts()
     expect(joinDecision({ ...base, output: { ...base.output!, outbound: { body: `${BODY}!`, system: base.output!.outbound.system } } }).checks.promptHashMatchesOutput).toBe(false)
@@ -361,5 +418,19 @@ describe("F34 R13: the reconstruction join", () => {
     expect(joinDecision({ ...base, output: { ...base.output!, usageLogId: "u-2" } }).checks).toMatchObject({ outputJoined: false, promptHashMatchesOutput: null })
     expect(joinDecision({ ...base, output: null }).checks).toMatchObject({ outputJoined: false, promptHashMatchesOutput: null })
     expect(joinDecision({ ...base, decision: null }).checks).toMatchObject({ decisionPresent: false, templatePinned: false, promptHashMatchesOutput: null, exportState: null })
+  })
+})
+
+describe("F34 R2-003 (R37): when a prompt hash with no output row is withheld", () => {
+  it("is the idempotency marker's TTL after the call started, so the masked body is gone from the marker too", () => {
+    expect(PROMPT_HASH_WITHHOLD_AFTER_MS).toBe(IDEMPOTENCY_TTL_MS)
+    expect(HASH_WITHHELD_NO_OUTPUT_ROW).toBe("no_output_row")
+  })
+
+  it("the publication removes the time: the output row then stores the masked body beside the hash", () => {
+    const fields = publicationFields({ usageLogId: "u-1", traceId: "t-1", firmId: "firm-1", outputId: "o-1", advisory: false, grounding: { status: "grounded", rules: "r", omitted: 0 }, anchors: [] })
+    const prompt = fields.prompt as Record<string, unknown>
+    expect(Object.keys(prompt)).toEqual(["hashWithholdAtMs"])
+    expect((prompt.hashWithholdAtMs as FieldValue).isEqual(FieldValue.delete())).toBe(true)
   })
 })

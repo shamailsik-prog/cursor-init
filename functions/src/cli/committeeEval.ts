@@ -20,7 +20,12 @@ export type EvalDeps = {
   env: Record<string, string | undefined>
   out: (line: string) => void
   readSet: () => unknown
-  transportFor: (key: string) => P1Transport
+  /**
+   * The transport for the operator's key; the Gateway transport when absent. Audit F34 round 2 (FA-F34-R2-002, spec
+   * R34): G-0 [21] lets a granted file use `gatewayTransport` only as a direct call held in a local const, so the CLI
+   * builds it here and hands the const to `runLiveEvaluation`, never a function that returns it.
+   */
+  transportFor?: (key: string) => P1Transport
 }
 
 export async function runCommitteeEval(deps: EvalDeps): Promise<number> {
@@ -32,7 +37,8 @@ export async function runCommitteeEval(deps: EvalDeps): Promise<number> {
   }
   const model = TASK_MODEL.committee
   deps.out(`LIVE: ${set.items.length} items of eval set ${set.version} against ${model}; worst case ${worstCaseMicroUsd(set, model) ?? "unpriced"} micro-USD`)
-  const report = await runLiveEvaluation(set, deps.transportFor(key), { model })
+  const transport = deps.transportFor === undefined ? gatewayTransport(key) : deps.transportFor(key)
+  const report = await runLiveEvaluation(set, transport, { model })
   deps.out(JSON.stringify(report))
   deps.out(`${report.failed === 0 ? "PASS" : "FAIL"}: ${report.passed} passed, ${report.failed} failed`)
   return report.failed === 0 ? 0 : 1
@@ -44,7 +50,6 @@ async function main(): Promise<void> {
     env: process.env,
     out: (line) => console.log(line),
     readSet: () => JSON.parse(readFileSync(setPath, "utf8")) as unknown,
-    transportFor: (key) => gatewayTransport(key),
   })
 }
 
