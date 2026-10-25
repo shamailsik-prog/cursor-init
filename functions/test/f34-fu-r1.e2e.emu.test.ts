@@ -23,6 +23,7 @@ import { setP1TransportForTests } from "../src/p1/transport"
 import { ApiError, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
 import { deleteFirmData } from "./firmCleanup"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit F34, independent re-audit FAIL 6/10 at e37b115 (#121): the R1 follow-up, end to end over the Auth and Firestore
@@ -521,10 +522,10 @@ describe.skipIf(!EMULATORS)("F34 R1 LOWs end to end", () => {
   it("R1-009 (R23): export.disabledReason tells Opik turned off from Opik misconfigured, and a rejected URL logs p1.opik_misconfigured", async () => {
     const firmId = await seedFirm()
     gatewayStub("ANSWER")
-    const error = vi.spyOn(logger, "error")
+    const registered = spyRegisteredErrors()
     const off = await callP1(req(firmId), { now: () => T })
     expect((await decisionOf(off.usageLogId))!.export).toEqual({ state: "disabled", attempts: 0, disabledReason: "unset" })
-    expect(error.mock.calls.filter((c) => c[0] === "p1.opik_misconfigured")).toEqual([])
+    expect(registered.fieldsOf("p1.opik_misconfigured")).toEqual([])
 
     vi.stubEnv("OPIK_BASE_URL", "http://opik.example.com")
     const bad = await callP1(req(firmId), { now: () => T })
@@ -532,12 +533,9 @@ describe.skipIf(!EMULATORS)("F34 R1 LOWs end to end", () => {
     vi.stubEnv("OPIK_BASE_URL", "https://opik.example.com")
     const unconfirmed = await callP1(req(firmId), { now: () => T })
     expect((await decisionOf(unconfirmed.usageLogId))!.export).toEqual({ state: "disabled", attempts: 0, disabledReason: "unconfirmed" })
-    const lines = error.mock.calls.filter((c) => c[0] === "p1.opik_misconfigured")
-    expect(lines).toEqual([
-      ["p1.opik_misconfigured", { reason: "invalid_url" }],
-      ["p1.opik_misconfigured", { reason: "unconfirmed" }],
-    ])
-    expect(JSON.stringify(error.mock.calls)).not.toContain("opik.example.com")
+    expect(registered.fieldsOf("p1.opik_misconfigured")).toEqual([{ reason: "invalid_url" }, { reason: "unconfirmed" }])
+    expect(JSON.stringify(registered.calls)).not.toContain("opik.example.com")
+    registered.restore()
   })
 
   it("R1-011 (R25): every record names the mask policy version, on the call's record and on the seed", async () => {

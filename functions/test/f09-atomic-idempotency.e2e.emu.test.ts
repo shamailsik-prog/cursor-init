@@ -16,6 +16,7 @@ import type { Operation } from "../src/p5/common"
 import { apiErrorOf, viaApi } from "./api"
 import { recordSent, type Sent } from "./sent"
 import { EMULATORS, mintIdToken, mockRes, uniq } from "./emu"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit finding F09 (HIGH, 2026-10-13): "Functions idempotency does not atomically cover committed effects". End to end
@@ -807,8 +808,7 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
     })
 
     it("re-audit LOW-2: a receipt write that fails for good logs p1.receipt_record_failed naming the operation and the trace; the retry answers 409 with that operation id and no second call", async () => {
-      const { logger } = await import("firebase-functions")
-      const errors = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const registered = spyRegisteredErrors()
       const f = await brainFirm()
       const sent = stubTransport()
       const brain = brainAt(() => T)
@@ -820,7 +820,10 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
       const operationId = await operationIdOf(f.firmId, key)
       const marker = (await markerDoc(f.firmId, key).get()).data()!
       expect(marker.result).toBeUndefined()
-      expect(errors).toHaveBeenCalledWith("p1.receipt_record_failed", expect.objectContaining({ firmId: f.firmId, operationId, traceId: marker.traceId, usageLogId: marker.usageLogId }))
+      expect(registered.fieldsOf("p1.receipt_record_failed")).toEqual([
+        expect.objectContaining({ firmId: f.firmId, operationId, traceId: marker.traceId, usageLogId: marker.usageLogId }),
+      ])
+      registered.restore()
       const retried = await apiErrorOf(ask(brain, f, key))
       expect([retried.status, retried.code, sent.length]).toEqual([409, "idempotency_effect_committed", 1])
       expect((await keyDoc(f.firmId, key).get()).data()?.response).toEqual({ status: 409, body: committedBody(operationId, false) })

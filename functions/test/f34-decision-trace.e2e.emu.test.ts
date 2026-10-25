@@ -14,6 +14,7 @@ import { reconcileReservations } from "../src/p1/reconciler"
 import { setP1TransportForTests } from "../src/p1/transport"
 import { viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
+import { spyRegisteredErrors } from "./registeredErrorLog"
 
 /**
  * Audit finding F34 (HIGH, 2026-10-13): "AI and workflow traces cannot establish decision reproducibility". End to end
@@ -421,7 +422,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     gatewayStub("ANSWER")
     const r = await callP1(req(firmId), { now: () => T })
     const { reconcileTraceExports } = await exportReconciler()
-    const error = vi.spyOn(logger, "error")
+    const registered = spyRegisteredErrors()
     let now = T
     for (let i = 0; i < 6; i++) {
       now += 3 * 60 * 60_000
@@ -431,8 +432,10 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     expect(e).toMatchObject({ state: "failed", attempts: 5, lastCode: "export_failed" })
     expect(e.abandonedAt).toBeInstanceOf(Timestamp)
     // Other suites' pending records may be due in the shared emulator too: only this record's line is asserted.
-    const abandoned = error.mock.calls.filter((c) => c[0] === "p1.trace_export_abandoned" && (c[1] as { usageLogId?: string }).usageLogId === r.usageLogId)
-    expect(abandoned).toEqual([["p1.trace_export_abandoned", { firmId, usageLogId: r.usageLogId, traceId: r.traceId, attempts: 5, code: "export_failed" }]])
+    expect(registered.fieldsOf("p1.trace_export_abandoned").filter((f) => f.usageLogId === r.usageLogId)).toEqual([
+      { firmId, usageLogId: r.usageLogId, traceId: r.traceId, attempts: 5, code: "export_failed" },
+    ])
+    registered.restore()
     expect((await reconstruct({ usageLogId: r.usageLogId }))!.checks).toMatchObject({ exportState: "failed" })
   })
 
