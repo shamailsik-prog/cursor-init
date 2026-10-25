@@ -13,6 +13,7 @@ import { errorCode } from "../log"
 import type { Caller } from "../p5/auth"
 import { isKnownClassification, rankOf } from "../p5/classification"
 import { isSafeDocId, type CallAudit, type Data, type FirmOperation, type FirmlessOperation } from "../p5/common"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { requirePermission } from "../p5/permission"
 import { THRESHOLDS, alertRef, budgetOf, firmConfigRef, monthRef, pkrRateOf, platformConfigRef, reservationRef, spentOf } from "./config"
 import { PROVIDER_ID } from "./costTable"
@@ -348,6 +349,13 @@ async function publish(a: {
       adminDb().runTransaction(
         async (tx) => {
           let effect = true
+          // Audit F42 (FA-F42-R1-007, spec R27c): a call in flight at the approval publishes nothing for the deleted
+          // matter. Its spend and trace are already settled by the P1 write seam; the answer is refused here.
+          const matterId = a.row.matterId
+          if (typeof matterId === "string" && matterId !== "") {
+            const tomb = (await tx.get(adminDb().collection(MATTER_TOMBSTONES).doc(matterId))).data()
+            if (isTombstoneFor(tomb, String(a.row.firmId), matterId)) throw new HttpError(403, "matter_deleted")
+          }
           if (a.operation !== undefined) {
             const { answered, marker } = await a.operation.read(tx)
             if (answered) return

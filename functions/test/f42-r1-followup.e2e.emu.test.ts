@@ -2,7 +2,13 @@ import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
+import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
+import { InMemoryAuthorityStore, setAuthorityStoreForTests } from "../src/d4/authority"
+import { firmConfigRef } from "../src/p1/config"
+import { p1TestSeam } from "../src/p1/gateway"
+import { setOpikFetchForTests } from "../src/p1/opik"
+import { setP1TransportForTests } from "../src/p1/transport"
 import { retentionTestSeam, type RetentionPolicy } from "../src/retention/config"
 import { runJobTask } from "../src/p2/worker"
 import { apiErrorOf, viaApi } from "./api"
@@ -139,6 +145,12 @@ afterEach(() => {
   delete retentionTestSeam.policy
   delete retentionTestSeam.afterStep
   delete retentionTestSeam.beforeAck
+  for (const k of Object.keys(p1TestSeam)) delete (p1TestSeam as Record<string, unknown>)[k]
+  setP1TransportForTests(null)
+  setOpikFetchForTests(null)
+  setAuthorityStoreForTests(null)
+  setProviderConfigForTests(null)
+  vi.unstubAllEnvs()
 })
 
 describe.skipIf(!EMULATORS)("FA-F42-R1-005: no content enters the deletion trail", () => {
@@ -337,5 +349,91 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("documents").doc(`${f.matterId}-after-ack`).get()).exists).toBe(false)
     const progress = (await db.collection("deletion_acks").doc(`${requestId}_firestore_documents`).get()).data()
     expect(progress).toMatchObject({ acknowledged: true, count: 1, afterAck: 1 })
+  })
+})
+
+const brainApi = viaApi<{ outputId?: string; usage?: unknown }>("committeeBrain")
+
+/** The trace ids every part of the request's processor requests holds, and the summary of `processor`. */
+async function recordedTraces(requestId: string, processor = "opik"): Promise<{ ids: string[]; summary: DocumentData | undefined }> {
+  const snap = await adminDb().collection("deletion_external_requests").where("requestId", "==", requestId).get()
+  const ids = snap.docs.filter((d) => typeof d.get("part") === "number").flatMap((d) => d.get("traceIds") as string[])
+  return { ids: [...ids].sort(), summary: snap.docs.find((d) => d.id === `${requestId}_${processor}`)?.data() }
+}
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-007: the trace of a P1 call in flight at the approval is recorded, never lost", () => {
+  it("rows that land after prepare read the ids and before their store's purge: anonymised, and their traces recorded in a new part", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, costMicroUsd: 1, trace: { id: "trace-before", status: "exported" }, createdAt: Timestamp.now() })
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    // The in-flight call settles now: its usage row and decision record land after prepare read the ids.
+    const late = uniq("late-usage")
+    await adminDb().collection("ai_usage_logs").doc(late).set({ firmId: f.firmId, matterId: f.matterId, costMicroUsd: 2, trace: { id: "trace-inflight", status: "exported" }, createdAt: Timestamp.now() })
+    await adminDb().collection("p1_decisions").doc(late).set({ firmId: f.firmId, matterId: f.matterId, traceId: "trace-inflight", export: { state: "pending", attempts: 0 }, settledAt: Timestamp.now() })
+    // A disabled trace never reached the processor: it is not requested.
+    await adminDb().collection("ai_usage_logs").doc(uniq("off")).set({ firmId: f.firmId, matterId: f.matterId, costMicroUsd: 1, trace: { id: "trace-disabled", status: "disabled" }, createdAt: Timestamp.now() })
+    await drain(f.firmId, clock, deps)
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    const { ids, summary } = await recordedTraces(requestId)
+    expect(ids).toEqual(["trace-before", "trace-inflight"])
+    expect(summary).toMatchObject({ count: 2, parts: 2, lateIds: 1, status: "pending_operator" })
+    expect((await adminDb().collection("ai_usage_logs").doc(late).get()).data()).toMatchObject({ matterId: null, anonymisedBy: requestId })
+    expect((await adminDb().collection("p1_decisions").doc(late).get()).data()).toMatchObject({ matterId: null, anonymisedBy: requestId })
+  })
+
+  it("a call in flight when prepare found no trace at all: the late trace still creates the processor request", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    expect((await recordedTraces(requestId)).summary).toBeUndefined()
+    await adminDb().collection("ai_usage_logs").doc(uniq("late")).set({ firmId: f.firmId, matterId: f.matterId, costMicroUsd: 2, trace: { id: "trace-only-late", status: "exported" }, createdAt: Timestamp.now() })
+    await drain(f.firmId, clock, deps)
+    const { ids, summary } = await recordedTraces(requestId)
+    expect(ids).toEqual(["trace-only-late"])
+    expect(summary).toMatchObject({ count: 1, parts: 1, lateIds: 1, status: "pending_operator" })
+  })
+
+  it("a committee call in flight across the approval and the whole saga: its rows lose the matter at write, its trace is recorded, nothing is published", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await firmConfigRef(f.firmId).set({ monthlyBudgetMicroUsd: 1_000_000_000 })
+    setAuthorityStoreForTests(new InMemoryAuthorityStore())
+    // Opik on (self-hosted, confirmed) behind a fake fetch, so the call's trace is exported; the provider faked at its transport.
+    vi.stubEnv("OPIK_BASE_URL", "http://opik.test.internal")
+    vi.stubEnv("OPIK_SELF_HOSTED_CONFIRMED", "true")
+    setOpikFetchForTests((async () => new Response(null, { status: 204 })) as typeof fetch)
+    setP1TransportForTests({
+      id: "f42r1-fake-gateway",
+      async send() {
+        return { text: "A plain answer.", inputTokens: 100, outputTokens: 50, model: "claude-opus-5.5", responseId: "resp-f42r1" }
+      },
+    } as never)
+    // The approval and the whole saga happen while the call is between its provider answer and its commit.
+    let requestId = ""
+    p1TestSeam.beforeCommit = async () => {
+      requestId = (await requestAndApprove(f)).requestId
+      await drain(f.firmId, new FakeClock(Date.now()))
+      expect((await send(statusApi, f, f.Q, { requestId })).status).toBe("completed")
+    }
+    const err = await apiErrorOf(send(brainApi, f, f.P, { matterId: f.matterId, body: "Summarise the position on bail." }))
+    expect(`${err.status} ${err.code}`).toBe("403 matter_deleted")
+    expect(requestId).not.toBe("")
+    const usage = await adminDb().collection("ai_usage_logs").where("firmId", "==", f.firmId).get()
+    expect(usage.size).toBe(1)
+    const row = usage.docs[0]!
+    expect(row.data()).toMatchObject({ matterId: null, anonymisedBy: requestId, trace: { status: "exported" } })
+    expect((await adminDb().collection("p1_decisions").doc(row.id).get()).data()).toMatchObject({ matterId: null, anonymisedBy: requestId })
+    const { ids, summary } = await recordedTraces(requestId)
+    expect(ids).toEqual([row.get("trace.id")])
+    expect(summary).toMatchObject({ count: 1, lateIds: 1, status: "pending_operator" })
+    // The answer was refused at its publication: no committee output names the deleted matter.
+    expect((await adminDb().collection("committee_outputs").where("firmId", "==", f.firmId).get()).size).toBe(0)
   })
 })

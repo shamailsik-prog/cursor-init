@@ -10,6 +10,7 @@ import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import { type AckDetail, type AckInput, ackRefOf, requestRefOf, sha256, stageAcks } from "./acks"
 import { retentionTestSeam, storeByKey, storeKey, type InventoryStore } from "./config"
 import { instructionsIn, moveInstructions } from "./instructions"
+import { capturesFor, exportedIds, readLateIds, stageLateIds } from "./lateTraces"
 import {
   DELETION_EXTERNAL_REQUESTS_COLLECTION,
   PREPARE_JOB_TYPE,
@@ -411,12 +412,19 @@ async function purgeChunk(
     const vaultRef = ackRefOf(ctx.payload.requestId, vaultKey)
     const [progressSnap, vaultSnap, ...snaps] = await tx.getAll(progressRef, vaultRef, ...rows.map((r) => r.ref))
     const progress = progressOf(progressSnap.data())
+    const treated = snaps.filter((snap) => pending(store, treatment, snap.data(), firmId))
+    // FA-F42-R1-007 (spec R27a): a trace source's rows lose the matter here, so any exported id among them that the
+    // processor request does not hold yet (a call that settled after prepare read the ids) is recorded first, in this
+    // same transaction. Reads, before the writes below.
+    const lateReads = await Promise.all(capturesFor(store.id, req.plan).map(async (cap) => ({ cap, read: await readLateIds(tx, ctx.payload.requestId, cap.processor) })))
+    for (const { cap, read } of lateReads) {
+      stageLateIds(tx, read, exportedIds(treated, cap.specs), { firmId, requestId: ctx.payload.requestId, matterId: req.matterId }, nowMs(ctx as JobContext<unknown>))
+    }
     let n = 0
     let objects = 0
     let refused = 0
-    snaps.forEach((snap) => {
-      const data = snap.data()
-      if (!pending(store, treatment, data, firmId)) return
+    treated.forEach((snap) => {
+      const data = snap.data()!
       if (treatment === "anonymise") {
         tx.update(snap.ref, { ...(store.anonymise ?? {}), anonymisedBy: ctx.payload.requestId })
       } else {
