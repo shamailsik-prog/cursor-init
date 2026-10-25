@@ -41,18 +41,42 @@ def terms_for_judgment(title: str, citations: list[str]) -> list[str]:
     return research_terms_of(blob)
 
 
+_VISIBLE_JUDGMENT = """
+  j.review_status = 'promoted'
+  AND j.bench_type IS NOT NULL
+  AND EXISTS (SELECT 1 FROM public.classification_rank cr WHERE cr.label = j.classification AND cr.rank = 0)
+  AND EXISTS (SELECT 1 FROM public.corpus_publication pub WHERE pub.id = j.publication_id AND pub.finished_at IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM public.source_provenance p
+               WHERE p.id = j.source_id
+                 AND btrim(coalesce(p.source_name, '')) <> '' AND p.fetched_at IS NOT NULL
+                 AND btrim(coalesce(p.content_hash, '')) <> '' AND p.extraction_method IS NOT NULL
+                 AND (btrim(coalesce(p.source_url, '')) <> '' OR btrim(coalesce(p.raw_storage_key, '')) <> ''))
+"""
+
+_VISIBLE_CITATION = """
+  c.review_status = 'promoted'
+  AND EXISTS (SELECT 1 FROM public.corpus_publication pub WHERE pub.id = c.publication_id AND pub.finished_at IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM public.source_provenance p
+               WHERE p.id = c.source_id
+                 AND btrim(coalesce(p.source_name, '')) <> '' AND p.fetched_at IS NOT NULL
+                 AND btrim(coalesce(p.content_hash, '')) <> '' AND p.extraction_method IS NOT NULL
+                 AND (btrim(coalesce(p.source_url, '')) <> '' OR btrim(coalesce(p.raw_storage_key, '')) <> ''))
+"""
+
+
 async def refresh_research_terms(conn: AsyncConnection) -> None:
     """Replace corpus_research_term and corpus_research_term_df from the current visible research corpus."""
     rows = (
         await conn.execute(
             text(
-                """
-                SELECT j.judgment_id, j.case_title,
+                f"""
+                SELECT j.id AS judgment_id, j.case_title,
                        coalesce(array_agg(c.citation_text ORDER BY c.citation_text COLLATE "C")
-                                FILTER (WHERE c.citation_text IS NOT NULL), '{}'::text[]) AS citations
-                  FROM public.v_research_judgment j
-                  LEFT JOIN public.v_authority_citation c ON c.judgment_id = j.judgment_id
-                 GROUP BY j.judgment_id, j.case_title
+                                FILTER (WHERE c.citation_text IS NOT NULL), '{{}}'::text[]) AS citations
+                  FROM public.judgment j
+                  LEFT JOIN public.citation c ON c.judgment_id = j.id AND {_VISIBLE_CITATION}
+                 WHERE {_VISIBLE_JUDGMENT}
+                 GROUP BY j.id, j.case_title
                 """
             )
         )

@@ -475,7 +475,7 @@ expect_out "D20: ... and neither application role holds anything on them" '^0$' 
   as_superuser_local "select count(*) from pg_class c cross join (values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)
     where c.relnamespace = 'public'::regnamespace and c.relname like 'v\\_authority\\_%'
       and has_table_privilege(u.n, c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"
-expect_out "D20: re-applying the chain (15-apply-annex-a.sh) restores the 35-relation inventory" 'Annex A \(001, 003, 004, 005\) applied' \
+expect_out "D20: re-applying the chain (15-apply-annex-a.sh) restores the 37-relation inventory" 'Annex A \(001, 003, 004, 005, 006\) applied' \
   "${COMPOSE[@]}" exec -T -u postgres postgres /docker-entrypoint-initdb.d/15-apply-annex-a.sh
 expect_out "D20: after the chain is re-applied, provision-roles succeeds again (prints ready)" 'ready in legal_scraper' provision
 # Whatever its name: a view whose rewrite rule depends on an inventory relation, outside the inventory.
