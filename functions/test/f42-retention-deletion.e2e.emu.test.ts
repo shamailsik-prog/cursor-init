@@ -285,6 +285,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     const ids = await seedStores(f.firmId, f.matterId, "m")
     const keep = await seedStores(f.firmId, f.otherMatterId, "o")
     const otherFirm = uniq("f42x")
+    firms.push(otherFirm) // FA-F42-R1-015: its seeded rows are deleted in afterAll with the rest.
     const foreign = await seedStores(otherFirm, f.matterId, "x") // same matter id, another firm: never touched
     const { requestId, approved } = await requestAndApprove(f)
     expect(approved.status).toBe("in_progress")
@@ -522,6 +523,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     expect(crossFirm.status).toBe(403)
     // A partner of the firm whose clearance is below the matter's label cannot approve.
     const low = await mintIdToken({ firmId: f.firmId, role: "partner", clearanceLevel: "public" })
+    uids.push(low.uid) // FA-F42-R1-015: deleted in afterAll with the firm's other accounts.
     expect((await apiErrorOf(send(approveApi, f, low, { requestId: req.requestId }))).code).toBe("clearance")
     // The outsider partner (no membership) may approve: deletion is firm administration, not matter membership.
     const ok = await send(approveApi, f, f.outsider, { requestId: req.requestId })
