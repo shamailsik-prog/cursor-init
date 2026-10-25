@@ -26,7 +26,7 @@ import {
 import { rankOf, rankOfStoredOrMax, type DocumentRecord, type SpineStore } from "@/platform/spine/store"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { getRuntimeStore } from "@/platform/spine/runtimeStore"
-import { getRuntimeRepositories } from "@/platform/persistence/runtimeRepositories"
+import { getRuntimeRepositories, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 import { syncFirmMatters, syncFirmMembers } from "@/platform/persistence/memberSync"
 import {
   assertDocumentObjectIngestAllowed,
@@ -139,6 +139,11 @@ async function handleGet(request: Request) {
       }
       throw err
     }
+    // FA-F13-036: in Firestore mode a null get is authoritative; never serve a stale in-process row.
+    if (resolvePersistenceMode() === "firestore" && stored === null) {
+      store.documents.delete(docId)
+      return NextResponse.json({ error: "unknown document" }, { status: 404 })
+    }
     const doc = stored ?? store.documents.get(docId) ?? null
     if (!doc || doc.firmId !== user.firmId) {
       return NextResponse.json({ error: "unknown document" }, { status: 404 })
@@ -194,6 +199,13 @@ async function handleGet(request: Request) {
     }
   })
   const nextCursor = cursor + items.length < visible.length ? String(cursor + items.length) : null
+  const droppedDocuments = firmDocs.droppedDocuments ?? []
+  if (droppedDocuments.length > 0) {
+    console.error(
+      `[api] documents list for firm ${user.firmId}: dropped ${droppedDocuments.length} malformed row(s):`,
+      droppedDocuments
+    )
+  }
 
   return NextResponse.json({
     items,
@@ -336,7 +348,17 @@ async function handlePost(request: Request) {
     if (!inMemoryDoc) {
       return NextResponse.json({ error: "document write failed" }, { status: 500 })
     }
-    const persisted = await repos.documents.get(write.docId, actor.firmId)
+    let persisted: DocumentRecord | null
+    try {
+      persisted = await repos.documents.get(write.docId, actor.firmId)
+    } catch (err) {
+      // FA-F13-037: a malformed stored row after ingest is not absence; drop cache and fail closed.
+      if (err instanceof DocumentMalformedError) {
+        store.documents.delete(write.docId)
+        return NextResponse.json({ error: "document write failed" }, { status: 500 })
+      }
+      throw err
+    }
     if (persisted) {
       await repos.documents.update(write.docId, actor.firmId, {
         contentHash: inMemoryDoc.contentHash,
