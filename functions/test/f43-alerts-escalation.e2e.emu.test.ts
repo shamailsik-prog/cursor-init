@@ -7,7 +7,7 @@ import { raiseAlert } from "../src/alerts/raise"
 import { jobRuntime } from "../src/p2/dispatch"
 import { ApiError, viaApi } from "./api"
 import { EMULATORS, mintIdToken, uniq } from "./emu"
-import { deleteFirmData } from "./firmCleanup"
+import { deleteFirmData, deleteFirmlessRowsOf } from "./firmCleanup"
 import { FakeClock, diagSpec, enqueueAt, readJob, sweepOrigins, testDeps } from "./jobs"
 
 /**
@@ -122,6 +122,8 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
       for (const d of jobs.docs) batch.delete(d.ref)
       await batch.commit()
     }
+    // The operator's and the refused callers' rows have no firm: they go first, by user, while uids still lists them.
+    await deleteFirmlessRowsOf(uids)
     await deleteFirmData([firmId, otherFirmId], uids.splice(0))
   }, CLEANUP_TIMEOUT_MS)
 

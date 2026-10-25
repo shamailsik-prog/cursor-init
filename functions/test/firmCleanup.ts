@@ -76,6 +76,27 @@ export async function deleteFirmScopedData(firmIds: readonly string[], uids: rea
   return all.length
 }
 
+/**
+ * The rows a test's users write with no firm (`firmId: ""`): the idempotency key and effect rows of a platform route
+ * (ids `_nofirm_…`, field `uid`) and the audit rows of a refused or firm-less call (field `actorId`). Neither
+ * deleteFirmData nor deleteFirmScopedData reaches them: their firmId names no firm and their ids carry no uid. Call it
+ * before those, while `uids` still lists the test's users. Returns the number of documents deleted.
+ */
+export async function deleteFirmlessRowsOf(uids: readonly string[]): Promise<number> {
+  const db = adminDb()
+  const ids = [...new Set(uids)]
+  const refs: DocumentReference[] = []
+  for (let i = 0; i < ids.length; i += 30) {
+    const chunk = ids.slice(i, i + 30)
+    for (const [collection, field] of [["idempotency_keys", "uid"], ["idempotency_effects", "uid"], ["audit_log", "actorId"]] as const) {
+      const snap = await db.collection(collection).where("firmId", "==", "").where(field, "in", chunk).select().get()
+      refs.push(...snap.docs.map((d) => d.ref))
+    }
+  }
+  await deleteAll(refs)
+  return refs.length
+}
+
 async function deleteAll(refs: readonly DocumentReference[]): Promise<void> {
   const db = adminDb()
   for (let i = 0; i < refs.length; i += 400) {

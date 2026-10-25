@@ -18,7 +18,7 @@ import { sweep } from "../src/p2/sweeper"
 import { viaApi } from "./api"
 import { budgetSpentAfterFirstPage } from "./checkerClock"
 import { EMULATORS, mintIdToken } from "./emu"
-import { deleteFirmData } from "./firmCleanup"
+import { deleteFirmData, deleteFirmlessRowsOf } from "./firmCleanup"
 import { FakeClock, diagSpec, enqueueAt, newFirm, sweepOrigins, testDeps } from "./jobs"
 
 /**
@@ -130,6 +130,9 @@ describe.skipIf(!EMULATORS)("audit F43 R1: recurrence after acknowledgment, the 
       }
     }
     // Each test's alerts go with it: an open alert left behind would be escalated by the next test's escalator run.
+    // The operator's platform-route rows have no firm, so they go first, by user: rows left in the shared emulator slow
+    // every later suite's cleanup.
+    await deleteFirmlessRowsOf(uids)
     await deleteFirmData(firms.splice(0), uids.splice(0))
   }, 300_000)
 
