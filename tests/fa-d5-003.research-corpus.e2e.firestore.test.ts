@@ -20,7 +20,7 @@ import * as session from "@/platform/p5/session"
 import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFirestore"
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
-import { deleteFirmTestData, remainingFirmTestData } from "@/tests/helpers/emulator-firm-cleanup"
+import { deleteFirmRows } from "@/tests/helpers/firm-cleanup"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import {
   FA_D5_003_BATCH,
@@ -189,8 +189,9 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003: /research reads the published Annex 
 
   afterAll(async () => {
     try {
-      await deleteFirmTestData(createdFirms, createdUids)
-      expect(await remainingFirmTestData(createdFirms, createdUids)).toEqual([])
+      const { remaining } = await deleteFirmRows({ firmIds: createdFirms, uids: createdUids })
+      expect(remaining).toBe(0)
+      expect((await adminAuth().getUsers(createdUids.map((uid) => ({ uid })))).users).toEqual([])
     } finally {
       setResearchEnv(savedEnv)
       await resetResearchSource()

@@ -27,7 +27,9 @@ functions 5097, UI off, project `demo-fa-d5-003-fu`.
 - [x] 9. GREEN runs, mutation (12+ mutants), gates, PR body, evidence log.
 - [x] 10. After merging #128 (F42): 006's seven relations in `infra/retention/inventory.json` (R39; the merged tree
   failed G-0 [22] with exactly these seven), and both FA-D5-003 emulator suites delete their firms in `afterAll` and
-  assert nothing is left (R40, `tests/helpers/emulator-firm-cleanup.ts`).
+  assert nothing is left (R40, with #131's shared `tests/helpers/firm-cleanup.ts` after the merge of 4a12508).
+- [x] 11. `corpus_service/README.md`: `index-terms` exits 1, not 4, on a database without 006 (as `cli.py` does); a test
+  pins it.
 
 ## RED/GREEN ledger
 
@@ -60,5 +62,5 @@ passed (3); research-corpus e2e 1 failed, 13 passed (14); parity 7 failed, 1 pas
 blend 40/40, declassify 4/4 and R4a outside k 4/4 differ); corpus-grants 9 failed, 13 passed (22: 8 for R1-001, 1 for
 R1-003); research-source 4 failed, 28 passed (32); `tests/fa-d5.research-search.e2e.test.ts` 2 failed, 21 passed (23,
 the R1-002 changed expectations); F05 `d4.corpus-authority.pg` 3 failed, 58 passed (61); the fold guards (golden 3,
-Python 6) pass. The branch then merged origin/main @ 5840d3d (#128); the final RED (on that main's code) and GREEN at
-the final head, and the mutants rerun there, are in the evidence log and the PR body.
+Python 6) pass. The branch then merged origin/main @ 5840d3d (#128) and @ 4a12508 (#131); the final RED (on the last
+merged main's code) and GREEN at the final head, and the mutants rerun there, are in the evidence log and the PR body.

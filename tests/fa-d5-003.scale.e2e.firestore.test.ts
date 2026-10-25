@@ -25,7 +25,7 @@ import { resetProductionFirestoreForTests } from "@/platform/persistence/adminFi
 import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { searchResearch, type ResearchCorpus } from "@/services/d5-1/research"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
-import { deleteFirmTestData, remainingFirmTestData } from "@/tests/helpers/emulator-firm-cleanup"
+import { deleteFirmRows } from "@/tests/helpers/firm-cleanup"
 import { HAS_AUTH_FIRESTORE_EMULATORS } from "@/tests/helpers/emulator-require"
 import { FA_D5_003_BATCH, FA_D5_003_SUITE, type ResearchDb, createResearchDb } from "@/tests/helpers/fa-d5-003-corpus"
 import { loadTruthCorpus, seedScaleCorpus, truthSource, type ScaleCounts } from "@/tests/helpers/fa-d5-003-scale"
@@ -182,8 +182,9 @@ describe.runIf(FA_D5_003_SUITE)("FA-D5-003 R1-001: /research over 25,000+ visibl
 
   afterAll(async () => {
     try {
-      await deleteFirmTestData(createdFirms, createdUids)
-      expect(await remainingFirmTestData(createdFirms, createdUids)).toEqual([])
+      const { remaining } = await deleteFirmRows({ firmIds: createdFirms, uids: createdUids })
+      expect(remaining).toBe(0)
+      expect((await adminAuth().getUsers(createdUids.map((uid) => ({ uid })))).users).toEqual([])
     } finally {
       setResearchEnv(saved)
       await resetResearchSource()
