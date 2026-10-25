@@ -70,3 +70,47 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 - Functions full suite: 2703 tests passed, 0 failed (two hook timeouts, each file green alone on the branch and on main).
 - Root unit suite: 6280 passed; the 31 failures are wall-clock (timeouts and time budgets), green alone. Root emulator
   neighbours: 419 of 419. Details and reruns in the PR body.
+
+## Codex P2 follow-up (PR #128)
+
+Three P2 findings from Codex on f8ff0f4, fixed test-first (RED: the final test files on an export of f8ff0f4; GREEN:
+f2b7e13; both under a private emulator, project `demo-f42-fu`, ports 8297/9297/4291/4293/8298/5797).
+
+Decisions (spec R4a, R7b, R7c):
+- `saga.ts` `runPurge`: at the budget the job acknowledges the finished purge and anonymise stores (`ack-{part}-p{i}`),
+  then hands the rest and the vault lock to a numbered continuation (`g0c1`, `g0c2`). Carrying the finished stores
+  into the continuation's acknowledgement would also work; acknowledging at once records each store when it is done
+  and keeps every continuation to the stores it still has to purge.
+- Found while fixing it: the budget restarted at 0 on each attempt while P2 keeps every attempt's step ids, so a retry
+  late in the budget failed permanently with `fenced_step_limit`. The budget now counts the job's recorded steps.
+- `saga.ts` external: a summary plus parts (5,000 ids, 256 KiB each, at most 24) written in the one step that
+  acknowledges the store, before the enqueue step. Chosen over one step per part: a retry would re-split a shifted id
+  set and could skip an id at a part boundary. Past 24 parts: the permanent `external_ids_over_limit`, never a cut.
+- `ops.ts`: a lapsed request ends as `expired` (approval attempt, or the next request, which audits
+  `retention.request_expired`). No cancel route (FU-6): the window, the second partner and the hold cover every case.
+
+| Case | RED on f8ff0f4 | GREEN on f2b7e13 |
+| --- | --- | --- |
+| Lapsed request blocks deletion (new) | `409 deletion_request_open` | passed |
+| Budget spill drops a finished store (new; 1 document, 9,000 versions) | `firestore_documents` never acknowledged | passed |
+| Retry budget (new; 10,000 versions, crash after the 44th chunk) | the job dead-lettered `fenced_step_limit` | passed |
+| More than 10,000 traces (new; 10,001) | the 10,001st id not recorded | passed |
+| Changed: approval past the window; Opik summary shape | `409 approval_expired`; no `parts` | passed |
+| Units: part naming, trace id parts (new) | not functions at f8ff0f4 | passed |
+
+RED totals: deletion e2e 6 failed, 8 passed (14); units 2 failed, 12 passed (14). GREEN: 14 of 14 each.
+
+Verification on f2b7e13 (the code head of the follow-up; the commit after it adds this ledger only):
+- F42 suites: deletion e2e 14 of 14, apply e2e 5 of 5, units 14 of 14, the F09 effect-marker guard 6 of 6, inventory
+  gate tests 18 of 18.
+- Neighbours: `http` 83, `p2.jobs-worker` 29, `p2.registry-discipline` 10, `p2.jobs-enqueue` 8, `p2.jobs-invariants` 5,
+  `p2.engine` 8, `p2.scheduled` 7, `p2.boot` 2, `f34-decision-trace` 10, `f34-decision-units` 17, `f43-alerts-p2` 8,
+  `f43-alerts.unit` 6: 12 of 12 files, 193 of 193 tests.
+- G-0 (`BASE=origin/main`): PASSED, step 21 PASS (323 stores).
+- G-2 (the gate's own suites and coverage, on a copy of `gate_g2.sh` pointed at the follow-up emulator): PASS, 457
+  tested, 0 allowed; Next 138 of 138, Functions 8 of 8; the five retention routes 12 attempts each, 0 allowed.
+- Typecheck: root, tests and functions `tsc --noEmit`, exit 0 each. `eslint --max-warnings 0` on the five touched TS
+  files: exit 0.
+- Mutation: 16 of 16 killed (the nine new mutants and the seven earlier ones on `saga.ts` and `ops.ts`, Z4 moved).
+- Not rerun for the follow-up: the full Functions and root suites, G-1 and the deploy contract (the follow-up changes
+  only `functions/src/retention/{saga,ops,model}.ts`, F42's tests, mutants and docs).
