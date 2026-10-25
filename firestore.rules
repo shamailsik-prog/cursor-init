@@ -459,7 +459,21 @@ service cloud.firestore {
     match /draft_template_analytics/{id} { allow get: if sameFirm() && role() in ['partner', 'associate', 'clerk'] && id == 'template:' + resource.data.firmId + ':' + resource.data.templateId; allow list: if sameFirm() && role() in ['partner', 'associate', 'clerk']; allow write: if false; }
     match /matter_report_export_analytics/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /matter_report_relevance_snapshots/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
-    match /workflow_ops_activity/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId); allow write: if false; }
+    // FA-D4-001-FU1: a court-ops acknowledgement row (an id under ops:court_ops:ack:) is keyed
+    // ops:court_ops:ack:{firmId}:{queueType}:{itemId}. A get of one also needs the id built from the row's own firm, queue
+    // and item (a legacy, mismatched or planted row is refused); other rows keep their rule. A list stays firm-scoped (a
+    // legacy ack row is one firm's own complete write, never mixed). Only the server (Admin SDK) writes.
+    match /workflow_ops_activity/{id} {
+      function courtOpsAckIdOk() {
+        return !id.matches('ops:court_ops:ack:.*')
+          || (resource.data.source == 'court_ops' && resource.data.action == 'court_ops_acknowledge'
+            && ((resource.data.queueType == 'workflow' && id == 'ops:court_ops:ack:' + resource.data.firmId + ':workflow:' + resource.data.documentId)
+              || (resource.data.queueType == 'follow_up' && id == 'ops:court_ops:ack:' + resource.data.firmId + ':follow_up:' + resource.data.followUpId)));
+      }
+      allow get: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId) && courtOpsAckIdOk();
+      allow list: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId);
+      allow write: if false;
+    }
     match /workflow_ops_alert_digests/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && matterScoped(resource.data.matterId); allow write: if false; }
     match /workflow_ops_alert_attestations/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
     match /workflow_ops_alert_escalation_ledgers/{id} { allow read: if sameFirm() && cleared(resource.data.classification) && role() in ['partner', 'associate', 'clerk'] && memberReader(resource.data.matterId); allow write: if false; }
