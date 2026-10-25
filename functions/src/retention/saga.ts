@@ -323,6 +323,12 @@ async function halt(ctx: JobContext<unknown>, req: Request): Promise<void> {
   const { firmId } = ctx.job
   const { requestId } = ctx.payload as { requestId: string }
   await step(ctx, `halt-${ctx.job.attempt}`, async (tx) => {
+    if (process.env.NODE_ENV !== "production") {
+      await retentionTestSeam.beforeHaltCommit?.({ firmId, matterId: req.matterId, requestId })
+    }
+    const hold = (await tx.get(holdsRef().doc(req.matterId))).data()
+    // FA-F42-R2-001: a release may land after assertNoHold threw but before this commit; do not wedge halted/held.
+    if (!hold || hold.firmId !== firmId || hold.active !== true) return
     const pending = await instructionsIn(tx, firmId, req.matterId, "pending_operator")
     const at = Timestamp.fromMillis(nowMs(ctx))
     tx.update(requestRefOf(requestId), { halted: { code: "legal_hold_active", at } })

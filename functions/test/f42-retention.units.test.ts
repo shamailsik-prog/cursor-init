@@ -18,7 +18,9 @@ import {
   type InventoryStore,
   type RetentionPolicy,
 } from "../src/retention/config"
+import type { Transaction } from "firebase-admin/firestore"
 import { JobError } from "../src/p2/errors"
+import { readLateIds, stageLateIds } from "../src/retention/lateTraces"
 import { purgeGroups, sagaInternals } from "../src/retention/saga"
 
 /** Audit F42: the pure parts of the retention mechanism (no emulator). */
@@ -313,6 +315,71 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(refused(() => traceIdParts(["y".repeat(256 * 1024)]))).toBe("external_ids_over_limit true")
     expect(refused(() => traceIdParts(Array.from({ length: 24 * 5_000 + 1 }, (_, i) => `t-${i}`)))).toBe("external_ids_over_limit true")
     expect(traceIdParts(Array.from({ length: 24 * 5_000 }, (_, i) => `t-${i}`))).toHaveLength(24)
+  })
+})
+
+describe("FA-F42-R2-002: lateTraces part cache cannot drop recorded ids", () => {
+  it("readLateIds still sees every part after the FIFO cache evicts an earlier part", async () => {
+    const partData = new Map<string, string[]>()
+    for (let n = 0; n < 65; n += 1) partData.set(`req_opik_p${n}`, [`trace-${n}`])
+
+    const makeTx = (parts: number): Transaction =>
+      ({
+        get: async (ref: { id: string }) =>
+          ({
+            exists: ref.id === "req_opik",
+            id: ref.id,
+            get: (field: string) => (field === "parts" ? parts : undefined),
+          }) as never,
+        getAll: async (...refs: { id: string }[]) =>
+          refs.map((ref) => ({
+            id: ref.id,
+            get: (field: string) => (field === "traceIds" ? partData.get(ref.id) ?? [] : undefined),
+          })) as never,
+      }) as Transaction
+
+    await readLateIds(makeTx(64), "req", "opik")
+    const read = await readLateIds(makeTx(65), "req", "opik")
+    expect(read.recorded.size).toBe(65)
+    expect(read.recorded.has("trace-0")).toBe(true)
+    expect(read.recorded.has("trace-64")).toBe(true)
+  })
+
+  it("stageLateIds does not re-count ids that are already recorded across more than 64 parts", async () => {
+    const partData = new Map<string, string[]>()
+    for (let n = 0; n < 65; n += 1) partData.set(`req_opik_p${n}`, [`trace-${n}`])
+    const makeTx = (parts: number): Transaction =>
+      ({
+        get: async (ref: { id: string }) =>
+          ({
+            exists: ref.id === "req_opik",
+            id: ref.id,
+            get: (field: string) => (field === "parts" ? parts : field === "count" ? 65 : 0),
+          }) as never,
+        getAll: async (...refs: { id: string }[]) =>
+          refs.map((ref) => ({
+            id: ref.id,
+            get: (field: string) => (field === "traceIds" ? partData.get(ref.id) ?? [] : undefined),
+          })) as never,
+      }) as Transaction
+
+    await readLateIds(makeTx(64), "req", "opik")
+    const read = await readLateIds(makeTx(65), "req", "opik")
+    const updates: Record<string, unknown>[] = []
+    const sets: Record<string, unknown>[] = []
+    const tx = {
+      get: makeTx(65).get,
+      getAll: makeTx(65).getAll,
+      update: (_ref: unknown, data: Record<string, unknown>) => {
+        updates.push(data)
+      },
+      set: (_ref: unknown, data: Record<string, unknown>) => {
+        sets.push(data)
+      },
+    } as Transaction
+    expect(stageLateIds(tx, read, ["trace-0", "trace-64"], { firmId: "f", requestId: "req", matterId: "m" }, 1)).toBe(0)
+    expect(updates).toHaveLength(0)
+    expect(sets).toHaveLength(0)
   })
 })
 

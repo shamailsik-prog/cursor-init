@@ -61,27 +61,23 @@ export function exportedIds(rows: ReadonlyArray<DocumentData | { get(path: strin
   return [...ids].sort()
 }
 
-/** Parts already read, by document id (immutable once written, so a cache never goes stale). Bounded. */
-const partCache = new Map<string, string[]>()
-const PART_CACHE_MAX = 64
-
 /** What a transaction read of one processor request: whether its summary exists, its part count and every id in it. */
 export type LateRead = { processor: string; exists: boolean; parts: number; recorded: ReadonlySet<string> }
 
-/** Reads the processor request in `tx` (the summary, and every part not cached). A read: call before the writes. */
+/** Reads the processor request in `tx` (the summary and every part). A read: call before the writes. */
 export async function readLateIds(tx: Transaction, requestId: string, processor: string): Promise<LateRead> {
   const summary = await tx.get(summaryRef(requestId, processor))
   const parts = summary.exists && typeof summary.get("parts") === "number" ? (summary.get("parts") as number) : 0
-  const missing = Array.from({ length: parts }, (_, n) => n).filter((n) => !partCache.has(partRef(requestId, processor, n).id))
-  if (missing.length > 0) {
-    const snaps = await tx.getAll(...missing.map((n) => partRef(requestId, processor, n)))
-    snaps.forEach((s) => {
-      if (partCache.size >= PART_CACHE_MAX) partCache.delete(partCache.keys().next().value as string)
-      partCache.set(s.id, Array.isArray(s.get("traceIds")) ? (s.get("traceIds") as string[]) : [])
-    })
-  }
   const recorded = new Set<string>()
-  for (let n = 0; n < parts; n += 1) for (const id of partCache.get(partRef(requestId, processor, n).id) ?? []) recorded.add(id)
+  if (parts > 0) {
+    // FA-F42-R2-002: always read every part in this transaction. A process-wide FIFO cache could evict a part while
+    // loading a later one in the same call, so `recorded` would miss ids and stageLateIds would double-count them.
+    const snaps = await tx.getAll(...Array.from({ length: parts }, (_, n) => partRef(requestId, processor, n)))
+    for (const s of snaps) {
+      const ids = Array.isArray(s.get("traceIds")) ? (s.get("traceIds") as string[]) : []
+      for (const id of ids) recorded.add(id)
+    }
+  }
   return { processor, exists: summary.exists, parts, recorded }
 }
 
