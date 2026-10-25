@@ -209,6 +209,16 @@ def test_index_terms_refuses_a_superuser_and_a_login_that_is_not_a_writer(corpus
     assert proc.returncode == 4 and "superuser_session" in proc.stderr
 
 
+def test_index_terms_on_a_database_without_006_exits_1_naming_research_index_missing(corpus_db):
+    # The login is a corpus_writer member, so this is not the role refusal (exit 4): it is the missing migration,
+    # reported by its code with exit 1 (cli.py: 4 only for a superuser or a role that is not a corpus_writer member).
+    corpus_db.apply_annex_a(("001_corpus_contract.sql", "003_corpus_publication.sql", "004_authority_read_views.sql", "005_research_reader.sql"))
+    writer, writer_pw = corpus_db.writer_role()
+    proc = corpus_db.run_cli("index-terms", user=writer, password=writer_pw)
+    assert proc.returncode == 1 and "research_index_missing" in proc.stderr, proc.stderr[-2000:]
+    assert proc.stdout.strip() == ""
+
+
 def test_a_citation_write_marks_its_judgments_and_the_index_writes_their_sizes_again(corpus_db):
     prepare(corpus_db)
     writer, writer_pw = corpus_db.writer_role()

@@ -229,8 +229,9 @@ DATABASE_URL=postgresql+asyncpg://<corpus_writer member>@<host>/<db> \
 ```
 
 stdout is one JSON object of counts (`titles`, `citations`, `unindexable`, `pending_titles`,
-`pending_citations`); exit `4` for a superuser or a role that is not a `corpus_writer` member and for
-a database without 006 (`research_index_missing`). Research folds a pending judgment itself, so it is
+`pending_citations`); exit `4` for a superuser or a role that is not a `corpus_writer` member, and `1`
+for a database without 006 (`research_index_missing`) or any other failure (nothing is written). Research folds a
+pending judgment itself, so it is
 exact whatever the index holds, but more than 2,000 pending visible judgments fail every search
 (`unindexed`) until this runs. A text the fold cannot reproduce exactly (a code point outside its
 domain) stays pending by design and counts in `unindexable`.
