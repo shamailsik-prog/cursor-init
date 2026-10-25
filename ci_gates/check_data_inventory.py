@@ -76,6 +76,8 @@ DDL_VIEW_RE = re.compile(
 PY_TABLENAME_RE = re.compile(r"__tablename__\s*=\s*[\"']([a-z_][a-z0-9_]*)[\"']")
 PY_CREATE_TABLE_RE = re.compile(r"create_table\(\s*[\"']([a-z_][a-z0-9_]*)[\"']")
 WEEKS_DAYS_RE = re.compile(r"^(\d+)([dw])$")
+# A reason code (spec R25): the policy lists them; a request or a hold may give only a listed one.
+REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,12 @@ def expected_backup_window(root: Path, name: str) -> int | None:
     return None
 
 
+def _reason_codes(value: object) -> bool:
+    """A closed list of reason codes: non-empty, each code-shaped, no duplicate (spec R25, FA-F42-R1-005)."""
+    return (isinstance(value, list) and bool(value) and all(isinstance(c, str) and REASON_CODE_RE.match(c) for c in value)
+            and len(set(value)) == len(value))
+
+
 def check_policy(policy: dict) -> list[Finding]:
     out: list[Finding] = []
     if not isinstance(policy.get("policyVersion"), str) or not policy["policyVersion"]:
@@ -207,6 +215,11 @@ def check_policy(policy: dict) -> list[Finding]:
             value = deletion.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 out.append(_fail("policy", f"deletion.{field} must be a positive integer"))
+        if not _reason_codes(deletion.get("reasonCodes")):
+            out.append(_fail("policy", "deletion.reasonCodes must be a closed, non-empty list of distinct codes"))
+    hold = policy.get("legalHold")
+    if not isinstance(hold, dict) or not _reason_codes(hold.get("reasonCodes")):
+        out.append(_fail("policy", "legalHold.reasonCodes must be a closed, non-empty list of distinct codes"))
     classes = policy.get("classes")
     if not isinstance(classes, dict) or not classes:
         return out + [_fail("policy", "classes missing")]

@@ -233,6 +233,22 @@ class Planted(unittest.TestCase):
         self.assertTrue(any("audit_trail: a periodic deletion needs periodDays" in m for m in msgs), msgs)
         self.assertTrue(any("must say PROPOSED" in m for m in msgs), msgs)
 
+    def test_reason_codes_are_a_closed_list_of_codes(self) -> None:
+        """FA-F42-R1-005 (spec R25): both lists exist, are non-empty, code-shaped and distinct."""
+        for mutate, needle in (
+            (lambda p: p["deletion"].pop("reasonCodes"), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", []), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", ["client_instruction", "Free text"]), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", ["court_order", "court_order"]), "deletion.reasonCodes"),
+            (lambda p: p.pop("legalHold"), "legalHold.reasonCodes"),
+            (lambda p: p["legalHold"].__setitem__("reasonCodes", "litigation_anticipated"), "legalHold.reasonCodes"),
+        ):
+            policy = copy.deepcopy(self.policy)
+            mutate(policy)
+            findings = gate.check_policy(policy)
+            self.assertTrue(any(needle in f.message for f in findings), msg=f"{needle}: {findings}")
+        self.assertEqual(gate.check_policy(self.policy), [])
+
     def test_a_class_that_may_anonymise_needs_the_fields(self) -> None:
         self.policy["classes"]["matter_content"]["onMatterDeletion"] = "anonymise"
         self.save()

@@ -11,7 +11,7 @@ import { isSafeDocId, type CallAudit, type Data, type FirmOperation } from "../p
 import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
 import { RetentionConfigError, activePolicy, holdRefusal, inventory, planDeletion, type PlannedStore, type RetentionPolicy } from "./config"
-import { PREPARE_JOB_TYPE, REASON_CODE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
+import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
 
 /**
  * Audit F42: the deletion protocol's routes (spec R4, R5, R9; `/api/platform/retention/*`).
@@ -30,7 +30,7 @@ import { PREPARE_JOB_TYPE, REASON_CODE, acksRef, holdsRef, requestsRef, type Hol
  *   partner releases it. A hold may be placed on a tombstoned matter, which halts its saga.
  *
  * Every retention action is partner-only firm administration in the shared P5 table; membership is not required, so
- * the routes keep working after the approval revoked it. Reason codes are short codes, never free text.
+ * the routes keep working after the approval revoked it. Reason codes come from the policy's closed lists, never free text.
  */
 
 const HOUR_MS = 3_600_000
@@ -43,8 +43,13 @@ function parseId(value: unknown, code: string): string {
   return value
 }
 
-function parseReason(value: unknown): string {
-  if (typeof value !== "string" || !REASON_CODE.test(value)) throw new HttpError(400, "invalid_reason_code")
+/**
+ * A reason code from the policy's closed list (spec R25): `deletion.reasonCodes` for a request, `legalHold.reasonCodes`
+ * for a hold. Anything else is 400 invalid_reason_code before anything is read or written (FA-F42-R1-005: a shape check
+ * alone let `client_<name>` into the permanent trail).
+ */
+function parseReason(value: unknown, allowed: readonly string[]): string {
+  if (typeof value !== "string" || !allowed.includes(value)) throw new HttpError(400, "invalid_reason_code")
   return value
 }
 
@@ -100,7 +105,7 @@ export const requestMatterDeletionOp: FirmOperation<RequestResult> = {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const matterId = parseId(data.matterId, "invalid_matter_id")
-    const reasonCode = parseReason(data.reasonCode)
+    const reasonCode = parseReason(data.reasonCode, loadPolicy().policy.deletion.reasonCodes)
     audit.target = `matters/${matterId}`
     await requirePermission(caller, "retention.request_deletion")
     const { policy, plan } = loadPolicy()
@@ -327,7 +332,7 @@ export const placeLegalHoldOp: FirmOperation<Record<string, unknown>> = {
     audit.firmId = caller.firmId
     audit.target = `firms/${caller.firmId}`
     const matterId = parseId(data.matterId, "invalid_matter_id")
-    const reasonCode = parseReason(data.reasonCode)
+    const reasonCode = parseReason(data.reasonCode, loadPolicy().policy.legalHold.reasonCodes)
     audit.target = `legal_holds/${matterId}`
     await requirePermission(caller, "retention.hold.place")
     const at = Timestamp.fromMillis(now ?? Date.now())

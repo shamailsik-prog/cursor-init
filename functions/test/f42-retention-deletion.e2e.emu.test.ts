@@ -99,10 +99,13 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
     ids[collection] = id
     return id
   }
-  await put("documents", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${tag}-d1/v1`, contentHash: "a".repeat(64), title: TITLE })
-  await put("document_versions", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${tag}-d1/v2` })
-  await put("ocr_texts", { matterId, documentId: `${tag}-d1`, classification: "internal", text: `${TITLE} OCR` })
-  await put("p1_ocr_operations", { matterId, documentId: `${tag}-d1`, text: `${TITLE} OCR op` })
+  // The vault's own key shape for the row (FA-F42-R1-005, spec R25): `<scheme><firmId>/documents/<documentId>/v<n>`.
+  const docId = uniq(`${tag}-d1`)
+  ids.documentId = docId
+  await put("documents", { matterId, classification: "internal", storagePath: `fs://${firmId}/documents/${docId}/v1`, contentHash: "a".repeat(64), title: TITLE }, docId)
+  await put("document_versions", { matterId, documentId: docId, classification: "internal", storagePath: `fs://${firmId}/documents/${docId}/v2` })
+  await put("ocr_texts", { matterId, documentId: docId, classification: "internal", text: `${TITLE} OCR` })
+  await put("p1_ocr_operations", { matterId, documentId: docId, text: `${TITLE} OCR op` })
   await put("committee_outputs", { matterId, actorId: "x", classification: "internal", text: OUTPUT_TEXT, outbound: { body: "masked" }, createdAt: Date.now() })
   await put("draft_gate_results", { matterId, draftId: "d", classification: "internal" })
   await put("draft_gate_overrides", { matterId, draftId: "d", reason: TITLE })
@@ -112,7 +115,7 @@ async function seedStores(firmId: string, matterId: string, tag: string): Promis
   await put("workflow_ops_activity", { matterId, classification: "internal", detail: TITLE })
   await put("workflow_ops_alert_digests", { matterId, classification: "internal", recomputeReason: TITLE })
   await put("follow_ups", { matterId, raw: TITLE })
-  await put("jobs", { matterId, jobType: "ocr", documentId: `${tag}-d1`, classification: "internal" })
+  await put("jobs", { matterId, jobType: "ocr", documentId: docId, classification: "internal" })
   await put("matter_parties", { matterId, name: `${tag} Opposing Party` })
   await put("conflict_checks", { matterId, subjects: [] })
   const exported = await put("ai_usage_logs", { matterId, model: "m", costMicroUsd: 5, trace: { id: `trace-${tag}-1`, status: "exported" }, createdAt: Timestamp.now() })
@@ -332,7 +335,7 @@ describe.skipIf(!EMULATORS)("F42: matter deletion through tombstone, saga and ac
     // The vault objects are tombstoned for the lifecycle. The Opik request lists every trace of the matter that was
     // exported (by the call, or by F34's reconciler) or may still be (pending); never a disabled or abandoned one.
     const vault = await adminDb().collection("vault_object_tombstones").where("requestId", "==", requestId).get()
-    expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/m-d1/v1`, `fs://${f.firmId}/documents/m-d1/v2`])
+    expect(vault.docs.map((d) => d.get("storagePath")).sort()).toEqual([`fs://${f.firmId}/documents/${ids.documentId}/v1`, `fs://${f.firmId}/documents/${ids.documentId}/v2`])
     const external = (await adminDb().collection("deletion_external_requests").doc(`${requestId}_opik`).get()).data()
     expect(external).toMatchObject({ processor: "opik", count: 3, parts: 1, status: "pending_operator" })
     expect((await recordedTraceIds(requestId)).ids.sort()).toEqual(["trace-m-1", "trace-m-3", "trace-m-4"])

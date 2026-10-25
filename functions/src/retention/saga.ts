@@ -320,12 +320,33 @@ async function assertNoHold(tx: Transaction, firmId: string, matterId: string): 
 const vaultKey = storeKey("objects:documents")
 const vaultTombId = (storagePath: string) => createHash("sha256").update(storagePath).digest("hex")
 
-type Progress = { count: number; chunks: string[] }
+/** The vault's own object key (platform/documents/documentObjectStore.ts buildDocumentStoragePath): scheme, firm, document, version. */
+const VAULT_PATH = /^(?:fs|s3):\/\/([A-Za-z0-9_-]{1,128})\/documents\/([A-Za-z0-9_-]{1,128})\/v[1-9][0-9]{0,8}$/
+const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
+
+/** The document a purged row's object belongs to: the row's own id for `documents`, else its `documentId` (id-shaped only). */
+function documentIdOf(snap: { id: string; ref: { parent: { id: string } } }, data: DocumentData): string | null {
+  const id: unknown = snap.ref.parent.id === "documents" ? snap.id : data.documentId
+  return typeof id === "string" && SAFE_ID.test(id) ? id : null
+}
+
+/**
+ * The storage path a vault tombstone may keep (spec R25, FA-F42-R1-005): only the vault's own shape for this row, with
+ * the row's firm and document. Anything else (a legacy path carrying a title, another firm's, a version suffix with
+ * text) is not copied into the permanent trail; the tombstone keeps its SHA-256 instead (its document id).
+ */
+export function vaultPathOf(path: string, firmId: string, documentId: string | null): string | null {
+  const m = VAULT_PATH.exec(path)
+  return m !== null && documentId !== null && m[1] === firmId && m[2] === documentId ? path : null
+}
+
+type Progress = { count: number; chunks: string[]; refusedPaths: number }
 
 function progressOf(data: DocumentData | undefined): Progress {
   return {
     count: typeof data?.count === "number" ? data.count : 0,
     chunks: Array.isArray(data?.chunks) ? (data.chunks as string[]) : [],
+    refusedPaths: typeof data?.refusedPaths === "number" ? data.refusedPaths : 0,
   }
 }
 
@@ -351,6 +372,7 @@ async function purgeChunk(
     const progress = progressOf(progressSnap.data())
     let n = 0
     let objects = 0
+    let refused = 0
     snaps.forEach((snap) => {
       const data = snap.data()
       if (!pending(store, treatment, data, firmId)) return
@@ -359,15 +381,20 @@ async function purgeChunk(
       } else {
         const path = data.storagePath
         if (writeVault && typeof path === "string" && path !== "") {
-          tx.set(adminDb().collection(VAULT_OBJECT_TOMBSTONES_COLLECTION).doc(vaultTombId(path)), {
+          const documentId = documentIdOf(snap, data)
+          const kept = vaultPathOf(path, firmId, documentId)
+          const tombId = vaultTombId(path)
+          tx.set(adminDb().collection(VAULT_OBJECT_TOMBSTONES_COLLECTION).doc(tombId), {
             firmId,
             requestId: ctx.payload.requestId,
-            documentId: snap.ref.parent.id === "documents" ? snap.id : (typeof data.documentId === "string" ? data.documentId : null),
-            storagePath: path,
+            documentId,
+            storagePath: kept,
+            ...(kept === null ? { storagePathSha256: tombId, pathShape: "refused" } : {}),
             lockUntil,
             at: Timestamp.fromMillis(nowMs(ctx as JobContext<unknown>)),
           })
           objects += 1
+          if (kept === null) refused += 1
         }
         tx.delete(snap.ref)
       }
@@ -379,7 +406,7 @@ async function purgeChunk(
     tx.set(progressRef, { ...base, storeId: store.id, storeKey: key, count: progress.count + n, chunks: [...progress.chunks, chunkHash] }, { merge: true })
     if (objects > 0) {
       const vault = progressOf(vaultSnap.data())
-      tx.set(vaultRef, { ...base, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, lockUntil }, { merge: true })
+      tx.set(vaultRef, { ...base, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, refusedPaths: vault.refusedPaths + refused, lockUntil }, { merge: true })
     }
   })
 }
@@ -510,7 +537,7 @@ async function acknowledge(
           outcome: "lock_pending",
           count: p.count,
           idsSha256: null,
-          detail: { lockUntilMax: lockUntil instanceof Timestamp ? lockUntil.toDate().toISOString() : null, lifecycle: "not_demonstrated" },
+          detail: { lockUntilMax: lockUntil instanceof Timestamp ? lockUntil.toDate().toISOString() : null, lifecycle: "not_demonstrated", refusedPaths: p.refusedPaths },
         })
       }
     }
@@ -535,4 +562,4 @@ export const retentionPurgeHandler: JobHandler<PurgePayload> = {
 }
 
 /** Exposed for the unit tests. */
-export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts }
+export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf }

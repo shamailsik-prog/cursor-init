@@ -127,6 +127,42 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(() => validatePolicy(period, inv)).toThrow(RetentionConfigError)
   })
 
+  it("FA-F42-R1-005: validation refuses a reason-code list that is missing, empty, not code-shaped or repeated", () => {
+    const inv = inventory()
+    const cases: Array<[string, (p: RetentionPolicy) => void]> = [
+      ["deletion.reasonCodes", (p) => delete (p.deletion as { reasonCodes?: unknown }).reasonCodes],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = [])],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = ["client_instruction", "Client Ayesha"])],
+      ["deletion.reasonCodes", (p) => (p.deletion.reasonCodes = ["court_order", "court_order"])],
+      ["legalHold.reasonCodes", (p) => delete (p as { legalHold?: unknown }).legalHold],
+      ["legalHold.reasonCodes", (p) => (p.legalHold.reasonCodes = ["ok_code", "x"])],
+    ]
+    for (const [field, mutate] of cases) {
+      const p = purgePolicy()
+      mutate(p)
+      expect(() => validatePolicy(p, inv), field).toThrow(new RetentionConfigError(field))
+    }
+  })
+
+  it("FA-F42-R1-005: a vault path is kept only in the vault's own shape for its row's firm and document", () => {
+    const { vaultPathOf } = sagaInternals
+    expect(vaultPathOf("fs://firmA/documents/doc1/v1", "firmA", "doc1")).toBe("fs://firmA/documents/doc1/v1")
+    expect(vaultPathOf("s3://firmA/documents/doc1/v12", "firmA", "doc1")).toBe("s3://firmA/documents/doc1/v12")
+    for (const [path, firm, doc] of [
+      ["fs://firmA/documents/Ayesha Siddiqui v Khan/v1", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v1", "firmB", "doc1"],
+      ["fs://firmA/documents/doc1/v1", "firmA", "doc2"],
+      ["fs://firmA/documents/doc1/v1", "firmA", null],
+      ["fs://firmA/documents/doc1/v1-Ayesha", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v0", "firmA", "doc1"],
+      ["gs://firmA/documents/doc1/v1", "firmA", "doc1"],
+      ["fs://firmA/exports/doc1/v1", "firmA", "doc1"],
+      ["fs://firmA/documents/doc1/v1/extra", "firmA", "doc1"],
+    ] as const) {
+      expect(vaultPathOf(path, firm, doc), path).toBeNull()
+    }
+  })
+
   it("groups the documents stores and the vault into the first purge job, the rest by the group size", () => {
     const p = purgePolicy()
     const plan = Object.fromEntries(planDeletion(p).map((x) => [x.key, x.treatment]))

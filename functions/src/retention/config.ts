@@ -27,7 +27,18 @@ export type RetentionPolicy = {
   ratifiedBy: string | null
   ratifiedAt: string | null
   note?: string
-  deletion: { approvalWindowHours: number; ackDeadlineHours: number; maxMembersRevokedAtApproval: number; storesPerPurgeJob: number; proposed?: string }
+  deletion: {
+    approvalWindowHours: number
+    ackDeadlineHours: number
+    maxMembersRevokedAtApproval: number
+    storesPerPurgeJob: number
+    /** The closed list of codes a deletion request may give (spec R25). */
+    reasonCodes: string[]
+    reasonCodesNote?: string
+    proposed?: string
+  }
+  /** Legal holds: the closed list of codes a hold may give (spec R25). */
+  legalHold: { reasonCodes: string[]; note?: string }
   classes: Record<string, ClassPolicy>
 }
 
@@ -106,6 +117,14 @@ const MATTER_KEYED: ReadonlySet<StoreKey["kind"]> = new Set(["docId", "field", "
 
 const positiveInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
 
+/** The shape of one reason code: lower case, a letter first, 3 to 64 characters (spec R25). */
+export const REASON_CODE_SHAPE = /^[a-z][a-z0-9_]{2,63}$/
+
+/** A closed list of reason codes: non-empty, each code-shaped, no duplicate. */
+function reasonCodeList(v: unknown): v is string[] {
+  return Array.isArray(v) && v.length > 0 && v.every((c) => typeof c === "string" && REASON_CODE_SHAPE.test(c)) && new Set(v).size === v.length
+}
+
 /** Checks the policy the code relies on (the CI gate checks the same file more fully); throws RetentionConfigError. */
 export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
   if (typeof p.policyVersion !== "string" || p.policyVersion === "") throw new RetentionConfigError("policyVersion")
@@ -113,6 +132,8 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
   if (!d || !positiveInt(d.approvalWindowHours) || !positiveInt(d.ackDeadlineHours) || !positiveInt(d.maxMembersRevokedAtApproval) || !positiveInt(d.storesPerPurgeJob)) {
     throw new RetentionConfigError("deletion")
   }
+  if (!reasonCodeList(d.reasonCodes)) throw new RetentionConfigError("deletion.reasonCodes")
+  if (!p.legalHold || !reasonCodeList(p.legalHold.reasonCodes)) throw new RetentionConfigError("legalHold.reasonCodes")
   for (const [name, c] of Object.entries(p.classes ?? {})) {
     if (!ACTIONS.has(c.onMatterDeletion) || typeof c.legalHold !== "boolean" || !PERIODIC.has(c.periodicAction)) throw new RetentionConfigError(`class ${name}`)
     if (c.periodDays !== null && !positiveInt(c.periodDays)) throw new RetentionConfigError(`class ${name} periodDays`)

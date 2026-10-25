@@ -31,8 +31,10 @@ export type AckOutcome = "purged" | "anonymised" | "retained" | "not_applicable"
 /** How the plan treats a store: decided at approval from the policy and the inventory, then fixed on the request. */
 export type Treatment = "purge" | "anonymise" | "retained" | "not_applicable" | "expiry" | "lock" | "external"
 
-/** A reason or refusal code: short, lower-case, never free text (no content enters the trail). */
-export const REASON_CODE = /^[a-z][a-z0-9_]{2,63}$/
+/**
+ * Reason codes are a closed list in the policy (`deletion.reasonCodes`, `legalHold.reasonCodes`; spec R25), checked by
+ * `config.ts` and the routes. FA-F42-R1-005: a shape check alone let a name in as snake case.
+ */
 
 /** The refusal codes a legal hold produces (spec R9). */
 export type HoldRefusal = "legal_hold_matter" | "legal_hold_policy"

@@ -9,7 +9,13 @@
     "ackDeadlineHours": 24,
     "maxMembersRevokedAtApproval": 400,
     "storesPerPurgeJob": 12,
+    "reasonCodes": ["client_instruction", "matter_opened_in_error", "duplicate_matter", "retention_period_elapsed", "court_order", "regulator_request"],
+    "reasonCodesNote": "PROPOSED, owner ratification required. The closed list of codes a deletion request may give (spec R25): a code, never free text, so no name or fact of a matter enters the deletion trail. Adding a code is a policy change.",
     "proposed": "PROPOSED, owner ratification required: a partner requests, a second partner approves within 72 h; every store acknowledges within 24 h of approval or the watch alerts."
+  },
+  "legalHold": {
+    "reasonCodes": ["litigation_anticipated", "litigation_pending", "regulator_request", "court_order", "client_instruction", "internal_investigation"],
+    "note": "PROPOSED, owner ratification required. The closed list of codes a legal hold may give (spec R25). Whether any code obliges a hold in law is [REQUIRES VERIFICATION]; the list is a labelling aid only."
   },
   "classes": {
     "matter_record": {
