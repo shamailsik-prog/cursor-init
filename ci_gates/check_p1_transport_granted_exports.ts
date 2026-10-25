@@ -166,6 +166,30 @@ function isTransportLikeType(checker: ts.TypeChecker, type: ts.Type, seen = new 
   return false
 }
 
+function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isFunctionExpression(node)
+  )
+}
+
+function functionCapturesTainted(node: ts.FunctionLikeDeclaration, tainted: Set<string>): boolean {
+  let found = false
+  const visit = (n: ts.Node) => {
+    if (found) return
+    if (ts.isIdentifier(n) && (tainted.has(n.text) || RESTRICTED_VALUE_IMPORTS.has(n.text))) {
+      found = true
+      return
+    }
+    if (isFunctionLike(n)) return
+    ts.forEachChild(n, visit)
+  }
+  if (node.body) ts.forEachChild(node.body, visit)
+  return found
+}
+
 function subtreeHasRestrictedFlow(node: ts.Node, tainted: Set<string>): boolean {
   let found = false
   const visit = (n: ts.Node) => {
@@ -201,9 +225,10 @@ function expressionUsesRestrictedCallee(expr: ts.Expression): boolean {
   return false
 }
 
-/** Export boundary: typed transport, restricted callee, or opaque/cast hiding restricted flow. */
+/** Export boundary: typed transport, restricted callee, closure capture, or opaque/cast hiding restricted flow. */
 function exportLeaksTransport(checker: ts.TypeChecker, expr: ts.Expression, tainted: Set<string>): boolean {
   const u = unwrapExpression(expr)
+  if (isFunctionLike(u) && functionCapturesTainted(u, tainted)) return true
   const t = checker.getTypeAtLocation(u)
   if (isTransportLikeType(checker, t)) return true
   if (expressionUsesRestrictedCallee(u)) return true
@@ -221,6 +246,8 @@ function expressionCapableOfTransport(
   expr: ts.Expression,
   tainted: Set<string>,
 ): boolean {
+  const u = unwrapExpression(expr)
+  if (isFunctionLike(u) && functionCapturesTainted(u, tainted)) return true
   if (subtreeHasRestrictedFlow(expr, tainted)) return true
   const t = checker.getTypeAtLocation(expr)
   if (isTransportLikeType(checker, t)) return true
@@ -245,11 +272,16 @@ function expressionLeaksTransportForEnvWrite(
   }
   const t = checker.getTypeAtLocation(e)
   if (isTransportLikeType(checker, t)) return true
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+    return functionCapturesTainted(e, tainted)
+  }
   if (ts.isObjectLiteralExpression(e)) {
     return e.properties.some((p) => {
       if (ts.isPropertyAssignment(p)) {
         const init = p.initializer
-        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return false
+        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
+          return functionCapturesTainted(init, tainted)
+        }
         return expressionLeaksTransportForEnvWrite(checker, init, tainted)
       }
       if (ts.isShorthandPropertyAssignment(p)) {
@@ -385,18 +417,28 @@ function checkExportBody(
     }
     if (ts.isCallExpression(n)) {
       const cal = unwrapExpression(n.expression)
+      const leaksArg = (arg: ts.Expression) =>
+        expressionCapableOfTransport(checker, arg, tainted) ||
+        exportLeaksTransport(checker, arg, tainted) ||
+        (isFunctionLike(unwrapExpression(arg)) && functionCapturesTainted(unwrapExpression(arg) as ts.FunctionLikeDeclaration, tainted))
       if (calleeIsParameter(checker, cal)) {
         for (const arg of n.arguments) {
-          if (expressionCapableOfTransport(checker, arg, tainted)) {
+          if (leaksArg(arg)) {
             findings.push(`${rel}: ${VIOLATION} (${exportName} passes transport to callback)`)
           }
         }
       }
       if (ts.isPropertyAccessExpression(cal) && cal.name.text === "cb") {
         for (const arg of n.arguments) {
-          if (expressionCapableOfTransport(checker, arg, tainted)) {
+          if (leaksArg(arg)) {
             findings.push(`${rel}: ${VIOLATION} (${exportName} passes transport to callback)`)
           }
+        }
+      }
+      for (const arg of n.arguments) {
+        const u = unwrapExpression(arg)
+        if (isFunctionLike(u) && functionCapturesTainted(u, tainted)) {
+          findings.push(`${rel}: ${VIOLATION} (${exportName} passes transport-capturing closure)`)
         }
       }
     }

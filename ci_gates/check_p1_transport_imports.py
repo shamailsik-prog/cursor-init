@@ -1026,10 +1026,81 @@ def _mentions_type(c: Code, a: int, b: int) -> bool:
     return any(c.toks[k].kind == "id" and c.toks[k].value in TYPE_NAMES and not c.member(k) for k in range(a, b))
 
 
-def _transport_use_ok(c: Code, i: int, live_eval: set[str]) -> bool:
+def _executable_scopes(c: Code) -> list[tuple[int, int]]:
+    """Token ranges [start, end) for function bodies (declarations and `=>` bodies)."""
+    ranges: list[tuple[int, int]] = []
+    for _name, a, b, _exported in _functions(c):
+        ranges.append((a, b))
+    toks = c.toks
+    for i, t in enumerate(toks):
+        if t.kind != "punct" or t.value != "=>":
+            continue
+        if c.punct(i + 1, "{"):
+            k = i + 1
+            end = c.close.get(k, len(toks))
+            ranges.append((k + 1, end))
+        else:
+            start = i + 1
+            ranges.append((start, c.stmt_end(start)))
+    return ranges
+
+
+def _innermost_scope(c: Code, i: int, scopes: list[tuple[int, int]]) -> tuple[int, int] | None:
+    best: tuple[int, int] | None = None
+    for a, b in scopes:
+        if a <= i < b:
+            if best is None or (b - a) < (best[1] - best[0]):
+                best = (a, b)
+    return best
+
+
+def _executable_scope_for(c: Code, i: int, scopes: list[tuple[int, int]]) -> tuple[int, int] | None:
+    """Innermost function body containing i, or the nearest body after i (function parameters)."""
+    inner = _innermost_scope(c, i, scopes)
+    if inner is not None:
+        return inner
+    after = [(a, b) for a, b in scopes if a > i]
+    if not after:
+        return None
+    return min(after, key=lambda ab: ab[0])
+
+
+def _read_nested_in_closure(c: Code, i: int, binding_i: int, scopes: list[tuple[int, int]]) -> bool:
+    """True when token i is read inside a nested function relative to the scope that binds the transport const."""
+    bind = _executable_scope_for(c, binding_i, scopes)
+    use = _innermost_scope(c, i, scopes)
+    if use is None:
+        return False
+    if bind is None:
+        return True
+    if use == bind:
+        return False
+    ba, bb = bind
+    ua, ub = use
+    return ba <= ua and ub <= bb
+
+
+def _binding_index_for_read(c: Code, i: int, name: str, binding_at: set[int]) -> int | None:
+    candidates = [bi for bi in binding_at if c.toks[bi].value == name and bi < i]
+    if not candidates:
+        return None
+    for bi in sorted(candidates, reverse=True):
+        if any(k in binding_at and c.toks[k].value == name for k in range(bi + 1, i)):
+            continue
+        return bi
+    return max(candidates)
+
+
+def _transport_use_ok(c: Code, i: int, live_eval: set[str], binding_i: int | None, scopes: list[tuple[int, int]]) -> bool:
     """Token i (a transport binding read) is the receiver of `.send(` / `.embed(`, an `.id` read, a null check, or an
     argument of `runLiveEvaluation(` as imported from evalSet.ts (`live_eval`: its local names in this file), never of a
     function a granted file defines under that name."""
+    if binding_i is not None and _read_nested_in_closure(c, i, binding_i, scopes):
+        if c.punct(i - 1, "(", ",") and c.punct(i + 1, ",", ")"):
+            p = c.parent[i]
+            if p >= 0 and c.punct(p, "(") and live_eval and c.word(p - 1, *live_eval) and not c.member(p - 1):
+                return True
+        return False
     k = i + 1
     if c.punct(k, "!"):
         k += 1
@@ -1068,10 +1139,12 @@ def granted_findings(c: Code, rel: str, value_locals: dict[str, str], whole_loca
     tracked.update(_typed_bindings(c))
     names = set(tracked.values())
     binding_at = set(tracked)
+    scopes = _executable_scopes(c)
     for i, t in enumerate(c.toks):
         if t.kind != "id" or t.value not in names or i in binding_at or not c.free(i) or _in_spans(i, spans):
             continue
-        if not _transport_use_ok(c, i, live_eval):
+        binding_i = _binding_index_for_read(c, i, t.value, binding_at)
+        if not _transport_use_ok(c, i, live_eval, binding_i, scopes):
             out.append(f"{rel}: uses {t.value} (a transport) other than as a .send/.embed receiver, an .id read, a null check or a runLiveEvaluation argument")
     # Kept from R17: a restricted value name on an `export` line.
     for i, t in enumerate(c.toks):
@@ -1097,6 +1170,80 @@ def granted_findings(c: Code, rel: str, value_locals: dict[str, str], whole_loca
 # ---------------------------------------------------------------------------------------------------------------------
 # The Gateway key and host (R32)
 # ---------------------------------------------------------------------------------------------------------------------
+
+
+_CODEGEN_NAMES = frozenset({"eval", "Function"})
+_TIMEOUT_NAMES = frozenset({"setTimeout", "setInterval"})
+
+
+def _fold_string_from(c: Code, start: int) -> tuple[str | None, int]:
+    """A string or `+` chain of string/template literals starting at `start`, and the index after it."""
+    t = c.at(start)
+    if t is None:
+        return None, start
+    if t.kind not in ("str", "tpl") or (t.kind == "tpl" and t.part != "full"):
+        return None, start
+    parts = [t.value]
+    j = start
+    while c.punct(j + 1, "+") and c.at(j + 2) is not None and (
+        c.toks[j + 2].kind == "str" or (c.toks[j + 2].kind == "tpl" and c.toks[j + 2].part == "full")
+    ):
+        parts.append(c.toks[j + 2].value)
+        j += 2
+    return "".join(parts), j + 1
+
+
+def _codegen_evasion_findings(c: Code, rel: str) -> list[str]:
+    """FA-F34-R6-002: dynamic eval/Function and string timers outside bare identifier forms."""
+    if not rel.startswith(COMPUTED_SCOPE):
+        return []
+    out: list[str] = []
+    toks = c.toks
+    for i, t in enumerate(toks):
+        if t.kind == "id" and t.value in _TIMEOUT_NAMES and c.punct(i + 1, "(") and not c.member(i):
+            folded, _ = _fold_string_from(c, i + 2)
+            if folded is not None:
+                out.append(f"{rel}: generates code at run time ({t.value} with string argument)")
+        if t.kind == "id" and t.value in ("globalThis", "global") and not c.member(i):
+            if c.punct(i + 1, ".") and c.word(i + 2, "eval", "Function"):
+                out.append(f"{rel}: generates code at run time ({c.toks[i + 2].value})")
+            if c.punct(i + 1, "["):
+                folded, _ = _fold_string_from(c, i + 2)
+                if folded in _CODEGEN_NAMES:
+                    out.append(f"{rel}: generates code at run time ({folded})")
+        if t.kind == "punct" and t.value == "[":
+            folded, _ = _fold_string_from(c, i + 1)
+            if folded in _CODEGEN_NAMES:
+                j = i - 1
+                while j >= 0 and c.punct(j, ")", "!", "?"):
+                    if c.punct(j, ")"):
+                        o = c.open.get(j)
+                        if o is None:
+                            break
+                        if c.ident(o + 1) and c.toks[o + 1].value in ("globalThis", "global") and not c.member(o + 1):
+                            out.append(f"{rel}: generates code at run time ({folded})")
+                            break
+                        j = o - 1
+                        continue
+                    j -= 1
+        if t.kind == "id" and t.value == "Reflect" and c.punct(i + 1, ".") and c.word(i + 2, "get") and c.punct(i + 3, "("):
+            j = i + 4
+            depth = 0
+            while j < len(toks):
+                tok = c.toks[j]
+                if tok.kind == "punct" and tok.value == "(":
+                    depth += 1
+                elif tok.kind == "punct" and tok.value == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif tok.kind == "punct" and tok.value == "," and depth == 0:
+                    folded, _ = _fold_string_from(c, j + 1)
+                    if folded in _CODEGEN_NAMES:
+                        out.append(f"{rel}: generates code at run time ({folded})")
+                    break
+                j += 1
+    return out
 
 
 def _literal_values(c: Code) -> list[str]:
@@ -1229,6 +1376,8 @@ def file_findings(rel: str, text: str, resolver: Resolver) -> list[str]:
             for name in grants.get(rel, ()):
                 if name not in imported.get(module, set()):
                     out.append(f"{rel}: holds a grant for {name} from {module} that it does not import")
+    if in_scope:
+        out.extend(_codegen_evasion_findings(c, rel))
     if in_scope or rel in KEY_NAME_GRANTS or rel in HOST_GRANTS:
         out.extend(gateway_findings(c, rel))
     return sorted(set(out))
