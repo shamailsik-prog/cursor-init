@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
 import { adminDb } from "../admin"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
@@ -205,9 +205,14 @@ function traceIdParts(ids: readonly string[]): string[][] {
   return parts
 }
 
-const DOCUMENT_FIRST = ["firestore:documents", "firestore:document_versions", "objects:documents"]
+/**
+ * The first purge group, in this order: the documents (whose purge first finds the legacy committee outputs through
+ * them, FA-F42-R1-002), their versions, the committee outputs (acknowledged only after that legacy purge, in the same
+ * job or its continuation, never by another group that might run first) and the vault (counted from both).
+ */
+const DOCUMENT_FIRST = ["firestore:documents", "firestore:document_versions", "firestore:committee_outputs", "objects:documents"]
 
-/** The purge jobs' store groups: the documents stores and the vault first, then the rest in plan order. */
+/** The purge jobs' store groups: the documents stores, the committee outputs and the vault first, then the rest in plan order. */
 export function purgeGroups(plan: Record<string, Treatment>, order: readonly string[], perJob: number): string[][] {
   const size = Math.max(1, Math.min(perJob, MAX_STORES_PER_JOB))
   const purge = order.filter((k) => ["purge", "anonymise", "lock"].includes(plan[k]))
@@ -438,11 +443,21 @@ async function purgeChunk(
     })
     // A write to a collection the conflict screen reads (the matter row) moves the firm's registry version with it.
     if (n > 0 && Object.hasOwn(REGISTRY_SCOPE, store.name)) bumpRegistryVersion(tx, firmId)
-    const base = { firmId, requestId: ctx.payload.requestId, matterId: req.matterId, acknowledged: false }
-    tx.set(progressRef, { ...base, storeId: store.id, storeKey: key, count: progress.count + n, chunks: [...progress.chunks, chunkHash] }, { merge: true })
+    // A store's first acknowledgement stands (spec R7): rows purged after it (rows that reappeared) are counted apart,
+    // in `afterAck`, and never flip the acknowledgement or change the count and hash it gave.
+    const base = { firmId, requestId: ctx.payload.requestId, matterId: req.matterId }
+    if (progressSnap.get("acknowledged") === true) {
+      tx.set(progressRef, { afterAck: FieldValue.increment(n) }, { merge: true })
+    } else {
+      tx.set(progressRef, { ...base, acknowledged: false, storeId: store.id, storeKey: key, count: progress.count + n, chunks: [...progress.chunks, chunkHash] }, { merge: true })
+    }
     if (objects > 0) {
       const vault = progressOf(vaultSnap.data())
-      tx.set(vaultRef, { ...base, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, refusedPaths: vault.refusedPaths + refused, lockUntil }, { merge: true })
+      if (vaultSnap.get("acknowledged") === true) {
+        tx.set(vaultRef, { afterAck: FieldValue.increment(objects), refusedAfterAck: FieldValue.increment(refused) }, { merge: true })
+      } else {
+        tx.set(vaultRef, { ...base, acknowledged: false, storeId: "objects:documents", storeKey: vaultKey, count: vault.count + objects, chunks: vault.chunks, refusedPaths: vault.refusedPaths + refused, lockUntil }, { merge: true })
+      }
     }
   })
 }
@@ -460,6 +475,12 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
     for (let i = 0; i < stores.length; i += 1) {
       const { key, store } = stores[i]
       if (req.plan[key] !== "purge" && req.plan[key] !== "anonymise") continue
+      // FA-F42-R1-002: before any document row goes, the legacy outputs that name the matter only through them.
+      if (key === DOCUMENTS_KEY && req.plan[key] === "purge") {
+        const next = await purgeLegacyOutputs(ctx, req, chunks)
+        if (next === null) return await continueWith(ctx, req, stores, i, jobId)
+        chunks = next
+      }
       // An acknowledged store is purged again if rows reappeared (its first acknowledgement stands).
       for (let round = 0; ; round += 1) {
         const rows = await matterRows(store, req.plan[key], firmId, req.matterId, CHUNK)
@@ -478,6 +499,62 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
     throw err
   }
   return {}
+}
+
+const DOCUMENTS_KEY = storeKey("firestore:documents")
+const OUTPUTS_KEY = storeKey("firestore:committee_outputs")
+/** Firestore's limit on the values of one array-contains-any filter. */
+export const LEGACY_DOCUMENT_BATCH = 30
+/** The matter's document ids read per page while the legacy outputs are found. */
+const DOCUMENT_ID_PAGE = 300
+
+/** A committee output the legacy purge takes: one with no matter (null or absent), or the matter's own. */
+function legacyOf(data: DocumentData, matterId: string): boolean {
+  const m: unknown = data.matterId
+  return m === null || m === undefined || m === matterId
+}
+
+/**
+ * FA-F42-R1-002 (spec R22): committee outputs written before `matterId` was required name the matter only through
+ * `documentIds`. Before the first document row of the matter is deleted, this pages the matter's document ids and, for
+ * each batch of 30 (array-contains-any), deletes in fenced chunks every output of the firm that names one of them and has
+ * no matter of its own (an output of another matter is never touched). The rows count on `committee_outputs`'s progress,
+ * so that store's acknowledgement counts and hashes them too. Only when the plan purges `committee_outputs`. Returns the
+ * chunk count after it, or null when the budget ran out (the caller hands over at the documents store, and the
+ * continuation runs this again over the documents still there).
+ */
+async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
+  if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
+  const outputs = plannedStore(OUTPUTS_KEY)
+  const { firmId } = ctx.job
+  let used = chunks
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb().collection("documents").where("firmId", "==", firmId).where("matterId", "==", req.matterId).orderBy(FieldPath.documentId()).limit(DOCUMENT_ID_PAGE)
+    if (after !== null) page = page.startAfter(after)
+    const docs = (await page.select().get()).docs.map((d) => d.id)
+    for (let b = 0; b < docs.length; b += LEGACY_DOCUMENT_BATCH) {
+      const batch = docs.slice(b, b + LEGACY_DOCUMENT_BATCH)
+      let cursor: string | null = null
+      for (let round = 0; ; round += 1) {
+        let q = adminDb().collection(outputs.name).where("firmId", "==", firmId).where("documentIds", "array-contains-any", batch).orderBy(FieldPath.documentId()).limit(CHUNK)
+        if (cursor !== null) q = q.startAfter(cursor)
+        const snap = await q.get()
+        if (snap.empty) break
+        cursor = snap.docs[snap.docs.length - 1].id
+        const rows = snap.docs.filter((d) => legacyOf(d.data(), req.matterId))
+        if (rows.length > 0) {
+          if (used >= CHUNK_STEP_BUDGET) return null
+          const ids = rows.map((r) => r.id).sort()
+          await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `legacy-${sha256(ids).slice(0, 24)}-${round}`)
+          used += 1
+        }
+        if (snap.size < CHUNK) break
+      }
+    }
+    if (docs.length < DOCUMENT_ID_PAGE) return used
+    after = docs[docs.length - 1]
+  }
 }
 
 /** The distinct step ids the job has recorded, every attempt's (the worker's `fencedSteps`). */

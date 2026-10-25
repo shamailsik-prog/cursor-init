@@ -163,12 +163,14 @@ describe("F42 units: treatments, plan and holds", () => {
     }
   })
 
-  it("groups the documents stores and the vault into the first purge job, the rest by the group size", () => {
+  it("groups the documents stores, the committee outputs and the vault into the first purge job, the rest by the group size", () => {
     const p = purgePolicy()
     const plan = Object.fromEntries(planDeletion(p).map((x) => [x.key, x.treatment]))
     const order = planDeletion(p).map((x) => x.key)
     const groups = purgeGroups(plan, order, 12)
-    expect(groups[0]).toEqual(["firestore_documents", "firestore_document_versions", "objects_documents"])
+    // FA-F42-R1-002: committee outputs ride with the documents, after them, so their legacy rows (found through the
+    // documents) are purged before the store is acknowledged, whatever order the other groups run in.
+    expect(groups[0]).toEqual(["firestore_documents", "firestore_document_versions", "firestore_committee_outputs", "objects_documents"])
     expect(groups.slice(1).every((g) => g.length <= 12 && g.length > 0)).toBe(true)
     const purged = order.filter((k) => ["purge", "anonymise", "lock"].includes(plan[k]))
     expect(groups.flat().sort()).toEqual([...purged].sort())

@@ -87,6 +87,7 @@ export default defineConfig({
             "tests/f02-next-authority.e2e.firestore.test.ts",
             "tests/f42-tombstone-next.e2e.firestore.test.ts",
             "tests/firestore.rules.f42-tombstone.test.ts",
+            "tests/f42-r1-followup-next.e2e.firestore.test.ts",
           ]),
     ],
   },

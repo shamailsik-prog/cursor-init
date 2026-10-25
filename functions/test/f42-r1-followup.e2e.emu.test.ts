@@ -273,3 +273,69 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-004: a legal hold stops every remaining d
     expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
   })
 })
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterId) are purged by their documents", () => {
+  it("the saga purges every legacy output that names a document of the matter, in batches of 30, and counts it truthfully", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    // 31 documents, so the matter's ids span two array-contains-any batches of 30.
+    const docIds = Array.from({ length: 31 }, (_, i) => `${f.matterId}-doc${String(i).padStart(2, "0")}`)
+    for (const id of docIds) await db.collection("documents").doc(id).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const otherDoc = `${f.matterId}-elsewhere`
+    await db.collection("documents").doc(otherDoc).set({ firmId: f.firmId, matterId: "another-matter", classification: "internal" })
+    const legacy = (id: string, documentIds: string[], extra: DocumentData = {}) =>
+      db.collection("committee_outputs").doc(`${f.matterId}-${id}`).set({ firmId: f.firmId, actorId: f.P.uid, documentIds, text: `${TITLE} legacy answer`, classification: "internal", createdAt: Date.now(), ...extra })
+    await legacy("null", [docIds[0]], { matterId: null })
+    await legacy("absent", [docIds[5], otherDoc])
+    await legacy("second-batch", [docIds[30]], { matterId: null })
+    // Kept: a legacy row of another matter's document only, and a row of another matter that names one of ours.
+    await legacy("keep-other-doc", [otherDoc], { matterId: null })
+    await legacy("keep-other-matter", [docIds[1]], { matterId: "another-matter" })
+    // The current shape: matterId set, purged by the store's own query as before.
+    await legacy("current", [docIds[2]], { matterId: f.matterId })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.status).toBe("completed")
+    const exists = async (id: string) => (await db.collection("committee_outputs").doc(`${f.matterId}-${id}`).get()).exists
+    for (const id of ["null", "absent", "second-batch", "current"]) expect(await exists(id), id).toBe(false)
+    for (const id of ["keep-other-doc", "keep-other-matter"]) expect(await exists(id), id).toBe(true)
+    // The acknowledgement counts every output the saga purged, the legacy ones included.
+    expect(view.acks.find((a) => a.storeId === "firestore:committee_outputs")).toMatchObject({ outcome: "purged", count: 4 })
+    expect(view.acks.find((a) => a.storeId === "firestore:documents")).toMatchObject({ outcome: "purged", count: 31 })
+  })
+
+  it("a store's first acknowledgement stands: a row purged after it is counted apart and never un-acknowledges the store", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    await db.collection("documents").doc(`${f.matterId}-first`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    // The first purge job crashes just after its acknowledgement committed; a row of the matter lands before the retry.
+    let crashed = false
+    retentionTestSeam.afterStep = async (step) => {
+      if (crashed || step !== "ack-g0") return
+      crashed = true
+      await db.collection("documents").doc(`${f.matterId}-after-ack`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+      throw new Error("simulated crash after the committed acknowledgement")
+    }
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    // The first group alone, twice: the crash, then its retry while the request is still in progress.
+    const g0 = (await db.collection("jobs").where("firmId", "==", f.firmId).where("payload.part", "==", "g0").get()).docs[0]!
+    expect(await runJobTask({ jobId: g0.id, seq: g0.get("dispatchSeq") as number }, deps)).toBe("failed")
+    expect(crashed).toBe(true)
+    const retry = (await db.collection("jobs").doc(g0.id).get()).data()!
+    clock.set((retry.nextAttemptAt as Timestamp).toMillis() + 1)
+    expect(await runJobTask({ jobId: g0.id, seq: retry.dispatchSeq as number }, deps)).toBe("done")
+    await drain(f.firmId, clock, deps)
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.status).toBe("completed")
+    expect(view.acks.find((a) => a.storeId === "firestore:documents")).toMatchObject({ outcome: "purged", count: 1 })
+    expect((await db.collection("documents").doc(`${f.matterId}-after-ack`).get()).exists).toBe(false)
+    const progress = (await db.collection("deletion_acks").doc(`${requestId}_firestore_documents`).get()).data()
+    expect(progress).toMatchObject({ acknowledged: true, count: 1, afterAck: 1 })
+  })
+})
