@@ -114,3 +114,32 @@ Verification on f2b7e13 (the code head of the follow-up; the commit after it add
 - Mutation: 16 of 16 killed (the nine new mutants and the seven earlier ones on `saga.ts` and `ops.ts`, Z4 moved).
 - Not rerun for the follow-up: the full Functions and root suites, G-1 and the deploy contract (the follow-up changes
   only `functions/src/retention/{saga,ops,model}.ts`, F42's tests, mutants and docs).
+
+## R1 follow-up (independent re-audit at 301e65d, FAIL 5/10)
+
+Spec section 11 (R21 to R35). Branch `claude/remediate-f42-fu` from main 5840d3d. Private emulators: Firestore 8697,
+Auth 9697, hub 4793, logging 4795, websocket 8698, project `demo-f42-fu`, UI off. RED: each new test run against main's
+code (the branch before the finding's fix, which is main for every file it touches); GREEN: the branch after.
+
+### Tasks (one commit per finding)
+
+1. Spec rulings R21 to R35 and this ledger.
+2. R1-003 rules: `notDeleted` on every clause that does not use membership; rules tests RP0 to RP4 (RED, GREEN).
+3. R1-005 reason codes as a closed policy list; vault path shape check; content plants never reach the trail.
+4. R1-004 `assertNoHold` in every prepare step; processor request `held` on halt, hold and release; runbook step.
+5. R1-002 legacy committee outputs: purge by documents in g0; the Next GET and the rules refuse them.
+6. R1-007 in-flight traces: anonymise-chunk capture; the P1 `stage` seam; the publication refusal.
+7. R1-001 replay refusal in both stacks (recording scope, body scan, tombstone read at replay).
+8. R1-006 independent approver (createdBy, partnerGrantedBy, tenure); FP7 refused.
+9. R1-009 job visibility; R1-010 committee scope eviction.
+10. R1-008 the inventory scanner and its run-time check; the 33 plants as must-fail fixtures.
+11. R1-011 periodic retention validation.
+12. R1-013 the CI-cost seam; R1-012 the surviving auditor mutants; R1-014 the runbook; R1-015 cleanup.
+13. Own mutants (at least 15), suites, gates, evidence, PR body.
+
+### RED/GREEN ledger (R1 follow-up)
+
+(Filled as each finding lands; the same numbers are in the PR body.)
+
+| Finding | Test | RED (on main's code) | GREEN (branch) |
+| --- | --- | --- | --- |

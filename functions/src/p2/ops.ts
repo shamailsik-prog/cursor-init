@@ -1,5 +1,6 @@
 import { FieldPath, Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Query, type Transaction } from "firebase-admin/firestore"
 import { decide } from "@/platform/p5/permissionDecision"
+import { MATTER_TOMBSTONES, isTombstoneFor } from "@/platform/retention/tombstone"
 import { adminDb } from "../admin"
 import { decodeCursor, encodeCursor, parsePage, type Page } from "../d1/pagination"
 import { HttpError } from "../http/errors"
@@ -50,16 +51,23 @@ export const listJobsTestSeam: { scanBatch?: number; betweenBatches?: () => Prom
 const nowOf = (session: Session): number => session.now ?? Date.now()
 const memberRef = (matterId: string, uid: string) => adminDb().collection("matter_members").doc(`${matterId}_${uid}`)
 const matterRef = (matterId: string) => adminDb().collection("matters").doc(matterId)
+const tombstoneRef = (matterId: string) => adminDb().collection(MATTER_TOMBSTONES).doc(matterId)
 
 /** The matter whose label and membership decide the row's visibility: a same-firm row's safe matterId, else none. */
 function matterOf(caller: Caller, job: DocumentData | undefined): string | null {
   return job && job.firmId === caller.firmId && isSafeDocId(job.matterId) ? job.matterId : null
 }
 
-/** A matter snapshot as `judge` reads it: its firm and current label, or null when it does not exist. */
-function matterNow(snap: DocumentSnapshot): MatterNow {
+/**
+ * A matter snapshot as `judge` reads it: its firm and current label, or null when it does not exist, or when the
+ * matter is tombstoned for its firm (audit F42, FA-F42-R1-009: from the approval on, the deleted matter's job rows are
+ * hidden like its other rows, so `none` and 404, until the saga purges them).
+ */
+function matterNow(snap: DocumentSnapshot, tomb: DocumentSnapshot): MatterNow {
   const data = snap.data()
-  return data ? { firmId: data.firmId, classification: data.classification } : null
+  if (!data) return null
+  if (tomb.exists && isTombstoneFor(tomb.data(), data.firmId, snap.id)) return null
+  return { firmId: data.firmId, classification: data.classification }
 }
 
 type Judged = { visibility: "none" } | { visibility: "full" | "restricted"; row: DocumentData }
@@ -108,8 +116,9 @@ async function readVisibleTx(tx: Transaction, caller: Caller, jobId: string): Pr
   const ref = jobsRef().doc(jobId)
   const job = (await tx.get(ref)).data()
   const matterId = matterOf(caller, job)
-  const [matterSnap, memberSnap] = matterId === null ? [] : await tx.getAll(matterRef(matterId), memberRef(matterId, caller.uid))
-  const judged = judge(caller, job, matterSnap ? matterNow(matterSnap) : null, memberSnap?.exists === true)
+  const [matterSnap, memberSnap, tombSnap] =
+    matterId === null ? [] : await tx.getAll(matterRef(matterId), memberRef(matterId, caller.uid), tombstoneRef(matterId))
+  const judged = judge(caller, job, matterSnap ? matterNow(matterSnap, tombSnap) : null, memberSnap?.exists === true)
   if (judged.visibility === "none") throw notFound()
   if (judged.visibility === "restricted") throw new HttpError(403, "not_member")
   return judged.row as JobRow
@@ -238,10 +247,10 @@ async function mattersNow(caller: Caller, rows: DocumentData[]): Promise<{ matte
   const members = new Set<string>()
   const matterIds = [...new Set(rows.map((r) => matterOf(caller, r)).filter((m): m is string => m !== null))]
   if (matterIds.length === 0) return { matters, members }
-  const snaps = await adminDb().getAll(...matterIds.flatMap((m) => [matterRef(m), memberRef(m, caller.uid)]))
+  const snaps = await adminDb().getAll(...matterIds.flatMap((m) => [matterRef(m), memberRef(m, caller.uid), tombstoneRef(m)]))
   matterIds.forEach((m, i) => {
-    matters.set(m, matterNow(snaps[2 * i]))
-    if (snaps[2 * i + 1].exists) members.add(m)
+    matters.set(m, matterNow(snaps[3 * i], snaps[3 * i + 2]))
+    if (snaps[3 * i + 1].exists) members.add(m)
   })
   return { matters, members }
 }
@@ -263,8 +272,9 @@ export const getJobOp: FirmOperation<JobView> = {
     await requirePermission(caller, "job.read")
     const job = (await jobsRef().doc(jobId).get()).data()
     const matterId = matterOf(caller, job)
-    const [matterSnap, memberSnap] = matterId === null ? [] : await adminDb().getAll(matterRef(matterId), memberRef(matterId, caller.uid))
-    const judged = judge(caller, job, matterSnap ? matterNow(matterSnap) : null, memberSnap?.exists === true)
+    const [matterSnap, memberSnap, tombSnap] =
+      matterId === null ? [] : await adminDb().getAll(matterRef(matterId), memberRef(matterId, caller.uid), tombstoneRef(matterId))
+    const judged = judge(caller, job, matterSnap ? matterNow(matterSnap, tombSnap) : null, memberSnap?.exists === true)
     if (judged.visibility === "none") throw notFound()
     await audit.allow()
     return jobView(jobId, judged.row, judged.visibility, { logs: true })

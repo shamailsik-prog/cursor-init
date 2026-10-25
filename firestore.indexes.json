@@ -23,6 +23,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "firmId", "order": "ASCENDING" },
+        { "fieldPath": "documentIds", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "committee_outputs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firmId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" },
         { "fieldPath": "__name__", "order": "ASCENDING" }
       ]

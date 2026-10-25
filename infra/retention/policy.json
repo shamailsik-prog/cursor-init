@@ -9,7 +9,15 @@
     "ackDeadlineHours": 24,
     "maxMembersRevokedAtApproval": 400,
     "storesPerPurgeJob": 12,
+    "approverMinTenureDays": 30,
+    "approverMinTenureNote": "PROPOSED, owner ratification required (spec R26): the requester's and the approver's account and partner role must each have run this many days (the approver's must also predate the request), and neither partner may have created the other's account or made the other partner.",
+    "reasonCodes": ["client_instruction", "matter_opened_in_error", "duplicate_matter", "retention_period_elapsed", "court_order", "regulator_request"],
+    "reasonCodesNote": "PROPOSED, owner ratification required. The closed list of codes a deletion request may give (spec R25): a code, never free text, so no name or fact of a matter enters the deletion trail. Adding a code is a policy change.",
     "proposed": "PROPOSED, owner ratification required: a partner requests, a second partner approves within 72 h; every store acknowledges within 24 h of approval or the watch alerts."
+  },
+  "legalHold": {
+    "reasonCodes": ["litigation_anticipated", "litigation_pending", "regulator_request", "court_order", "client_instruction", "internal_investigation"],
+    "note": "PROPOSED, owner ratification required. The closed list of codes a legal hold may give (spec R25). Whether any code obliges a hold in law is [REQUIRES VERIFICATION]; the list is a labelling aid only."
   },
   "classes": {
     "matter_record": {
@@ -17,6 +25,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "[REQUIRES VERIFICATION] The matter row itself. No retention period is adopted.",
       "proposed": {
         "onMatterDeletion": "anonymise",
@@ -30,6 +39,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "Access-control rows, not content. An approved deletion revokes them in the approval transaction regardless of this action (spec R5).",
       "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
     },
@@ -38,6 +48,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "[REQUIRES VERIFICATION] Documents, OCR text, drafts, evidence, AI outputs and filing records of a matter.",
       "proposed": {
         "onMatterDeletion": "purge",
@@ -50,6 +61,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "Search and reporting rows derived from matter records; they should follow the records they derive from.",
       "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
     },
@@ -58,6 +70,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "[REQUIRES VERIFICATION] P1 spend and attempt metadata (no text). Spend totals are kept separately in ai_usage_months.",
       "proposed": {
         "onMatterDeletion": "anonymise",
@@ -70,6 +83,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "P2 job rows of a matter (ids, codes, payload ids).",
       "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
     },
@@ -78,6 +92,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "Legacy Next workflow-ops and filing-escalation rows; rows that carry matterId are matter records.",
       "proposed": { "onMatterDeletion": "purge", "note": "PROPOSED, owner ratification required." }
     },
@@ -86,6 +101,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "matter_closure",
       "basis": "Kept so that future conflict screens still see whom the firm acted for and against (spec R8). Any professional-conduct basis is [REQUIRES VERIFICATION].",
       "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
     },
@@ -94,6 +110,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "The audit trail, including the trail of the deletion itself, survives (ids, codes and hashes only).",
       "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
     },
@@ -102,6 +119,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "Operational keys and counters under Firestore TTL (F32). An idempotency effect may hold a response body until its TTL deletes it.",
       "proposed": { "onMatterDeletion": "retain", "note": "Expiry under TTL is not a policy choice; recorded for completeness." }
     },
@@ -110,6 +128,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "Firm, user, MFA and platform rows; not keyed by matter.",
       "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
     },
@@ -118,6 +137,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "Firm-level governance, configuration and aggregates; not keyed by matter.",
       "proposed": { "onMatterDeletion": "retain", "note": "PROPOSED, owner ratification required." }
     },
@@ -126,6 +146,7 @@
       "legalHold": true,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "F03 document vault objects under the F33 COMPLIANCE lock (infra/backup/document-vault.json); no deletion is possible before the lock ends.",
       "proposed": { "onMatterDeletion": "lock", "note": "PROPOSED, owner ratification required: tombstone each object and delete it after its lock by a hold-aware lifecycle rule (NOT DEMONSTRATED)." }
     },
@@ -134,6 +155,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "Self-hosted Opik traces (masked prompt and response at ranks 0 to 3).",
       "proposed": { "onMatterDeletion": "external", "note": "PROPOSED, owner ratification required: record a deletion request for the operator (the Opik call is NOT DEMONSTRATED)." }
     },
@@ -142,6 +164,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "F33 backups; a deleted row lives on until the backup expires under its own retention.",
       "proposed": { "onMatterDeletion": "expiry", "note": "Expiry under the backup retention is not a policy choice; recorded for completeness." }
     },
@@ -150,6 +173,7 @@
       "legalHold": false,
       "periodDays": null,
       "periodicAction": "retain",
+      "periodBasis": "row_age",
       "basis": "Public law corpus and its vectors; holds no client or matter data. Out of scope of matter deletion.",
       "proposed": { "onMatterDeletion": "retain", "note": "Out of scope." }
     }

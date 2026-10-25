@@ -58,6 +58,7 @@ import {
   type WriteFence,
 } from "@/platform/persistence/firestoreDbModular"
 import { getRuntimeFirestore, resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
+import { runRecordingMatters } from "@/platform/retention/operationMatters"
 
 export type { SettleOutcome } from "@/platform/http/durableIdempotency"
 
@@ -303,7 +304,8 @@ export function resetIdempotencyForTests(): void {
 /** The caller a request's keys are scoped to; set by withSession for the whole request. */
 export type IdempotencyScope = { firmId: string; userId: string }
 
-type RequestClaims = { scope: IdempotencyScope; claims: IdempotencyClaim[] }
+/** `matters`: every matter the request's permission checks named (audit F42, spec R21), stored with its claims' answers. */
+type RequestClaims = { scope: IdempotencyScope; claims: IdempotencyClaim[]; matters: Set<string> }
 
 const requestClaims = new AsyncLocalStorage<RequestClaims>()
 
@@ -443,11 +445,11 @@ function claimLostResponse(): NextResponse {
  *   idempotency_claim_lost.
  */
 export async function runWithIdempotencyScope<T>(scope: IdempotencyScope, run: () => Promise<T>): Promise<T> {
-  const ctx: RequestClaims = { scope, claims: [] }
+  const ctx: RequestClaims = { scope, claims: [], matters: new Set() }
   let result: T | undefined
   let failure: { error: unknown } | undefined
   try {
-    result = await requestClaims.run(ctx, run)
+    result = await requestClaims.run(ctx, () => runRecordingMatters(ctx.matters, run))
   } catch (error) {
     failure = { error }
   }
@@ -606,10 +608,11 @@ export async function beginIdempotentRequest(request: Request, key: string, fing
       const claim = new IdempotencyClaim({
         complete: () => undefined,
         settle: (completed, payload, refusal) => {
-          if (!completed) return durable.settle(ref, { completed: false, ...(refusal === undefined ? {} : { refusal }) })
+          const matters = [...(ctx?.matters ?? [])]
+          if (!completed) return durable.settle(ref, { completed: false, matters, ...(refusal === undefined ? {} : { refusal }) })
           const json = JSON.stringify(payload ?? null)
           const kept = Buffer.byteLength(json, "utf8") <= DURABLE_MAX_RESPONSE_BYTES ? json : null
-          return durable.settle(ref, { completed: true, json: kept })
+          return durable.settle(ref, { completed: true, json: kept, matters })
         },
         fence: () => fence,
         operationId: ref.operationId,
@@ -628,6 +631,9 @@ export async function beginIdempotentRequest(request: Request, key: string, fing
       return { response: unavailableResponse() }
     case "terminal":
       return { response: effectCommittedResponse(begun.operationId) }
+    case "matter_deleted":
+      // Audit F42 (FA-F42-R1-001, spec R21): the stored answer belongs to a matter deleted since; refused as a fresh call.
+      return { response: errorResponse(403, "matter_deleted", "the matter was deleted") }
     case "refusal": {
       // A refusal is stored only after an effect committed: its replay carries the signal too (ruling 15).
       const body = begun.body !== null && typeof begun.body === "object" && !Array.isArray(begun.body) ? begun.body : { result: begun.body }

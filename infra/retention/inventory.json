@@ -103,7 +103,7 @@
   "stores": [
     {"id": "firestore:ai_budget_alerts", "kind": "firestore", "name": "ai_budget_alerts", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "firestore:ai_config", "kind": "firestore", "name": "ai_config", "profile": "firm_governance", "key": {"kind": "none"}},
-    {"id": "firestore:ai_reservations", "kind": "firestore", "name": "ai_reservations", "profile": "ai_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}},
+    {"id": "firestore:ai_reservations", "kind": "firestore", "name": "ai_reservations", "profile": "ai_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}, "ageField": {"field": "createdAt", "type": "timestamp"}},
     {"id": "firestore:ai_usage_logs", "kind": "firestore", "name": "ai_usage_logs", "profile": "ai_record", "key": {"kind": "field", "field": "matterId"}, "anonymise": {"matterId": null}, "ageField": {"field": "createdAt", "type": "timestamp"}},
     {"id": "firestore:ai_usage_months", "kind": "firestore", "name": "ai_usage_months", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "firestore:api_keys", "kind": "firestore", "name": "api_keys", "profile": "identity_platform", "key": {"kind": "none"}},

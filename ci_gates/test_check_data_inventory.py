@@ -52,7 +52,7 @@ class ShippedTree(unittest.TestCase):
             self.assertTrue(policy["classes"][name]["legalHold"], msg=name)
 
 
-class Planted(unittest.TestCase):
+class PlantedTree(unittest.TestCase):
     """A small synthetic tree: two rules collections, one code collection, one object prefix, one table."""
 
     def setUp(self) -> None:
@@ -79,6 +79,8 @@ class Planted(unittest.TestCase):
         }
         self.write("firestore.rules", "service cloud.firestore {\n  match /databases/{database}/documents {\n    match /matters/{id} { allow read: if false; }\n    match /documents/{id} { allow read: if false; }\n  }\n}\n")
         self.write("functions/src/audit.ts", 'export const ref = () => db.collection("audit_log")\n')
+        # The two rules blocks are server-only, so the code names them too (a server-only store must be visible in code).
+        self.write("functions/src/matters.ts", 'export const m = () => db.collection("matters")\nexport const d = () => db.collection("documents")\n')
         self.write("platform/documents/path.ts", "export const p = (firmId: string, id: string) => `s3://${firmId}/documents/${id}/v1`\n")
         self.write("postgres/ddl/001.sql", "CREATE TABLE IF NOT EXISTS judgment (id UUID PRIMARY KEY);\n")
         self.save()
@@ -99,6 +101,9 @@ class Planted(unittest.TestCase):
         findings, _ = gate.run(self.root)
         return [f.message for f in findings]
 
+
+
+class Planted(PlantedTree):
     def test_baseline_passes(self) -> None:
         self.assertEqual(self.messages(), [])
         self.assertEqual(gate.main(["--root", str(self.root)]), 0)
@@ -233,6 +238,22 @@ class Planted(unittest.TestCase):
         self.assertTrue(any("audit_trail: a periodic deletion needs periodDays" in m for m in msgs), msgs)
         self.assertTrue(any("must say PROPOSED" in m for m in msgs), msgs)
 
+    def test_reason_codes_are_a_closed_list_of_codes(self) -> None:
+        """FA-F42-R1-005 (spec R25): both lists exist, are non-empty, code-shaped and distinct."""
+        for mutate, needle in (
+            (lambda p: p["deletion"].pop("reasonCodes"), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", []), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", ["client_instruction", "Free text"]), "deletion.reasonCodes"),
+            (lambda p: p["deletion"].__setitem__("reasonCodes", ["court_order", "court_order"]), "deletion.reasonCodes"),
+            (lambda p: p.pop("legalHold"), "legalHold.reasonCodes"),
+            (lambda p: p["legalHold"].__setitem__("reasonCodes", "litigation_anticipated"), "legalHold.reasonCodes"),
+        ):
+            policy = copy.deepcopy(self.policy)
+            mutate(policy)
+            findings = gate.check_policy(policy)
+            self.assertTrue(any(needle in f.message for f in findings), msg=f"{needle}: {findings}")
+        self.assertEqual(gate.check_policy(self.policy), [])
+
     def test_a_class_that_may_anonymise_needs_the_fields(self) -> None:
         self.policy["classes"]["matter_content"]["onMatterDeletion"] = "anonymise"
         self.save()
@@ -242,6 +263,150 @@ class Planted(unittest.TestCase):
         self.inventory["stores"][-1]["key"]["windowDays"] = 30
         self.save()
         self.assertTrue(any("windowDays 30 disagrees" in m for m in self.messages()))
+
+    def test_a_deleting_period_must_cover_its_class_and_matter_closure_is_not_adoptable(self) -> None:
+        """FA-F42-R1-011 (spec R31): no incoherent period can be ratified."""
+        cls = self.policy["classes"]["matter_content"]
+        cls.update({"periodDays": 30, "periodicAction": "purge", "legalHold": False})
+        self.save()
+        self.assertTrue(any("matter_content: a deleting period aged from matter closure is not built (FU-8)" in m for m in self.messages()))
+        cls["periodBasis"] = "row_age"
+        self.save()
+        self.assertTrue(any("firestore:documents: its class matter_content has a deleting period, which retention.apply can age only" in m for m in self.messages()))
+        self.inventory["stores"][1]["ageField"] = {"field": "uploadedAt", "type": "timestamp"}
+        self.save()
+        self.assertEqual(self.messages(), [])
+        del cls["periodBasis"]
+        self.save()
+        self.assertTrue(any("matter_content: periodBasis must be one of" in m for m in self.messages()))
+
+    def test_a_deleting_period_on_a_class_with_a_store_apply_cannot_age_fails(self) -> None:
+        """FA-F42-R1-011 (spec R31): the vault (and any non-Firestore or unkeyed store) cannot take a deleting period."""
+        self.policy["classes"]["vault_object"].update({"periodDays": 30, "periodicAction": "purge", "legalHold": False, "periodBasis": "row_age"})
+        self.save()
+        self.assertTrue(any("objects:documents: its class vault_object has a deleting period, which retention.apply can age only" in m for m in self.messages()))
+        self.policy["classes"]["vault_object"].update({"periodicAction": "retain"})
+        self.save()
+        self.assertEqual(self.messages(), [])
+
+    def test_the_approver_tenure_is_a_positive_whole_number_of_days(self) -> None:
+        """FA-F42-R1-006 (spec R26): the gate refuses what validatePolicy refuses."""
+        self.assertEqual(self.policy["deletion"]["approverMinTenureDays"], 30)
+        for bad in (None, 0, 1.5, "30", True):
+            policy = copy.deepcopy(self.policy)
+            if bad is None:
+                policy["deletion"].pop("approverMinTenureDays")
+            else:
+                policy["deletion"]["approverMinTenureDays"] = bad
+            self.assertTrue(any("deletion.approverMinTenureDays" in f.message for f in gate.check_policy(policy)), bad)
+
+    def test_a_server_only_collection_must_be_visible_in_code(self) -> None:
+        """FA-F42-R1-008 (spec R28): a server-only rules block is no substitute for the code scan."""
+        self.write("firestore.rules", (self.root / "firestore.rules").read_text().replace("  }\n}", "    match /hidden_store/{id} { allow read, write: if false; }\n  }\n}"))
+        self.inventory["stores"].append({"id": "firestore:hidden_store", "kind": "firestore", "name": "hidden_store", "profile": "audit_trail", "key": {"kind": "none"}})
+        self.save()
+        msgs = self.messages()
+        self.assertTrue(any("server-only Firestore collection hidden_store is found only through its firestore.rules block" in m for m in msgs), msgs)
+        # Named in code (through a constant of any name), it passes.
+        self.write("functions/src/hidden.ts", 'const STORE = "hidden_store"\nexport const h = () => adminDb().collection(STORE)\n')
+        self.assertEqual(self.messages(), [])
+
+    def test_a_dynamic_name_must_begin_an_inventoried_collection(self) -> None:
+        self.write("functions/src/dyn.ts", "export const x = (db: any, k: string) => db.collection(`audit_${k}`)\n")
+        self.assertEqual(self.messages(), [], msg="a prefix of an inventoried collection passes")
+        self.write("functions/src/dyn.ts", "export const x = (db: any, k: string) => db.collection(`zz_new_${k}`)\n")
+        self.assertTrue(any("dynamic Firestore collection name zz_new_..." in m for m in self.messages()))
+
+
+# The re-auditor's 33 plant shapes at 301e65d (scratchpad reaudit-f42/gate_plants.py; 21 were missed): each must fail.
+PLANT_TS = "functions/src/zz_audit_plant.ts"
+PLANT_PLATFORM = "platform/zz_audit_plant.ts"
+PLANT_SQL = "postgres/ddl/099_audit_plant.sql"
+PLANT_PY = "corpus_service/zz_audit_plant.py"
+AUDITOR_PLANTS = (
+    # (id, files, rules addition, a substring the gate's findings must contain)
+    ("P1", {PLANT_TS: 'import { adminDb } from "./admin"\nexport const x = () => adminDb().collection("audit_plant_new")\n'}, None, "audit_plant_new"),
+    ("P2", {PLANT_TS: 'export const x = (db: any) => db.collection("matters").doc("m").collection("audit_plant_sub")\n'}, None, "audit_plant_sub"),
+    ("P2r", {}, "    match /matters/{matterId}/audit_plant_notes/{noteId} { allow read: if false; }\n", "audit_plant_notes"),
+    ("P2rn", {}, "    match /audit_plant_parent/{p} {\n      match /audit_plant_child/{c} { allow read: if false; }\n    }\n", "audit_plant_child"),
+    ("P3", {PLANT_TS: 'export const x = (db: any) => db.collectionGroup("audit_plant_cg")\n'}, None, "audit_plant_cg"),
+    ("P3m", {PLANT_TS: 'import { collectionGroup } from "firebase/firestore"\nexport const x = (firestore: any) => collectionGroup(firestore, "audit_plant_cg2")\n'}, None, "audit_plant_cg2"),
+    ("P4", {PLANT_PLATFORM: "export const p = (firmId: string, id: string) => `s3://bucket/${firmId}/audit_plant_exports/${id}`\n"}, None, "audit_plant_exports"),
+    ("P4b", {PLANT_PLATFORM: "export const p = (input: { firmId: string }, id: string) => `s3://bucket/${input.firmId}/audit_plant_exports2/${id}`\n"}, None, "audit_plant_exports2"),
+    ("P4c", {PLANT_PLATFORM: 'export const p = (firmId: string, id: string) => "s3://bucket/" + firmId + "/audit_plant_exports3/" + id\n'}, None, "audit_plant_exports3"),
+    ("P5", {PLANT_SQL: "CREATE TABLE IF NOT EXISTS audit_plant_tbl (id TEXT PRIMARY KEY, matter_id TEXT, body TEXT);\n"}, None, "audit_plant_tbl"),
+    ("P5t", {PLANT_SQL: "CREATE TEMP TABLE audit_plant_tmp (id TEXT, body TEXT);\n"}, None, "audit_plant_tmp"),
+    ("P5u", {PLANT_SQL: "CREATE UNLOGGED TABLE audit_plant_unl (id TEXT, body TEXT);\n"}, None, "audit_plant_unl"),
+    ("P5s", {PLANT_SQL: "SELECT * INTO audit_plant_into FROM judgment;\n"}, None, "audit_plant_into"),
+    ("P5o", {"corpus_service/migrations_audit_plant.sql": "CREATE TABLE audit_plant_elsewhere (id TEXT, body TEXT);\n"}, None, "audit_plant_elsewhere"),
+    ("P5py", {PLANT_PY: 'DDL = "CREATE TABLE audit_plant_pyraw (id TEXT, body TEXT)"\n'}, None, "audit_plant_pyraw"),
+    ("P6", {PLANT_SQL: "CREATE VIEW audit_plant_v AS SELECT 1;\n"}, None, "audit_plant_v"),
+    ("P6m", {PLANT_SQL: "CREATE MATERIALIZED VIEW IF NOT EXISTS audit_plant_mv AS SELECT 1;\n"}, None, "audit_plant_mv"),
+    ("B1", {PLANT_TS: 'export const x = (db: any, name: string) => db.collection(name)\nexport const y = (db: any) => x(db, "audit_plant_dyn_arg")\n'}, None, "audit_plant_dyn_arg"),
+    ("B2a", {PLANT_TS: 'export const x = (db: any, k: string) => db.collection("audit_plant_" + k)\n'}, None, "audit_plant_"),
+    ("B2b", {PLANT_TS: 'const P = "audit_plant"\nexport const x = (db: any) => db.collection(P + "_concat")\n'}, None, "audit_plant_concat"),
+    ("B2c", {PLANT_TS: "export const x = (db: any) => db.collection(`audit_plant_tpl`)\n"}, None, "audit_plant_tpl"),
+    ("B2d", {PLANT_TS: "export const x = (db: any, k: string) => db.collection(`audit_plant_${k}`)\n"}, None, "audit_plant_"),
+    ("B2e", {PLANT_TS: 'const AUDIT_PLANT_STORE = "audit_plant_const"\nexport const x = (db: any) => db.collection(AUDIT_PLANT_STORE)\n'}, None, "audit_plant_const"),
+    ("B2f", {PLANT_TS: 'export const x = (db: any) => db.collection("auditPlantCamel")\n'}, None, "auditPlantCamel"),
+    ("B2g", {PLANT_TS: 'import { collection } from "firebase/firestore"\nexport const x = (firestore: any) => collection(firestore, "audit_plant_mod")\n'}, None, "audit_plant_mod"),
+    ("B2h", {PLANT_TS: 'import { doc } from "firebase/firestore"\nexport class R { db: any; get(id: string) { return doc(this.db, "audit_plant_this", id) } }\n'}, None, "audit_plant_this"),
+    ("B2i", {"functions/src/zz_audit_plant.js": 'exports.x = (db) => db.collection("audit_plant_js")\n'}, None, "audit_plant_js"),
+    ("B2j", {"scripts/zz_audit_plant.cjs": 'module.exports = (db) => db.collection("audit_plant_cjs")\n'}, None, "audit_plant_cjs"),
+    ("B2k", {"components/zz_audit_plant.ts": 'export const x = (db: any) => db.collection("audit_plant_comp")\n'}, None, "audit_plant_comp"),
+    ("B2l", {PLANT_PY: 'def f(db):\n    return db.collection("audit_plant_py")\n'}, None, "audit_plant_py"),
+    ("B3", {PLANT_SQL: "CREATE TABLE IF NOT EXISTS client_private.judgment (id TEXT PRIMARY KEY, matter_id TEXT, privileged_text TEXT);\n"}, None, "client_private.judgment"),
+    ("B3b", {PLANT_SQL: 'CREATE OR REPLACE VIEW "firm_private"."v_judgment" AS SELECT 1;\n'}, None, "firm_private.v_judgment"),
+    ("B3c", {PLANT_SQL: "CREATE TABLE app.audit_plant_q (id TEXT);\n"}, None, "app.audit_plant_q"),
+)
+
+
+class AuditorPlants(PlantedTree):
+    """FA-F42-R1-008: every shape the re-auditor planted is a must-fail fixture (and the clean tree passes)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The public corpus names the B3 plants collide with, and the view P5s reads, are inventoried as public corpus.
+        self.inventory["stores"].append({"id": "postgres:v_judgment", "kind": "postgres", "name": "v_judgment", "profile": "public_corpus", "key": {"kind": "none"}})
+        self.write("postgres/ddl/002_views.sql", "CREATE OR REPLACE VIEW public.v_judgment AS SELECT 1;\n")
+        self.save()
+
+    def test_the_clean_tree_passes(self) -> None:
+        self.assertEqual(self.messages(), [])
+
+    def test_every_planted_shape_fails_the_gate_and_names_the_store(self) -> None:
+        self.assertEqual(len(AUDITOR_PLANTS), 33)
+        rules = self.root / "firestore.rules"
+        clean = rules.read_text(encoding="utf-8")
+        for pid, files, rules_extra, needle in AUDITOR_PLANTS:
+            with self.subTest(plant=pid):
+                written = []
+                try:
+                    for rel, text in files.items():
+                        self.write(rel, text)
+                        written.append(self.root / rel)
+                    if rules_extra:
+                        rules.write_text(clean.replace("  }\n}", rules_extra + "  }\n}"), encoding="utf-8")
+                    msgs = self.messages()
+                    self.assertTrue(any(needle in m for m in msgs), msg=f"{pid}: {msgs}")
+                    self.assertEqual(gate.main(["--root", str(self.root)]), 1)
+                finally:
+                    for p in written:
+                        p.unlink()
+                    rules.write_text(clean, encoding="utf-8")
+        self.assertEqual(self.messages(), [])
+
+
+class RuntimeCheck(unittest.TestCase):
+    """FA-F42-R1-008: the run-time check compares the emulator's root collections with the inventory."""
+
+    def test_an_uninventoried_root_collection_fails_and_test_fixtures_are_named(self) -> None:
+        inventory = gate.load_json(ROOT, gate.INVENTORY)
+        findings = gate.check_runtime_collections(["matters", "documents", "zz_unknown_store", *gate.RUNTIME_TEST_COLLECTIONS], inventory)
+        self.assertEqual([f.message for f in findings], [
+            "run-time: Firestore collection zz_unknown_store exists after the emulator suite but is not inventoried; add it to infra/retention/inventory.json",
+        ])
+        self.assertEqual(gate.check_runtime_collections(["matters"], inventory), [])
 
 
 if __name__ == "__main__":
