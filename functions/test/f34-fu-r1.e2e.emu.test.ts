@@ -1,7 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import type { Response } from "express"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import type { Request } from "firebase-functions/v2/https"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { buildOutbound } from "@/platform/p1/outboundPrompt"
