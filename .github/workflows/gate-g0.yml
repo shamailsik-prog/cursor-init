@@ -203,7 +203,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     # 45, not 30: on PR #128 (F42) the suite passed (2773 tests, 1753.9 s) but the job hit the 30-minute cap during
-    # emulator shutdown. Main 798cf56 took 23m46s for the whole job. The F42 retention e2e adds about 100 s locally.
+    # emulator shutdown. Main 798cf56 took 23m46s for the whole job. PR #128 added about six minutes to the Functions
+    # test step (22m49s on 798cf56, 28m56s at 301e65d), not the 100 s once noted here. Each F42 e2e case that runs the
+    # whole deletion saga (every inventoried store) costs about 20-30 s on a loaded host whatever its row count; the
+    # large-store cases now seed about 100 rows instead of 9,000 to 10,001 (FA-F42-R1-013).
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

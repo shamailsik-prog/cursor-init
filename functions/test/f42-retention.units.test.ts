@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process"
 import path from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { decide } from "@/platform/p5/permissionDecision"
 import { isTombstoneFor, matterKeyOfRow } from "@/platform/retention/tombstone"
@@ -11,6 +11,7 @@ import {
   inventory,
   planDeletion,
   policyHolds,
+  retentionTestSeam,
   storeKey,
   treatmentOf,
   validatePolicy,
@@ -49,6 +50,21 @@ describe("F42 units: store keys", () => {
     expect(storeKey(`${long}b`)).not.toBe(key)
     // The same key ci_gates/check_data_inventory.py store_key computes (its collision check relies on it).
     expect(key).toBe("firestore_a_very_long_legacy_collection_name_a_v_hc50e0e6fda8a20890ca1122e")
+  })
+
+  it("FA-F42-R1-013 (spec R32): the saga's production sizes are pinned; the test seam lowers them only outside production", () => {
+    const { limits } = sagaInternals
+    const production = { chunk: 200, chunkStepBudget: 45, traceIdsPerPart: 5_000, maxTraceParts: 24 }
+    expect(limits()).toEqual(production)
+    try {
+      retentionTestSeam.limits = { chunk: 10, chunkStepBudget: 5 }
+      expect(limits()).toEqual({ ...production, chunk: 10, chunkStepBudget: 5 })
+      vi.stubEnv("NODE_ENV", "production")
+      expect(limits()).toEqual(production)
+    } finally {
+      vi.unstubAllEnvs()
+      delete retentionTestSeam.limits
+    }
   })
 
   it("FA-F42-R1-012 (R21): the TypeScript and Python store keys agree on every inventoried id and on long and odd ids", () => {

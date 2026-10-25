@@ -8,7 +8,7 @@ import type { JobSpec } from "../p2/enqueue"
 import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import { type AckDetail, type AckInput, ackRefOf, requestRefOf, sha256, stageAcks } from "./acks"
-import { retentionTestSeam, storeByKey, storeKey, type InventoryStore } from "./config"
+import { retentionTestSeam, storeByKey, storeKey, type InventoryStore, type RetentionLimits } from "./config"
 import { instructionsIn, moveInstructions } from "./instructions"
 import { capturesFor, exportedIds, readLateIds, stageLateIds } from "./lateTraces"
 import {
@@ -183,6 +183,15 @@ const TRACE_IDS_PER_PART = 5_000
 const TRACE_PART_BYTES = 256 * 1024
 const MAX_TRACE_PARTS = 24
 
+/** The production sizes, pinned by a unit test. */
+const PRODUCTION_LIMITS: RetentionLimits = { chunk: CHUNK, chunkStepBudget: CHUNK_STEP_BUDGET, traceIdsPerPart: TRACE_IDS_PER_PART, maxTraceParts: MAX_TRACE_PARTS }
+
+/** The sizes in force: the production ones, or the test seam's outside production (FA-F42-R1-013, spec R32). */
+function limits(): RetentionLimits {
+  const seam = process.env.NODE_ENV === "production" ? undefined : retentionTestSeam.limits
+  return { ...PRODUCTION_LIMITS, ...seam }
+}
+
 const overLimit = () => new JobError("external_ids_over_limit", { permanent: true })
 
 /** The ids in order, in parts within both bounds; more than `MAX_TRACE_PARTS` parts is refused, never cut short. */
@@ -193,7 +202,7 @@ function traceIdParts(ids: readonly string[]): string[][] {
   for (const id of ids) {
     const size = Buffer.byteLength(id, "utf8") + 1
     if (size > TRACE_PART_BYTES) throw overLimit()
-    if (part.length === TRACE_IDS_PER_PART || bytes + size > TRACE_PART_BYTES) {
+    if (part.length === limits().traceIdsPerPart || bytes + size > TRACE_PART_BYTES) {
       parts.push(part)
       part = []
       bytes = 0
@@ -202,7 +211,7 @@ function traceIdParts(ids: readonly string[]): string[][] {
     bytes += size
   }
   if (part.length > 0) parts.push(part)
-  if (parts.length > MAX_TRACE_PARTS) throw overLimit()
+  if (parts.length > limits().maxTraceParts) throw overLimit()
   return parts
 }
 
@@ -491,9 +500,9 @@ async function runPurge(ctx: JobContext<PurgePayload>): Promise<JobResult> {
       }
       // An acknowledged store is purged again if rows reappeared (its first acknowledgement stands).
       for (let round = 0; ; round += 1) {
-        const rows = await matterRows(store, req.plan[key], firmId, req.matterId, CHUNK)
+        const rows = await matterRows(store, req.plan[key], firmId, req.matterId, limits().chunk)
         if (rows.length === 0) break
-        if (chunks >= CHUNK_STEP_BUDGET) return await continueWith(ctx, req, stores, i, jobId)
+        if (chunks >= limits().chunkStepBudget) return await continueWith(ctx, req, stores, i, jobId)
         const ids = rows.map((r) => r.id).sort()
         // A step id from the chunk's own ids; `round` keeps it new if the same ids come back (re-written since).
         const stepId = `chunk-${i}-${sha256(ids).slice(0, 24)}-${round}`
@@ -545,19 +554,19 @@ async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, c
       const batch = docs.slice(b, b + LEGACY_DOCUMENT_BATCH)
       let cursor: string | null = null
       for (let round = 0; ; round += 1) {
-        let q = adminDb().collection(outputs.name).where("firmId", "==", firmId).where("documentIds", "array-contains-any", batch).orderBy(FieldPath.documentId()).limit(CHUNK)
+        let q = adminDb().collection(outputs.name).where("firmId", "==", firmId).where("documentIds", "array-contains-any", batch).orderBy(FieldPath.documentId()).limit(limits().chunk)
         if (cursor !== null) q = q.startAfter(cursor)
         const snap = await q.get()
         if (snap.empty) break
         cursor = snap.docs[snap.docs.length - 1].id
         const rows = snap.docs.filter((d) => legacyOf(d.data(), req.matterId))
         if (rows.length > 0) {
-          if (used >= CHUNK_STEP_BUDGET) return null
+          if (used >= limits().chunkStepBudget) return null
           const ids = rows.map((r) => r.id).sort()
           await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `legacy-${sha256(ids).slice(0, 24)}-${round}`)
           used += 1
         }
-        if (snap.size < CHUNK) break
+        if (snap.size < limits().chunk) break
       }
     }
     if (docs.length < DOCUMENT_ID_PAGE) return used
@@ -679,4 +688,4 @@ export const retentionPurgeHandler: JobHandler<PurgePayload> = {
 }
 
 /** Exposed for the unit tests. */
-export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf }
+export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf, limits }

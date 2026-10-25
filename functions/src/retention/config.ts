@@ -52,6 +52,9 @@ export type RetentionPolicy = {
   classes: Record<string, ClassPolicy>
 }
 
+/** The deletion saga's sizes (spec R32): rows per chunk, chunk steps per purge job, ids per trace part, trace parts. */
+export type RetentionLimits = { chunk: number; chunkStepBudget: number; traceIdsPerPart: number; maxTraceParts: number }
+
 export type StoreKey =
   | { kind: "docId" }
   | { kind: "field"; field: string }
@@ -98,6 +101,11 @@ export const retentionTestSeam: {
   afterStep?: (stepId: string) => Promise<void>
   /** retention.apply: runs after a page is read and before its chunk's transaction (a hold placed here is a race). */
   beforeApplyChunk?: (storeKey: string) => Promise<void>
+  /**
+   * FA-F42-R1-013 (spec R32): smaller saga sizes, so a test of a continuation, a retry late in the budget or many traces
+   * needs about 100 rows instead of 10,000. Each one left out keeps its production value.
+   */
+  limits?: Partial<RetentionLimits>
   beforeAck?: (part: string) => Promise<void>
 } = {}
 

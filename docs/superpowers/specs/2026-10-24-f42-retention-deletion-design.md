@@ -415,6 +415,8 @@ lifecycle rule can honour per-object holds (NOT DEMONSTRATED); that Firestore TT
 - FU-8 (R31): periodic retention aged from the matter's closure, for the matter classes (not built; until then the
   config refuses any deleting period on a matter class).
 - FU-9 (R34): an engineer-run re-purge of a finished request's plan after a backup restore (not built).
+- FU-10 (R32): cut the fixed cost of an e2e case that runs the whole saga (about 20-30 s each on a loaded host), for
+  example with a test-scoped inventory or several assertions per saga run (not built).
 
 ## 11. R1 follow-up: the independent re-audit at 301e65d (FAIL 5/10)
 
@@ -569,10 +571,14 @@ a period counted from each matter's closure cannot express it yet; that is FU-8,
 silently deletes some of a matter's copies and keeps others.
 
 **R32. CI cost (R1-013).** The chunk size, the chunk-step budget, the part size and the part ceiling are read through
-`retentionTestSeam.limits` outside production, so the continuation, retry and many-traces cases run on about 100
-rows instead of 8,801 to 10,001; one unit test pins the production values and exercises the boundaries with them. The
-workflow comment is corrected: PR #128 added about six minutes to the Functions test step (22m49s on 798cf56, 28m56s
-at 301e65d).
+`retentionTestSeam.limits` outside production, so the continuation, retry and many-traces cases run on 50, 100 and 81
+rows instead of 9,000, 10,000 and 10,001; one unit test pins the production values, and the trace-part unit tests
+still exercise the boundaries at them. The workflow comment is corrected: PR #128 added about six minutes to the
+Functions test step (22m49s on 798cf56, 28m56s at 301e65d). Measured here (the deletion e2e file, same emulator, a
+loaded host, before and after): the three cases took 31.8 s, 38.2 s and 36.5 s, then 31.8 s, 32.3 s and 27.4 s, while the
+file's other full-saga cases slowed by about 25% between the runs (host load); the file took 236 s, then 230 s. The rows
+were not the main cost: each case that runs the whole saga over every inventoried store costs about 20-30 s whatever
+its row count. Cutting that (a test-scoped inventory, or several assertions per saga run) is FU-10, not built.
 
 **R33. Mutants (R1-012).** Tests kill the auditor's survivors R07, R08, R09, R14, R16 and R21; R21 is a parity test that
 runs the TypeScript and Python store keys over every inventoried id and a set of long and odd ids.
