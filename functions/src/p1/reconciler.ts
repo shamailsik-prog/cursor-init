@@ -7,7 +7,7 @@ import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
 import { errorCode } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
-import { reconciledDecision } from "./decisionRecord"
+import { SEED_HASH_RELEASED, reconciledDecision, seedHashScrub } from "./decisionRecord"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
 import { opikConfig, opikDisabledReason } from "./opik"
@@ -217,7 +217,9 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
       // Nothing was sent: release the hold, charge nothing.
       const now = FieldValue.serverTimestamp()
       tx.set(totalRef, { firmId: p.firmId, monthKey: p.monthKey, reservedMicroUsd: FieldValue.increment(-p.held), updatedAt: now }, { merge: true })
-      tx.update(ref, { state: "released", actualMicroUsd: 0, settledAt: now, settledBy: "reconciler" })
+      // PR #132 review, Codex P1 (spec R42): no record is written and nothing was sent, so the seed's hash would be the
+      // only copy left; it goes with the hold.
+      tx.update(ref, { state: "released", actualMicroUsd: 0, settledAt: now, settledBy: "reconciler", ...seedHashScrub(snap.get("decisionSeed.prompt"), SEED_HASH_RELEASED) })
       markSettled()
       return { state: "released" as const, staged: { ...NOTHING_STAGED, crossings: [] }, firmId: p.firmId, monthKey: p.monthKey }
     }

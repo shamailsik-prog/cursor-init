@@ -77,6 +77,13 @@ const TOKEN: Readonly<Record<RedactionKind, string>> = {
 export const MASK_TOKENS: readonly string[] = Object.values(TOKEN)
 
 /**
+ * Every kind the mask redacts, in TOKEN's order (audit F34 round 2, FA-F34-R2-006, spec R39). TOKEN is typed
+ * `Record<RedactionKind, string>`, so a kind added to the type without a token fails the build, and this list holds it.
+ * functions/test/f34-decision-units.test.ts holds the R25 golden set to one entry per kind here.
+ */
+export const REDACTION_KINDS: readonly RedactionKind[] = Object.freeze(Object.keys(TOKEN) as RedactionKind[])
+
+/**
  * The version of what this mask redacts (audit F34 re-audit R1-011, spec ruling R25), recorded on every P1 decision record
  * (`decisions.mask.policyVersion`) beside the counts by kind, so a record says which mask produced them. Bump it with any
  * change to what is masked; functions/test/f34-decision-units.test.ts pins it beside a golden set of masked outputs, so

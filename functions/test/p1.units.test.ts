@@ -377,7 +377,7 @@ describe("P1 Opik trace payload (P3-67, audit F34 R10)", () => {
         matterId: "matter-1",
         usageLogId: "usage-1",
         // The decision record's format version: f34.2 since the F34 re-audit R1 follow-up (spec section 5).
-        decisionRecordVersion: "f34.2",
+        decisionRecordVersion: "f34.3",
       },
       tags: ["internal", "ok"],
     })

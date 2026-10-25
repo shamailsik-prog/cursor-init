@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto"
-import { Timestamp, type DocumentData, type DocumentReference, type Firestore } from "firebase-admin/firestore"
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Firestore } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import { onSchedule } from "firebase-functions/v2/scheduler"
 import { isClassification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { errorCode } from "../log"
 import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
-import { DECISIONS_COLLECTION, exportFields, nextExport, type ExportStep } from "./decisionRecord"
+import { DECISIONS_COLLECTION, HASH_WITHHELD_NO_OUTPUT_ROW, exportFields, nextExport, seedHashScrub, type ExportStep } from "./decisionRecord"
 import { OPIK_TIMEOUT_MS, exportTrace, opikConfig, type OpikConfig, type TraceRecord } from "./opik"
 import type { UsageOutcome } from "./types"
 
@@ -32,6 +32,11 @@ import type { UsageOutcome } from "./types"
  *
  * A store failure on one record is logged by its code (`p1.trace_export_retry_failed`) and the record stays as it was, to
  * be tried on a later run; a failure of the query itself is logged at ERROR (`p1.trace_export_reconcile_failed`).
+ *
+ * Round 2 (FA-F34-R2-003, spec R37): each run also withholds the prompt hash of every record above rank 1 that is past its
+ * `prompt.hashWithholdAtMs` with no output row (`withholdUnpublishedPromptHashes`). PR #132 review, Codex P2 (thread
+ * 4369851306; spec R43): it runs first, within HASH_WITHHOLD_BUDGET_MS of the run's budget, because it needs no network and
+ * an Opik backlog that spends the export loop's budget must never starve it; the export loop takes the rest.
  */
 
 /** The schedule, as the deploy manifest records it. */
@@ -44,6 +49,16 @@ export const TRACE_EXPORT_BUDGET_MS = 30_000
 export const TRACE_EXPORT_RECONCILER_TIMEOUT_SECONDS = 45
 /** A claim's lease: longer than one export (OPIK_TIMEOUT_MS) and its two transactions, so a live run never loses it. */
 export const TRACE_EXPORT_LEASE_MS = 60_000
+/**
+ * The share of TRACE_EXPORT_BUDGET_MS the withholding pass may use, first in each run (spec R43). One page of at most
+ * TRACE_EXPORT_PAGE_SIZE Firestore transactions, no network; the export loop's deadline is the run's, so the whole run
+ * stays within TRACE_EXPORT_BUDGET_MS plus one export.
+ */
+export const HASH_WITHHOLD_BUDGET_MS = 10_000
+
+if (!(HASH_WITHHOLD_BUDGET_MS > 0 && HASH_WITHHOLD_BUDGET_MS < TRACE_EXPORT_BUDGET_MS)) {
+  throw new Error(`the withholding share (${HASH_WITHHOLD_BUDGET_MS} ms) must be part of the run's budget (${TRACE_EXPORT_BUDGET_MS} ms)`)
+}
 
 if (!(TRACE_EXPORT_BUDGET_MS + OPIK_TIMEOUT_MS + 10_000 <= TRACE_EXPORT_RECONCILER_TIMEOUT_SECONDS * 1000)) {
   throw new Error(`trace export budget (${TRACE_EXPORT_BUDGET_MS} ms) plus one export must end 10 s before the reconciler timeout`)
@@ -137,13 +152,17 @@ async function finish(db: Firestore, ref: DocumentReference, token: string, outc
   })
 }
 
-/** One run (see the module comment). `now` is the clock due times and leases are compared with (the tests drive it). */
-export async function reconcileTraceExports(opts: { now?: () => number; config?: OpikConfig } = {}): Promise<TraceExportResult> {
+/**
+ * One run (see the module comment). `now` is the clock due times and leases are compared with (the tests drive it).
+ * `budgetEndsAt` (epoch ms, wall clock): the scheduled run's deadline, shared with the withholding pass before it (R43);
+ * alone, a run has TRACE_EXPORT_BUDGET_MS from its start.
+ */
+export async function reconcileTraceExports(opts: { now?: () => number; config?: OpikConfig; budgetEndsAt?: number } = {}): Promise<TraceExportResult> {
   const now = opts.now ?? Date.now
   const cfg = opts.config ?? opikConfig()
   const db = adminDb()
-  const started = Date.now()
-  const spent = () => Date.now() - started >= TRACE_EXPORT_BUDGET_MS
+  const budgetEndsAt = opts.budgetEndsAt ?? Date.now() + TRACE_EXPORT_BUDGET_MS
+  const spent = () => Date.now() >= budgetEndsAt
   const result: TraceExportResult = { exported: [], rescheduled: [], abandoned: [], skipped: [] }
 
   let due: DocumentReference[]
@@ -195,6 +214,72 @@ export async function reconcileTraceExports(opts: { now?: () => number; config?:
   return result
 }
 
+export type HashWithholdResult = { withheld: string[]; cleared: string[]; skipped: string[] }
+
+/**
+ * Audit F34 round 2 (FA-F34-R2-003, spec ruling R37): the records due (`prompt.hashWithholdAtMs <= now`, oldest first, one
+ * single-field range, at most TRACE_EXPORT_PAGE_SIZE) are re-read in a transaction each. A record whose output was
+ * published (its `output.outputId`, or a `committee_outputs` row with its usage id) only loses the time: the masked body is
+ * stored beside its hash. Any other has `prompt.hash` set to null and `prompt.hashWithheld: "no_output_row"`: past the
+ * idempotency marker's TTL nothing stores the body any more, and nothing will publish it, so the bare SHA-256 would be the
+ * only trace of a short body and a dictionary oracle. The template id, version and pin stay, and the reservation's decision
+ * seed loses its copy of the hash in the same transaction (R42). `budgetEndsAt` (epoch ms, wall clock): the end of this
+ * pass's share of the scheduled run, which runs it before the export loop (R43). A failed query is logged under the
+ * reconciler's `p1.trace_export_reconcile_failed` (ERROR, `step: "prompt_hash_withhold"`); a failed record is
+ * `p1.prompt_hash_withhold_retry_failed` (WARN) and stays due for a later run.
+ */
+export async function withholdUnpublishedPromptHashes(opts: { now?: () => number; budgetEndsAt?: number } = {}): Promise<HashWithholdResult> {
+  const now = opts.now ?? Date.now
+  const budgetEndsAt = opts.budgetEndsAt ?? Date.now() + TRACE_EXPORT_BUDGET_MS
+  const db = adminDb()
+  const result: HashWithholdResult = { withheld: [], cleared: [], skipped: [] }
+  let due: DocumentReference[]
+  try {
+    const snap = await db
+      .collection(DECISIONS_COLLECTION)
+      .where("prompt.hashWithholdAtMs", "<=", Math.floor(now()))
+      .orderBy("prompt.hashWithholdAtMs")
+      .limit(TRACE_EXPORT_PAGE_SIZE)
+      .get()
+    due = snap.docs.map((d) => d.ref)
+  } catch (err) {
+    // The reconciler's own ERROR event (no new alert line: the manifest and alerts.tf already carry this one).
+    logger.error("p1.trace_export_reconcile_failed", { step: "prompt_hash_withhold", code: errorCode(err), event: "p1.trace_export_reconcile_failed" })
+    return result
+  }
+  for (const ref of due) {
+    if (Date.now() >= budgetEndsAt) {
+      logger.warn("p1.prompt_hash_withhold_budget_spent", { withheld: result.withheld.length, cleared: result.cleared.length })
+      break
+    }
+    try {
+      const step = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref)
+        const at = snap.get("prompt.hashWithholdAtMs")
+        if (!snap.exists || typeof at !== "number" || at > Math.floor(now())) return "skipped" as const
+        const rows = await tx.get(db.collection("committee_outputs").where("usageLogId", "==", ref.id).limit(1))
+        // PR #132 review, Codex P1 (spec R42): the reservation (same id) keeps the call's decision seed, which held a copy
+        // of the hash; it is cleared in this transaction too. A settlement already cleared it on every reservation settled
+        // since R42 (`in_record`); this covers the ones settled before.
+        const reservationRef = db.collection("ai_reservations").doc(ref.id)
+        const reservation = await tx.get(reservationRef)
+        if (typeof snap.get("output.outputId") === "string" || !rows.empty) {
+          tx.update(ref, { "prompt.hashWithholdAtMs": FieldValue.delete() })
+          return "cleared" as const
+        }
+        tx.update(ref, { "prompt.hash": null, "prompt.hashWithheld": HASH_WITHHELD_NO_OUTPUT_ROW, "prompt.hashWithholdAtMs": FieldValue.delete() })
+        const scrub = reservation.exists ? seedHashScrub(reservation.get("decisionSeed.prompt"), HASH_WITHHELD_NO_OUTPUT_ROW) : {}
+        if (Object.keys(scrub).length > 0) tx.update(reservationRef, scrub)
+        return "withheld" as const
+      })
+      result[step].push(ref.id)
+    } catch (err) {
+      logger.warn("p1.prompt_hash_withhold_retry_failed", { usageLogId: ref.id, code: errorCode(err) })
+    }
+  }
+  return result
+}
+
 /** The scheduled export reconciler (F34, R11): every 5 minutes, one instance. No caller, no tenant input. */
 export const p1TraceExportReconciler = onSchedule(
   {
@@ -205,6 +290,10 @@ export const p1TraceExportReconciler = onSchedule(
     ingressSettings: INTERNAL_ONLY,
   },
   async () => {
-    await reconcileTraceExports()
+    const started = Date.now()
+    // PR #132 review, Codex P2 (spec R43): withholding first, within its share, so an Opik backlog that spends the export
+    // loop's budget cannot starve it; the export loop then has the run's remaining budget.
+    await withholdUnpublishedPromptHashes({ budgetEndsAt: started + HASH_WITHHOLD_BUDGET_MS })
+    await reconcileTraceExports({ budgetEndsAt: started + TRACE_EXPORT_BUDGET_MS })
   }
 )
