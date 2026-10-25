@@ -213,7 +213,7 @@ describe.skipIf(!EMULATORS)("audit F34: a durable, redacted decision record for 
     const usageLogId = row.usageLogId as string
     const d = await decisionOf(usageLogId)
     expect(d, "a decision record exists for the attempt (spec R1)").toBeDefined()
-    expect(d).toMatchObject({ recordVersion: "f34.2", traceId: out.traceId, usageLogId, firmId: f.firmId, matterId: f.matterId, taskType: "committee", classification: "internal", outcome: "ok", blockReason: null })
+    expect(d).toMatchObject({ recordVersion: "f34.3", traceId: out.traceId, usageLogId, firmId: f.firmId, matterId: f.matterId, taskType: "committee", classification: "internal", outcome: "ok", blockReason: null })
 
     // R3: the registered template, its pinned hash, and the hash of exactly what the provider received.
     expect(d!.prompt).toMatchObject({
