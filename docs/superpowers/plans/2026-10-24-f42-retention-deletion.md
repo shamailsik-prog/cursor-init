@@ -9,7 +9,7 @@ Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Bran
 | Path | Purpose |
 | --- | --- |
 | `infra/retention/inventory.json`, `infra/retention/policy.json` | R2, R3 |
-| `ci_gates/check_data_inventory.py`, `ci_gates/test_check_data_inventory.py`, `ci_gates/gate_g0.sh` step 21 | R3 |
+| `ci_gates/check_data_inventory.py`, `ci_gates/test_check_data_inventory.py`, `ci_gates/gate_g0.sh` step 22 (21 until F34 #129 took that number on main) | R3 |
 | `platform/retention/tombstone.ts` | shared tombstone shape and the row-to-matter key (both stacks) |
 | `platform/p5/permissionDecision.ts` | `matter-deleted`, retention actions (R4, R6) |
 | `functions/src/retention/{model,config,ops,saga,acks,apply,watch,alert,functions}.ts` | R4, R5, R7 to R11 |

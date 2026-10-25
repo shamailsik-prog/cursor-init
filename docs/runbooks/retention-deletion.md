@@ -2,7 +2,7 @@
 
 Spec: `docs/superpowers/specs/2026-10-24-f42-retention-deletion-design.md`. Policy: `infra/retention/policy.json`
 (**PROPOSED, owner ratification required**). Inventory: `infra/retention/inventory.json` (gated by
-`ci_gates/check_data_inventory.py`, G-0 step 21).
+`ci_gates/check_data_inventory.py`, G-0 step 22).
 
 ## What the shipped policy does
 
@@ -81,7 +81,7 @@ class's stores that declare an `ageField`, sparing rows of matters under a hold,
 
 ## Adding a store
 
-A new Firestore collection, object key prefix (`${firmId}/<segment>/`), Postgres table or Postgres view fails G-0 step 21 until it is
+A new Firestore collection, object key prefix (`${firmId}/<segment>/`), Postgres table or Postgres view fails G-0 step 22 until it is
 in `infra/retention/inventory.json` with a profile (classification, retention class, who deletes, how deletion is
 acknowledged) and a key. A store another finding is adding may be registered with `"pending": "Fxx"`; the gate prints
 a note once it lands, and the flag is then dropped (F34's `p1_decisions` was registered so and is now inventoried for

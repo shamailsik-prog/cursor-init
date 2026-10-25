@@ -94,6 +94,12 @@ resource "google_monitoring_alert_policy" "functions_errors" {
     }
   }
   conditions {
+    display_name = "p1.opik_misconfigured"
+    condition_matched_log {
+      filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="p1.opik_misconfigured"'
+    }
+  }
+  conditions {
     display_name = "autoconfirm.backlog_stale"
     condition_matched_log {
       filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.message="autoconfirm.backlog_stale"'

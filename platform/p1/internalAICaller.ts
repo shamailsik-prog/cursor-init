@@ -70,6 +70,11 @@ export type OutboundResponse = {
    * both counts as non-negative integers. Absent on a blocked call (nothing was sent) and when the transport reported none.
    */
   usage?: { inputTokens: number; outputTokens: number }
+  /**
+   * Audit F34 re-audit R1-008 (spec ruling R22): true on a blocked result whose request was handed to the transport, which
+   * then threw: the provider may have received and billed it, so its usage is unknown, never zero. Absent otherwise.
+   */
+  sent?: true
 }
 
 export type Transport = {
@@ -235,8 +240,11 @@ export async function callCommitteeBrain(
     if (err instanceof Error && err.message === PHASE0_NO_CREDENTIALS) {
       return blocked(PHASE0_NO_CREDENTIALS)
     }
-    console.error("[p1] transport error", err)
-    return blocked(TRANSPORT_ERROR_REASON)
+    // Audit F34 re-audit R1-008 (R22): a fixed code only. The error's message and stack may echo the prompt (a provider
+    // error quoting the request), so neither is logged.
+    console.error("[p1] transport error", { code: TRANSPORT_ERROR_REASON })
+    // The request reached the transport: its usage is unknown (the bridge reports usage_unreported), not zero.
+    return { ...blocked(TRANSPORT_ERROR_REASON), sent: true }
   }
 }
 

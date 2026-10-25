@@ -71,7 +71,7 @@ anything.
 collection, object prefix, Postgres table, external processor, backup set). Each store names a `profile` that carries
 the classification, retention class, who may delete and how deletion is acknowledged, plus a `key` saying how a
 matter's rows are found (`docId`, `field` with the field name, `none`, `ttl`, `objects`, `traceExport`, `backup`).
-`ci_gates/check_data_inventory.py` (G-0 step 20) fails when:
+`ci_gates/check_data_inventory.py` (G-0 step 22) fails when:
 
 - a collection in a `firestore.rules` match block, or named by a Firestore collection literal in TypeScript
   (`.collection("x")`, `collection(db, "x")`, `doc(db, "x", ...)`, a helper call `(db, "x"`, `COLLECTION = "x"`), is
