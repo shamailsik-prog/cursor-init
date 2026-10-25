@@ -84,6 +84,10 @@ python3 ci_gates/check_deploy_contract.py || fail=1
 echo "[21] p1-transport-import guard (audit F34 R1-003: only the granted send sites may import a P1 transport)"
 python3 ci_gates/check_p1_transport_imports.py || fail=1
 
+echo "[22] data-inventory guard (audit F42: every Firestore collection, object prefix and Postgres table or view is inventoried with its classification, key, retention class, deleter and acknowledgement)"
+python3 ci_gates/check_data_inventory.py || fail=1
+python3 ci_gates/test_check_data_inventory.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_data_inventory.py"; fail=1; }
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

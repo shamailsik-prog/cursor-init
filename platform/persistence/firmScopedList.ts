@@ -10,6 +10,7 @@ import {
   type FirmIdQuery,
 } from "@/platform/persistence/firestoreDbModular"
 import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
+import { dropTombstonedRows } from "@/platform/persistence/matterTombstones"
 
 export type FirmScopedListMeta = {
   truncated: boolean
@@ -65,7 +66,8 @@ async function runFirmScopedPageQuery<T extends { id?: string }>(
   const truncated = snap.docs.length > pageLimit
   const kept = truncated ? snap.docs.slice(0, pageLimit) : snap.docs
   // F14 R8 / F01: the document id is authoritative; it wins over any `id` in the data.
-  const items = kept.map((row) => ({ ...(row.data() as T), id: row.id }))
+  // Audit F42: a row of a tombstoned matter is never listed (the page's cursor still moves past it).
+  const items = await dropTombstonedRows(db, collectionName, firmId, kept.map((row) => ({ ...(row.data() as T), id: row.id })))
   const lastDoc = kept[kept.length - 1]
   const nextCursor = truncated && lastDoc?.id ? lastDoc.id : null
   const lastCursor = lastDoc ? ((lastDoc as { cursor?: unknown }).cursor ?? lastDoc) : undefined

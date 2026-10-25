@@ -27,6 +27,7 @@ import * as p1Ops from "../src/p1/ops"
 import * as draftOps from "../src/d4/drafts"
 import * as doctypeOps from "../src/d4/doctypeOps"
 import * as gateOps from "../src/d4/gateOps"
+import * as retentionOps from "../src/retention/ops"
 import * as alertOps from "../src/alerts/ops"
 import { alertIdFor } from "../src/alerts/model"
 import { enqueueJob } from "../src/p2/enqueue"
@@ -79,6 +80,8 @@ const NOT_TENANT_ENDPOINTS: Record<string, string> = {
   p1ReservationReconciler: "scheduler, no caller; settles or releases lapsed P1 spend reservations, each in its own firm's month total (audit F07, F08)",
   p1CorpusEmbedding: "service endpoint, no tenant caller: IAM-private and OIDC-verified for the corpus service account only; spends the one firm its deployment names (P1_CORPUS_FIRM_ID), never a firm the request names, and reads or returns no firm data (FA-D3C-002)",
   auditOutboxReconciler: "scheduler, no caller; publishes each staged Next audit-outbox entry into its own firm's audit log, a row of another firm to the entry firm's dead letter (audit F11)",
+  retentionApplyTick: "scheduler, no caller; enqueues retention.apply for every firm, which ages out only its own firm's rows under the policy (audit F42)",
+  retentionDeletionWatch: "scheduler, no caller; alerts on overdue deletion requests with ids and counts, writes only each request's alertedAt (audit F42)",
   p1TraceExportReconciler: "scheduler, no caller; re-exports each pending P1 decision record's metadata-only trace by its own id and records the outcome on that record only (audit F34)",
   alertEscalator: "scheduler, no caller; escalates each open alert within its own firm (its partners, its founding partner) and delivers pages (audit F43)",
   alertChecker: "scheduler, no caller; derives queue, saga and AI-spend alerts from each firm's own rows, one alert per firm (audit F43)",
@@ -155,6 +158,12 @@ const PROBES: Record<string, Probe> = {
   getVerificationReport: { data: (a) => ({ draftId: a.draftId }), target: true },
   overrideGate: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID, reason: "G2 probe override reason, long enough to pass" }), target: true },
   approveDraft: { data: (a) => ({ draftId: a.draftId, version: 1, resultId: G2_RESULT_ID }), target: true },
+  // Audit F42: the retention routes, aimed at firm A's matter and its pending deletion request.
+  requestMatterDeletion: { data: (a) => ({ matterId: a.matterId, reasonCode: "client_instruction" }), target: true },
+  approveMatterDeletion: { data: (a) => ({ requestId: a.deletionRequestId }), target: true },
+  getDeletionRequest: { data: (a) => ({ requestId: a.deletionRequestId }), target: true },
+  placeLegalHold: { data: (a) => ({ matterId: a.matterId, reasonCode: "litigation_anticipated" }), target: true },
+  releaseLegalHold: { data: (a) => ({ matterId: a.matterId }), target: true },
   // Audit F02: GET and POST share a path tail, so the key is method + path. Firm-B with
   // X-Firm-Id of firm A is refused at session bind, before the Next core (which is absent
   // here and would otherwise answer 503 authority_core_unconfigured).
@@ -195,7 +204,7 @@ function isF02AuthorityRoute(route: Route): boolean {
   )
 }
 
-const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps, alertOps] as unknown as Record<string, unknown>[]
+const HANDLER_MODULES = [identity, mfa, gates, numbering, clientOps, conflictOps, matterOps, entityRead, entityOps, entityUnmerge, jobOps, p1Ops, draftOps, doctypeOps, gateOps, retentionOps, alertOps] as unknown as Record<string, unknown>[]
 function opFor(name: string): Operation | undefined {
   for (const mod of HANDLER_MODULES) {
     const op = mod[`${name}Op`] as Operation | undefined
@@ -210,7 +219,7 @@ const OTHER_EXPORTS = Object.keys(index)
   .sort()
 
 type Member = { uid: string; token: string; email: string }
-type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string; deadJobId: string; queuedJobId: string; draftId: string; alertId: string }
+type FirmA = { firmId: string; partner: Member; victim: string; victimEmail: string; approvalId: string; users: string[]; clientId: string; matterId: string; checkId: string; entityId: string; linkId: string; deadJobId: string; queuedJobId: string; draftId: string; deletionRequestId: string; alertId: string }
 type FirmB = { firmId: string; members: Record<Role, Member> }
 
 async function seedFirm(firmId: string, name: string): Promise<Record<Role, Member>> {
@@ -274,15 +283,21 @@ async function snapshotFirmA(a: FirmA): Promise<unknown> {
   const gateResult = (await adminDb().collection("draft_gate_results").doc(`${a.draftId}_1`).get()).data()
   const gateResultRows = (await adminDb().collection("draft_gate_results").where("firmId", "==", a.firmId).count().get()).data().count
   const gateOverrideRows = (await adminDb().collection("draft_gate_overrides").where("firmId", "==", a.firmId).count().get()).data().count
+  // Audit F42: a cross-firm deletion request, approval or hold that wrote anything (a request, a tombstone, a hold) fails "unchanged".
+  const deletionRequest = (await adminDb().collection("deletion_requests").doc(a.deletionRequestId).get()).data()
+  const deletionRequests = (await adminDb().collection("deletion_requests").where("firmId", "==", a.firmId).count().get()).data().count
+  const tombstone = (await adminDb().collection("matter_tombstones").doc(a.matterId).get()).exists
+  const hold = (await adminDb().collection("legal_holds").doc(a.matterId).get()).exists
+  const retention = { status: deletionRequest?.status, approvedBy: deletionRequest?.approvedBy ?? null, deletionRequests, tombstone, hold }
   // Audit F43: a cross-firm acknowledge, resolve or operator action that wrote anything fails "unchanged".
   const alert = (await adminDb().collection("ops_alerts").doc(a.alertId).get()).data()
   const alertState = { state: alert?.state, level: alert?.level, actions: alert?.actions, escalateAt: alert?.escalateAt?.toMillis?.(), updatedAt: alert?.updatedAt?.toMillis?.() }
-  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows, gateResult: { ...gateResult }, gateResultRows, gateOverrideRows }, alert: alertState }
+  return { users, firm: { ...firm }, approval: { used: approval?.used, codeAttempts: approval?.codeAttempts ?? 0 }, firmUsers, link: { ...link }, mergeEvents, jobs, ai: { config: aiConfig, outputs: aiOutputs, usageRows: aiUsageRows, platform: aiPlatform }, drafts: { draft: { ...draft }, draftRows, draftVersionRows, draftEventRows, gateResult: { ...gateResult }, gateResultRows, gateOverrideRows }, alert: alertState, retention }
 }
 
 /** Every identifier and name of firm A that must never appear in a firm-B response. */
 function firmATokens(a: FirmA): string[] {
-  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, a.alertId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", G2_RESULT_ID, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
+  return [a.firmId, a.victim, a.victimEmail, a.approvalId, a.partner.uid, a.partner.email, ...a.users, a.clientId, a.matterId, a.checkId, a.entityId, a.linkId, a.deadJobId, a.queuedJobId, a.draftId, a.deletionRequestId, a.alertId, "G2 Alpha Draft Title", "G2 ALPHA DRAFT BODY", "G2 ALPHA USED TEXT", G2_RESULT_ID, "G2 Alpha Chambers", "G2 Alpha Client", "G2 Alpha Matter", "ALPHA-0001", "G2 Alpha Entity"]
 }
 
 function leaked(body: unknown, tokens: string[]): string[] {
@@ -419,6 +434,28 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
         gateRuns: 1,
         resultId: G2_RESULT_ID,
       })
+    // Audit F42: a pending firm-A deletion request (as requestMatterDeletion writes one), for the approve and status probes.
+    const deletionRequestId = uniq("g2delA")
+    await adminDb().collection("deletion_requests").doc(deletionRequestId).set({
+      ...stamp,
+      requestId: deletionRequestId,
+      matterId,
+      status: "pending_approval",
+      reasonCode: "client_instruction",
+      requestedBy: aMembers.partner.uid,
+      requestedAt: Timestamp.now(),
+      approvedBy: null,
+      approvedAt: null,
+      refusal: null,
+      halted: null,
+      policyVersion: "g2",
+      expected: [],
+      plan: {},
+      acked: {},
+      ackDeadlineAt: null,
+      alertedAt: null,
+      completedAt: null,
+    })
     A = {
       firmId: firmA,
       alertId,
@@ -435,6 +472,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       victimEmail: victim.email,
       approvalId: approval.id,
       users: [...Object.values(aMembers).map((m) => m.uid), victim.uid],
+      deletionRequestId,
     }
     const firmB = uniq("g2-firm-b")
     B = { firmId: firmB, members: await seedFirm(firmB, "G2 Beta Associates") }
@@ -497,7 +535,8 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       rows.push({ suite: "functions", service: "P5", channel: "http", path: `${route.method} ${route.path}`, status: "tested", attempts, allowed })
     }
     expect(failures).toEqual([])
-  })
+    // The sweep is 12 calls per route and grows with every route (audit F42 added five): its own budget, not the 15 s default.
+  }, 120_000)
 
   it("positive control: firm A's own partner reads each seeded record through the same GET routes (validates the seed shapes)", async () => {
     const router = createRouter(ROUTES)
@@ -519,6 +558,7 @@ describe.skipIf(!EMULATORS)("G-2 cross-firm isolation: the P5 HTTP api", () => {
       ["/api/d4/intelligence/listDocumentTypes", { q: "Art. 199" }, "constitutional_petition_199"],
       ["/api/d4/intelligence/getTypeProfile", { typeId: "constitutional_petition_199" }, "template_cp_199_v1"],
       ["/api/d4/intelligence/getVerificationReport", { draftId: A.draftId }, "G2 ALPHA USED TEXT"],
+      ["/api/platform/retention/getDeletionRequest", { requestId: A.deletionRequestId }, A.deletionRequestId],
     ]
     for (const [i, [path, query, token]] of reads.entries()) {
       const { res, out } = mockRes()
