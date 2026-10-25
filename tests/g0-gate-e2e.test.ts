@@ -129,6 +129,10 @@ function buildBaseTree(): string {
     "corpus_service/docker/postgres/provision-roles.sh",
     "services/d5-1/researchCorpus.ts",
     "platform/corpus/pgResearchCorpus.ts",
+    // Check [23] (audit FA-F43-R1-P01): the decide table whose DECIDE_ACTIONS the copied functions/src call sites are
+    // checked against, and the Next.js entry point, whose listed forward would otherwise read as stale.
+    "platform/p5/permissionDecision.ts",
+    "platform/p5/checkPermission.ts",
   ]) {
     copyFromRepo(dir, rel);
   }

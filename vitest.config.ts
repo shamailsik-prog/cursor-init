@@ -68,6 +68,7 @@ export default defineConfig({
             "tests/f11-audit-outbox.firestore.test.ts",
             "tests/f11-atomic-request-audit.e2e.firestore.test.ts",
             "tests/f18-legacy-ai-path.e2e.firestore.test.ts",
+            "tests/fa-f43-p01-next-routes.e2e.firestore.test.ts",
             "tests/f13-canonical-matter-shapes.e2e.firestore.test.ts",
             "tests/f13-reaudit.e2e.firestore.test.ts",
             "tests/f13-slice2.e2e.firestore.test.ts",
