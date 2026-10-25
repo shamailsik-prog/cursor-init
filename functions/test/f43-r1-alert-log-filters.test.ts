@@ -4,6 +4,7 @@ import path from "node:path"
 import { format } from "node:util"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { logger } from "firebase-functions"
+import { logAlertNotifier } from "../src/alerts/notifier"
 import { logRegisteredError } from "../src/log"
 
 /**
@@ -77,7 +78,7 @@ describe("FA-F43-R1-001: log-based alert filters match structured runtime logs",
 
   it("legacy logger.error message equality does not match; structured event filters do", () => {
     const event = "ops_alert.notified"
-    const fields = { pageId: "p1", alertId: "a1", firmId: "f1", condition: "job.dead_lettered", severity: "high", level: 0, ownerRole: "operator", episode: 1, users: 0, fallback: null }
+    const fields = { pageId: "p1", alertId: "a1", firmId: "f1", condition: "job.dead_lettered", pageSeverity: "high", level: 0, ownerRole: "operator", episode: 1, users: 0, fallback: null }
     const legacy = legacyErrorPayload(event, fields)
     const structured = structuredErrorPayload(event, fields)
     expect(legacy.message).toContain("ops_alert.notified")
@@ -85,6 +86,54 @@ describe("FA-F43-R1-001: log-based alert filters match structured runtime logs",
     const filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.event="ops_alert.notified"'
     expect(matchesLogFilter(filter, legacy)).toBe(false)
     expect(matchesLogFilter(filter, structured)).toBe(true)
+  })
+
+  it("FA-F43-R2-001: logRegisteredError keeps Cloud Logging severity ERROR when fields carry domain severity", () => {
+    const writeSpy = vi.spyOn(logger, "write").mockImplementation(() => undefined)
+    logRegisteredError("ops_alert.notified", {
+      pageId: "p1",
+      alertId: "a1",
+      firmId: "f1",
+      condition: "job.dead_lettered",
+      severity: "critical",
+      level: 0,
+      ownerRole: "operator",
+      episode: 1,
+      users: 0,
+      fallback: null,
+    })
+    const emitted = writeSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(emitted.severity).toBe("ERROR")
+    expect(emitted.event).toBe("ops_alert.notified")
+    writeSpy.mockRestore()
+
+    const lines: string[] = []
+    const writeSpy2 = vi.spyOn(logger, "write").mockImplementation((entry) => {
+      lines.push(JSON.stringify(entry))
+    })
+    return logAlertNotifier.deliver({
+      id: "pg1",
+      alertId: "al1",
+      firmId: "fm1",
+      condition: "job.dead_lettered",
+      severity: "critical",
+      level: 1,
+      ownerRole: "partner",
+      episode: 2,
+      targets: [{ kind: "oncall" }],
+      fallback: null,
+      status: "pending",
+      claimedUntil: null,
+      deliveryAttempts: 0,
+      createdAt: { toMillis: () => 0 } as never,
+      deliveredAt: null,
+    }).then(() => {
+      writeSpy2.mockRestore()
+      const parsed = JSON.parse(lines[0]!) as Record<string, unknown>
+      expect(parsed).toMatchObject({ severity: "ERROR", event: "ops_alert.notified", pageSeverity: "critical" })
+      const filter = 'resource.type="cloud_run_revision" AND severity="ERROR" AND jsonPayload.event="ops_alert.notified"'
+      expect(matchesLogFilter(filter, parsed)).toBe(true)
+    })
   })
 
   it("logRegisteredError output matches every committed policy filter (one policy per event)", () => {

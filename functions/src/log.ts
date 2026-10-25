@@ -6,7 +6,8 @@ import { logger } from "firebase-functions"
  * stack trace (`Error: name\n at …`), which equality filters on `message` never match.
  */
 export function logRegisteredError(event: string, fields: Record<string, unknown> = {}): void {
-  logger.write({ severity: "ERROR", event, ...fields })
+  // Spread caller fields first so domain keys (e.g. page `severity`: critical) never replace Cloud Logging severity.
+  logger.write({ ...fields, event, severity: "ERROR" })
 }
 
 /**

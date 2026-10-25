@@ -47,7 +47,7 @@ export const logAlertNotifier: AlertNotifier = {
       alertId: page.alertId,
       firmId: page.firmId,
       condition: page.condition,
-      severity: page.severity,
+      pageSeverity: page.severity,
       level: page.level,
       ownerRole: page.ownerRole,
       episode: page.episode,
