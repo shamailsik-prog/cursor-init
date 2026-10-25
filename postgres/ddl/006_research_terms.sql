@@ -73,6 +73,34 @@ $$;
 REVOKE ALL ON FUNCTION public.corpus_research_term_apply(integer, jsonb, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.corpus_research_term_apply(integer, jsonb, jsonb) TO corpus_writer;
 
+-- 3c. Routine inventory (14 routines; was 12 after 003). Provisioning resets EXECUTE drift on these.
+CREATE OR REPLACE FUNCTION public.corpus_contract_routines() RETURNS TABLE (routine regprocedure, public_execute boolean)
+LANGUAGE sql STABLE
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT p, x.public_execute FROM (
+    SELECT pg_catalog.to_regprocedure('public.' || v.signature) AS p, v.public_execute
+    FROM (VALUES
+      ('enforce_monotonic_classification()', true),
+      ('declassify(uuid, text, text, text)', false),
+      ('corpus_session_is_superuser()', false),
+      ('corpus_provenance_complete(uuid)', false),
+      ('corpus_contract_relations()', false),
+      ('corpus_contract_routines()', false),
+      ('enforce_promoted_via_publication()', false),
+      ('corpus_publication_commit_check()', false),
+      ('corpus_publication_append_only()', false),
+      ('corpus_publication_item_guard()', false),
+      ('corpus_publication_begin(text, text, text, text)', false),
+      ('corpus_publication_finish(uuid, jsonb)', false),
+      ('corpus_research_term_clear()', false),
+      ('corpus_research_term_apply(integer, jsonb, jsonb)', false)
+    ) AS v(signature, public_execute)
+  ) x
+  WHERE p IS NOT NULL
+$$;
+REVOKE ALL ON FUNCTION public.corpus_contract_routines() FROM PUBLIC;
+
 -- 4. Inventory (37 relations; was 35 after 005).
 CREATE OR REPLACE FUNCTION public.corpus_contract_relations() RETURNS SETOF regclass
 LANGUAGE sql STABLE

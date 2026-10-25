@@ -213,7 +213,7 @@ const JUDGMENT_COUNT_SQL = `SELECT value FROM public.corpus_metadata WHERE key =
 const CANDIDATES_SQL = `SELECT DISTINCT t.judgment_id::text AS id
   FROM public.corpus_research_term t
  WHERE t.term = ANY ($1::text[])
- ORDER BY t.judgment_id
+ ORDER BY 1
  LIMIT $2`
 const DOCUMENTS_BY_ID_SQL = `SELECT j.judgment_id::text AS id, j.case_title AS title, j.bench_type,
        coalesce(array_agg(c.citation_text ORDER BY c.citation_text COLLATE "C") FILTER (WHERE c.citation_text IS NOT NULL),

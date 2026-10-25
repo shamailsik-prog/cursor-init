@@ -1716,7 +1716,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     // 37 since 006 (two term tables plus 005's two v_research_* views); still four v_authority_* views.
     expect(inventory.rows[0]).toEqual({ n: 37, views: 4 });
     const routines = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_routines()");
-    expect(routines.rows[0].n).toBe(12);
+    expect(routines.rows[0].n).toBe(14);
   });
 
   it("PG-DDL-27 004: a published citation is visible with its judgment's bench; under a quarantined, bench-less or non-public judgment it is not (requirement 3, ruling 8)", async () => {

@@ -214,6 +214,8 @@ ANNEX_A_ROUTINES = {
     "corpus_publication_item_guard()": False,
     "corpus_publication_begin(text,text,text,text)": False,
     "corpus_publication_finish(uuid,jsonb)": False,
+    "corpus_research_term_clear()": False,
+    "corpus_research_term_apply(integer,jsonb,jsonb)": False,
 }
 
 
@@ -247,6 +249,8 @@ def test_f19_contract_routines_list_every_annex_a_function_and_who_may_execute_i
     assert sorted(grants) == [
         ("corpus_publication_begin(text,text,text,text)", "corpus_writer"),
         ("corpus_publication_finish(uuid,jsonb)", "corpus_writer"),
+        ("corpus_research_term_apply(integer,jsonb,jsonb)", "corpus_writer"),
+        ("corpus_research_term_clear()", "corpus_writer"),
         ("declassify(uuid,text,text,text)", "corpus_declassify"),
     ]
 
