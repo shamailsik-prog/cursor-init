@@ -4,7 +4,7 @@ import { JobError } from "../p2/errors"
 import type { JobContext, JobHandler, JobResult } from "../p2/registry"
 import type { ScheduledJobSpec } from "../p2/scheduled"
 import { sha256 } from "./acks"
-import { activePolicy, inventory, retentionClassOf, retentionTestSeam, storeKey, type InventoryStore, type RetentionPolicy } from "./config"
+import { RetentionConfigError, activePolicy, ageable, inventory, retentionClassOf, retentionTestSeam, storeKey, type InventoryStore, type RetentionPolicy } from "./config"
 import { RETENTION_RUNS_COLLECTION, holdsRef } from "./model"
 
 /**
@@ -17,6 +17,11 @@ import { RETENTION_RUNS_COLLECTION, holdsRef } from "./model"
  *
  * With the shipped policy (no class has a period) it deletes nothing. Each run reads at most `MAX_PAGES` pages of a
  * store; the rest waits for the next day's run.
+ *
+ * FA-F42-R1-011 (spec R31): a policy that fails validation (a deleting period aged from matter closure, not built, or
+ * one on a class with a store this job cannot age) fails the run permanently, `retention_policy_invalid`, before any
+ * row is read: the job is dead-lettered on its first attempt and the operator sees it, instead of a run that deletes
+ * part of a class.
  */
 
 export const RETENTION_APPLY_SPEC: ScheduledJobSpec = { jobType: "retention.apply", cron: "0 1 * * *", period: "day" }
@@ -42,7 +47,7 @@ type Target = { store: InventoryStore; key: string; action: "purge" | "anonymise
 export function retentionTargets(policy: RetentionPolicy, nowMs: number): Target[] {
   const out: Target[] = []
   for (const store of inventory().stores) {
-    if (store.kind !== "firestore" || !store.ageField || (store.key.kind !== "field" && store.key.kind !== "docId")) continue
+    if (!ageable(store)) continue
     const cls = policy.classes[retentionClassOf(store)]
     if (!cls || cls.legalHold || cls.periodDays === null || cls.periodicAction === "retain") continue
     out.push({ store, key: storeKey(store.id), action: cls.periodicAction, cutoffMs: nowMs - cls.periodDays * DAY_MS })
@@ -59,9 +64,19 @@ const matterOf = (t: Target, data: DocumentData, id: string): string | null => {
 const alreadyAnonymised = (t: Target, data: DocumentData): boolean =>
   Object.entries(t.store.anonymise ?? {}).every(([field, value]) => data[field] === value)
 
+/** The active policy; an invalid one is a permanent failure of the run (FA-F42-R1-011). */
+function policyForRun(): RetentionPolicy {
+  try {
+    return activePolicy()
+  } catch (err) {
+    if (err instanceof RetentionConfigError) throw new JobError("retention_policy_invalid", { permanent: true })
+    throw err
+  }
+}
+
 async function run(ctx: JobContext<Payload>): Promise<JobResult> {
   const { firmId } = ctx.job
-  const policy = activePolicy()
+  const policy = policyForRun()
   const nowMs = ctx.now()
   const deleted: Record<string, number> = {}
   const anonymised: Record<string, number> = {}
@@ -137,7 +152,9 @@ async function run(ctx: JobContext<Payload>): Promise<JobResult> {
 export const retentionApplyHandler: JobHandler<Payload> = {
   jobType: RETENTION_APPLY_SPEC.jobType,
   saga: false,
-  errorCodes: {},
+  errorCodes: {
+    retention_policy_invalid: "The retention policy failed validation; no row was aged out.",
+  },
   parse,
   run,
 }

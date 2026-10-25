@@ -264,6 +264,42 @@ class Planted(PlantedTree):
         self.save()
         self.assertTrue(any("windowDays 30 disagrees" in m for m in self.messages()))
 
+    def test_a_deleting_period_must_cover_its_class_and_matter_closure_is_not_adoptable(self) -> None:
+        """FA-F42-R1-011 (spec R31): no incoherent period can be ratified."""
+        cls = self.policy["classes"]["matter_content"]
+        cls.update({"periodDays": 30, "periodicAction": "purge", "legalHold": False})
+        self.save()
+        self.assertTrue(any("matter_content: a deleting period aged from matter closure is not built (FU-8)" in m for m in self.messages()))
+        cls["periodBasis"] = "row_age"
+        self.save()
+        self.assertTrue(any("firestore:documents: its class matter_content has a deleting period, which retention.apply can age only" in m for m in self.messages()))
+        self.inventory["stores"][1]["ageField"] = {"field": "uploadedAt", "type": "timestamp"}
+        self.save()
+        self.assertEqual(self.messages(), [])
+        del cls["periodBasis"]
+        self.save()
+        self.assertTrue(any("matter_content: periodBasis must be one of" in m for m in self.messages()))
+
+    def test_a_deleting_period_on_a_class_with_a_store_apply_cannot_age_fails(self) -> None:
+        """FA-F42-R1-011 (spec R31): the vault (and any non-Firestore or unkeyed store) cannot take a deleting period."""
+        self.policy["classes"]["vault_object"].update({"periodDays": 30, "periodicAction": "purge", "legalHold": False, "periodBasis": "row_age"})
+        self.save()
+        self.assertTrue(any("objects:documents: its class vault_object has a deleting period, which retention.apply can age only" in m for m in self.messages()))
+        self.policy["classes"]["vault_object"].update({"periodicAction": "retain"})
+        self.save()
+        self.assertEqual(self.messages(), [])
+
+    def test_the_approver_tenure_is_a_positive_whole_number_of_days(self) -> None:
+        """FA-F42-R1-006 (spec R26): the gate refuses what validatePolicy refuses."""
+        self.assertEqual(self.policy["deletion"]["approverMinTenureDays"], 30)
+        for bad in (None, 0, 1.5, "30", True):
+            policy = copy.deepcopy(self.policy)
+            if bad is None:
+                policy["deletion"].pop("approverMinTenureDays")
+            else:
+                policy["deletion"]["approverMinTenureDays"] = bad
+            self.assertTrue(any("deletion.approverMinTenureDays" in f.message for f in gate.check_policy(policy)), bad)
+
     def test_a_server_only_collection_must_be_visible_in_code(self) -> None:
         """FA-F42-R1-008 (spec R28): a server-only rules block is no substitute for the code scan."""
         self.write("firestore.rules", (self.root / "firestore.rules").read_text().replace("  }\n}", "    match /hidden_store/{id} { allow read, write: if false; }\n  }\n}"))

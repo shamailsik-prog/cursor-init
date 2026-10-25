@@ -556,10 +556,16 @@ cache, which is its store.
 
 **R31. Periodic retention cannot be ratified incoherently (R1-011).** Each class carries `periodBasis`: `row_age` (a
 row ages from its own `ageField`) or `matter_closure` (Module 9 frames retention for closed matters, which ages from
-the matter's closure). Config validation (Functions and the gate) refuses a class with a deleting `periodicAction` when
-its basis is `matter_closure` (not built: FU-8) or when any of its matter-keyed Firestore stores has no `ageField`. The
-matter classes are `matter_closure`; `ai_record` is `row_age` (spend rows, aged by their own time). The shipped policy
-has no period, so it still deletes nothing.
+the matter's closure). Config validation (Functions `validatePolicy` and the gate) refuses a class with a deleting
+period (`periodDays` set, `periodicAction` purge or anonymise, held or not) when its basis is `matter_closure` (not
+built: FU-8) or when any store of the class is one `retention.apply` cannot age: only a Firestore store keyed by matter
+(doc id or field) with an `ageField` is aged, so the vault, Postgres, external, TTL, backup and unkeyed stores cannot
+sit in a class with a deleting period. The matter classes are `matter_closure`; `ai_record` is `row_age` (spend rows,
+aged by their own time; `ai_reservations` gains its `createdAt` ageField), the one class whose every store can take a
+period today. A run whose policy fails validation dead-letters at once, `retention_policy_invalid` (permanent), before
+any row is read. The shipped policy has no period, so it still deletes nothing. Devil's advocate: a firm that wants
+a period counted from each matter's closure cannot express it yet; that is FU-8, and refusing is safer than a period that
+silently deletes some of a matter's copies and keeps others.
 
 **R32. CI cost (R1-013).** The chunk size, the chunk-step budget, the part size and the part ceiling are read through
 `retentionTestSeam.limits` outside production, so the continuation, retry and many-traces cases run on about 100

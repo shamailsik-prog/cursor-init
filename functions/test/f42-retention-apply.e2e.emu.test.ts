@@ -32,28 +32,47 @@ afterAll(async () => {
   if (EMULATORS) await deleteFirmScopedData(firms)
 }, 120_000)
 
-function periodPolicy(): RetentionPolicy {
+/**
+ * A test policy with a deleting period on the AI records, aged by row (FA-F42-R1-011, spec R31: the one class whose
+ * every store has an ageField, so the only kind of period validation lets a policy adopt).
+ */
+function periodPolicy(action: "anonymise" | "purge" = "anonymise"): RetentionPolicy {
   const p = structuredClone(shippedPolicy) as unknown as RetentionPolicy
   p.policyVersion = "test-f42-period"
-  p.classes.matter_content = { ...p.classes.matter_content, periodDays: 30, periodicAction: "purge", legalHold: false }
-  p.classes.ai_record = { ...p.classes.ai_record, periodDays: 30, periodicAction: "anonymise", legalHold: false }
+  p.classes.ai_record = { ...p.classes.ai_record, periodDays: 30, periodicAction: action, legalHold: false, periodBasis: "row_age" }
   return p
+}
+
+/** Where each seeded key lives. */
+const COLLECTION_OF: Record<string, string> = {
+  oldOutput: "committee_outputs",
+  oldUsage: "ai_usage_logs",
+  youngUsage: "ai_usage_logs",
+  heldUsage: "ai_usage_logs",
+  oldReservation: "ai_reservations",
+  oldDecision: "p1_decisions",
+  youngDecision: "p1_decisions",
 }
 
 async function seed(firmId: string, matterId: string, heldMatterId: string): Promise<Record<string, string>> {
   const db = adminDb()
   const now = Date.now()
   const ids: Record<string, string> = {}
-  const put = async (key: string, collection: string, data: Record<string, unknown>) => {
+  const put = async (key: string, data: Record<string, unknown>) => {
     const id = uniq(key)
-    await db.collection(collection).doc(id).set({ firmId, ...data })
+    await db.collection(COLLECTION_OF[key]).doc(id).set({ firmId, ...data })
     ids[key] = id
   }
-  await put("oldOutput", "committee_outputs", { matterId, text: "old", createdAt: now - 40 * DAY })
-  await put("youngOutput", "committee_outputs", { matterId, text: "young", createdAt: now - 5 * DAY })
-  await put("heldOutput", "committee_outputs", { matterId: heldMatterId, text: "held", createdAt: now - 40 * DAY })
-  await put("oldUsage", "ai_usage_logs", { matterId, costMicroUsd: 7, createdAt: Timestamp.fromMillis(now - 40 * DAY) })
-  await put("youngUsage", "ai_usage_logs", { matterId, costMicroUsd: 8, createdAt: Timestamp.fromMillis(now - 2 * DAY) })
+  const ago = (days: number) => Timestamp.fromMillis(now - days * DAY)
+  // A matter-content row, old enough for any period: no class it belongs to may take a deleting period (R31).
+  await put("oldOutput", { matterId, text: "old", createdAt: now - 40 * DAY })
+  await put("oldUsage", { matterId, costMicroUsd: 7, createdAt: ago(40) })
+  await put("youngUsage", { matterId, costMicroUsd: 8, createdAt: ago(2) })
+  await put("heldUsage", { matterId: heldMatterId, costMicroUsd: 9, createdAt: ago(40) })
+  await put("oldReservation", { matterId, costMicroUsd: 3, createdAt: ago(40) })
+  // F34's decision records age with the AI records, by `settledAt`.
+  await put("oldDecision", { matterId, traceId: "trace-old", settledAt: ago(40) })
+  await put("youngDecision", { matterId, traceId: "trace-young", settledAt: ago(2) })
   await db.collection("legal_holds").doc(heldMatterId).set({ firmId, matterId: heldMatterId, active: true, reasonCode: "litigation_anticipated", placedBy: "p", placedAt: Timestamp.now() })
   return ids
 }
@@ -82,46 +101,80 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     const firmId = firmFor("f42ret")
     const ids = await seed(firmId, uniq("m"), uniq("held"))
     expect(await runApply(firmId, "2026-10-24")).toBe("done")
-    for (const key of Object.keys(ids)) expect(await exists(key.includes("Output") ? "committee_outputs" : "ai_usage_logs", ids[key]), key).toBe(true)
+    for (const key of Object.keys(ids)) expect(await exists(COLLECTION_OF[key], ids[key]), key).toBe(true)
     const usage = (await adminDb().collection("ai_usage_logs").doc(ids.oldUsage).get()).data()
     expect(typeof usage?.matterId).toBe("string")
     const run = (await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-24`).get()).data()
     expect(run).toMatchObject({ firmId, period: "2026-10-24", policyVersion: shippedPolicy.policyVersion, deleted: {}, anonymised: {} })
-    // Periods set but the classes under legal hold (the shipped default for matter content): still nothing.
+    // A period set but the class under legal hold: still nothing.
     const held = periodPolicy()
-    held.classes.matter_content.legalHold = true
     held.classes.ai_record.legalHold = true
     retentionTestSeam.policy = held
     expect(await runApply(firmId, "2026-10-23")).toBe("done")
-    for (const key of Object.keys(ids)) expect(await exists(key.includes("Output") ? "committee_outputs" : "ai_usage_logs", ids[key]), key).toBe(true)
+    for (const key of Object.keys(ids)) expect(await exists(COLLECTION_OF[key], ids[key]), key).toBe(true)
     expect((await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-23`).get()).data()).toMatchObject({ deleted: {}, anonymised: {} })
   })
 
-  it("a test policy deletes and anonymises rows older than the period, keeps younger rows and spares a held matter", async () => {
-    retentionTestSeam.policy = periodPolicy()
+  it("a test policy anonymises rows older than the period, keeps younger rows and spares a held matter", async () => {
+    retentionTestSeam.policy = periodPolicy("anonymise")
     const firmId = firmFor("f42ret")
     const matterId = uniq("m")
     const ids = await seed(firmId, matterId, uniq("held"))
-    // F34's decision records age with the AI records, by `settledAt`.
-    const oldDecision = uniq("oldDecision")
-    const youngDecision = uniq("youngDecision")
-    await adminDb().collection("p1_decisions").doc(oldDecision).set({ firmId, matterId, traceId: "trace-old", settledAt: Timestamp.fromMillis(Date.now() - 40 * DAY) })
-    await adminDb().collection("p1_decisions").doc(youngDecision).set({ firmId, matterId, traceId: "trace-young", settledAt: Timestamp.fromMillis(Date.now() - 2 * DAY) })
     expect(await runApply(firmId, "2026-10-25")).toBe("done")
-    expect(await exists("committee_outputs", ids.oldOutput)).toBe(false)
-    expect(await exists("committee_outputs", ids.youngOutput)).toBe(true)
-    expect(await exists("committee_outputs", ids.heldOutput)).toBe(true)
-    expect((await adminDb().collection("ai_usage_logs").doc(ids.oldUsage).get()).data()).toMatchObject({ matterId: null, costMicroUsd: 7 })
-    expect((await adminDb().collection("ai_usage_logs").doc(ids.youngUsage).get()).data()).toMatchObject({ matterId })
-    expect((await adminDb().collection("p1_decisions").doc(oldDecision).get()).data()).toMatchObject({ matterId: null, traceId: "trace-old" })
-    expect((await adminDb().collection("p1_decisions").doc(youngDecision).get()).data()).toMatchObject({ matterId })
+    const data = async (key: string) => (await adminDb().collection(COLLECTION_OF[key]).doc(ids[key]).get()).data()
+    expect(await data("oldUsage")).toMatchObject({ matterId: null, costMicroUsd: 7 })
+    expect(await data("oldReservation")).toMatchObject({ matterId: null, costMicroUsd: 3 })
+    expect(await data("oldDecision")).toMatchObject({ matterId: null, traceId: "trace-old" })
+    expect(await data("youngUsage")).toMatchObject({ matterId })
+    expect(await data("youngDecision")).toMatchObject({ matterId })
+    expect((await data("heldUsage"))?.matterId).toBeTypeOf("string")
+    // The matter-content row is untouched: its class has no period.
+    expect(await data("oldOutput")).toMatchObject({ matterId, text: "old" })
     const run = (await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-25`).get()).data()
-    expect(run).toMatchObject({ deleted: { firestore_committee_outputs: 1 }, anonymised: { firestore_ai_usage_logs: 1, firestore_p1_decisions: 1 }, skippedHeld: 1 })
+    expect(run).toMatchObject({ deleted: {}, anonymised: { firestore_ai_usage_logs: 1, firestore_ai_reservations: 1, firestore_p1_decisions: 1 }, skippedHeld: 1 })
     // Another firm's old rows are never touched by this firm's run.
     const other = firmFor("f42ret")
     const otherIds = await seed(other, uniq("m"), uniq("held"))
     expect(await runApply(firmId, "2026-10-26")).toBe("done")
-    expect(await exists("committee_outputs", otherIds.oldOutput)).toBe(true)
+    expect((await adminDb().collection("ai_usage_logs").doc(otherIds.oldUsage).get()).get("matterId")).toBeTypeOf("string")
+  })
+
+  it("a test policy that purges deletes rows older than the period, keeps younger rows and spares a held matter", async () => {
+    retentionTestSeam.policy = periodPolicy("purge")
+    const firmId = firmFor("f42ret")
+    const ids = await seed(firmId, uniq("m"), uniq("held"))
+    expect(await runApply(firmId, "2026-10-25")).toBe("done")
+    for (const key of ["oldUsage", "oldReservation", "oldDecision"]) expect(await exists(COLLECTION_OF[key], ids[key]), key).toBe(false)
+    for (const key of ["youngUsage", "youngDecision", "heldUsage", "oldOutput"]) expect(await exists(COLLECTION_OF[key], ids[key]), key).toBe(true)
+    const run = (await adminDb().collection("retention_runs").doc(`${firmId}_2026-10-25`).get()).data()
+    expect(run).toMatchObject({ deleted: { firestore_ai_usage_logs: 1, firestore_ai_reservations: 1, firestore_p1_decisions: 1 }, anonymised: {}, skippedHeld: 1 })
+  })
+
+  it("FA-F42-R1-011: a policy with a period it cannot apply coherently is refused for good; the run deletes nothing", async () => {
+    const firmId = firmFor("f42ret")
+    const ids = await seed(firmId, uniq("m"), uniq("held"))
+    // A matter-content period aged from matter closure (not built, FU-8), and one aged by row on a class with stores
+    // that have no ageField: each would delete some of the class's stores and not others.
+    const closure = periodPolicy()
+    closure.classes.matter_content = { ...closure.classes.matter_content, periodDays: 30, periodicAction: "purge", legalHold: false }
+    const partial = periodPolicy()
+    partial.classes.matter_content = { ...partial.classes.matter_content, periodDays: 30, periodicAction: "purge", legalHold: false, periodBasis: "row_age" }
+    for (const [period, policy] of [["2026-10-21", closure], ["2026-10-22", partial]] as const) {
+      retentionTestSeam.policy = policy
+      const now = Date.now()
+      const { jobId } = await enqueueAt(
+        { firmId, jobType: RETENTION_APPLY_SPEC.jobType, classification: "internal", matterId: null, payload: { period }, idempotencyKey: `${RETENTION_APPLY_SPEC.jobType}:${period}`, runKey: `${RETENTION_APPLY_SPEC.jobType}:${period}`, createdBy: "system" },
+        now
+      )
+      // Permanent: dead-lettered on the first attempt, not retried into the same refusal.
+      expect(await runJobTask({ jobId, seq: 0 }, testDeps(new FakeClock(now)))).toBe("dead_lettered")
+      const job = (await adminDb().collection("jobs").doc(jobId).get()).data()
+      expect(job?.lastError?.code).toBe("retention_policy_invalid")
+      expect(job?.attempts).toBe(1)
+      expect((await adminDb().collection("retention_runs").doc(`${firmId}_${period}`).get()).exists).toBe(false)
+    }
+    for (const key of Object.keys(ids)) expect(await exists(COLLECTION_OF[key], ids[key]), key).toBe(true)
+    expect((await adminDb().collection("ai_usage_logs").doc(ids.oldUsage).get()).get("matterId")).toBeTypeOf("string")
   })
 
   it("the watch raises one F43 durable alert per overdue in-progress request, with ids and counts only", async () => {

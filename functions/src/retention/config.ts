@@ -12,11 +12,19 @@ import type { HoldRefusal, Treatment } from "./model"
 export type PolicyAction = "retain" | "purge" | "anonymise" | "expiry" | "external" | "lock"
 export type PeriodicAction = "retain" | "purge" | "anonymise"
 
+/**
+ * What a class's period ages from (FA-F42-R1-011, spec R31): `row_age`, each row's own `ageField` (what
+ * retention.apply executes); `matter_closure`, the matter's closure (Module 9 frames retention for closed matters; not
+ * built, FU-8).
+ */
+export type PeriodBasis = "row_age" | "matter_closure"
+
 export type ClassPolicy = {
   onMatterDeletion: PolicyAction
   legalHold: boolean
   periodDays: number | null
   periodicAction: PeriodicAction
+  periodBasis: PeriodBasis
   basis: string
   proposed?: unknown
 }
@@ -116,6 +124,13 @@ export class RetentionConfigError extends Error {
 const ACTIONS: ReadonlySet<string> = new Set(["retain", "purge", "anonymise", "expiry", "external", "lock"])
 const PERIODIC: ReadonlySet<string> = new Set(["retain", "purge", "anonymise"])
 const MATTER_KEYED: ReadonlySet<StoreKey["kind"]> = new Set(["docId", "field", "objects", "traceExport"])
+const PERIOD_BASES: ReadonlySet<string> = new Set(["row_age", "matter_closure"])
+
+/** Whether a class has a period that deletes (purge or anonymise), held or not. */
+const deletingPeriod = (c: ClassPolicy): boolean => c.periodDays !== null && c.periodicAction !== "retain"
+
+/** Whether retention.apply can age `s`: a Firestore store keyed by matter (doc id or field) with an ageField. */
+export const ageable = (s: InventoryStore): boolean => s.kind === "firestore" && (s.key.kind === "docId" || s.key.kind === "field") && s.ageField !== undefined
 
 const positiveInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
 
@@ -140,6 +155,9 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
   for (const [name, c] of Object.entries(p.classes ?? {})) {
     if (!ACTIONS.has(c.onMatterDeletion) || typeof c.legalHold !== "boolean" || !PERIODIC.has(c.periodicAction)) throw new RetentionConfigError(`class ${name}`)
     if (c.periodDays !== null && !positiveInt(c.periodDays)) throw new RetentionConfigError(`class ${name} periodDays`)
+    // FA-F42-R1-011 (spec R31): every class names what its period ages from; aging from matter closure is not built.
+    if (!PERIOD_BASES.has(c.periodBasis)) throw new RetentionConfigError(`class ${name} periodBasis`)
+    if (deletingPeriod(c) && c.periodBasis === "matter_closure") throw new RetentionConfigError(`class ${name} periodBasis matter_closure (FU-8)`)
   }
   for (const s of inv.stores) {
     const cls = classOfStore(s, inv, p)
@@ -148,6 +166,9 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
     if (needsAnon && (s.anonymise === undefined || Object.keys(s.anonymise).length === 0)) throw new RetentionConfigError(`store ${s.id} anonymise`)
     // An anonymised row of a field-keyed store must leave the matter's query, or the saga would find it again.
     if (s.anonymise !== undefined && s.key.kind === "field" && s.anonymise[s.key.field] !== null) throw new RetentionConfigError(`store ${s.id} anonymise key`)
+    // FA-F42-R1-011 (spec R31): a deleting period covers every store of its class, or it is not adoptable: a store
+    // retention.apply cannot age would keep rows the period was ratified to remove.
+    if (deletingPeriod(cls) && !ageable(s)) throw new RetentionConfigError(`store ${s.id} period not applicable`)
   }
 }
 

@@ -66,6 +66,9 @@ KEY_KINDS = {
 }
 ACTIONS = {"retain", "purge", "anonymise", "expiry", "external", "lock"}
 PERIODIC_ACTIONS = {"retain", "purge", "anonymise"}
+# FA-F42-R1-011 (spec R31): what a class's period ages from. `row_age`: each row's own `ageField`. `matter_closure`: the
+# matter's closure (Module 9 frames retention for closed matters); not built, so a deleting period on it is refused.
+PERIOD_BASES = {"row_age", "matter_closure"}
 PROFILE_FIELDS = ("classification", "retentionClass", "deleter", "acknowledgement")
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # FA-F42-R1-008: a Firestore collection may be camelCase, and a Postgres relation outside `public` keeps its schema.
@@ -449,7 +452,8 @@ def check_policy(policy: dict) -> list[Finding]:
     if not isinstance(deletion, dict):
         out.append(_fail("policy", "deletion settings missing"))
     else:
-        for field in ("approvalWindowHours", "ackDeadlineHours", "maxMembersRevokedAtApproval", "storesPerPurgeJob"):
+        # approverMinTenureDays: FA-F42-R1-006 (spec R26), as validatePolicy.
+        for field in ("approvalWindowHours", "ackDeadlineHours", "maxMembersRevokedAtApproval", "storesPerPurgeJob", "approverMinTenureDays"):
             value = deletion.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 out.append(_fail("policy", f"deletion.{field} must be a positive integer"))
@@ -478,6 +482,10 @@ def check_policy(policy: dict) -> list[Finding]:
             out.append(_fail("policy", f"class {name}: a periodic deletion needs periodDays"))
         if not isinstance(cls.get("basis"), str) or not cls["basis"]:
             out.append(_fail("policy", f"class {name}: basis is required"))
+        if cls.get("periodBasis") not in PERIOD_BASES:
+            out.append(_fail("policy", f"class {name}: periodBasis must be one of {sorted(PERIOD_BASES)}"))
+        elif period is not None and cls.get("periodicAction") in ("purge", "anonymise") and cls["periodBasis"] == "matter_closure":
+            out.append(_fail("policy", f"class {name}: a deleting period aged from matter closure is not built (FU-8); it cannot be adopted"))
     return out
 
 
@@ -582,6 +590,14 @@ def check_inventory(root: Path, inventory: dict, policy: dict) -> list[Finding]:
             cls = classes.get(profile.get("retentionClass"), {})
             if "anonymise" in (cls.get("onMatterDeletion"), cls.get("periodicAction")) and anonymise is None:
                 out.append(_fail("inventory", f"{label}: its class may anonymise, so anonymise fields are required"))
+        # FA-F42-R1-011 (spec R31): a deleting period covers every store of its class, or it is not adoptable. Only a
+        # Firestore store keyed by matter (doc id or field) with an ageField is aged by retention.apply (as validatePolicy).
+        if profile is not None:
+            cls = classes.get(profile.get("retentionClass"), {})
+            ageable = kind == "firestore" and kk in ("docId", "field") and store.get("ageField") is not None
+            if cls.get("periodDays") is not None and cls.get("periodicAction") in ("purge", "anonymise") and not ageable:
+                out.append(_fail("inventory", f"{label}: its class {profile.get('retentionClass')} has a deleting period, "
+                                              "which retention.apply can age only in a Firestore store keyed by matter with an ageField"))
     return out
 
 

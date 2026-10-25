@@ -144,6 +144,36 @@ describe("F42 units: treatments, plan and holds", () => {
     }
   })
 
+  it("FA-F42-R1-011: a deleting period is adoptable only aged by row, on a class whose every store retention.apply can age", () => {
+    const inv = inventory()
+    // The shipped policy names a basis for every class and has no period: it validates and deletes nothing.
+    const p0 = shipped()
+    for (const [name, c] of Object.entries(p0.classes)) expect(["row_age", "matter_closure"], name).toContain(c.periodBasis)
+    expect(() => validatePolicy(p0, inv)).not.toThrow()
+    const refused: Array<[string, (p: RetentionPolicy) => void]> = [
+      // No basis, or an unknown one.
+      ["class matter_content periodBasis", (p) => delete (p.classes.matter_content as { periodBasis?: unknown }).periodBasis],
+      ["class ai_record periodBasis", (p) => ((p.classes.ai_record as { periodBasis: unknown }).periodBasis = "created")],
+      // Aged from matter closure: not built (FU-8), so not adoptable, held or not.
+      ["class matter_content periodBasis matter_closure (FU-8)", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge" })],
+      ["class matter_content periodBasis matter_closure (FU-8)", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge", legalHold: true })],
+      // Aged by row on a class with a store retention.apply cannot age: a Firestore store with no ageField, the vault.
+      ["store firestore:custody_events period not applicable", (p) => Object.assign(p.classes.matter_content, { periodDays: 30, periodicAction: "purge", periodBasis: "row_age" })],
+      ["store objects:documents period not applicable", (p) => Object.assign(p.classes.vault_object, { periodDays: 30, periodicAction: "purge" })],
+      ["store firestore:audit_dead_letter period not applicable", (p) => Object.assign(p.classes.audit_trail, { periodDays: 3650, periodicAction: "purge" })],
+    ]
+    for (const [field, mutate] of refused) {
+      const p = shipped()
+      mutate(p)
+      expect(() => validatePolicy(p, inv), field).toThrow(new RetentionConfigError(field))
+    }
+    // A row-aged period on the AI records (every store with an ageField) validates; so does a period that only retains.
+    const ok = shipped()
+    Object.assign(ok.classes.ai_record, { periodDays: 30, periodicAction: "anonymise" })
+    Object.assign(ok.classes.matter_content, { periodDays: 30, periodicAction: "retain" })
+    expect(() => validatePolicy(ok, inv)).not.toThrow()
+  })
+
   it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
     const inv = inventory()
     expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)
