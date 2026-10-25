@@ -414,6 +414,7 @@ lifecycle rule can honour per-object holds (NOT DEMONSTRATED); that Firestore TT
 - FU-7 (R26): the platform operator's countersignature for a firm with no independent second partner (not built).
 - FU-8 (R31): periodic retention aged from the matter's closure, for the matter classes (not built; until then the
   config refuses any deleting period on a matter class).
+- FU-9 (R34): an engineer-run re-purge of a finished request's plan after a backup restore (not built).
 
 ## 11. R1 follow-up: the independent re-audit at 301e65d (FAIL 5/10)
 

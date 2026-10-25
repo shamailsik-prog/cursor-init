@@ -92,6 +92,29 @@ deleting `periodicAction`, and no class-wide legal hold, it deletes or anonymise
 class's stores that declare an `ageField`, sparing rows of matters under a hold, and writes
 `retention_runs/{firmId}_{day}` (counts only). Backfill a day: `npm --prefix functions run jobs:backfill -- retention.apply <from> <to>`.
 
+## Restoring a backup (FA-F42-R1-014, spec R34)
+
+A restore (F33: PITR, a scheduled backup, an export) brings back every row a deletion removed, and a backup taken
+before an approval has no tombstone for the matter, so both API stacks and the rules would serve the matter again. A
+restored database is put into service only after these steps. None is drilled (NOT DEMONSTRATED); the command shapes
+below are the ones the F33 runbook uses, to be checked against the installed `gcloud` (**[REQUIRES VERIFICATION]**).
+
+1. **Before the restore**, export the deletion trail from the live database (it is the record of what was deleted and
+   must not be replaced by the backup's older copy): `matter_tombstones`, `deletion_requests`, `deletion_acks`,
+   `deletion_external_requests`, `vault_object_tombstones`, `legal_holds` (for example
+   `gcloud firestore export gs://<bucket>/pre-restore-<date> --collection-ids=matter_tombstones,deletion_requests,...`).
+2. Restore into a **new** database id (F33), never `(default)`.
+3. **Before the restored database serves any request:** import the exported trail over its own copies; then, for every
+   tombstoned matter, delete every `matter_members` row of the matter that the restore brought back (the approval had
+   revoked them, and membership-gated rules and routes read them). From then on both API stacks refuse the matter
+   (`403 matter_deleted`) and the rules refuse it on every path (R23).
+4. Re-run each deletion whose request is `in_progress` or `completed` in the trail, so the rows the restore brought
+   back are purged or anonymised again and the processor instructions re-checked. The saga's own jobs are deduplicated
+   by request, so this needs an engineer-run re-purge of the request's plan (FU-9, not built). Until it runs, the
+   restored rows stay unreadable through every path above, and the retention watch does not see them (their request is
+   already finished): record the restore and the matters it touched on the deletion requests' audit trail.
+5. Check `legal_holds`: a hold in the trail stands; nothing of a held matter is purged in step 4.
+
 ## Adding a store
 
 A new Firestore collection, object key prefix (`${firmId}/<segment>/`), Postgres table or Postgres view fails G-0 step 22 until it is
