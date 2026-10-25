@@ -113,6 +113,10 @@ function buildBaseTree(): string {
     "firestore.indexes.json",
     "docs/deploy",
     "functions/src",
+    // Check [21] (audit F34 round 2, spec R29, R32): the importer's tsconfig.json (`baseUrl`, `paths`), and the other
+    // file that holds a Gateway key-name grant (a grant whose file is missing fails as stale).
+    "functions/tsconfig.json",
+    "platform/p1/providerKeyGuard.ts",
     "platform/http",
     "scripts/deploy-preflight.sh",
     "app/api/p1/committee-brain/route.ts",
@@ -235,6 +239,36 @@ const PLANTED: GateCase[] = [
         "}\n",
     },
     reports: ["FAIL: functions/src/p1/zzAuditAdhoc2.ts: imports activeTransport from functions/src/p1/transport"],
+  },
+  // Audit F34 round 2 (FA-F34-R2-001, spec R29, R30, R32): the round-2 auditor's bypasses B01, B16 and B09, which passed
+  // G-0 at 7987e39 and sent the ad hoc system text to the Gateway in the deployed bundle (re-audit bundle-probe.json).
+  {
+    name: "F34 R2-001 B01: a re-export through a helper in functions/test/, imported into functions/src",
+    rel: "functions/src/p1/zzUseHelper.ts",
+    body:
+      'import { activeTransport } from "../../test/zzHelper"\nexport async function go() {\n  const gw = activeTransport()\n' +
+      '  return gw?.send({ model: "m", messages: [{ role: "system", content: "ad hoc" }], maxTokens: 8 })\n}\n',
+    extra: { "functions/test/zzHelper.ts": 'export { activeTransport } from "../src/p1/transport"\n' },
+    reports: ["FAIL: functions/src/p1/zzUseHelper.ts: imports functions/test/zzHelper from an unscanned directory"],
+  },
+  {
+    name: "F34 R2-001 B16: a bare specifier that functions/tsconfig.json's baseUrl resolves to the transport",
+    rel: "functions/src/p1/zzBase.ts",
+    body:
+      'import { activeTransport } from "src/p1/transport"\n' +
+      'export const go = () => activeTransport()?.send({ model: "m", messages: [{ role: "system", content: "ad hoc" }], maxTokens: 8 })\n',
+    reports: ["FAIL: functions/src/p1/zzBase.ts: imports activeTransport from functions/src/p1/transport"],
+  },
+  {
+    name: "F34 R2-001 B09: fetch(GATEWAY_URL) with the Gateway key",
+    rel: "functions/src/p1/zzRaw.ts",
+    body:
+      'import { GATEWAY_URL } from "./transport"\nexport async function go(text: string) {\n' +
+      '  return fetch(GATEWAY_URL, { method: "POST", headers: { authorization: `Bearer ${process.env.AI_GATEWAY_API_KEY}` }, body: JSON.stringify({ messages: [{ role: "system", content: "ad hoc system" }, { role: "user", content: text }] }) })\n}\n',
+    reports: [
+      "FAIL: functions/src/p1/zzRaw.ts: imports GATEWAY_URL from functions/src/p1/transport",
+      "FAIL: functions/src/p1/zzRaw.ts: names the AI Gateway key AI_GATEWAY_API_KEY",
+    ],
   },
   // PR #129 review, Codex P2 (thread 4368766679): a granted file binding the whole transport and handing a value on.
   {
