@@ -56,6 +56,8 @@ const MISMATCHED = ackId(FIRM_A, "workflow", "doc_m")
 /** What main let firm A write: queueType = B's firm id, id = "workflow:doc_p", landing on B's firm-qualified id. */
 const PLANTED = ackId(FIRM_B, "workflow", "doc_p")
 const EVENT = "ops:workflow_event:wfe_fu1"
+/** At firm A's firm-qualified id, but not an acknowledgement row (another action). */
+const NOT_AN_ACK = ackId(FIRM_A, "workflow", "doc_x")
 
 let env: RulesTestEnvironment
 
@@ -93,6 +95,7 @@ describe.runIf(HAS_FIRESTORE_EMULATOR)("FA-D4-001-FU1 rules: court-ops acknowled
       await setDoc(doc(db, COLL, LEGACY), ack(FIRM_A, "workflow", "doc_l"))
       await setDoc(doc(db, COLL, MISMATCHED), ack(FIRM_B, "workflow", "doc_m"))
       await setDoc(doc(db, COLL, PLANTED), ack(FIRM_A, FIRM_B, "workflow:doc_p", { documentId: null, followUpId: null }))
+      await setDoc(doc(db, COLL, NOT_AN_ACK), ack(FIRM_A, "workflow", "doc_x", { action: "court_ops_resolve_follow_up" }))
       await setDoc(doc(db, COLL, EVENT), {
         ...ack(FIRM_A, "workflow", "doc_e"),
         source: "workflow_event",
@@ -152,6 +155,10 @@ describe.runIf(HAS_FIRESTORE_EMULATOR)("FA-D4-001-FU1 rules: court-ops acknowled
   it("the row main let firm A plant at firm B's id can be got by neither firm", async () => {
     await assertFails(getDoc(doc(await as(A_PARTNER), COLL, PLANTED)))
     await assertFails(getDoc(doc(await as(B_PARTNER), COLL, PLANTED)))
+  })
+
+  it("a row under the acknowledgement prefix that is not an acknowledgement (another action) cannot be got", async () => {
+    await assertFails(getDoc(doc(await as(A_PARTNER), COLL, NOT_AN_ACK)))
   })
 
   it("firm A's client and intern cannot get firm A's acknowledgement row", async () => {
