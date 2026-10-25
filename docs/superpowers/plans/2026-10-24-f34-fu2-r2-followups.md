@@ -33,7 +33,7 @@ branch. Counts are tests, from the runs in the evidence log.
 
 | Suite | RED on main | GREEN on branch |
 |---|---|---|
-| `tests/f34-p1-transport-import-gate.test.ts` | 56 failed, 57 passed (113) | 113 passed |
+| `tests/f34-p1-transport-import-gate.test.ts` | 56 failed, 58 passed (114) | 114 passed |
 | `tests/g0-gate-e2e.test.ts` | 3 failed (B01, B16, B09), 26 passed (29) | 29 passed |
 | `functions/test/f34-fu2.e2e.emu.test.ts` | 2 failed (the R37 TTL case; the reconciled record's time), 4 passed (6) | 6 passed |
 | `functions/test/f34-decision-units.test.ts` + `p1.units.test.ts` | 7 failed (R37 units ×3, the golden set, three `f34.3` expectations), 63 passed (70) | 70 passed |
