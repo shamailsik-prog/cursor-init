@@ -10,7 +10,7 @@ import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
 import { reconciledDecision } from "./decisionRecord"
 import { NOTHING_STAGED, isRetryableCommitError, leaseMillis, logLearning, settledState, stage, type ClosedState, type StageResult, type UsageRecord } from "./gateway"
 import { isMonthKey } from "./month"
-import { opikConfig } from "./opik"
+import { opikConfig, opikDisabledReason } from "./opik"
 import { modelId } from "./transport"
 import type { LedgerTaskType, P1Outcome } from "./types"
 
@@ -259,7 +259,18 @@ async function reconcileOne(db: Firestore, ref: DocumentReference, nowMs: number
     // Audit F34 (R2): the call never committed, so its decision record is written here, from the seed it left on the
     // reservation before dispatch and the attempt's ids and transport time; its trace export is left to the export
     // reconciler (`pending`, nothing tried), or `disabled` when tracing is off.
-    const decision = reconciledDecision({ usageLogId: ref.id, traceId: p.traceId, seed: snap.get("decisionSeed"), attempt: p.attempt, record, nowMs, tracing: opikConfig().enabled })
+    // Re-audit R1-009 (R23): when tracing is off, the record says why (turned off, or set but rejected).
+    const opik = opikConfig()
+    const decision = reconciledDecision({
+      usageLogId: ref.id,
+      traceId: p.traceId,
+      seed: snap.get("decisionSeed"),
+      attempt: p.attempt,
+      record,
+      nowMs,
+      tracing: opik.enabled,
+      disabledReason: opikDisabledReason(opik),
+    })
     const staged = await stage(db, tx, {
       usageRef: db.collection("ai_usage_logs").doc(ref.id),
       configRef,

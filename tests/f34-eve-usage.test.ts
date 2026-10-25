@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { LanguageModelV3CallOptions, LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import { committeeBrainLanguageModel } from "@/platform/p1/committeeBrainModel"
 import { setTransportForTests } from "@/platform/p1/internalAICaller"
@@ -14,11 +14,11 @@ import { setTransportForTests } from "@/platform/p1/internalAICaller"
 
 const INSTRUCTIONS = `Instructions (instructions)\n${readFileSync(path.resolve(__dirname, "..", "agent", "instructions.md"), "utf8").trim()}`
 
-const call = (classification: string | undefined): LanguageModelV3CallOptions =>
+const call = (classification: string | undefined, text = "Summarise the notice."): LanguageModelV3CallOptions =>
   ({
     prompt: [
       { role: "system", content: INSTRUCTIONS },
-      { role: "user", content: [{ type: "text", text: "Summarise the notice." }] },
+      { role: "user", content: [{ type: "text", text }] },
     ],
     providerOptions: classification === undefined ? {} : { sikander: { classification } },
   }) as never
@@ -28,7 +28,10 @@ const ZERO = {
   outputTokens: { total: 0, text: 0, reasoning: 0 },
 }
 
-afterEach(() => setTransportForTests(null))
+afterEach(() => {
+  setTransportForTests(null)
+  vi.restoreAllMocks()
+})
 
 describe("audit F34 R12: the eve bridge's usage", () => {
   it("a call P1 blocks (no transport in this runtime) sent nothing: zero usage, none_sent", async () => {
@@ -69,6 +72,33 @@ describe("audit F34 R12: the eve bridge's usage", () => {
     expect(r.usage.outputTokens.total).toBeUndefined()
     expect(r.usage.raw).toEqual({ status: "usage_unreported", reason: "transport_reported_no_usage" })
     expect(r.providerMetadata).toEqual({ sikander: { usageStatus: "usage_unreported", usageReason: "transport_reported_no_usage" } })
+  })
+
+  // Audit F34 re-audit R1-008 (spec ruling R22): on main e37b115 a call that was sent and then threw reported 0/0
+  // `none_sent`, and the bridge's console.error logged the error, whose message may echo the prompt.
+  it("a call that was sent and then threw is usage_unreported (transport_failed_after_send), and logs no error text", async () => {
+    const planted = "zanzibar quokka restricted strategy"
+    const logged: string[] = []
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack ?? ""}` : (JSON.stringify(a) ?? String(a)))).join(" "))
+    })
+    let sent = 0
+    setTransportForTests({
+      send: async (r) => {
+        sent += 1
+        throw new Error(`upstream 500 after billing; echo: ${r.messages[r.messages.length - 1]!.content}`)
+      },
+    })
+    const r = await committeeBrainLanguageModel.doGenerate(call("public", `Summarise the notice. ${planted}`))
+    expect(sent).toBe(1)
+    expect(r.finishReason.unified).toBe("error")
+    expect(r.usage.inputTokens.total).toBeUndefined()
+    expect(r.usage.outputTokens.total).toBeUndefined()
+    expect(r.usage.raw).toEqual({ status: "usage_unreported", reason: "transport_failed_after_send" })
+    expect(r.providerMetadata).toEqual({ sikander: { usageStatus: "usage_unreported", usageReason: "transport_failed_after_send" } })
+    expect(logged.length).toBeGreaterThan(0)
+    expect(logged.join("\n")).not.toContain("zanzibar")
+    expect(logged.join("\n")).not.toContain("upstream")
   })
 
   it("the stream's finish part carries the same usage and status", async () => {

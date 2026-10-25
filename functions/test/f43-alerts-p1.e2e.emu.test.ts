@@ -220,6 +220,8 @@ describe.skipIf(!EMULATORS)("audit F43: P1 faults raise durable alerts (e2e)", (
       ])
     } finally {
       await deleteFirmData([other])
+      // The million-token reply taught the platform-wide learned overhead (p1.overhead_learned); later suites expect none.
+      await adminDb().collection("platform").doc("p1Overhead").delete()
     }
   })
 

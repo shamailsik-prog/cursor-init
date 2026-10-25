@@ -314,6 +314,28 @@ resource "google_monitoring_alert_policy" "log_p1_trace_export_reconcile_failed"
   notification_channels = [google_monitoring_notification_channel.oncall.name]
 }
 
+resource "google_monitoring_alert_policy" "log_p1_opik_misconfigured" {
+  display_name = "ERROR log event p1.opik_misconfigured"
+  combiner     = "OR"
+  conditions {
+    display_name = "p1.opik_misconfigured"
+    condition_matched_log {
+      filter = "resource.type=\"cloud_run_revision\" AND severity=\"ERROR\" AND jsonPayload.event=\"p1.opik_misconfigured\""
+    }
+  }
+  alert_strategy {
+    notification_rate_limit {
+      period = "300s"
+    }
+    auto_close = "1800s"
+  }
+  documentation {
+    content   = "Runbook: functions/src/p1/README.md"
+    mime_type = "text/markdown"
+  }
+  notification_channels = [google_monitoring_notification_channel.oncall.name]
+}
+
 resource "google_monitoring_alert_policy" "log_autoconfirm_backlog_stale" {
   display_name = "ERROR log event autoconfirm.backlog_stale"
   combiner     = "OR"

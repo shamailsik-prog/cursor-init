@@ -81,6 +81,9 @@ python3 ci_gates/check_next_ai_egress.py || fail=1
 echo "[20] deploy-contract guard (audit F32: manifest, firebase.json, indexes TTL, alerts, Next maxDuration, terraform drift)"
 python3 ci_gates/check_deploy_contract.py || fail=1
 
+echo "[21] p1-transport-import guard (audit F34 R1-003: only the granted send sites may import a P1 transport)"
+python3 ci_gates/check_p1_transport_imports.py || fail=1
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { PROMPT_TEMPLATE_PINS } from "@/platform/p1/promptTemplates"
@@ -13,31 +14,28 @@ import { EMULATORS, uniq } from "./emu"
 
 /**
  * Audit F34, spec ruling R3: every prompt the P1 path sends comes from a registered template, and a call site that sends
- * anything else fails. Statically: in functions/src only `callP1` (gateway.ts) and the offline evaluation (evalSet.ts)
- * call a P1 transport's `send`, and each builds its messages with `buildOutbound`, whose system message is the registry
- * text for the purpose. At run time: every purpose, and an unknown one, sends a system message whose SHA-256 is a pinned
+ * anything else fails. Statically: only `callP1` (gateway.ts) and the offline evaluation (evalSet.ts) may import a P1
+ * transport (G-0 [21], audit F34 R1-003), and each builds its messages with `buildOutbound`, whose system message is the
+ * registry text for the purpose. At run time: every purpose, and an unknown one, sends a system message whose SHA-256 is a pinned
  * template hash; an ad-hoc system text is refused and nothing is sent.
  */
 
 const SRC = path.resolve(__dirname, "../src")
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex")
 
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const p = path.join(dir, name)
-    return statSync(p).isDirectory() ? sources(p) : p.endsWith(".ts") ? [p] : []
-  })
-}
-
 describe("F34 R3: the only P1 transport call sites build their prompt from the registry", () => {
-  const SEND_SITE = /\btransport\.send\(|\.send\(\s*\{\s*model\b/
-
-  it("only gateway.ts and evalSet.ts send through a P1 transport", () => {
-    const sites = sources(SRC)
-      .filter((p) => SEND_SITE.test(readFileSync(p, "utf8")))
-      .map((p) => path.relative(SRC, p))
-      .sort()
-    expect(sites).toEqual(["p1/evalSet.ts", "p1/gateway.ts"])
+  // Audit F34 R1-003 (spec ruling R17): the call-site regex this replaced matched two exact shapes and missed an ordinary
+  // alias (`const gw = activeTransport(); await gw?.send(...)`). The rule is now an import rule, G-0 check [21]: only
+  // gateway.ts and evalSet.ts (and the eval CLI, which hands evalSet.ts the Gateway transport and never sends) may import
+  // a P1 transport. tests/f34-p1-transport-import-gate.test.ts plants the shapes it must fail on.
+  it("only the granted send sites import a P1 transport (G-0 [21], ci_gates/check_p1_transport_imports.py)", () => {
+    const res = spawnSync("python3", ["ci_gates/check_p1_transport_imports.py"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" })
+    expect(`${res.stdout}${res.stderr}`).toContain("PASS: P1 transports are imported only by their grants")
+    expect(res.status).toBe(0)
+    const grants = JSON.parse(
+      spawnSync("python3", ["ci_gates/check_p1_transport_imports.py", "--print-grants"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).stdout
+    ) as { sendSites: string[] }
+    expect(grants.sendSites).toEqual(["functions/src/p1/embedding.ts", "functions/src/p1/evalSet.ts", "functions/src/p1/gateway.ts"])
   })
 
   it("each of them builds the messages it sends with buildOutbound and sends those messages", () => {

@@ -1,3 +1,4 @@
+import { logger } from "firebase-functions"
 import type { SystemRecord } from "@/platform/p1/outboundPrompt"
 import { classificationRank, type Classification } from "@/platform/p1/types"
 import { DECISION_RECORD_VERSION } from "./decisionRecord"
@@ -94,8 +95,9 @@ export type TraceRecord = {
   system?: SystemRecord | null
   maskedResponse: string | null
   /**
-   * Audit F34 (R10): ids and hashes that join the trace to the decision record, at every rank: the prompt hash (never the
-   * text), the registered template, and the model the provider reported. Absent on a record built before F34.
+   * Audit F34 (R10): ids that join the trace to the decision record: the prompt hash (never the text), the registered
+   * template, and the model the provider reported. Absent on a record built before F34. The prompt hash is exported only
+   * where the text itself may ride (re-audit R1-001, R15), and the reported model only when it is recognised (R1-005, R19).
    */
   promptHash?: string | null
   promptTemplateId?: string | null
@@ -103,13 +105,33 @@ export type TraceRecord = {
   modelReported?: string | null
 }
 
+/** What the trace says for a reported model that is neither the configured model nor its alias (re-audit R1-005, R19). */
+export const UNRECOGNISED_MODEL = "unrecognised"
+
+/**
+ * The reported model as a trace may carry it (audit F34 re-audit R1-005, spec ruling R19): the provider's own `model`
+ * field is free text that reaches a second system at every rank, so it is exported only when it is the configured model or
+ * the configured id without its `provider/` prefix (the rule of F17's `modelMatches` in ops.ts, which the units hold this
+ * to), `"unrecognised"` otherwise, and null when the provider reported none. The server-only record keeps what was reported.
+ */
+export function exportedModelReport(configured: string, reported: string | null): string | null {
+  if (reported === null) return null
+  if (reported === configured) return reported
+  const slash = configured.indexOf("/")
+  return slash > 0 && configured.slice(slash + 1) === reported ? reported : UNRECOGNISED_MODEL
+}
+
 /**
  * One Opik trace. The masked request (`{ system, prompt }` with the system policy's id and version, or `{ prompt }`
  * without a system message) and the masked response ride along only at ranks 0 and 1 (TRACE_TEXT_MAX_RANK, audit F34
- * R10) and never on a blocked call; ranks 2 to 4 and blocked calls are metadata only: ids, hashes and metrics. An unknown
- * classification label throws (fails closed).
+ * R10) and never on a blocked call; ranks 2 to 4 and blocked calls are metadata only: ids and metrics. The prompt hash
+ * follows the text (re-audit R1-001, spec ruling R15): a SHA-256 of a short, guessable body is a dictionary oracle, so it
+ * is exported only where the masked body itself may ride, never at ranks 2 to 4 and never on a blocked call (a
+ * `not_minimised` refusal's masked body still holds what the mask missed). An unknown classification label throws
+ * (fails closed).
  */
 export function buildTrace(r: TraceRecord, project: string): Record<string, unknown> {
+  const textMayRide = classificationRank(r.classification) <= TRACE_TEXT_MAX_RANK && r.outcome !== "blocked"
   const trace: Record<string, unknown> = {
     id: r.traceId,
     project_name: project,
@@ -129,16 +151,16 @@ export function buildTrace(r: TraceRecord, project: string): Record<string, unkn
       firmId: r.firmId,
       matterId: r.matterId,
       usageLogId: r.usageLogId,
-      // Audit F34 (R10): ids and hashes only, never text.
+      // Audit F34 (R10): ids only, never text; the prompt hash only where the text may ride (R15).
       decisionRecordVersion: DECISION_RECORD_VERSION,
-      ...(r.promptHash === undefined ? {} : { promptHash: r.promptHash }),
+      ...(r.promptHash === undefined || !textMayRide ? {} : { promptHash: r.promptHash }),
       ...(r.promptTemplateId === undefined ? {} : { promptTemplateId: r.promptTemplateId }),
       ...(r.promptTemplateVersion === undefined ? {} : { promptTemplateVersion: r.promptTemplateVersion }),
-      ...(r.modelReported === undefined ? {} : { modelReported: r.modelReported }),
+      ...(r.modelReported === undefined ? {} : { modelReported: exportedModelReport(r.model, r.modelReported) }),
     },
     tags: [r.classification, r.outcome],
   }
-  if (classificationRank(r.classification) <= TRACE_TEXT_MAX_RANK && r.outcome !== "blocked") {
+  if (textMayRide) {
     if (typeof r.maskedBody === "string") trace.input = r.system ? { system: { ...r.system }, prompt: r.maskedBody } : { prompt: r.maskedBody }
     if (typeof r.maskedResponse === "string") trace.output = { text: r.maskedResponse }
   }
@@ -154,9 +176,25 @@ export function setOpikFetchForTests(f: typeof fetch | null): void {
   testFetch = f
 }
 
-/** Posts one trace; "failed" for any error, non-2xx, refused redirect or timeout, "disabled" when tracing is off. Never throws. */
+/**
+ * Why tracing is off, when it is (audit F34 re-audit R1-009, spec ruling R23), for the decision record's
+ * `export.disabledReason`; undefined when tracing is on.
+ */
+export function opikDisabledReason(cfg: OpikConfig): Extract<OpikConfig, { enabled: false }>["reason"] | undefined {
+  return cfg.enabled ? undefined : cfg.reason
+}
+
+/**
+ * Posts one trace; "failed" for any error, non-2xx, refused redirect or timeout, "disabled" when tracing is off. Never throws.
+ * Tracing off because `OPIK_BASE_URL` is set but rejected (invalid_url, unconfirmed, third_party_host) is a
+ * misconfiguration, not a choice: each export asked for under it logs `p1.opik_misconfigured` at ERROR with the reason,
+ * never the URL (re-audit R1-009, R23; alert policy in infra/deploy-manifest.json). Unset is tracing turned off: no line.
+ */
 export async function exportTrace(r: TraceRecord, cfg: OpikConfig = opikConfig(), opts?: { timeoutMs?: number }): Promise<"exported" | "failed" | "disabled"> {
-  if (!cfg.enabled) return "disabled"
+  if (!cfg.enabled) {
+    if (cfg.reason !== "unset") logger.error("p1.opik_misconfigured", { reason: cfg.reason, event: "p1.opik_misconfigured" })
+    return "disabled"
+  }
   try {
     const res = await (testFetch ?? fetch)(`${cfg.baseUrl}/v1/private/traces/batch`, {
       method: "POST",
