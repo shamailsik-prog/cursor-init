@@ -4,7 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { canonicalMatterDocument } from "@/platform/d1/matterDocument"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
-import { adminDb } from "../src/admin"
+import { adminAuth, adminDb } from "../src/admin"
 import { InMemoryAuthorityStore, setAuthorityStoreForTests } from "../src/d4/authority"
 import { ROUTES, createRouter } from "../src/http/router"
 import { firmConfigRef } from "../src/p1/config"
@@ -27,7 +27,7 @@ import { FakeClock, testDeps } from "./jobs"
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 })
 
-type Member = { uid: string; token: string }
+type Member = { uid: string; token: string; email?: string }
 type Firm = { firmId: string; P: Member; Q: Member; A: Member; matterId: string }
 type RequestView = { requestId: string; status: string; refusal?: { code: string } | null; jobId?: string }
 type Ack = { storeId: string; outcome: string; count: number | null; idsSha256: string | null; detail: Record<string, unknown> }
@@ -545,5 +545,95 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-009: a deleted matter's job rows are hidd
     expect((await send(listJobsApi, f, f.P, { limit: "50" })).items.map((i) => i.jobId)).not.toContain(jobId)
     const cancel = await apiErrorOf(send(cancelJobApi, f, f.P, { jobId, note: "Cancelled after the matter was deleted." }))
     expect(cancel.status).toBe(404)
+  })
+})
+
+const createFirmUserApi = viaApi<{ uid: string }>("createFirmUser")
+const setUserClaimsApi = viaApi<Record<string, unknown>>("setUserClaims")
+const PASSWORD = "f42r1-pass-123"
+
+/** Signs in an emulator account with a password set here (stands in for the reset link its owner receives). */
+async function signIn(uid: string, email: string): Promise<Member> {
+  await adminAuth().updateUser(uid, { password: PASSWORD })
+  const res = await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password: PASSWORD, returnSecureToken: true }),
+  })
+  if (!res.ok) throw new Error(`emulator sign-in failed: ${res.status}`)
+  return { uid, email, token: ((await res.json()) as { idToken: string }).idToken }
+}
+
+/** Backdates the user doc's timestamp fields by the given number of days. */
+const ageUser = (uid: string, fields: Record<string, number>) =>
+  adminDb().collection("users").doc(uid).set(Object.fromEntries(Object.entries(fields).map(([k, days]) => [k, Timestamp.fromMillis(Date.now() - days * DAY_MS)])), { merge: true })
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of the requester", () => {
+  it("FP7: a sole partner who mints a second partner account cannot approve their own request with it", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const firmId = uniq("f42r1solo")
+    firms.push(firmId)
+    await adminDb().collection("firms").doc(firmId).set({ name: "SOLO", plan: "internal", rateLimits: { general: 5000 } })
+    const P = await member(firmId, "partner")
+    const f: Firm = { firmId, P, Q: P, A: P, matterId: uniq("f42r1solom") }
+    await seedMatter(firmId, f.matterId, TITLE, [P.uid])
+    const req = await send(requestApi, f, P, { matterId: f.matterId, reasonCode: "client_instruction" })
+    const email = `${uniq("puppet")}@example.test`
+    const { uid } = await send(createFirmUserApi, f, P, { email, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(uid)
+    const puppet = await signIn(uid, email)
+    // createFirmUser records who made the account.
+    expect((await adminDb().collection("users").doc(uid).get()).get("createdBy")).toBe(P.uid)
+    // Even backdated past any tenure, the account the requester made cannot approve the requester's deletion.
+    await ageUser(uid, { createdAt: 400 })
+    const err = await apiErrorOf(send(approveApi, f, puppet, { requestId: req.requestId }))
+    expect(`${err.status} ${err.code}`).toBe("403 approver_created_by_requester")
+    expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+    // The other way round: the puppet files the request for its creator to approve. Refused too.
+    const second = uniq("f42r1solom")
+    await seedMatter(firmId, second, TITLE, [P.uid])
+    const byPuppet = await send(requestApi, f, puppet, { matterId: second, reasonCode: "client_instruction" })
+    expect(byPuppet.status).toBe("pending_approval")
+    const reverse = await apiErrorOf(send(approveApi, f, P, { requestId: byPuppet.requestId }))
+    expect(`${reverse.status} ${reverse.code}`).toBe("403 requester_created_by_approver")
+    expect((await adminDb().collection("matter_tombstones").doc(second).get()).exists).toBe(false)
+  })
+
+  it("an approver the requester made partner, and one whose account or partner role is too young or unknown, are refused; an established one approves", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const req = await send(requestApi, f, f.P, { matterId: f.matterId, reasonCode: "client_instruction" })
+    // A, an established associate, is made partner by the requester; even backdated, still the requester's pick.
+    await send(setUserClaimsApi, f, f.P, { uid: f.A.uid, role: "partner" })
+    const grant = (await adminDb().collection("users").doc(f.A.uid).get()).data()
+    expect(grant?.partnerGrantedBy).toBe(f.P.uid)
+    expect(grant?.partnerSince).toBeInstanceOf(Timestamp)
+    await ageUser(f.A.uid, { partnerSince: 400 })
+    const promoted = await signIn(f.A.uid, f.A.email!)
+    expect((await apiErrorOf(send(approveApi, f, promoted, { requestId: req.requestId }))).code).toBe("approver_promoted_by_requester")
+    // An account made by someone else, ten days ago: younger than the PROPOSED 30 days.
+    const young = await member(f.firmId, "partner")
+    await ageUser(young.uid, { createdAt: 10 })
+    expect((await apiErrorOf(send(approveApi, f, young, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
+    // A partner role granted (by another partner) after the request was made: younger than the request.
+    const late = await member(f.firmId, "partner")
+    await adminDb().collection("users").doc(late.uid).set({ partnerSince: Timestamp.fromMillis(Date.now() + 1_000), partnerGrantedBy: "another-partner" }, { merge: true })
+    expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
+    // A partner whose claims were changed (updatedAt) with no partnerSince is judged by the change: here, yesterday.
+    const changed = await member(f.firmId, "partner")
+    await ageUser(changed.uid, { updatedAt: 1 })
+    await adminDb().collection("users").doc(changed.uid).set({ claimsVersion: 2 }, { merge: true })
+    expect((await apiErrorOf(send(approveApi, f, changed, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
+    // An account whose start the store cannot tell is refused (fail closed).
+    const unknown = await mintIdToken(claims(f.firmId, "partner"))
+    uids.push(unknown.uid)
+    expect((await apiErrorOf(send(approveApi, f, unknown, { requestId: req.requestId }))).code).toBe("approver_tenure_unknown")
+    // Each refusal is a deny row in the audit log, naming its code; nothing was tombstoned.
+    const audit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.approve_deletion").get()
+    const reasons = audit.docs.map((d) => `${d.get("decision")} ${d.get("reason")}`)
+    for (const code of ["approver_promoted_by_requester", "approver_tenure_too_short", "approver_tenure_unknown"]) expect(reasons).toContain(`deny ${code}`)
+    expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+    // Control: Q, established and independent, approves.
+    expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
   })
 })

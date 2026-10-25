@@ -144,6 +144,22 @@ describe("F42 units: treatments, plan and holds", () => {
     }
   })
 
+  it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
+    const inv = inventory()
+    expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)
+    const cases: Array<(p: RetentionPolicy) => void> = [
+      (p) => delete (p.deletion as { approverMinTenureDays?: unknown }).approverMinTenureDays,
+      (p) => (p.deletion.approverMinTenureDays = 0),
+      (p) => (p.deletion.approverMinTenureDays = 1.5),
+      (p) => ((p.deletion as { approverMinTenureDays: unknown }).approverMinTenureDays = "30"),
+    ]
+    for (const mutate of cases) {
+      const p = purgePolicy()
+      mutate(p)
+      expect(() => validatePolicy(p, inv)).toThrow(new RetentionConfigError("deletion.approverMinTenureDays"))
+    }
+  })
+
   it("FA-F42-R1-005: a vault path is kept only in the vault's own shape for its row's firm and document", () => {
     const { vaultPathOf } = sagaInternals
     expect(vaultPathOf("fs://firmA/documents/doc1/v1", "firmA", "doc1")).toBe("fs://firmA/documents/doc1/v1")

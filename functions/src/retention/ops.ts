@@ -35,9 +35,56 @@ import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } fr
  */
 
 const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
 const db = () => adminDb()
 const matterRef = (id: string) => db().collection("matters").doc(id)
 const tombRef = (id: string) => db().collection(MATTER_TOMBSTONES).doc(id)
+const userRef = (uid: string) => db().collection("users").doc(uid)
+const millisOf = (v: unknown): number | null => (v instanceof Timestamp ? v.toMillis() : null)
+
+/**
+ * When a partner's account and partner role began, the later of the two (spec R26), or null when the store cannot
+ * tell. The role's start is `partnerSince`; without it, `createdAt` when the claims were never changed (no
+ * `claimsVersion`, no `updatedAt`), else the last claims change (`updatedAt`): later, so stricter.
+ */
+function partnerStartMs(user: DocumentData | undefined): number | null {
+  if (!user) return null
+  const account = millisOf(user.createdAt)
+  if (account === null) return null
+  const changed = user.claimsVersion !== undefined || user.updatedAt !== undefined
+  const role = millisOf(user.partnerSince) ?? (changed ? millisOf(user.updatedAt) : account)
+  return role === null ? null : Math.max(account, role)
+}
+
+/**
+ * Audit F42 (FA-F42-R1-006, spec R26): the requester and the approver must be two people the store can tell apart.
+ * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`): checked
+ * both ways, since a sole partner's puppet could otherwise file the request for its creator to approve. The approver's
+ * account and partner role must predate the request and be `approverMinTenureDays` old at the approval; the
+ * requester's must be that old at the request. A start the store cannot tell refuses (fail closed). Each refusal is a
+ * 403 with its own code, audited as a deny by the router.
+ */
+function requireIndependentPartners(
+  approver: DocumentData | undefined,
+  requester: DocumentData | undefined,
+  ids: { approver: string; requester: string },
+  times: { requestedAtMs: number | null; nowMs: number },
+  policy: RetentionPolicy
+): void {
+  // An unreadable request time would make every comparison below false (NaN): refuse instead (fail closed).
+  if (times.requestedAtMs === null || ids.requester === "") throw new HttpError(409, "request_invalid")
+  if (approver?.createdBy === ids.requester) throw new HttpError(403, "approver_created_by_requester")
+  if (approver?.partnerGrantedBy === ids.requester) throw new HttpError(403, "approver_promoted_by_requester")
+  if (requester?.createdBy === ids.approver) throw new HttpError(403, "requester_created_by_approver")
+  if (requester?.partnerGrantedBy === ids.approver) throw new HttpError(403, "requester_promoted_by_approver")
+  const tenure = policy.deletion.approverMinTenureDays * DAY_MS
+  const approverStart = partnerStartMs(approver)
+  if (approverStart === null) throw new HttpError(403, "approver_tenure_unknown")
+  if (approverStart >= times.requestedAtMs || times.nowMs - approverStart < tenure) throw new HttpError(403, "approver_tenure_too_short")
+  const requesterStart = partnerStartMs(requester)
+  if (requesterStart === null) throw new HttpError(403, "requester_tenure_unknown")
+  if (times.requestedAtMs - requesterStart < tenure) throw new HttpError(403, "requester_tenure_too_short")
+}
 
 function parseId(value: unknown, code: string): string {
   if (!isSafeDocId(value)) throw new HttpError(400, code)
@@ -189,7 +236,14 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const req = (await tx.get(reqRef)).data()
       if (!req || req.firmId !== caller.firmId || typeof req.matterId !== "string") throw new HttpError(404, "not_found")
       const matterId = req.matterId
-      const [matterSnap, tombSnap, holdSnap] = await tx.getAll(matterRef(matterId), tombRef(matterId), holdsRef().doc(matterId))
+      const requester = typeof req.requestedBy === "string" && isSafeDocId(req.requestedBy) && req.requestedBy !== caller.uid ? req.requestedBy : null
+      const [matterSnap, tombSnap, holdSnap, approverSnap, requesterSnap] = await tx.getAll(
+        matterRef(matterId),
+        tombRef(matterId),
+        holdsRef().doc(matterId),
+        userRef(caller.uid),
+        ...(requester === null ? [] : [userRef(requester)])
+      )
       const limit = policy.deletion.maxMembersRevokedAtApproval
       const members = await tx.get(db().collection("matter_members").where("firmId", "==", caller.firmId).where("matterId", "==", matterId).limit(limit + 1))
       if (req.status !== "pending_approval") throw new HttpError(409, "request_not_pending")
@@ -197,6 +251,13 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const matter = readMatterDocument(matterSnap.data())
       requireCleared(caller, req.classification)
       if (matter) requireCleared(caller, matter.classification)
+      requireIndependentPartners(
+        approverSnap.data(),
+        requesterSnap?.data(),
+        { approver: caller.uid, requester: requester ?? "" },
+        { requestedAtMs: millisOf(req.requestedAt), nowMs },
+        policy
+      )
       if (lapsed(req, nowMs, policy)) {
         // Recorded like a refusal: the request ends, so it no longer holds the matter's one open request.
         tx.update(reqRef, expiryOf(at, caller.uid, null))

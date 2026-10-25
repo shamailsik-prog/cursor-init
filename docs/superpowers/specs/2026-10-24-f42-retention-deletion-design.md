@@ -493,20 +493,28 @@ otherwise) and `v<n>`. Any other path is not copied: the tombstone keeps its SHA
 `pathShape: "refused"`, and the vault acknowledgement counts it (`detail.refusedPaths`); the lifecycle executor (FU-4)
 matches objects by that hash.
 
-**R26. The approver must be independent of the requester (R1-006).** Besides being another partner of the firm, the
-approver must not have been created by the requester (`users/{uid}.createdBy`, now written by `createFirmUser`), must
-not have been made partner by the requester (`partnerGrantedBy`, written by `setUserClaims` when a role becomes
-partner), and their account and partner role must predate the request and be at least N days old at the approval:
-N = `deletion.approverMinTenureDays`, PROPOSED 30. A partner whose start is unknown (no `partnerSince`) is judged by
-`createdAt` when their claims were never changed, else by the last claims change (`updatedAt`): later, so stricter.
-Refusal `403 approver_not_independent` (with `detail`: `created_by_requester`, `promoted_by_requester`,
-`tenure_too_short`), recorded as a deny audit row. Ruling on a sole-partner firm: no rule inside a firm whose every
-account one person provisions can prove two people; a firm with no independent second partner cannot delete through
-this saga (its requests expire). The honest path is a platform operator's countersignature through the P5
-platform-admin path, recorded as FU-7 and not built here. Steelman against: a new real partner must wait 30 days to
-co-sign; accepted for an irreversible act. Devil's advocate: a patient sole partner who creates an account through a
-second creator and waits 30 days still passes; this is the residual FU-7 closes, and the request, approval and audit
-rows name both partners for review.
+**R26. The two partners must be independent of each other (R1-006).** Besides being another partner of the firm,
+the approver must not have been created by the requester (`users/{uid}.createdBy`, now written by `createFirmUser`)
+nor made partner by the requester (`partnerGrantedBy` with `partnerSince`, written by `setUserClaims` when a role
+becomes partner and by `createFirmUser` for a partner account, and removed when the role is left). The same holds the
+other way round: the requester must not have been created or made partner by the approver, else a sole partner's
+puppet files the request for its creator to approve (the reverse of the auditor's FP7). The approver's account and
+partner role must predate the request and be at least N days old at the approval; the requester's must be N days old
+at the request: N = `deletion.approverMinTenureDays`, PROPOSED 30. A partner whose start is unknown (no
+`partnerSince`) is judged by `createdAt` when their claims were never changed, else by the last claims change
+(`updatedAt`): later, so stricter. Refusals, each `403` with its own code and recorded as a deny audit row:
+`approver_created_by_requester`, `approver_promoted_by_requester`, `requester_created_by_approver`,
+`requester_promoted_by_approver`, `approver_tenure_too_short`, `approver_tenure_unknown`,
+`requester_tenure_too_short`, `requester_tenure_unknown` (no readable start, fail closed); a request with no readable
+time or requester is `409 request_invalid`. Ruling on a sole-partner firm: no rule inside a firm whose every account
+one person provisions can prove two people; a firm with no independent second partner cannot delete through this saga
+(its requests expire). The honest path is a platform operator's countersignature through the P5 platform-admin path,
+recorded as FU-7 and not built here. Cost of the two-way rule: in a two-partner firm where one partner provisioned the
+other's account, neither can delete through the saga, since the store cannot tell that second partner from a puppet;
+such a firm waits for FU-7 (or a third partner neither provisioned). Steelman against: a new real partner must wait 30
+days to co-sign; accepted for an irreversible act. Devil's advocate: a patient sole partner who creates an account
+through a second creator (P makes X, X makes Y) and waits 30 days still passes; this is the residual FU-7 closes, and
+the request, approval and audit rows name both partners for review.
 
 **R27. In-flight traces are recorded (R1-007, RES-2).** (a) The anonymise or purge chunk of a trace source
 (`ai_usage_logs`, `p1_decisions`), when the plan requests the processor, reads the processor request in its

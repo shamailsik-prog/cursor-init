@@ -333,6 +333,9 @@ export const createFirmUserOp: FirmOperation<{ uid: string }> = {
         clearanceLevel,
         mfaEnabled: false,
         active: true,
+        // Audit F42 (FA-F42-R1-006, spec R26): who made the account, so a deletion's two partners can be told apart.
+        createdBy: caller.uid,
+        ...(role === "partner" ? { partnerSince: FieldValue.serverTimestamp(), partnerGrantedBy: caller.uid } : {}),
         createdAt: FieldValue.serverTimestamp(),
       })
     } catch (err) {
@@ -397,7 +400,7 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
         version: Math.max(committedVersion(syncDoc, current), claimsVersionOf(current)) + 1,
       }
       await audit.stage(tx, "allow", "ok")
-      writeClaimsState(tx, uid, result)
+      writeClaimsState(tx, uid, result, partnerFields(current.role, result.role, caller.uid))
       return { result, before: { role: current.role, clearanceLevel: current.clearanceLevel } }
     })
     audit.committed()
@@ -409,7 +412,7 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
       // revert that follows is audited too (recoverFailedSync).
       const syncFailed = err instanceof HttpError && err.code === "claims_sync_failed"
       await audit.incident(syncFailed ? "claims_sync_failed" : "claims_sync_error")
-      await recoverFailedSync(audit, uid, change.result, change.before)
+      await recoverFailedSync(audit, uid, change.result, change.before, caller.uid)
       throw err
     }
     await adminAuth().revokeRefreshTokens(uid)
@@ -417,12 +420,24 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
   },
 }
 
-/** Writes a ClaimsResult to the users doc and its server-only claims_sync record in one transaction. */
-function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult): void {
+/**
+ * Audit F42 (FA-F42-R1-006, spec R26): the users-doc fields a role change writes about the partner role. Becoming
+ * partner records when (`partnerSince`) and by whom (`partnerGrantedBy`); leaving it removes both, so a later grant is
+ * dated afresh. Any other change leaves them as they are.
+ */
+function partnerFields(before: unknown, after: unknown, by: string): Record<string, unknown> {
+  if (before !== "partner" && after === "partner") return { partnerSince: FieldValue.serverTimestamp(), partnerGrantedBy: by }
+  if (before === "partner" && after !== "partner") return { partnerSince: FieldValue.delete(), partnerGrantedBy: FieldValue.delete() }
+  return {}
+}
+
+/** Writes a ClaimsResult (and `extra`, the partner fields) to the users doc and its server-only claims_sync record in one transaction. */
+function writeClaimsState(tx: Transaction, uid: string, r: ClaimsResult, extra: Record<string, unknown> = {}): void {
   tx.update(usersRef().doc(uid), {
     role: r.role,
     clearanceLevel: r.clearanceLevel,
     claimsVersion: r.version,
+    ...extra,
     updatedAt: FieldValue.serverTimestamp(),
   })
   tx.set(claimsSyncRef(uid), { ...r, at: FieldValue.serverTimestamp() })
@@ -441,11 +456,12 @@ async function recoverFailedSync(
   audit: CallAudit,
   uid: string,
   ours: ClaimsResult,
-  before: { role: unknown; clearanceLevel: unknown }
+  before: { role: unknown; clearanceLevel: unknown },
+  by: string
 ): Promise<void> {
   let reverted: { result: ClaimsResult; blocked: boolean } | undefined
   try {
-    reverted = await revertIfStillOurs(audit, uid, ours, before)
+    reverted = await revertIfStillOurs(audit, uid, ours, before, by)
   } catch (err) {
     logFailure("setUserClaims revert failed", err, uid)
     await audit.incident("claims_revert_failed")
@@ -473,7 +489,8 @@ async function revertIfStillOurs(
   audit: CallAudit,
   uid: string,
   ours: ClaimsResult,
-  before: { role: unknown; clearanceLevel: unknown }
+  before: { role: unknown; clearanceLevel: unknown },
+  by: string
 ): Promise<{ result: ClaimsResult; blocked: boolean } | undefined> {
   return adminDb().runTransaction(async (tx) => {
     // Same read order as setUserClaims (claims_sync before users): see the note there.
@@ -497,7 +514,8 @@ async function revertIfStillOurs(
     )
     // FN-2: the revert's audit row commits with the revert (no revert without its row).
     await audit.stage(tx, "deny", blocked ? "revert_blocked_last_partner" : "claims_change_reverted")
-    writeClaimsState(tx, uid, result)
+    // A reverted grant leaves no partner fields; a reverted removal grants afresh (dated now: later, so stricter).
+    writeClaimsState(tx, uid, result, partnerFields(doc.role, result.role, by))
     return { result, blocked }
   })
 }

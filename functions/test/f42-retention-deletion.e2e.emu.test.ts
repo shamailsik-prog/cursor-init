@@ -192,6 +192,11 @@ async function newFirm(): Promise<Firm> {
     await mintIdToken(claims(firmId, "partner")),
   ]
   uids.push(P.uid, Q.uid, A.uid, C.uid, outsider.uid)
+  // Established accounts, made long before any request (FA-F42-R1-006, spec R26: an approval judges both partners'
+  // tenure, and an account with no readable start is refused).
+  for (const m of [P, Q, A, C, outsider]) {
+    await adminDb().collection("users").doc(m.uid).set({ createdAt: Timestamp.fromMillis(Date.now() - 400 * 86_400_000) }, { merge: true })
+  }
   const matterId = uniq("f42m")
   const otherMatterId = uniq("f42other")
   await seedMatter(firmId, matterId, TITLE, [P.uid, Q.uid, A.uid, C.uid])

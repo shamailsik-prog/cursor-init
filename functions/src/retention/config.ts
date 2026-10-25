@@ -32,6 +32,8 @@ export type RetentionPolicy = {
     ackDeadlineHours: number
     maxMembersRevokedAtApproval: number
     storesPerPurgeJob: number
+    /** Days a partner's account and partner role must have run before they may request or approve (spec R26). */
+    approverMinTenureDays: number
     /** The closed list of codes a deletion request may give (spec R25). */
     reasonCodes: string[]
     reasonCodesNote?: string
@@ -132,6 +134,7 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
   if (!d || !positiveInt(d.approvalWindowHours) || !positiveInt(d.ackDeadlineHours) || !positiveInt(d.maxMembersRevokedAtApproval) || !positiveInt(d.storesPerPurgeJob)) {
     throw new RetentionConfigError("deletion")
   }
+  if (!positiveInt(d.approverMinTenureDays)) throw new RetentionConfigError("deletion.approverMinTenureDays")
   if (!reasonCodeList(d.reasonCodes)) throw new RetentionConfigError("deletion.reasonCodes")
   if (!p.legalHold || !reasonCodeList(p.legalHold.reasonCodes)) throw new RetentionConfigError("legalHold.reasonCodes")
   for (const [name, c] of Object.entries(p.classes ?? {})) {

@@ -9,6 +9,8 @@
     "ackDeadlineHours": 24,
     "maxMembersRevokedAtApproval": 400,
     "storesPerPurgeJob": 12,
+    "approverMinTenureDays": 30,
+    "approverMinTenureNote": "PROPOSED, owner ratification required (spec R26): the requester's and the approver's account and partner role must each have run this many days (the approver's must also predate the request), and neither partner may have created the other's account or made the other partner.",
     "reasonCodes": ["client_instruction", "matter_opened_in_error", "duplicate_matter", "retention_period_elapsed", "court_order", "regulator_request"],
     "reasonCodesNote": "PROPOSED, owner ratification required. The closed list of codes a deletion request may give (spec R25): a code, never free text, so no name or fact of a matter enters the deletion trail. Adding a code is a policy change.",
     "proposed": "PROPOSED, owner ratification required: a partner requests, a second partner approves within 72 h; every store acknowledges within 24 h of approval or the watch alerts."
