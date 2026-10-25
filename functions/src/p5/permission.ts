@@ -28,8 +28,10 @@ type Evaluation = PermissionDecision & { classification: Classification }
  * I-3 / U-2) over matters/{id} and matter_members/{matterId}_{uid} read from Firestore, with the
  * matter's tombstone (matter_tombstones/{id}, audit F42: a deleted matter is refused `matter-deleted`).
  * Fails closed: a malformed matterId denies with "invalid-matter-id", a read error denies with
- * "store-unavailable"; every decision is audited (one audit_log row: action, decision, reason),
- * and if the audit write fails the result is deny "audit_unavailable".
+ * "store-unavailable", and an action no row of the table knows denies with "unknown-action" (the
+ * table's default, FA-F43-R1-P01; this file has no default of its own); every decision is audited
+ * (one audit_log row: action, decision, reason), and if the audit write fails the result is deny
+ * "audit_unavailable".
  */
 export async function checkPermission(
   caller: Caller,
@@ -68,7 +70,8 @@ export async function checkPermission(
  * an AI action (P3-70, P3-71, P3-66; ai.call takes the matterId), a D4 draft action (P4-10; every one takes the matterId)
  * or doctype.read (firm-level)
  * through checkPermission, so it is decided by the shared table and audited like every other
- * decision. Deny → 403 partner_only (the operations' existing error code); an audit failure →
+ * decision. Deny → 403 partner_only (the operations' existing error code) or 403 with the
+ * table's reason (`unknown_action` for an action no row knows, FA-F43-R1-P01); an audit failure →
  * 503 audit_unavailable. The operations keep their own extra guards (self-change, clearance
  * cap, last partner).
  */

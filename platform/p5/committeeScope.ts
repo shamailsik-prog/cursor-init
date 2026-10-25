@@ -9,6 +9,7 @@
  * Access to every referenced matter goes through P5 `checkPermission`.
  */
 import { checkPermission } from "@/platform/p5/checkPermission"
+import type { CommitteeBrainAction } from "@/platform/p5/permissionDecision"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import { resolvePersistenceMode } from "@/platform/persistence/runtimeRepositories"
 import type { SpineRepositories } from "@/platform/persistence/spineRepositories"
@@ -61,13 +62,16 @@ async function loadMatter(
   return matter ?? null
 }
 
-/** Hydrates the matter + membership row, then defers to P5 checkPermission. */
+/**
+ * Hydrates the matter + membership row, then defers to P5 checkPermission. `action` is one of the two committee rows of
+ * the shared table (FA-F43-R1-P01): typed, so G-0 [23] resolves it and TypeScript holds every caller to the pair.
+ */
 export async function canAccessMatter(
   store: SpineStore,
   repos: SpineRepositories,
   actor: User,
   matterId: string,
-  action = "committee_brain"
+  action: CommitteeBrainAction = "committee_brain"
 ): Promise<{ allow: boolean; reason: string; matter: Matter | null }> {
   const matter = await loadMatter(store, repos, matterId, actor.firmId)
   if (!matter) return { allow: false, reason: "unknown-matter", matter: null }

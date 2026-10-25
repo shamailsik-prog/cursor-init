@@ -40,22 +40,24 @@ type Case = {
 }
 
 const OWN = { firmId: "firmA", classification: "confidential" }
+// FA-F43-R1-P01: the matter-gate cases used "read_matter", an action no row knows, which fell through to `allow ok`; they
+// now use the real matter-level row `matter.read`, and "read_matter" itself is refused unknown-action (cases at the end).
 const CASES: Case[] = [
-  { name: "member associate reads a matter", role: "associate", action: "read_matter", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
-  { name: "non-member partner", role: "partner", action: "read_matter", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
-  { name: "another firm's matter", role: "partner", action: "read_matter", matter: { firmId: "firmB", classification: "public" }, member: true, expected: { allow: false, reason: "cross-firm" } },
-  { name: "a missing matter", role: "partner", action: "read_matter", matter: "missing", expected: { allow: false, reason: "cross-firm" } },
-  { name: "clearance below the matter", role: "associate", clearance: "internal", action: "read_matter", matter: { firmId: "firmA", classification: "privileged" }, member: true, expected: { allow: false, reason: "clearance" } },
-  { name: "an unreadable classification is refused even at the top clearance", role: "partner", clearance: "privileged-restricted", action: "read_matter", matter: { firmId: "firmA", classification: "bogus" }, member: true, expected: { allow: false, reason: "clearance" } },
-  { name: "an Object.prototype key as classification", role: "partner", clearance: "privileged-restricted", action: "read_matter", matter: { firmId: "firmA", classification: "constructor" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "member associate reads a matter", role: "associate", action: "matter.read", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "non-member partner", role: "partner", action: "matter.read", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
+  { name: "another firm's matter", role: "partner", action: "matter.read", matter: { firmId: "firmB", classification: "public" }, member: true, expected: { allow: false, reason: "cross-firm" } },
+  { name: "a missing matter", role: "partner", action: "matter.read", matter: "missing", expected: { allow: false, reason: "cross-firm" } },
+  { name: "clearance below the matter", role: "associate", clearance: "internal", action: "matter.read", matter: { firmId: "firmA", classification: "privileged" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "an unreadable classification is refused even at the top clearance", role: "partner", clearance: "privileged-restricted", action: "matter.read", matter: { firmId: "firmA", classification: "bogus" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "an Object.prototype key as classification", role: "partner", clearance: "privileged-restricted", action: "matter.read", matter: { firmId: "firmA", classification: "constructor" }, member: true, expected: { allow: false, reason: "clearance" } },
   { name: "intern drafting", role: "intern", action: "draft", expected: { allow: false, reason: "intern-channel-denied" } },
-  { name: "intern reading a matter", role: "intern", action: "read_matter", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "intern reading a matter", role: "intern", action: "matter.read", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
   { name: "client research", role: "client", action: "research", matter: OWN, member: true, expected: { allow: false, reason: "client-channel-denied" } },
   { name: "client lists matters", role: "client", action: "list_matters", expected: { allow: true, reason: "client-own-matters" } },
   { name: "own_matters scope lists", role: "associate", action: "list_matters", scope: "own_matters", expected: { allow: true, reason: "client-own-matters" } },
   { name: "own_matters scope drafts", role: "associate", action: "draft", scope: "own_matters", expected: { allow: false, reason: "client-channel-denied" } },
   { name: "partner lists matters", role: "partner", action: "list_matters", expected: { allow: true, reason: "ok" } },
-  { name: "accounts reads a matter it is a member of", role: "accounts", action: "read_matter", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
+  { name: "accounts reads a matter it is a member of", role: "accounts", action: "matter.read", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
   { name: "accounts drafts", role: "accounts", action: "draft", expected: { allow: false, reason: "accounts-register-only" } },
   { name: "accounts reads the intimation register", role: "accounts", action: "intimation_register", expected: { allow: true, reason: "accounts-register" } },
   { name: "accounts records an entry on its firm's matter", role: "accounts", action: "record_accounts_entry", matter: OWN, member: false, expected: { allow: true, reason: "accounts-register" } },
@@ -75,6 +77,21 @@ const CASES: Case[] = [
   { name: "doctype.read by an intern", role: "intern", action: "doctype.read", expected: { allow: false, reason: "intern-channel-denied" } },
   { name: "doctype.read by a client", role: "client", action: "doctype.read", expected: { allow: false, reason: "client-denied" } },
   { name: "doctype.read by accounts", role: "accounts", action: "doctype.read", expected: { allow: false, reason: "accounts-register-only" } },
+  // FA-F43-R1-P01: an action no row knows is refused in all three, for every role but accounts; the Next routes' actions
+  // are decided by their own rows (spec R2/R3).
+  ...["partner", "associate", "clerk", "intern", "client"].flatMap((role): Case[] => [
+    { name: `an unknown action by the ${role} role, member matter`, role, action: "read_matter", matter: OWN, member: true, expected: { allow: false, reason: "unknown-action" } },
+    { name: `an unknown action by the ${role} role, no matter`, role, action: "fa_f43_unknown.action", expected: { allow: false, reason: "unknown-action" } },
+  ]),
+  { name: "an unknown action by accounts", role: "accounts", action: "read_matter", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
+  { name: "committee_brain by a member clerk", role: "clerk", action: "committee_brain", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "committee_brain by a member intern", role: "intern", action: "committee_brain", matter: OWN, member: true, expected: { allow: false, reason: "role-not-permitted" } },
+  { name: "committee_brain by a member client", role: "client", action: "committee_brain", matter: OWN, member: true, expected: { allow: false, reason: "client-denied" } },
+  { name: "committee_brain naming no matter", role: "partner", action: "committee_brain", expected: { allow: false, reason: "cross-firm" } },
+  { name: "committee_brain_read by a non-member associate", role: "associate", action: "committee_brain_read", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
+  { name: "normalise_case_number by an intern", role: "intern", action: "normalise_case_number", expected: { allow: true, reason: "ok" } },
+  { name: "research by a member clerk", role: "clerk", action: "research", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "intimation_register by a partner", role: "partner", action: "intimation_register", expected: { allow: false, reason: "role-not-permitted" } },
   ...FIRM_ADMIN_ACTIONS.flatMap((action): Case[] => [
     { name: `${action} by a partner`, role: "partner", action, expected: { allow: true, reason: "ok" } },
     ...["associate", "clerk", "intern", "accounts", "client"].map((role): Case => ({

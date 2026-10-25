@@ -165,16 +165,23 @@ describe("canAccessMatter", () => {
     expect(await canAccessMatter(store, failing, actor, "m1")).toMatchObject({ allow: true })
   })
 
-  it("passes the committee_brain action to P5 (an intern is not denied as for research/draft)", async () => {
+  // Changed by FA-F43-R1-P01: until then committee_brain had no row and fell through to `allow ok` for an intern. It is now
+  // partner, associate, clerk (P3-70, as ai.call; the route refuses an intern before P5). The action passed is pinned by
+  // the audit row, so a default of "" (unknown-action) or of the other committee action is caught.
+  it("passes the committee_brain action to P5 by default, committee_brain_read when asked; an intern is refused", async () => {
+    const clerk: User = { ...actor, id: "clerk1", role: "clerk" }
     const intern: User = { ...actor, id: "intern1", role: "intern" }
     const store = storeWith({ matter: matter("m1") })
-    store.users.set(intern.id, intern)
-    store.members.set(store.memberKey("m1", intern.id), { matterId: "m1", userId: intern.id, firmId: "firmA" })
-    expect(await canAccessMatter(store, repos({}), intern, "m1")).toMatchObject({ allow: true, reason: "ok" })
-    expect(await canAccessMatter(store, repos({}), intern, "m1", "research")).toMatchObject({
-      allow: false,
-      reason: "intern-channel-denied",
-    })
+    for (const u of [clerk, intern]) {
+      store.users.set(u.id, u)
+      store.members.set(store.memberKey("m1", u.id), { matterId: "m1", userId: u.id, firmId: "firmA" })
+    }
+    expect(await canAccessMatter(store, repos({}), clerk, "m1")).toMatchObject({ allow: true, reason: "ok" })
+    expect(store.audit.at(-1)).toMatchObject({ actorId: "clerk1", target: "m1", reason: "allow:committee_brain:ok" })
+    expect(await canAccessMatter(store, repos({}), clerk, "m1", "committee_brain_read")).toMatchObject({ allow: true, reason: "ok" })
+    expect(store.audit.at(-1)).toMatchObject({ actorId: "clerk1", reason: "allow:committee_brain_read:ok" })
+    expect(await canAccessMatter(store, repos({}), intern, "m1")).toMatchObject({ allow: false, reason: "role-not-permitted" })
+    expect(store.audit.at(-1)).toMatchObject({ actorId: "intern1", reason: "deny:committee_brain:role-not-permitted" })
   })
 })
 

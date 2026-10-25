@@ -23,16 +23,22 @@
  *     own_matters -> client-denied; the draft actions are matter-level (cross-firm / not-member /
  *     clearance), doctype.read is firm-level; then the role table -> intern-channel-denied for an
  *     intern (as the legacy `draft` action), role-not-permitted otherwise
- *   - intern: no research / draft                -> deny intern-channel-denied
- *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
- *                                                -> deny staff-only
- *   - client or own_matters scope: no research / draft; list_matters is own matters only
- *   - list_matters                               -> allow
- *   - a named matter: same firm (cross-firm), not tombstoned (matter-deleted, audit F42), a member
- *     (not-member), cleared for its classification (clearance; an unreadable classification is
- *     refused: fail closed). Every matter-level row above goes through the same gate.
- *   - client research                            -> deny client-research-denied
- *   - otherwise                                  -> allow ok
+ *   - an accounts register action (ACCOUNTS_ACTIONS) by any role but accounts -> deny role-not-permitted
+ *     (FA-F43-R1-P01: no route serves the register to staff yet)
+ *   - a Next.js route action (NEXT_ROUTE_ACTIONS, FA-F43-R1-P01), in this order:
+ *       intern research / draft                  -> deny intern-channel-denied
+ *       a client or an own_matters scope: list_matters -> allow client-own-matters; a staff-only
+ *       action (STAFF_ONLY_ACTIONS) -> deny staff-only; research / draft -> deny client-channel-denied;
+ *       anything else -> deny client-denied
+ *       the matter gate: the committee actions must name a matter; research, draft and
+ *       normalise_case_number are gated when they name one; list_matters never is
+ *       then the role table (NEXT_ROUTE_ROLES)   -> role-not-permitted
+ *   - the matter gate (every matter-level row above): same firm (cross-firm), not tombstoned
+ *     (matter-deleted, audit F42), a member (not-member), cleared for its classification
+ *     (clearance; an unreadable classification is refused: fail closed).
+ *   - otherwise                                  -> deny unknown-action (FA-F43-R1-P01: an action
+ *     no row knows is refused, never allowed; DECIDE_ACTIONS lists every action a row decides, and
+ *     G-0 [23], ci_gates/check_permission_actions.py, keeps every call site's action in it)
  */
 import { CLASSIFICATION_RANKS, type Classification } from "@/platform/p1/types"
 
@@ -49,8 +55,14 @@ export type DecisionCaller = { role: string; firmId: string; clearanceLevel: Cla
  */
 export type DecisionMatter = { firmId: string; classification: unknown; deleted?: boolean } | null | undefined
 
-/** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
-export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set(["intimation_register", "record_accounts_entry"])
+/**
+ * The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). Any other role is
+ * refused them (role-not-permitted, FA-F43-R1-P01): no route serves the register to staff yet, and when one does
+ * (L17.6 #40: "visible on the matter and in the dashboard") its roles are ruled then.
+ */
+export const ACCOUNTS_ACTIONS = ["intimation_register", "record_accounts_entry"] as const
+export type AccountsAction = (typeof ACCOUNTS_ACTIONS)[number]
+export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set(ACCOUNTS_ACTIONS)
 
 /**
  * Firm administration (P5 identity and E-19 MFA operations, Cloud Functions): partner only.
@@ -96,6 +108,50 @@ export function isRetentionAction(action: string): action is RetentionAction {
  * `normalise_case_number` is POST /api/g0/normalise. Accounts keep their register-only rule.
  */
 export const STAFF_ONLY_ACTIONS: ReadonlySet<string> = new Set(["normalise_case_number"])
+
+/**
+ * FA-F43-R1-P01: the actions the Next.js routes pass to checkPermission, each decided by an explicit row (until this
+ * audit all but list_matters reached the table's default `allow ok`). Roles and sources (spec
+ * docs/superpowers/specs/2026-10-24-fa-f43-p01-unknown-action-deny-design.md, R2):
+ *   - list_matters: every staff role; a client or an own_matters scope gets client-own-matters (unchanged). A listing:
+ *     never matter-gated, scoped later by membership.
+ *   - research: partner, associate, clerk (L18 §8 and L19.10: a client cannot research; an intern is refused
+ *     intern-channel-denied as since Phase 1; the ops-reporting and court-ops routes refuse client, intern, accounts).
+ *   - draft: partner, associate, clerk (P4-10: the same roles as the D4 draft actions; an intern intern-channel-denied).
+ *   - normalise_case_number: partner, associate, clerk, intern (re-audit N-2; a client is staff-only).
+ *   - committee_brain, committee_brain_read: partner, associate, clerk, matter-level (P3-70: as ai.call; the
+ *     /api/p1/committee-brain route refuses client, intern and accounts before P5). A client or an own_matters scope is
+ *     client-denied, as for every AI action.
+ * research, draft and normalise_case_number are matter-level when they name a matter and firm-level otherwise.
+ */
+export const NEXT_ROUTE_ACTIONS = [
+  "list_matters",
+  "research",
+  "draft",
+  "normalise_case_number",
+  "committee_brain",
+  "committee_brain_read",
+] as const
+export type NextRouteAction = (typeof NEXT_ROUTE_ACTIONS)[number]
+const NEXT_ROUTE_ACTION_SET: ReadonlySet<string> = new Set(NEXT_ROUTE_ACTIONS)
+
+export function isNextRouteAction(action: string): action is NextRouteAction {
+  return NEXT_ROUTE_ACTION_SET.has(action)
+}
+
+/** The committee-brain actions platform/p5/committeeScope.ts `canAccessMatter` takes. */
+export type CommitteeBrainAction = "committee_brain" | "committee_brain_read"
+
+const NEXT_ROUTE_ROLES: Record<NextRouteAction, readonly string[]> = {
+  list_matters: ["partner", "associate", "clerk", "intern"],
+  research: ["partner", "associate", "clerk"],
+  draft: ["partner", "associate", "clerk"],
+  normalise_case_number: ["partner", "associate", "clerk", "intern"],
+  committee_brain: ["partner", "associate", "clerk"],
+  committee_brain_read: ["partner", "associate", "clerk"],
+}
+/** Must name a matter; none given fails closed (cross-firm). */
+const NEXT_ROUTE_MATTER_LEVEL: ReadonlySet<string> = new Set(["committee_brain", "committee_brain_read"])
 
 /**
  * D1 (Phase 2a: clients, matters, conflict checks). Staff only; a client or an own_matters scope
@@ -174,8 +230,9 @@ const JOB_ROLES: Record<JobAction, readonly string[]> = {
  * Operational alerts (audit F43): read the firm's alert worklist (`alert.read`) and acknowledge or resolve an alert
  * that has escalated to the firm's partners (`alert.ack`): partner only, firm-level (an alert carries references, never
  * matter text). Staff only; a client or an own_matters scope is denied (client-denied) and accounts hit
- * accounts-register-only before this table. Without these rows an unknown action would fall through to `allow ok`
- * for every staff role. The operator's own route is not a table action: it needs the `platformAdmin` claim.
+ * accounts-register-only before this table. (Before FA-F43-R1-P01 an action no row knew fell through to `allow ok` for
+ * every staff role; it is now refused unknown-action.) The operator's own route is not a table action: it needs the
+ * `platformAdmin` claim.
  */
 export const ALERT_ACTIONS = ["alert.read", "alert.ack"] as const
 export type AlertAction = (typeof ALERT_ACTIONS)[number]
@@ -247,6 +304,30 @@ const DRAFT_ROLES: Record<DraftAction | DocTypeAction, readonly string[]> = {
   "draft.override": ["partner"],
   "draft.approve": ["partner"],
   "doctype.read": ["partner", "associate", "clerk"],
+}
+
+/**
+ * FA-F43-R1-P01: every action a row of `decide` decides. Any other string is refused unknown-action. The G-0 parity
+ * gate (ci_gates/check_permission_actions.py, check [23]) parses this list and fails the build when a call site passes
+ * an action that is not in it.
+ */
+export const DECIDE_ACTIONS = [
+  ...FIRM_ADMIN_ACTIONS,
+  ...RETENTION_ACTIONS,
+  ...ACCOUNTS_ACTIONS,
+  ...D1_ACTIONS,
+  ...JOB_ACTIONS,
+  ...ALERT_ACTIONS,
+  ...AI_ACTIONS,
+  ...DRAFT_ACTIONS,
+  ...DOCTYPE_ACTIONS,
+  ...NEXT_ROUTE_ACTIONS,
+] as const
+export type DecideAction = (typeof DECIDE_ACTIONS)[number]
+const DECIDE_ACTION_SET: ReadonlySet<string> = new Set(DECIDE_ACTIONS)
+
+export function isKnownAction(action: string): action is DecideAction {
+  return DECIDE_ACTION_SET.has(action)
 }
 
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
@@ -337,24 +418,28 @@ export function decide(
     return deny(caller.role === "intern" ? "intern-channel-denied" : "role-not-permitted")
   }
 
-  if (caller.role === "intern" && (action === "research" || action === "draft")) {
-    return deny("intern-channel-denied")
+  // FA-F43-R1-P01: the accounts register is the accounts role's alone (the accounts row above returned for it).
+  if (ACCOUNTS_REGISTER_ACTIONS.has(action)) return deny("role-not-permitted")
+
+  if (isNextRouteAction(action)) {
+    if (caller.role === "intern" && (action === "research" || action === "draft")) {
+      return deny("intern-channel-denied")
+    }
+    if (extra?.scope === "own_matters" || caller.role === "client") {
+      if (action === "list_matters") return allow("client-own-matters")
+      if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
+      if (action === "research" || action === "draft") return deny("client-channel-denied")
+      return deny("client-denied")
+    }
+    // A listing is never matter-gated; a committee action must name a matter (none fails closed); the others are
+    // matter-level when they name one.
+    if (action !== "list_matters" && (NEXT_ROUTE_MATTER_LEVEL.has(action) || matter !== undefined)) {
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
+    }
+    return NEXT_ROUTE_ROLES[action].includes(caller.role) ? allow("ok") : deny("role-not-permitted")
   }
 
-  if (extra?.scope === "own_matters" || caller.role === "client") {
-    if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
-    if (action === "research" || action === "draft") return deny("client-channel-denied")
-    if (action === "list_matters") return allow("client-own-matters")
-  }
-
-  if (action === "list_matters") return allow("ok")
-
-  if (matter !== undefined) {
-    const refused = matterGate(caller, matter, isMember)
-    if (refused) return refused
-  }
-
-  if (action === "research" && caller.role === "client") return deny("client-research-denied")
-
-  return allow("ok")
+  // FA-F43-R1-P01: an action no row knows is refused, for every role (it was `allow ok`).
+  return deny("unknown-action")
 }

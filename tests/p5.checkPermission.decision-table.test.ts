@@ -53,8 +53,10 @@ describe("checkPermission decision table", () => {
     })
   })
 
+  // FA-F43-R1-P01: these cases used "read", an action no row knows, as a stand-in for a matter-level action; it fell
+  // through to `allow ok`. They now use real rows (matter.read, research), and the stand-in is refused unknown-action.
   it("lets an intern read a matter they are a member of", () => {
-    expect(checkPermission(setup("intern"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("intern"), "u1", "matter.read", "m_own")).toEqual({ allow: true, reason: "ok" })
   })
 
   it.each(["research", "draft"])("denies a client %s with client-channel-denied", (action) => {
@@ -88,46 +90,48 @@ describe("checkPermission decision table", () => {
     })
   })
 
-  it("does not short-circuit other client actions: they still pass the matter checks", () => {
-    expect(checkPermission(setup("client"), "u1", "read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
-    expect(checkPermission(setup("client"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+  it("refuses a client's other actions by their own rows, never by the default (it was: a member client may read)", () => {
+    expect(checkPermission(setup("client"), "u1", "read", "m_unjoined")).toEqual({ allow: false, reason: "unknown-action" })
+    expect(checkPermission(setup("client"), "u1", "read", "m_own")).toEqual({ allow: false, reason: "unknown-action" })
+    expect(checkPermission(setup("client"), "u1", "matter.read", "m_own")).toEqual({ allow: false, reason: "client-denied" })
     expect(
-      checkPermission(setup("associate"), "u1", "read", "m_unjoined", { scope: "own_matters" })
-    ).toEqual({ allow: false, reason: "not-member" })
+      checkPermission(setup("associate"), "u1", "research", "m_unjoined", { scope: "own_matters" })
+    ).toEqual({ allow: false, reason: "client-channel-denied" })
   })
 
   it("denies a matter that does not exist with cross-firm (no existence oracle)", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_missing")).toEqual({ allow: false, reason: "cross-firm" })
+    expect(checkPermission(setup("partner"), "u1", "research", "m_missing")).toEqual({ allow: false, reason: "cross-firm" })
   })
 
   it("denies another firm's matter with cross-firm even when a membership row exists", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_other_firm")).toEqual({
+    expect(checkPermission(setup("partner"), "u1", "research", "m_other_firm")).toEqual({
       allow: false,
       reason: "cross-firm",
     })
   })
 
   it("denies a same-firm matter the user is not a member of with not-member", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
+    expect(checkPermission(setup("partner"), "u1", "research", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
   })
 
   it("denies a member whose clearance is below the matter's with clearance", () => {
-    expect(checkPermission(setup("partner", "privileged"), "u1", "read", "m_secret")).toEqual({
+    expect(checkPermission(setup("partner", "privileged"), "u1", "research", "m_secret")).toEqual({
       allow: false,
       reason: "clearance",
     })
   })
 
   it("allows a member at exactly the matter's clearance", () => {
-    expect(checkPermission(setup("partner", "privileged-restricted"), "u1", "read", "m_secret")).toEqual({
+    expect(checkPermission(setup("partner", "privileged-restricted"), "u1", "research", "m_secret")).toEqual({
       allow: true,
       reason: "ok",
     })
-    expect(checkPermission(setup("partner", "confidential"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("partner", "confidential"), "u1", "research", "m_own")).toEqual({ allow: true, reason: "ok" })
   })
 
-  it("allows a firm-level action with no matter", () => {
-    expect(checkPermission(setup("associate"), "u1", "read")).toEqual({ allow: true, reason: "ok" })
+  it("allows a firm-level action with no matter, and refuses one no row knows", () => {
+    expect(checkPermission(setup("associate"), "u1", "research")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("associate"), "u1", "read")).toEqual({ allow: false, reason: "unknown-action" })
   })
 })
 

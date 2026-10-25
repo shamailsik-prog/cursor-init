@@ -71,7 +71,7 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
   it("an intern may read a matter they are a member of", async () => {
     const c = caller({ role: "intern" })
     const m = await matter(c.firmId, "internal", [c.uid])
-    expect((await decide(c, "read_matter", m)).decision).toEqual({ allow: true, reason: "ok" })
+    expect((await decide(c, "matter.read", m)).decision).toEqual({ allow: true, reason: "ok" })
   })
 
   it("list_matters: staff ok, client or own_matters scope client-own-matters, before any matter check", async () => {
@@ -87,13 +87,20 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
     })
   })
 
-  it("a client's other actions still pass the matter checks, and a member client may read", async () => {
+  // FA-F43-R1-P01: this case asserted that a member client "may read" with `read_matter`, an action no row knows, which
+  // fell through to `allow ok`. A client's matter read is now refused by its own row, and the stand-in by the default.
+  it("a client's other actions are refused by their own rows: matter.read client-denied, an unknown action unknown-action", async () => {
     const client = caller({ role: "client" })
     const m = await matter(client.firmId, "internal")
-    expect((await decide(client, "read_matter", m)).decision).toEqual({ allow: false, reason: "not-member" })
+    expect((await decide(client, "read_matter", m)).decision).toEqual({ allow: false, reason: "unknown-action" })
     const member = caller({ role: "client" })
     const own = await matter(member.firmId, "internal", [member.uid])
-    expect((await decide(member, "read_matter", own)).decision).toEqual({ allow: true, reason: "ok" })
+    const { decision, row } = await decide(member, "read_matter", own)
+    expect(decision).toEqual({ allow: false, reason: "unknown-action" })
+    expect(row).toMatchObject({ action: "read_matter", target: `matters/${own}`, decision: "deny", reason: "unknown-action" })
+    const reader = caller({ role: "client" })
+    const theirs = await matter(reader.firmId, "internal", [reader.uid])
+    expect((await decide(reader, "matter.read", theirs)).decision).toEqual({ allow: false, reason: "client-denied" })
   })
 
   it("staff list_matters is allowed before any matter check, even with another firm's matter id", async () => {
@@ -102,17 +109,22 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
     expect((await decide(staff, "list_matters", foreign)).decision).toEqual({ allow: true, reason: "ok" })
   })
 
-  it("a firm-level action without a matter is allowed and audited as internal", async () => {
+  // FA-F43-R1-P01: `read_firm` (no row) was allowed here; a real firm-level row is used, and the stand-in is refused.
+  it("a firm-level action without a matter is allowed and audited as internal; one no row knows is refused", async () => {
     const c = caller()
-    const { decision, row } = await decide(c, "read_firm")
+    const { decision, row } = await decide(c, "research")
     expect(decision).toEqual({ allow: true, reason: "ok" })
     expect(row).toMatchObject({ target: `firms/${c.firmId}`, classification: "internal", decision: "allow", reason: "ok" })
+    const other = caller()
+    const refused = await decide(other, "read_firm")
+    expect(refused.decision).toEqual({ allow: false, reason: "unknown-action" })
+    expect(refused.row).toMatchObject({ target: `firms/${other.firmId}`, classification: "internal", decision: "deny", reason: "unknown-action" })
   })
 
   it("a malformed matter id is denied invalid-matter-id, audited against that id as internal", async () => {
     for (const bad of ["", "a/b", ".", "..", "__x__"]) {
       const c = caller()
-      const { decision, row } = await decide(c, "read_matter", bad)
+      const { decision, row } = await decide(c, "matter.read", bad)
       expect(decision).toEqual({ allow: false, reason: "invalid-matter-id" })
       expect(row).toMatchObject({ target: `matters/${bad}`, classification: "internal", reason: "invalid-matter-id" })
     }
@@ -121,14 +133,14 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
   it("ids that only resemble reserved ones are ordinary ids", async () => {
     for (const id of [`__x${uniq("m")}`, `x${uniq("m")}__`, `a__${uniq("m")}__`, `__${uniq("m")}__b`]) {
       const c = caller()
-      expect((await decide(c, "read_matter", id)).decision).toEqual({ allow: false, reason: "cross-firm" })
+      expect((await decide(c, "matter.read", id)).decision).toEqual({ allow: false, reason: "cross-firm" })
     }
   })
 
   it("a matter with an unknown label is audited as privileged-restricted and denied for clearance", async () => {
     const c = caller({ clearanceLevel: "privileged-restricted" })
     const m = await matter(c.firmId, "top-secret", [c.uid])
-    const { decision, row } = await decide(c, "read_matter", m)
+    const { decision, row } = await decide(c, "matter.read", m)
     expect(decision).toEqual({ allow: false, reason: "clearance" })
     expect(row).toMatchObject({ classification: "privileged-restricted" })
   })
@@ -136,7 +148,7 @@ describe.skipIf(!EMULATORS)("checkPermission: exact decision and audit row per b
   it("a member at exactly the matter's clearance is allowed, audited with the matter's label", async () => {
     const c = caller({ clearanceLevel: "privileged" })
     const m = await matter(c.firmId, "privileged", [c.uid])
-    const { decision, row } = await decide(c, "read_matter", m)
+    const { decision, row } = await decide(c, "matter.read", m)
     expect(decision).toEqual({ allow: true, reason: "ok" })
     expect(row).toMatchObject({ target: `matters/${m}`, classification: "privileged" })
   })
