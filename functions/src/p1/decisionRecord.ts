@@ -49,6 +49,22 @@ export const PROMPT_HASH_WITHHOLD_AFTER_MS = 24 * 60 * 60 * 1000
 export const HASH_WITHHELD_NO_OUTPUT_ROW = "no_output_row"
 
 /**
+ * PR #132 review, Codex P1 (thread 4369851302; spec ruling R42). The reservation's `decisionSeed` carries a copy of the
+ * prompt record, hash included, so the lease reconciler can write the record of a call that never commits (R2, R16). That
+ * copy is needed only while the reservation is open. Every transition out of `reserved` clears it in the same transaction:
+ * a settlement that writes or follows the decision record (the call's commit, the embedding's, the lease reconciler's)
+ * records `hashWithheld: "in_record"`; the lease reconciler's release, which writes no record and after which nothing was
+ * sent, records `"released"`; and the export reconciler's withholding (R37) records `"no_output_row"` on the seed too.
+ */
+export const SEED_HASH_IN_RECORD = "in_record"
+export const SEED_HASH_RELEASED = "released"
+
+/** The fields that clear a reservation's seed hash (`seedPrompt`: its `decisionSeed.prompt`); none when it holds no seed. */
+export function seedHashScrub(seedPrompt: unknown, reason: string): Record<string, unknown> {
+  return seedPrompt !== null && typeof seedPrompt === "object" ? { "decisionSeed.prompt.hash": null, "decisionSeed.prompt.hashWithheld": reason } : {}
+}
+
+/**
  * The hash an embedding's record keeps of what was sent (re-audit R1-002, spec ruling R16): the SHA-256 of the masked input
  * string, UTF-8. Never the text; server-only like every record (R15: never exported above rank 1 or on a blocked call).
  */

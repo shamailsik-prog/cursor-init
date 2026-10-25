@@ -338,6 +338,24 @@ describe("F34 R1-007 and R16: the lease reconciler's record", () => {
     expect((d.phases as Record<string, unknown>).transportMs).toBeNull()
   })
 
+  // PR #132 review, Codex P1 (spec R42): a seed whose hash was withheld gives a record that says so, and the
+  // reconstruction reads it as not checkable, never as a mismatch.
+  it("a seed whose hash was withheld gives a record with the hash withheld, which the join reads as not checkable (R42)", () => {
+    const withheldSeed = { ...seed, prompt: { ...seed.prompt, hash: null, hashWithheld: "no_output_row" } }
+    const d = reconciledDecision({ usageLogId: "u-1", traceId: "t-1", seed: withheldSeed, attempt: { outcome: "returned" }, record: RECONCILED_RECORD, nowMs: 9, tracing: false })
+    expect(d.prompt).toEqual({ ...seed.prompt, hash: null, hashWithheld: "no_output_row" })
+    const joined = joinDecision({
+      usageLogId: "u-1",
+      decision: d,
+      usage: null,
+      reservation: { traceId: "t-1", state: "settled", decisionSeed: withheldSeed },
+      output: { id: "o-1", usageLogId: "u-1", traceId: "t-1", outbound: { body: "Draft a reply.", system: { policyId: "committee-brain", version: SYSTEM_POLICY_VERSION } } },
+      eventNames: [],
+    })
+    expect(joined.checks.promptHashMatchesOutput).toBeNull()
+    expect(JSON.stringify(joined)).not.toContain("b".repeat(64))
+  })
+
   it("carries the embedding's caller and corpus operation, and the reason tracing was off (R16, R23)", () => {
     const d = reconciledDecision({
       usageLogId: "u-1",

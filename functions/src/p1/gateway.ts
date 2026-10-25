@@ -30,7 +30,18 @@ import {
   spentOf,
 } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID, TASK_MODEL, costMicroUsd, estimateRequestTokens, estimateTokens, learnedOverheadCap, requestTokenCeiling, reservationOverheadTokens } from "./costTable"
-import { DECISIONS_COLLECTION, DECISION_RECORD_VERSION, PROMPT_HASH_WITHHOLD_AFTER_MS, anchorsOf, exportAfterCall, exportFields, type RetrievalAnchor } from "./decisionRecord"
+import {
+  DECISIONS_COLLECTION,
+  DECISION_RECORD_VERSION,
+  PROMPT_HASH_WITHHOLD_AFTER_MS,
+  SEED_HASH_IN_RECORD,
+  SEED_HASH_RELEASED,
+  anchorsOf,
+  exportAfterCall,
+  exportFields,
+  seedHashScrub,
+  type RetrievalAnchor,
+} from "./decisionRecord"
 import { monthKeyPkt } from "./month"
 import { OPIK_TIMEOUT_MS, TRACE_TEXT_MAX_RANK, exportTrace, opikConfig, opikDisabledReason } from "./opik"
 import { P1TransportError, TRANSPORT_TIMEOUT_MS, activeTransport, isTransportCode, modelId, plainId, type TransportCode } from "./transport"
@@ -1542,6 +1553,9 @@ export async function stage(db: Firestore, tx: Transaction, a: CommitArgs): Prom
       ...(anomaly === null ? {} : { usageAnomaly: true }),
       settledAt: now,
       settledBy: a.settledBy ?? "gateway",
+      // PR #132 review, Codex P1 (spec R42): the seed's copy of the prompt hash outlives its use; the record staged in this
+      // transaction holds the hash from here on.
+      ...seedHashScrub(reservationSnap!.get("decisionSeed.prompt"), a.decision ? SEED_HASH_IN_RECORD : SEED_HASH_RELEASED),
     })
   }
   if (anomaly !== null) {

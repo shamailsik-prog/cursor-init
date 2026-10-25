@@ -2,15 +2,16 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import type { Response } from "express"
 import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import type { Request } from "firebase-functions/v2/https"
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { buildOutbound } from "@/platform/p1/outboundPrompt"
 import { setProviderConfigForTests } from "@/platform/p1/providerPolicy"
 import { adminDb } from "../src/admin"
 import { IDEMPOTENCY_TTL_MS } from "../src/http/idempotency"
-import { firmConfigRef, platformConfigRef } from "../src/p1/config"
+import { runDecisionCli } from "../src/cli/p1Decision"
+import { firmConfigRef, platformConfigRef, reservationRef } from "../src/p1/config"
 import { handleCorpusEmbedding } from "../src/p1/corpusEmbedding"
 import { reconstructP1Decision } from "../src/p1/decisionRecord"
-import { p1EmbeddingTestSeam } from "../src/p1/embedding"
+import { callP1Embedding, p1EmbeddingTestSeam, type P1EmbeddingRequest } from "../src/p1/embedding"
 import { setP1EmbeddingTransportForTests } from "../src/p1/embeddingTransport"
 import { RESERVATION_LEASE_MS, p1TestSeam } from "../src/p1/gateway"
 import { setOpikFetchForTests } from "../src/p1/opik"
@@ -80,10 +81,19 @@ const promptHashOf = (messages: readonly Msg[]) => sha256(JSON.stringify(message
 const guessHash = (body: string) =>
   promptHashOf(buildOutbound({ purpose: "committee-brain", turns: [{ role: "user", segments: [{ kind: "text", text: body }] }], partyNames: [] }).messages)
 const figure = (n: number) => `Client authorises settlement at PKR ${n} lakh.`
+/** The attacker's dictionary, built once: the guessed hash of every settlement figure from 1000 to 9999. */
+let dictionary: Map<string, number> | null = null
+function figureDictionary(): Map<string, number> {
+  if (dictionary === null) {
+    dictionary = new Map()
+    for (let n = 1000; n <= 9999; n++) dictionary.set(guessHash(figure(n)), n)
+  }
+  return dictionary
+}
 /** The auditor's attack: every 64-hex value in `stored` against every settlement figure from 1000 to 9999. */
 function recoverFigure(stored: unknown): number | null {
-  const hashes = new Set(JSON.stringify(stored).match(HEX64) ?? [])
-  for (let n = 1000; n <= 9999; n++) if (hashes.has(guessHash(figure(n)))) return n
+  const d = figureDictionary()
+  for (const h of JSON.stringify(stored).match(HEX64) ?? []) if (d.has(h)) return d.get(h)!
   return null
 }
 
@@ -158,6 +168,11 @@ afterEach(async () => {
   if (EMULATORS) await platformConfigRef().delete()
 })
 
+// The attack's 9,000 guesses are built once, outside any test's time limit.
+beforeAll(() => {
+  if (EMULATORS) figureDictionary()
+}, 120_000)
+
 afterAll(async () => {
   if (EMULATORS) await deleteFirmData(firms)
 }, 120_000)
@@ -195,7 +210,16 @@ describe.skipIf(!EMULATORS)("FA-F34-R2-003: a prompt hash with no output row is 
     expect(recoverFigure(d), "the settlement figure is recoverable from the server-only record").toBeNull()
     const rec = await reconstructP1Decision(db(), { usageLogId: d0!.id as string })
     expect(rec?.checks.promptHashMatchesOutput).toBeNull()
-  })
+    // PR #132 review, Codex P1 (thread 4369851302; spec R42): the reservation's decision seed held a second copy of the
+    // hash, which the reconstruction CLI printed. Both copies are gone, and the CLI's output recovers nothing.
+    const reservation = (await reservationRef(d0!.id as string).get()).data()!
+    expect(reservation.decisionSeed.prompt, "the reservation's seed still holds the hash").toMatchObject({ hash: null, hashWithheld: "no_output_row" })
+    expect(recoverFigure(reservation), "the settlement figure is recoverable from the reservation's seed").toBeNull()
+    const printed: string[] = []
+    expect(await runDecisionCli({ argv: ["--usage", d0!.id as string], out: (line) => printed.push(line), db })).toBe(0)
+    expect(printed.join("\n")).toContain("decisionSeed")
+    expect(recoverFigure(printed.join("\n")), "the settlement figure is recoverable from the reconstruction CLI's output").toBeNull()
+  }, 120_000)
 
   it("a privileged answer that was published keeps its hash after the TTL, and the reconstruction still checks it against the output row", async () => {
     const f = await newFirm("privileged")
@@ -242,6 +266,94 @@ describe.skipIf(!EMULATORS)("FA-F34-R2-003: a prompt hash with no output row is 
     expect(d.prompt).not.toHaveProperty("hashWithholdAtMs")
     expect(d.prompt).not.toHaveProperty("hashWithheld")
   })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
+// PR #132 review (spec R42, R43): the reservation's copy of the hash, and withholding behind an Opik backlog
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!EMULATORS)("PR #132 review, Codex P1 (R42): the decision seed's copy of the hash lives only while the reservation is open", () => {
+  it("a published privileged answer: settlement clears the seed's hash, and the record keeps the one the reconstruction checks", async () => {
+    const f = await newFirm("privileged")
+    gatewayStub()
+    const out = await ask(f, figure(5150))
+    const usageLogId = (await db().collection("committee_outputs").doc(out.outputId).get()).get("usageLogId") as string
+    const reservation = (await reservationRef(usageLogId).get()).data()!
+    expect(reservation.state).toBe("settled")
+    expect(reservation.decisionSeed.prompt, "the settled reservation's seed still holds the hash").toMatchObject({ hash: null, hashWithheld: "in_record", templateId: "committee-brain" })
+    expect(recoverFigure(reservation)).toBeNull()
+    expect((await decisionOf(usageLogId))!.prompt.hash).toBe(guessHash(figure(5150)))
+    expect((await reconstructP1Decision(db(), { usageLogId }))?.checks.promptHashMatchesOutput).toBe(true)
+  })
+
+  it("the embedding path: an embedding's settlement clears its seed's input hash; its record keeps it (the input lives in the corpus row)", async () => {
+    const firmId = uniq("f34fu2emb")
+    firms.push(firmId)
+    await firmConfigRef(firmId).set({ monthlyBudgetMicroUsd: BIG })
+    embeddingStub()
+    const out = await embedViaHttp(firmId)
+    expect([out.status, out.body.outcome]).toEqual([200, "ok"])
+    const usageLogId = out.body.usageLogId as string
+    expect((await reservationRef(usageLogId).get()).get("decisionSeed.prompt"), "the settled embedding reservation's seed still holds the hash").toMatchObject({ hash: null, hashWithheld: "in_record" })
+    expect((await decisionOf(usageLogId))!.prompt.hash).toBe(sha256(MASKED_INPUT))
+  })
+
+  it("the lease reconciler: it writes the record from the seed's hash, then clears the seed; a release clears it too", async () => {
+    const firmId = uniq("f34fu2emb")
+    firms.push(firmId)
+    await firmConfigRef(firmId).set({ monthlyBudgetMicroUsd: BIG })
+    embeddingStub()
+    p1EmbeddingTestSeam.crashAt = "dispatched"
+    await expect(callP1Embedding(embeddingRequest(firmId), { now: () => T })).rejects.toThrow(/crashAt/)
+    delete p1EmbeddingTestSeam.crashAt
+    const [res] = await byFirm("ai_reservations", firmId)
+    expect(res!.decisionSeed.prompt.hash, "an open reservation keeps the seed's hash (the reconciler needs it)").toBe(sha256(MASKED_INPUT))
+    expect((await reconcileReservations({ now: () => T + RESERVATION_LEASE_MS + HOUR })).settled).toContain(res!.id)
+    expect((await decisionOf(res!.id as string))!.prompt.hash, "the reconciled record is written from the seed's hash").toBe(sha256(MASKED_INPUT))
+    expect((await reservationRef(res!.id as string).get()).get("decisionSeed.prompt"), "the reconciled reservation's seed still holds the hash").toMatchObject({ hash: null, hashWithheld: "in_record" })
+
+    // A chat call that died after reserving and before any attempt: the lease reconciler releases its hold and writes no
+    // record, so the seed's hash would be the only copy, with no body stored anywhere.
+    const f = await newFirm("privileged-restricted")
+    gatewayStub()
+    p1TestSeam.crashAt = "reserved"
+    await ask(f, figure(6061)).catch(() => null)
+    delete p1TestSeam.crashAt
+    const [held] = await byFirm("ai_reservations", f.firmId)
+    expect(held!.state).toBe("reserved")
+    expect(held!.decisionSeed.prompt.hash).toBe(guessHash(figure(6061)))
+    expect((await reconcileReservations({ now: () => T + RESERVATION_LEASE_MS + HOUR })).released).toContain(held!.id)
+    const released = (await reservationRef(held!.id as string).get()).data()!
+    expect(released.state).toBe("released")
+    expect(released.decisionSeed.prompt, "the released reservation's seed still holds the hash").toMatchObject({ hash: null, hashWithheld: "released" })
+    expect(recoverFigure(released)).toBeNull()
+  }, 120_000)
+})
+
+describe.skipIf(!EMULATORS)("PR #132 review, Codex P2 (R43): an Opik backlog does not starve the withholding", () => {
+  it("a scheduled run whose export loop spends the whole budget still withholds the due hashes", async () => {
+    const f = await newFirm("privileged-restricted")
+    const status = { code: 500 }
+    fakeOpik(status)
+    gatewayStub()
+    failEveryOutputWrite()
+    const secret = 1000 + Math.floor(Math.random() * 9000)
+    await ask(f, figure(secret)).catch(() => null)
+    const [d0] = await byFirm("p1_decisions", f.firmId)
+    expect(d0!.export.state, "the record's export failed, so it is in the export backlog").toBe("pending")
+    expect(d0!.prompt.hash).toBe(guessHash(figure(secret)))
+    await expireMarkers(f.firmId)
+    // Every export now takes longer than the run's whole budget (an Opik that answers only at its timeout).
+    setOpikFetchForTests((async () => {
+      vi.setSystemTime(Date.now() + 31_000)
+      return new Response(null, { status: 204 })
+    }) as typeof fetch)
+    await scheduledExportRun(T + IDEMPOTENCY_TTL_MS + HOUR)
+    const d = (await decisionOf(d0!.id as string))!
+    expect(d.prompt.hash, "the Opik backlog starved the withholding").toBeNull()
+    expect(d.prompt.hashWithheld).toBe("no_output_row")
+    expect(recoverFigure(d)).toBeNull()
+  }, 120_000)
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -332,6 +444,16 @@ async function embedViaHttp(firmId: string, classification = "public"): Promise<
   await handleCorpusEmbedding(request, res as unknown as Response, { now: () => T })
   return out
 }
+
+const embeddingRequest = (firmId: string): P1EmbeddingRequest => ({
+  firmId,
+  caller: CALLER,
+  operationId: OP,
+  corpusModel: "text-embedding-3-small",
+  dimensions: DIMS,
+  input: INPUT,
+  classification: "public",
+})
 
 function embeddingStub(): { model: string; input: string }[] {
   const sent: { model: string; input: string }[] = []
