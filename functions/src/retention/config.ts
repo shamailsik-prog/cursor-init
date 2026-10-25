@@ -96,6 +96,8 @@ export type PlannedStore = { key: string; store: InventoryStore; retentionClass:
 export const retentionTestSeam: {
   policy?: RetentionPolicy
   afterStep?: (stepId: string) => Promise<void>
+  /** retention.apply: runs after a page is read and before its chunk's transaction (a hold placed here is a race). */
+  beforeApplyChunk?: (storeKey: string) => Promise<void>
   beforeAck?: (part: string) => Promise<void>
 } = {}
 

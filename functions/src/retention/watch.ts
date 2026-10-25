@@ -16,6 +16,12 @@ import { requestsRef } from "./model"
  */
 
 const PAGE = 200
+
+/**
+ * Test seam (never set in production code, and ignored when NODE_ENV is production): `afterQuery` runs after the
+ * query and before the transactions, so a test can make another run alert a request this run has already read.
+ */
+export const retentionWatchTestSeam: { afterQuery?: () => Promise<void> } = {}
 export const WATCH_TIMEOUT_SECONDS = 120
 
 const countOf = (value: unknown): number => (Array.isArray(value) ? value.length : value !== null && typeof value === "object" ? Object.keys(value).length : 0)
@@ -30,6 +36,7 @@ export async function runRetentionWatch(nowMs: number): Promise<{ scanned: numbe
     .orderBy("ackDeadlineAt")
     .limit(PAGE)
     .get()
+  if (process.env.NODE_ENV !== "production") await retentionWatchTestSeam.afterQuery?.()
   let alerted = 0
   for (const doc of snap.docs) {
     try {

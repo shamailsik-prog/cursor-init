@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import shippedPolicy from "@/infra/retention/policy.json"
 import { decide } from "@/platform/p5/permissionDecision"
@@ -49,6 +51,30 @@ describe("F42 units: store keys", () => {
     expect(key).toBe("firestore_a_very_long_legacy_collection_name_a_v_hc50e0e6fda8a20890ca1122e")
   })
 
+  it("FA-F42-R1-012 (R21): the TypeScript and Python store keys agree on every inventoried id and on long and odd ids", () => {
+    const odd = [
+      `firestore:${"a".repeat(71)}`, // 81 characters: one past the limit, so hashed
+      `firestore:${"x".repeat(1500)}`,
+      `firestore:${"b".repeat(60)}-${"c".repeat(9)}`, // 80 exactly: kept
+      "postgres:client_private.judgment",
+      "firestore:ünïcode_ñame",
+      "objects:documents",
+    ]
+    const ids = [...inventory().stores.map((s) => s.id), ...odd]
+    const script = [
+      "import json, sys",
+      "sys.path.insert(0, 'ci_gates')",
+      "import check_data_inventory as g",
+      "print(json.dumps([g.store_key(i) for i in json.load(sys.stdin)]))",
+    ].join("\n")
+    const out = spawnSync("python3", ["-c", script], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8", input: JSON.stringify(ids) })
+    expect(out.status, out.stderr).toBe(0)
+    expect(JSON.parse(out.stdout) as string[]).toEqual(ids.map(storeKey))
+    // Both forms are exercised: the long ids are hashed, the 80-character one is kept as it is.
+    expect(storeKey(odd[0])).toMatch(/_h[0-9a-f]{24}$/)
+    expect(storeKey(odd[2])).toBe(odd[2].replace(/[^A-Za-z0-9]/g, "_"))
+  })
+
   it("every inventoried store has a distinct key of at most 80 characters", () => {
     const keys = inventory().stores.map((s) => storeKey(s.id))
     expect(new Set(keys).size).toBe(keys.length)
@@ -97,6 +123,15 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(policyHolds(p, planDeletion(p))).toBe(false)
     p.classes.matter_access.legalHold = true
     expect(policyHolds(p, planDeletion(p))).toBe(true)
+  })
+
+  it("FA-F42-R1-012 (R16): a class hold on the vault or on the processor's traces alone holds the deletion", () => {
+    for (const name of ["vault_object", "third_party_trace"]) {
+      const p = purgePolicy()
+      p.classes[name].legalHold = true
+      expect(policyHolds(p, planDeletion(p)), name).toBe(true)
+      expect(holdRefusal(p, planDeletion(p), undefined, "f1"), name).toBe("legal_hold_policy")
+    }
   })
 
   it("a matter hold of the firm refuses first; another firm's or an inactive hold does not", () => {

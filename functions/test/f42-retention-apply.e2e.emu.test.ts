@@ -5,7 +5,7 @@ import { adminDb } from "../src/admin"
 import { alertIdFor } from "../src/alerts/model"
 import { RETENTION_APPLY_SPEC } from "../src/retention/apply"
 import { retentionTestSeam, type RetentionPolicy } from "../src/retention/config"
-import { runRetentionWatch } from "../src/retention/watch"
+import { retentionWatchTestSeam, runRetentionWatch } from "../src/retention/watch"
 import { SCHEDULED_JOBS } from "../src/p2/scheduled"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
@@ -90,6 +90,8 @@ const exists = async (c: string, id: string) => (await adminDb().collection(c).d
 
 afterEach(() => {
   delete retentionTestSeam.policy
+  delete retentionTestSeam.beforeApplyChunk
+  delete retentionWatchTestSeam.afterQuery
 })
 
 describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-deletion watch", () => {
@@ -213,6 +215,45 @@ describe.skipIf(!EMULATORS)("F42: retention execution and the unacknowledged-del
     const again = await db.collection("ops_alerts").where("firmId", "==", firmId).get()
     expect(again.size).toBe(1)
     expect(again.docs[0].get("count")).toBe(1)
+  })
+
+  it("FA-F42-R1-012 (R09): a hold placed after a page is read and before its chunk commits spares the matter's rows", async () => {
+    retentionTestSeam.policy = periodPolicy("anonymise")
+    const firmId = firmFor("f42ret")
+    const matterId = uniq("m")
+    const ids = await seed(firmId, matterId, uniq("held"))
+    let placed = false
+    retentionTestSeam.beforeApplyChunk = async () => {
+      if (placed) return
+      placed = true
+      await adminDb().collection("legal_holds").doc(matterId).set({ firmId, matterId, active: true, reasonCode: "litigation_anticipated", placedBy: "p", placedAt: Timestamp.now() })
+    }
+    expect(await runApply(firmId, "2026-10-27")).toBe("done")
+    expect(placed).toBe(true)
+    // The chunk's transaction re-reads the hold: nothing of the matter is anonymised, in the first store or after it.
+    for (const key of ["oldUsage", "oldReservation", "oldDecision"]) {
+      expect((await adminDb().collection(COLLECTION_OF[key]).doc(ids[key]).get()).get("matterId"), key).toBe(matterId)
+    }
+  })
+
+  it("FA-F42-R1-012 (R14): a run whose query read a request before another run alerted it does not alert it again", async () => {
+    const firmId = firmFor("f42watchrace")
+    const db = adminDb()
+    const now = Date.now()
+    const req = uniq("req")
+    await db.collection("deletion_requests").doc(req).set({ firmId, matterId: uniq("m"), expected: ["a", "b"], acked: {}, status: "in_progress", ackDeadlineAt: Timestamp.fromMillis(now - 1000), alertedAt: null })
+    const inner: { result: { scanned: number; alerted: number } | null } = { result: null }
+    // Between the outer run's query and its transactions, a second run raises the alert and stamps the request.
+    retentionWatchTestSeam.afterQuery = async () => {
+      delete retentionWatchTestSeam.afterQuery
+      inner.result = await runRetentionWatch(now)
+    }
+    const outer = await runRetentionWatch(now)
+    expect(inner.result?.alerted).toBeGreaterThanOrEqual(1)
+    expect(outer.alerted).toBe(0)
+    const alert = await db.collection("ops_alerts").doc(alertIdFor("retention.deletion_unacknowledged", firmId, `deletionRequest:${req}`)).get()
+    expect(alert.get("count")).toBe(1)
+    expect((await db.collection("ops_alert_notifications").where("alertId", "==", alert.id).get()).size).toBe(1)
   })
 
   it("a request that falls overdue behind a full page of already-alerted ones is still alerted", async () => {

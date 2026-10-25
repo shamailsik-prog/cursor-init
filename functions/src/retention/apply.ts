@@ -108,6 +108,7 @@ async function run(ctx: JobContext<Payload>): Promise<JobResult> {
       skippedHeld += candidates.length - rows.length
       if (rows.length > 0) {
         const ids = rows.map((d) => d.id).sort()
+        if (process.env.NODE_ENV !== "production") await retentionTestSeam.beforeApplyChunk?.(t.key)
         const n = await ctx.runFenced(`apply-${t.key.slice(0, 40)}-${sha256(ids).slice(0, 24)}`, async (tx) => {
           const heldNow = matters.length > 0 ? await tx.getAll(...matters.map((m) => holdsRef().doc(m))) : []
           const heldIds = new Set(heldNow.filter((h) => h.get("firmId") === firmId && h.get("active") === true).map((h) => h.id))

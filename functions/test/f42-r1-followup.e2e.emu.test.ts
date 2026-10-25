@@ -247,6 +247,8 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-004: a legal hold stops every remaining d
     expect(Object.keys(halted.acked)).toEqual([])
     // Another partner releases the hold; a partner retries the halted job; the saga finishes and the instruction is issued.
     await send(releaseApi, f, f.Q, { matterId: f.matterId })
+    // FA-F42-R1-012 (R07): the release itself clears the request's halt, before any job runs again.
+    expect((await send(statusApi, f, f.P, { requestId })).halted).toBeNull()
     expect(await retryDead(f, f.P)).toBe(1)
     expect((await drain(f.firmId, clock, deps)).every((o) => o === "done")).toBe(true)
     const done = await send(statusApi, f, f.P, { requestId })
@@ -635,5 +637,52 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
     // Control: Q, established and independent, approves.
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
+  })
+})
+
+describe.skipIf(!EMULATORS)("FA-F42-R1-012: the auditor's surviving mutants", () => {
+  it("R08: a hold placed between a group's purge and its acknowledgement stops the acknowledgement", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const { requestId, approved } = await requestAndApprove(f)
+    const clock = new FakeClock(Date.now())
+    const deps = testDeps(clock)
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, deps)).toBe("done")
+    // What prepare acknowledged on its own (stores the matter has no rows in): the halt must add nothing to it.
+    const before = Object.keys((await send(statusApi, f, f.P, { requestId })).acked).sort()
+    let placedAt: string | null = null
+    retentionTestSeam.beforeAck = async (part) => {
+      if (placedAt !== null) return
+      placedAt = part
+      await adminDb().collection("legal_holds").doc(f.matterId).set({ firmId: f.firmId, matterId: f.matterId, active: true, reasonCode: "litigation_anticipated", placedBy: f.P.uid, placedAt: Timestamp.now() })
+    }
+    expect(await drain(f.firmId, clock, deps)).toContain("dead_lettered")
+    expect(placedAt).not.toBeNull()
+    const view = await send(statusApi, f, f.P, { requestId })
+    expect(view.halted).toMatchObject({ code: "legal_hold_active" })
+    expect(Object.keys(view.acked).sort()).toEqual(before)
+    expect(view.status).toBe("in_progress")
+  })
+
+  it("own: a hold placed between prepare's steps stops the next one: no instruction after the static step, no purge job after the instruction", async () => {
+    for (const after of ["static", "external"]) {
+      retentionTestSeam.policy = testPolicy()
+      const f = await newFirm()
+      await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: `trace-${after}-1`, status: "exported" }, createdAt: Timestamp.now() })
+      const { requestId, approved } = await requestAndApprove(f)
+      let placed = false
+      retentionTestSeam.afterStep = async (stepId) => {
+        if (placed || !stepId.startsWith(`${after}-`)) return
+        placed = true
+        await adminDb().collection("legal_holds").doc(f.matterId).set({ firmId: f.firmId, matterId: f.matterId, active: true, reasonCode: "litigation_anticipated", placedBy: f.P.uid, placedAt: Timestamp.now() })
+      }
+      expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, testDeps(new FakeClock(Date.now()))), after).toBe("dead_lettered")
+      expect(placed, after).toBe(true)
+      expect((await adminDb().collection("jobs").doc(approved.jobId!).get()).get("lastError.code"), after).toBe("legal_hold_active")
+      // After the static step the hold stops the instruction to the processor; after the instruction, the purge jobs.
+      if (after === "static") expect(await processorRequests(requestId), after).toEqual([])
+      expect((await adminDb().collection("jobs").where("firmId", "==", f.firmId).where("jobType", "==", "retention.store.purge").get()).size, after).toBe(0)
+      delete retentionTestSeam.afterStep
+    }
   })
 })
