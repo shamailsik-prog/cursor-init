@@ -4,7 +4,7 @@ import { assertMinimised, providerAllowedFor } from "@/platform/p1/providerPolic
 import { residualPII } from "@/platform/p1/residualPII"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { budgetOf, firmConfigRef, killSwitchBlocks, learnedOverheadOf, monthRef, overheadRef, pkrRateOf, platformConfigRef, reservationRef, reservedOf, spentOf } from "./config"
 import { PROVIDER_ID, bodyTokenCeiling, costMicroUsd, estimateTokens, reservationOverheadTokens } from "./costTable"
 import { DECISION_RECORD_VERSION, EMBEDDING_INPUT_HASH_ALGORITHM, embeddingInputHash, exportAfterCall, exportFields } from "./decisionRecord"
@@ -514,10 +514,10 @@ export async function callP1Embedding(req: P1EmbeddingRequest, opts?: { now?: ()
     staged = await commit(db, { usageRef, configRef, totalRef, record, traceId, failCommit: t.failCommit === true, seam: t, reservation, decision })
     accounting = "settled"
   } catch (err) {
-    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
+    logRegisteredError("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
   }
   for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
-  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
+  if (staged.exceeded !== null) logRegisteredError("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
   logLearning(usageRef.id, firmId, staged)
 
   return {

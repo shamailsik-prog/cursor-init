@@ -10,7 +10,7 @@ import { prepareAlerts, stageAlert } from "../alerts/raise"
 import { p1CommitSpecs } from "../alerts/specs"
 import { isContentionAbort } from "../d1/contention"
 import { FUNCTION_TIMEOUT_SECONDS } from "../health"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { stageAudit } from "../p5/audit"
 import { readLateWrite, stageLateWrite, type SeamRow } from "../retention/lateTraces"
 import {
@@ -868,7 +868,7 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
       // Re-audit LOW-2: the operation's receipt is lost. A same-key retry answers 409 idempotency_effect_committed for
       // this charged call (never a second one); this line names what an operator needs to find it.
       if (operation) {
-        logger.error("p1.receipt_record_failed", {
+        logRegisteredError("p1.receipt_record_failed", {
           firmId,
           usageLogId: usageRef.id,
           operationId: operation.operation.fields.operationId ?? null,
@@ -990,10 +990,10 @@ export async function callP1(req: P1Request, opts?: CallP1Options): Promise<P1Re
   } catch (err) {
     // The result is still returned (P3-63) and the log keeps the record; the reservation, when there is one, keeps
     // holding the worst case with its provider attempt, so the spend is never lost from the books (F08).
-    logger.error("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
+    logRegisteredError("p1.usage_log_failed", { usageLogId: usageRef.id, ...record, accounting, code: errorCode(err) })
   }
   for (const c of staged.crossings) logger.warn("p1.budget_threshold", { firmId, monthKey, ...c })
-  if (staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
+  if (staged.exceeded !== null) logRegisteredError("p1.reservation_exceeded", { firmId, usageLogId: usageRef.id, monthKey, ...staged.exceeded })
   logLearning(usageRef.id, firmId, staged)
 
   return {
@@ -1462,8 +1462,8 @@ export type StageResult = { crossings: Crossing[]; exceeded: Exceeded | null; le
  * one, and an anomaly is logged `p1.overhead_anomaly` at ERROR (re-audit R3-D1). Shared by the call and the reconciler.
  */
 export function logLearning(usageLogId: string, firmId: string, staged: StageResult): void {
-  if (staged.learnedOverhead !== null) logger.error("p1.overhead_learned", { usageLogId, ...staged.learnedOverhead })
-  if (staged.anomaly !== null) logger.error("p1.overhead_anomaly", { firmId, usageLogId, ...staged.anomaly })
+  if (staged.learnedOverhead !== null) logRegisteredError("p1.overhead_learned", { usageLogId, ...staged.learnedOverhead })
+  if (staged.anomaly !== null) logRegisteredError("p1.overhead_anomaly", { firmId, usageLogId, ...staged.anomaly })
 }
 
 /** A stage that crossed nothing, exceeded nothing, taught nothing and showed no anomaly. */

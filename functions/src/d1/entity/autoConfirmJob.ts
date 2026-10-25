@@ -3,7 +3,7 @@ import { logger } from "firebase-functions"
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../../admin"
-import { logFailure } from "../../log"
+import { logFailure, logRegisteredError } from "../../log"
 import { stageAudit } from "../../p5/audit"
 import { isSafeDocId } from "../../p5/common"
 import { MAX_FENCED_STEPS } from "../../p2/constants"
@@ -377,7 +377,7 @@ async function checkpoint(c: CheckpointInput): Promise<void> {
     return { wasStale }
   })
   if (result === null) return
-  if (stale) logger.error("autoconfirm.backlog_stale", { firmId: c.firmId, jobId: c.jobId, source: pending!.source, ageMs })
+  if (stale) logRegisteredError("autoconfirm.backlog_stale", { firmId: c.firmId, jobId: c.jobId, source: pending!.source, ageMs })
   else if (result.wasStale) logger.info("autoconfirm.backlog_cleared", { firmId: c.firmId, jobId: c.jobId })
   if (outcome === "backlog_remaining") logger.warn("autoconfirm.backlog_remaining", { firmId: c.firmId, jobId: c.jobId, period: c.period, continuation: c.continuation })
 }

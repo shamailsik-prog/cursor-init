@@ -1,5 +1,5 @@
-import { logger } from "firebase-functions"
 import type { SystemRecord } from "@/platform/p1/outboundPrompt"
+import { logRegisteredError } from "../log"
 import { classificationRank, type Classification } from "@/platform/p1/types"
 import { DECISION_RECORD_VERSION } from "./decisionRecord"
 import { TRANSPORT_ERROR, type UsageOutcome } from "./types"
@@ -192,7 +192,7 @@ export function opikDisabledReason(cfg: OpikConfig): Extract<OpikConfig, { enabl
  */
 export async function exportTrace(r: TraceRecord, cfg: OpikConfig = opikConfig(), opts?: { timeoutMs?: number }): Promise<"exported" | "failed" | "disabled"> {
   if (!cfg.enabled) {
-    if (cfg.reason !== "unset") logger.error("p1.opik_misconfigured", { reason: cfg.reason })
+    if (cfg.reason !== "unset") logRegisteredError("p1.opik_misconfigured", { reason: cfg.reason })
     return "disabled"
   }
   try {

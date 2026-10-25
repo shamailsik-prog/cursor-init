@@ -1,8 +1,7 @@
 import { Timestamp, type DocumentReference, type Transaction } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
-import { ACK_WINDOW_MS, alertIdFor, assertSafeDetail, maxSeverity, opsAlertsRef, type AlertRow, type AlertSpec } from "./model"
+import { errorCode, logRegisteredError } from "../log"
+import { ACK_HOLD_MS, ACK_WINDOW_MS, alertIdFor, assertSafeDetail, maxSeverity, opsAlertsRef, type AlertRow, type AlertSpec } from "./model"
 import { stagePage } from "./notifier"
 
 /**
@@ -11,9 +10,10 @@ import { stagePage } from "./notifier"
  * only if the caller's state change does:
  *
  * - none yet: created `open` at level 0 (owner `operator`), with its acknowledgment deadline and one level-0 page;
- * - `open` or `acknowledged`: counted (`count`, `totalCount`, `lastSeenAt`, the latest `ref` and `detail`); severity
- *   only rises; no page (one page per episode and level: the dedupe);
- * - `resolved`: reopened as a new episode at level 0, acknowledgment and resolution cleared, with a new page.
+ * - `open` or `acknowledged` (while `ACK_HOLD_MS` has not lapsed since acknowledgment): counted (`count`, `totalCount`,
+ *   `lastSeenAt`, the latest `ref` and `detail`); severity only rises; no page (one page per episode and level);
+ * - `resolved`, or `acknowledged` past `ACK_HOLD_MS`: reopened as a new episode at level 0, acknowledgment and
+ *   resolution cleared, with a new page.
  */
 
 export type PreparedAlert = { spec: AlertSpec; id: string; ref: DocumentReference; current: AlertRow | undefined }
@@ -45,11 +45,21 @@ export async function prepareAlert(tx: Transaction, spec: AlertSpec): Promise<Pr
 
 export type StagedAlert = "opened" | "reopened" | "counted"
 
+const millisOf = (t: unknown): number | null => (t instanceof Timestamp ? t.toMillis() : null)
+
+/** True when an acknowledged alert's hold has lapsed and a recurrence should page again (FA-F43-R1-002). */
+function ackHoldExpired(row: AlertRow, nowMs: number): boolean {
+  if (row.state !== "acknowledged" || row.acknowledgedAt === null) return false
+  const ackAt = millisOf(row.acknowledgedAt)
+  return ackAt !== null && nowMs >= ackAt + ACK_HOLD_MS
+}
+
 /** Writes a prepared alert in `tx` at `nowMs` (writes only). */
 export function stageAlert(tx: Transaction, prepared: PreparedAlert, nowMs: number): StagedAlert {
   const { spec, current, ref } = prepared
   const at = Timestamp.fromMillis(nowMs)
-  if (current === undefined || current.state === "resolved") {
+  const reopen = current !== undefined && (current.state === "resolved" || ackHoldExpired(current, nowMs))
+  if (current === undefined || reopen) {
     const row: AlertRow = {
       schemaVersion: 1,
       condition: spec.condition,
@@ -117,7 +127,7 @@ export async function raiseAlertBestEffort(spec: AlertSpec, nowMs: number): Prom
   try {
     return (await Promise.race([raiseAlert(spec, nowMs), timeout])).id
   } catch (err) {
-    logger.error("ops_alert.raise_failed", { condition: spec.condition, firmId: spec.firmId, subjectKey: spec.subjectKey, code: errorCode(err) })
+    logRegisteredError("ops_alert.raise_failed", { condition: spec.condition, firmId: spec.firmId, subjectKey: spec.subjectKey, code: errorCode(err) })
     return null
   } finally {
     clearTimeout(timer)

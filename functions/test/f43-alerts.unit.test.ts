@@ -33,9 +33,10 @@ describe("audit F43: the alert model", () => {
   })
 
   it("acknowledgment windows: critical 15 min, high 30 min, warning 4 h; severity steps up one at a time and stops at critical", async () => {
-    const { ACK_WINDOW_MS, SEVERITIES, raiseSeverity, maxSeverity } = await model()
+    const { ACK_HOLD_MS, ACK_WINDOW_MS, SEVERITIES, raiseSeverity, maxSeverity } = await model()
     expect(SEVERITIES).toEqual(["warning", "high", "critical"])
     expect(ACK_WINDOW_MS).toEqual({ critical: 15 * 60_000, high: 30 * 60_000, warning: 4 * 3_600_000 })
+    expect(ACK_HOLD_MS).toBe(ACK_WINDOW_MS.warning)
     expect([raiseSeverity("warning"), raiseSeverity("high"), raiseSeverity("critical")]).toEqual(["high", "critical", "critical"])
     expect([maxSeverity("warning", "high"), maxSeverity("critical", "high"), maxSeverity("high", "high")]).toEqual(["high", "critical", "high"])
   })

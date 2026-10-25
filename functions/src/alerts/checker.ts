@@ -1,7 +1,6 @@
 import { FieldPath, Timestamp, type DocumentReference, type Query, type QueryDocumentSnapshot } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { JOB_ENGINE } from "../p2/constants"
 import { JOB_WAIT_ALERT_MS, RESERVATION_UNRESOLVED_ALERT_MS, SAGA_AGE_ALERT_MS, type AlertSpec } from "./model"
 import { raiseAlertBestEffort } from "./raise"
@@ -185,7 +184,7 @@ export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ rais
   try {
     cursors = await loadCursors()
   } catch (err) {
-    logger.error("ops_alert.pass_failed", { pass: "cursors", code: errorCode(err) })
+    logRegisteredError("ops_alert.pass_failed", { pass: "cursors", code: errorCode(err) })
     return { raised }
   }
   for (const pass of opts.passes ?? CHECK_PASSES) {
@@ -195,7 +194,7 @@ export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ rais
     try {
       specs = await PASSES[pass]({ nowMs, cursors, spent })
     } catch (err) {
-      logger.error("ops_alert.pass_failed", { pass, code: errorCode(err) })
+      logRegisteredError("ops_alert.pass_failed", { pass, code: errorCode(err) })
       continue
     }
     for (const spec of specs) {

@@ -1,6 +1,15 @@
 import { logger } from "firebase-functions"
 
 /**
+ * A manifest-registered ERROR line for log-based alert policies (F32/F43). Uses structured logging (`event` on
+ * `jsonPayload`) because `firebase-functions` 6.6+ rewrites string-first ERROR logs so `jsonPayload.message` is a
+ * stack trace (`Error: name\n at …`), which equality filters on `message` never match.
+ */
+export function logRegisteredError(event: string, fields: Record<string, unknown> = {}): void {
+  logger.write({ severity: "ERROR", event, ...fields })
+}
+
+/**
  * A loggable error code: the SDK's `code` string, or a gRPC numeric code as `grpc_<n>` (Firestore's
  * Admin SDK raises those, e.g. `grpc_3` for INVALID_ARGUMENT), never the message (which may carry an email).
  */

@@ -1,7 +1,6 @@
 import { FieldValue, Timestamp, type DocumentReference, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
-import { logger } from "firebase-functions"
 import { adminDb } from "../admin"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { USER_NOTIFICATIONS, alertOutboxRef, pageIdFor, type AlertCondition, type OwnerRole, type Severity } from "./model"
 
 /**
@@ -43,7 +42,7 @@ export interface AlertNotifier {
 /** The production notifier: one structured ERROR line per page, matched by the manifest policy `ops_alert.notified`. */
 export const logAlertNotifier: AlertNotifier = {
   async deliver(page) {
-    logger.error("ops_alert.notified", {
+    logRegisteredError("ops_alert.notified", {
       pageId: page.id,
       alertId: page.alertId,
       firmId: page.firmId,
@@ -153,7 +152,7 @@ export async function deliverPending(opts: { now: () => number; notifier: AlertN
       try {
         await opts.notifier.deliver(page)
       } catch (err) {
-        logger.error("ops_alert.pass_failed", { pass: "deliver", pageId: doc.id, code: errorCode(err) })
+        logRegisteredError("ops_alert.pass_failed", { pass: "deliver", pageId: doc.id, code: errorCode(err) })
         await doc.ref.update({ status: "pending", claimedUntil: null })
         continue
       }

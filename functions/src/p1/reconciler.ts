@@ -4,7 +4,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler"
 import { isClassification, type Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { INTERNAL_ONLY, RUNTIME_DEFAULTS } from "../runtimeOptions"
-import { errorCode } from "../log"
+import { errorCode, logRegisteredError } from "../log"
 import { firmConfigRef, monthRef, pkrRateOf } from "./config"
 import { MAX_OUTPUT_TOKENS, PROVIDER_ID } from "./costTable"
 import { SEED_HASH_RELEASED, reconciledDecision, seedHashScrub } from "./decisionRecord"
@@ -331,21 +331,21 @@ export async function reconcileReservations(opts: { now?: () => number } = {}): 
       if (done.state === "released") logger.info("p1.reservation_released", { firmId: done.firmId, usageLogId: doc.id })
       else logger.warn("p1.reservation_reconciled", { firmId: done.firmId, usageLogId: doc.id })
       for (const c of done.staged.crossings) logger.warn("p1.budget_threshold", { firmId: done.firmId, monthKey: done.monthKey, ...c })
-      if (done.staged.exceeded !== null) logger.error("p1.reservation_exceeded", { firmId: done.firmId, usageLogId: doc.id, monthKey: done.monthKey, ...done.staged.exceeded })
+      if (done.staged.exceeded !== null) logRegisteredError("p1.reservation_exceeded", { firmId: done.firmId, usageLogId: doc.id, monthKey: done.monthKey, ...done.staged.exceeded })
       logLearning(doc.id, done.firmId, done.staged)
     } catch (err) {
       const firmId = typeof doc.get("firmId") === "string" ? (doc.get("firmId") as string) : null
       // A store fault a later run may not meet is retried then, and never counted (re-audit R2-D1).
       const transient = isRetryableCommitError(err)
-      logger.error("p1.reconcile_failed", { firmId, usageLogId: doc.id, code: errorCode(err), transient })
+      logRegisteredError("p1.reconcile_failed", { firmId, usageLogId: doc.id, code: errorCode(err), transient })
       if (transient) return
       try {
         if ((await recordFailure(db, doc.ref, err)) === "quarantined") {
           result.quarantined.push(doc.id)
-          logger.error("p1.reconcile_quarantined", { firmId, usageLogId: doc.id, failures: RECONCILE_MAX_FAILURES, code: errorCode(err) })
+          logRegisteredError("p1.reconcile_quarantined", { firmId, usageLogId: doc.id, failures: RECONCILE_MAX_FAILURES, code: errorCode(err) })
         }
       } catch (countErr) {
-        logger.error("p1.reconcile_failure_uncounted", { firmId, usageLogId: doc.id, code: errorCode(countErr) })
+        logRegisteredError("p1.reconcile_failure_uncounted", { firmId, usageLogId: doc.id, code: errorCode(countErr) })
       }
     }
   }
@@ -355,7 +355,7 @@ export async function reconcileReservations(opts: { now?: () => number } = {}): 
     try {
       await body()
     } catch (err) {
-      logger.error("p1.reconcile_pass_failed", { pass: name, code: errorCode(err) })
+      logRegisteredError("p1.reconcile_pass_failed", { pass: name, code: errorCode(err) })
     }
   }
 

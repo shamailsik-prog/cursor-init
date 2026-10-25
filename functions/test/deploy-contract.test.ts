@@ -47,14 +47,14 @@ describe("deploy contract violations (R6)", () => {
     for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v)
     vi.stubEnv("NODE_ENV", "production")
     const { logger } = await import("firebase-functions")
-    const errSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    const writeSpy = vi.spyOn(logger, "write").mockImplementation(() => undefined)
     await expect(import("../src/deployConfig")).rejects.toMatchObject({ name: "DeployContractError" })
-    expect(errSpy).toHaveBeenCalledTimes(1)
-    expect(errSpy.mock.calls[0]?.[0]).toBe(CONTRACT_ALERT)
-    const payload = errSpy.mock.calls[0]?.[1] as { codes?: string[] } | undefined
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    const payload = writeSpy.mock.calls[0]?.[0] as { event?: string; codes?: string[] } | undefined
+    expect(payload?.event).toBe(CONTRACT_ALERT)
     expect(Array.isArray(payload?.codes)).toBe(true)
     expect(payload?.codes?.length).toBeGreaterThan(0)
-    expect(JSON.stringify(errSpy.mock.calls[0])).not.toMatch(/ALLOW_ALL|ALLOW_INTERNAL/)
+    expect(JSON.stringify(writeSpy.mock.calls[0])).not.toMatch(/ALLOW_ALL|ALLOW_INTERNAL/)
   })
 
   it("loads deployConfig for a safe deployed env", async () => {
@@ -75,7 +75,7 @@ describe("deploy contract violations (R6)", () => {
     vi.stubEnv("NODE_ENV", "")
     vi.stubEnv("FUNCTIONS_EMULATOR", "")
     const { logger } = await import("firebase-functions")
-    vi.spyOn(logger, "error").mockImplementation(() => undefined)
+    vi.spyOn(logger, "write").mockImplementation(() => undefined)
     await expect(import("../src/deployConfig")).rejects.toMatchObject({ name: "DeployContractError" })
   })
 })

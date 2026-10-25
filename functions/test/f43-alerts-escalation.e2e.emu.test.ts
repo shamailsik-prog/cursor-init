@@ -239,6 +239,41 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect(await alertDoc(alert.id)).toMatchObject({ level: 0, state: "acknowledged" })
   })
 
+  it("FA-F43-R1-002: within the acknowledgment hold a recurrence only counts; after it lapses the alert reopens with a level-0 page", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const { ACK_HOLD_MS } = (await import(/* @vite-ignore */ ["..", "src", "alerts", "model"].join("/"))) as { ACK_HOLD_MS: number }
+    const { alert, jobId } = await deadLetter()
+    const { runAlertEscalator } = await escalatorModule()
+    await runAlertEscalator({ now: () => T0 + MIN, notifier })
+    await useOperatorClock(clock)
+    const ackAt = T0 + MIN
+    clock.set(ackAt)
+    await viaApi("operatorAlertAction", route())({ token: operator.token, data: { alertId: alert.id, action: "acknowledge" } } as never)
+    const d = testDeps(clock)
+    jobRuntime.deps = d
+    const withinHold = ackAt + ACK_HOLD_MS - MIN
+    clock.set(withinHold)
+    await viaApi("retryFailedJob", route())({ token: founder.token, data: { firmId, jobId, note: "Still failing during the hold." } } as never)
+    expect(await d.dispatcher.deliver({ jobId, seq: (await readJob(jobId)).dispatchSeq }, withinHold)).toBe("dead_lettered")
+    expect(await alertDoc(alert.id)).toMatchObject({ state: "acknowledged", episode: 1, count: 2 })
+    expect((await pagesOf(alert.id)).map((p) => p.id).sort()).toEqual([`${alert.id}_e1_l0`])
+    expect((await runAlertEscalator({ now: () => withinHold + MIN, notifier })).escalated).toEqual([])
+
+    const afterHold = ackAt + ACK_HOLD_MS + MIN
+    clock.set(afterHold)
+    await viaApi("retryFailedJob", route())({ token: founder.token, data: { firmId, jobId, note: "Fails again after the hold." } } as never)
+    expect(await d.dispatcher.deliver({ jobId, seq: (await readJob(jobId)).dispatchSeq }, afterHold)).toBe("dead_lettered")
+    expect(await alertDoc(alert.id)).toMatchObject({
+      state: "open",
+      episode: 2,
+      level: 0,
+      ownerRole: "operator",
+      count: 1,
+      totalCount: 3,
+      acknowledgedAt: null,
+    })
+    expect((await pagesOf(alert.id)).map((p) => p.id).sort()).toEqual([`${alert.id}_e1_l0`, `${alert.id}_e2_l0`].sort())
+  })
+
   it("the owning role: a partner may not act at level 0, may once it reaches the partners; an associate, another firm and a non-operator are refused", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     const ack = viaApi("acknowledgeAlert", route())

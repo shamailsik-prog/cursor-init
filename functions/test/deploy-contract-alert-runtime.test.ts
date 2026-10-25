@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
  * runtime logs are written under `resource.type="cloud_run_revision"`, so no policy could ever match, and the F43
  * notifier's `ops_alert.notified` line (and every F32 ERROR policy) would reach no one.
  *
+ * FA-F43-R1-001: policies are one per event, double-quoted filters on `jsonPayload.event`, with `notification_rate_limit`.
+ *
  * The test derives the resource types the filters must name from the runtime generation of the deployed exports (each
  * export's `__endpoint.platform`): any function may emit any registered line (the emitting modules, `log.ts` among them,
  * are shared by every function), so a filter must cover the generation of every export. It checks both what the
@@ -22,9 +24,9 @@ const LAYER_FLAGS = ["CORE_ENABLED", "LEGACY_GOVERNANCE_CHAINS", "L17_2_ENABLED"
 
 type Manifest = { alerts: { policies: Array<{ event: string; surface: string }> } }
 
-/** The `filter = '...'` strings of an alerts.tf text, in order. */
+/** The `filter = "..."` strings of an alerts.tf text, in order (double-quoted HCL). */
 function filtersOf(alertsTf: string): string[] {
-  return [...alertsTf.matchAll(/filter\s*=\s*'([^']*)'/g)].map((m) => m[1])
+  return [...alertsTf.matchAll(/filter\s*=\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\"/g, '"'))
 }
 
 /** The resource types a filter names, sorted. */
@@ -75,12 +77,15 @@ describe("PR #120 review: log-based alert filters match the runtime generation o
     const manifest = JSON.parse(readFileSync(path.join(ROOT, "infra/deploy-manifest.json"), "utf8")) as Manifest
     const events = manifest.alerts.policies.filter((p) => p.surface === "functions").map((p) => p.event)
     const committed = readFileSync(path.join(ROOT, "infra/terraform/alerts.tf"), "utf8")
+    expect(committed.match(/resource "google_monitoring_alert_policy"/g)?.length).toBe(events.length)
+    expect(committed).not.toMatch(/filter\s*=\s*'/)
+    expect(committed).toMatch(/notification_rate_limit/)
     for (const [label, tf] of [["rendered", renderedAlertsTf()], ["committed", committed]] as const) {
       const filters = filtersOf(tf)
       expect([label, filters.length]).toEqual([label, events.length])
       for (const [i, filter] of filters.entries()) {
         expect([label, events[i], resourceTypesOf(filter)]).toEqual([label, events[i], expected])
-        expect([label, filter.includes(`jsonPayload.message="${events[i]}"`), filter.includes('severity="ERROR"')]).toEqual([label, true, true])
+        expect([label, filter.includes(`jsonPayload.event="${events[i]}"`), filter.includes('severity="ERROR"')]).toEqual([label, true, true])
       }
     }
   })
