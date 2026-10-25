@@ -297,6 +297,9 @@ jobs:
       - name: Gate F18 eve model AST (G-0 [19] rule f; needs node_modules)
         if: ${{ !cancelled() }}
         run: python3 ci_gates/check_next_ai_egress.py --rule-f-ast-only
+      - name: Gate F34 granted export AST (G-0 [21] FA-F34-R3-001; needs node_modules)
+        if: ${{ !cancelled() }}
+        run: python3 ci_gates/check_p1_transport_imports.py --granted-export-ast-only
       - name: Gate G-1 spine
         if: ${{ !cancelled() }}
         run: python3 ci_gates/gate_g1.py

@@ -79,9 +79,11 @@ child process) are not traced. The grants are reviewed with this gate.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import posixpath
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 
@@ -306,7 +308,33 @@ class Resolver:
             if path is None:
                 path = raw[2:] if raw.startswith("@/") else raw
         path = posixpath.normpath(_module_id(posixpath.normpath(path)))
-        return None if path == ".." or path.startswith("../") else path
+        if path == ".." or path.startswith("../"):
+            return None
+        return self._canonical_module_id(path)
+
+    def _canonical_module_id(self, module_path: str) -> str:
+        """FA-F34-R5-003: follow symlinks so `tx.ts` → `transport.ts` cannot bypass grants."""
+        stem = _JS_EXT_RE.sub("", module_path)
+        candidates: list[str] = []
+        if pathlib.PurePosixPath(module_path).suffix:
+            candidates.append(module_path)
+        for ext in _RESOLVE_EXTS:
+            candidates.append(stem + ext)
+            candidates.append(posixpath.join(stem, "index" + ext))
+        root = self.root.resolve()
+        for rel in candidates:
+            try:
+                resolved = (self.root / rel).resolve()
+            except OSError:
+                continue
+            if not resolved.is_file():
+                continue
+            try:
+                canonical = _module_id(str(resolved.relative_to(root)).replace("\\", "/"))
+            except ValueError:
+                continue
+            return canonical
+        return module_path
 
     def _through_paths(self, raw: str, cfg: TsConfig) -> str | None:
         first: str | None = None
@@ -1206,8 +1234,55 @@ def file_findings(rel: str, text: str, resolver: Resolver) -> list[str]:
     return sorted(set(out))
 
 
+def _npm_tool_root() -> pathlib.Path:
+    for key in ("GITHUB_WORKSPACE", "SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
+        env = os.environ.get(key)
+        if env:
+            root = pathlib.Path(env)
+            if (root / "node_modules" / "typescript").is_dir():
+                return root
+    for root in (pathlib.Path.cwd(), *pathlib.Path.cwd().parents):
+        if (root / "node_modules" / "typescript").is_dir():
+            return root
+    return pathlib.Path(__file__).resolve().parent.parent
+
+
+def granted_export_ast_findings(root: pathlib.Path) -> list[str]:
+    """FA-F34-R4-001 / R5-001: granted-file export allowlist + TypeScript checker (fail closed, R4-002)."""
+    if os.environ.get("G0_STATIC_ONLY") == "1":
+        return ["granted export check not run (G0_STATIC_ONLY=1; FA-F34-R4-002 fail closed)"]
+    tools = _npm_tool_root()
+    script = tools / "ci_gates" / "check_p1_transport_granted_exports.ts"
+    if not script.is_file():
+        return ["ci_gates/check_p1_transport_granted_exports.ts: missing (FA-F34-R4-001)"]
+    tsx_bin = tools / "node_modules" / ".bin" / "tsx"
+    if not tsx_bin.is_file():
+        return ["granted export check not run (tsx missing; FA-F34-R4-002 fail closed)"]
+    env = {**os.environ, "SIKANDER_GATE_TOOL_ROOT": str(tools)}
+    try:
+        proc = subprocess.run(
+            [str(tsx_bin), str(script), str(root.resolve())],
+            cwd=str(tools),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return [f"granted export AST check could not run ({err})"]
+    if proc.returncode == 0:
+        return []
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        detail = (proc.stderr or proc.stdout or "unknown error").strip().replace("\n", " ")
+        return [f"granted export AST check failed ({detail[:240]})"]
+    return lines
+
+
 def findings(root: pathlib.Path = pathlib.Path(".")) -> list[str]:
     out: list[str] = []
+    if os.environ.get("G0_STATIC_ONLY") != "1":
+        out.extend(granted_export_ast_findings(root))
     resolver = Resolver(root)
     for rel_path in iter_scan_files(root):
         rel = str(rel_path).replace("\\", "/")
@@ -1241,6 +1316,15 @@ def main(argv: list[str]) -> int:
                 indent=2,
             )
         )
+        return 0
+    if "--granted-export-ast-only" in argv:
+        found = granted_export_ast_findings(pathlib.Path(".").resolve())
+        for line in found:
+            print(f"FAIL: {line}")
+        if found:
+            print("FAIL: a granted file exports a P1 transport (audit F34 R3-001; spec R27)")
+            return 1
+        print("PASS: granted P1 transport files do not export a transport (FA-F34-R3-001 AST)")
         return 0
     found = findings()
     for line in found:
