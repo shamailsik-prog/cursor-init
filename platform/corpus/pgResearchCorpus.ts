@@ -353,12 +353,9 @@ export class PgResearchCorpus implements ResearchSource {
         return rankResearchCorpus(corpus, prepared, unitQuery)
       }
       const wholeCorpusIdf = await this.wholeCorpusIdf(client, refresh.value)
-      const candidateRows = await this.rowsUnder<{ id: unknown }>(
-        client,
-        CANDIDATES_SQL,
-        [terms, RESEARCH_MAX_CANDIDATES + 1],
-        RESEARCH_MAX_CANDIDATES
-      )
+      const candidateRows = (await this.run(client, CANDIDATES_SQL, [terms, RESEARCH_MAX_CANDIDATES])).rows as Array<{
+        id: unknown
+      }>
       const candidateIds = candidateRows.map((r) => {
         if (typeof r.id !== "string" || !UUID.test(r.id)) throw unavailable("inconsistent")
         return r.id
