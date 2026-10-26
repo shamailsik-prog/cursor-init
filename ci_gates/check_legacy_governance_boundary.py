@@ -28,8 +28,9 @@ FLAG_DEFAULT_RE = re.compile(
 def load_manifest(root: pathlib.Path) -> dict:
     path = root / MANIFEST
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("inventoryVersion") != 1:
-        raise ValueError(f"{MANIFEST}: unsupported inventoryVersion")
+    version = data.get("inventoryVersion")
+    if version not in (1, 2):
+        raise ValueError(f"{MANIFEST}: unsupported inventoryVersion {version}")
     return data
 
 
@@ -40,22 +41,46 @@ def line_count(root: pathlib.Path, rel: str) -> int:
     return len(p.read_text(encoding="utf-8", errors="replace").splitlines())
 
 
+def adapter_rule_directories(manifest: dict) -> list[str]:
+    rule = manifest["quarantinePersistenceModuleRule"]
+    if "directories" in rule:
+        return list(rule["directories"])
+    return [rule["directory"]]
+
+
 def governance_adapter_paths(root: pathlib.Path, manifest: dict) -> list[str]:
     rule = manifest["quarantinePersistenceModuleRule"]
-    directory = rule["directory"]
     prefix = rule["basenamePrefix"]
     suffix = rule["basenameSuffix"]
-    base = root / directory
+    out: list[str] = []
+    for directory in adapter_rule_directories(manifest):
+        base = root / directory
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if not p.is_file():
+                continue
+            name = p.name
+            if name.startswith(prefix) and name.endswith(suffix):
+                out.append(rel_posix(p.relative_to(root)))
+    return out
+
+
+def quarantine_source_files(root: pathlib.Path, prefix: str) -> list[tuple[str, int]]:
+    """All JS/TS sources under a quarantine folder prefix (recursive)."""
+    norm = prefix.replace("\\", "/").rstrip("/") + "/"
+    base = root / norm.rstrip("/")
     if not base.is_dir():
         return []
-    out: list[str] = []
-    for p in sorted(base.iterdir()):
-        if not p.is_file():
+    found: list[tuple[str, int]] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in JS_SUFFIXES:
             continue
-        name = p.name
-        if name.startswith(prefix) and name.endswith(suffix):
-            out.append(rel_posix(p.relative_to(root)))
-    return out
+        rel = rel_posix(p.relative_to(root))
+        if not rel.startswith(norm):
+            continue
+        found.append((rel, line_count(root, rel)))
+    return found
 
 
 def is_quarantine_module(rel: str, manifest: dict) -> bool:
@@ -64,12 +89,16 @@ def is_quarantine_module(rel: str, manifest: dict) -> bool:
         if rel == fixed.replace("\\", "/"):
             return True
     rule = manifest["quarantinePersistenceModuleRule"]
-    directory = rule["directory"].rstrip("/") + "/"
-    prefix = rule["basenamePrefix"]
-    suffix = rule["basenameSuffix"]
+    prefix_name = rule["basenamePrefix"]
+    suffix_name = rule["basenameSuffix"]
     name = pathlib.Path(rel).name
-    if rel.startswith(directory) and name.startswith(prefix) and name.endswith(suffix):
-        return True
+    if not (name.startswith(prefix_name) and name.endswith(suffix_name)):
+        pass
+    else:
+        for directory in adapter_rule_directories(manifest):
+            dir_prefix = directory.rstrip("/") + "/"
+            if rel.startswith(dir_prefix):
+                return True
     for entry in manifest.get("frozenMonoliths", []):
         if rel == entry["path"]:
             return True
@@ -84,8 +113,9 @@ def under_quarantine_path(rel: str, manifest: dict) -> bool:
     return False
 
 
-def check_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
+def check_listed_path_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
     failures: list[str] = []
+    require_exist = bool(manifest.get("listedBudgetPathsMustExist", True))
     for group_name, key in (
         ("frozen monolith", "frozenMonoliths"),
         ("spine coupling", "spineCouplingBudgets"),
@@ -95,20 +125,74 @@ def check_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
             max_lines = int(entry["maxLines"])
             count = line_count(root, rel)
             if count < 0:
-                # Minimal G-0 e2e trees omit frozen monoliths; budgets apply only when present.
+                if require_exist:
+                    failures.append(
+                        f"{rel}: listed {group_name} budget path is missing "
+                        "(rename/delete blocked; restore the file or update the F41 manifest with audit evidence)"
+                    )
                 continue
             if count > max_lines:
                 failures.append(
                     f"{rel}: {count} lines exceeds {group_name} budget {max_lines} "
                     "(shrink frozen code or raise the budget in the F41 manifest with audit evidence)"
                 )
+    return failures
+
+
+def check_quarantine_folder_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
+    failures: list[str] = []
+    for entry in manifest.get("quarantineFolderBudgets", []):
+        prefix = entry["prefix"]
+        files = quarantine_source_files(root, prefix)
+        total = sum(lines for _rel, lines in files if lines >= 0)
+        max_total = int(entry["maxTotalLines"])
+        if total > max_total:
+            failures.append(
+                f"{prefix}: {total} total lines in quarantine sources exceeds folder budget {max_total}"
+            )
+        if "maxSourceFiles" in entry:
+            cap = int(entry["maxSourceFiles"])
+            if len(files) > cap:
+                failures.append(
+                    f"{prefix}: {len(files)} source files exceeds folder file cap {cap} "
+                    f"(new files under quarantine folders are blocked)"
+                )
+    return failures
+
+
+def check_adapter_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
+    failures: list[str] = []
     adapters = governance_adapter_paths(root, manifest)
     cap = int(manifest["maxGovernanceAdapterFiles"])
     if len(adapters) > cap:
         failures.append(
-            f"platform/persistence: {len(adapters)} workflowOps*Governance.ts adapters "
-            f"exceed cap {cap}"
+            f"governance adapters: {len(adapters)} workflowOps*Governance.ts files exceed cap {cap}"
         )
+    total_lines = 0
+    per_file_cap = int(manifest.get("maxGovernanceAdapterLinesPerFile", 0))
+    total_cap = int(manifest.get("maxGovernanceAdapterTotalLines", 0))
+    for rel in adapters:
+        count = line_count(root, rel)
+        if count < 0:
+            failures.append(f"{rel}: governance adapter path missing")
+            continue
+        total_lines += count
+        if per_file_cap and count > per_file_cap:
+            failures.append(
+                f"{rel}: {count} lines exceeds per-adapter budget {per_file_cap} (FA-F41-002 E7)"
+            )
+    if total_cap and total_lines > total_cap:
+        failures.append(
+            f"governance adapters: {total_lines} total lines exceed adapter total budget {total_cap}"
+        )
+    return failures
+
+
+def check_budgets(root: pathlib.Path, manifest: dict) -> list[str]:
+    failures: list[str] = []
+    failures.extend(check_listed_path_budgets(root, manifest))
+    failures.extend(check_quarantine_folder_budgets(root, manifest))
+    failures.extend(check_adapter_budgets(root, manifest))
     return failures
 
 

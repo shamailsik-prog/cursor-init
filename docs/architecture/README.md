@@ -145,12 +145,13 @@ Gates:
   changed or removed in `package.json` without the lock. Regenerate a lockfile only with the pinned npm
   (`npm install --package-lock-only --ignore-scripts`), never by hand.
 - **Legacy-governance boundary guard (audit F41):** `python3 ci_gates/check_legacy_governance_boundary.py` is G-0
-  check [23]: caps the frozen ops-reporting / filings monoliths and `workflowOps*Governance.ts` adapter count;
-  blocks imports of those adapters from active-product trees (`app/api/d1`, `app/api/d2/court-ops`, `app/api/d5`,
+  check [23]: listed monolith/spine paths must exist; per-folder line and file caps under quarantine prefixes;
+  recursive `workflowOps*Governance.ts` discovery with per-file, total-line and file-count adapter budgets; blocks
+  imports of those adapters from active-product trees (`app/api/d1`, `app/api/d2/court-ops`, `app/api/d5`,
   `functions/src`); requires `LEGACY_GOVERNANCE_CHAINS` to default off. Budgets live in
-  `platform/boundaries/legacyGovernanceQuarantine.json`. CodeQL still analyses filings, ops-reporting, the
-  operator console and governance adapters; only the one adapter path that exceeds CodeQL's trap filename limit is
-  excluded (`.github/codeql/codeql-config.yml`, FA-F41-001).
+  `platform/boundaries/legacyGovernanceQuarantine.json` (inventory v2, FA-F41-002). CodeQL still analyses filings,
+  ops-reporting, the operator console and governance adapters; only the one adapter path that exceeds CodeQL's trap
+  filename limit is excluded (`.github/codeql/codeql-config.yml`, FA-F41-001).
 - **G-1 (spine):** `python3 ci_gates/gate_g1.py` runs `tests/gate_g1.test.ts` (G1-1 to G1-10), in memory.
 - **G-2 (cross-firm isolation):** `npm run gate:g2`. Locally it starts the Auth and Firestore emulators on ephemeral
   ports with a private `demo-g2-*` project, so it can run beside other emulators. With `CI` set it uses the repo

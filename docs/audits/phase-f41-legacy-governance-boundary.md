@@ -19,6 +19,13 @@ consumed review and CI attention while `LEGACY_GOVERNANCE_CHAINS` stays off.
 | RED | PR #147 @ `0ac8d9e3`–`4b5e91d5`: `.github/codeql/codeql-config.yml` ignored `app/api/d4/filings`, ops-reporting, operator console, and all `workflowOps*Governance.ts` adapters | Filings core (`create_package` / `decide_package` / package list) and spine-linked adapters left unscanned vs base (`7c23e3cf`, one filename only) |
 | GREEN | PR #147 @ `782f7e60`: broad `paths-ignore` reverted; only the single trap-path-limit adapter excluded (same as `7c23e3cf`) | CI `40332948915`: CodeQL (javascript-typescript) PASS; 16 pass / 0 fail / 4 skip |
 
+### FA-F41-002 [MEDIUM] — Quarantine growth must not bypass via new files / renames / adapter bloat
+
+| State | Evidence | Result |
+| --- | --- | --- |
+| RED | PR #147 @ `5b05c43b`: G-0 [23] capped only named file `maxLines`; missing listed paths skipped; adapters counted only in `platform/persistence/` top level; no folder totals or adapter line budgets | Re-audit escapes E4 (new 5k-line file under `filings/`), E5/E5b (rename/delete listed monolith), E7 (double adapter size) exited **0** |
+| GREEN | Same PR after FA-F41-002: manifest inventory v2 — `quarantineFolderBudgets`, `listedBudgetPathsMustExist`, recursive adapter `rglob`, `maxGovernanceAdapterTotalLines` / `maxGovernanceAdapterLinesPerFile`; planted regressions in `test_check_legacy_governance_boundary.py` | Gate + unit tests PASS on CI (see head SHA below) |
+
 ## Scope note
 
 This does **not** delete frozen chains or collapse the spine types (that needs
