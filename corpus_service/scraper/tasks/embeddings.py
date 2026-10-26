@@ -45,6 +45,7 @@ from scraper import p1_client
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster, EmbeddingAttempt, StatutesMaster
 from scraper.tasks import job_record, outcomes
+from scraper import harvest_control
 
 logger = logging.getLogger(__name__)
 
@@ -930,4 +931,8 @@ def process_embedding_queue_sync(celery_task_id=None, worker=None):
 def process_embedding_queue_task(self):
     # No Celery retry (F28 R7): beat fires this every 5 minutes and each row has its own attempt
     # bound and next_attempt_at (F27 R8).
+    if harvest_control.is_paused():
+        logger.info("Harvester paused by operator; skipping scheduled embedding batch")
+        counts = BatchCounts()
+        return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "harvest_paused"}
     return process_embedding_queue_sync(celery_task_id=self.request.id, worker=self.request.hostname)

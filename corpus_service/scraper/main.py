@@ -11,6 +11,7 @@ from scraper.config import settings
 from scraper import client_identity
 from scraper.parsers import raw_store
 from scraper.rate_limit import RateLimitedPathsMiddleware
+from scraper import harvest_control
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Blackletter Legal Scraper")
@@ -95,17 +96,16 @@ async def live_feed(_: None = Depends(require_admin_api_key)):
     return {"feed": logs[-40:]}
 @app.post("/api/start")
 async def start_h(_: None = Depends(require_admin_api_key)):
-    import pathlib
-    STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
-    sf=STATE_DIR/"harvest.stopped"
-    if sf.exists(): sf.unlink()
-    return {"status":"started"}
+    harvest_control.resume()
+    return {"status": "started"}
 @app.post("/api/stop")
 async def stop_h(_: None = Depends(require_admin_api_key)):
-    import pathlib
-    STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
-    (STATE_DIR/"harvest.stopped").write_text("stopped")
-    return {"status":"stopped"}
+    harvest_control.pause()
+    return {"status": "stopped"}
+@app.get("/api/harvest-control")
+async def harvest_control_status(_: None = Depends(require_admin_api_key)):
+    """Operator view: pause flag and whether scheduled harvest/embedding tasks will run."""
+    return {"paused": harvest_control.is_paused()}
 @app.get("/api/vault")
 async def vault(_: None = Depends(require_admin_api_key)):
     LIVE_DIR = _live_dir()

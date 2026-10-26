@@ -6,6 +6,7 @@ from sqlalchemy import select
 from scraper.models import ScraperSource
 from scraper.tasks import job_record, lifecycle, outcomes
 from scraper.trust import may_harvest, may_publish_directly
+from scraper import harvest_control
 logger = logging.getLogger(__name__)
 
 # Audit F28 (spec docs/superpowers/specs/2026-10-18-f28-source-failure-outcomes-design.md): a run
@@ -123,6 +124,10 @@ async def _run_async(source_name: str):
     """Decide whether the source runs, and run it. Returns ``outcomes.Skipped`` (a policy decision),
     ``outcomes.Refused`` (the source cannot be run: F28 R5) or the harvester's own result; a harvest
     failure propagates."""
+    # Audit F29: the dashboard stop flag must gate scheduled Celery harvest work, not only seat workers.
+    if harvest_control.is_paused():
+        logger.info("%s harvest paused by operator, skip", source_name)
+        return outcomes.Skipped("harvest_paused")
     async with SessionLocal() as db:
         result = await db.execute(select(ScraperSource).where(ScraperSource.source_name==source_name))
         source = result.scalars().first()
