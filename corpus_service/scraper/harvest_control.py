@@ -11,16 +11,22 @@ import logging
 import pathlib
 from datetime import datetime, timezone
 
+from typing import Any, Dict
+
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from scraper.config import settings
 from scraper.database import SessionLocal
-from scraper.models import HarvestOperatorState
+from scraper.models import HarvestOperatorState, ScraperJob
+from scraper.tasks.job_record import JOB_TYPE_EMBED, JOB_TYPE_SOURCE, STATUS_RUNNING
 
 logger = logging.getLogger(__name__)
 
 SINGLETON_ID = "global"
 _LEGACY_STOP_FILE = "harvest.stopped"
+# Scheduled harvest and embedding batches (F29 consumers); not corpus lifecycle ticks.
+_HARVEST_JOB_TYPES = frozenset({JOB_TYPE_SOURCE, JOB_TYPE_EMBED})
 
 
 def state_dir() -> pathlib.Path:
@@ -97,6 +103,48 @@ async def resume_async() -> None:
     async with SessionLocal() as session:
         await _set_paused(session, False)
     _clear_legacy_file()
+
+
+async def _running_harvest_jobs(session) -> Dict[str, int]:
+    """Count ``scraper_jobs`` rows still ``running`` for F29-governed work (cheap index on status)."""
+    rows = (
+        await session.execute(
+            select(ScraperJob.job_type, func.count())
+            .where(
+                ScraperJob.status == STATUS_RUNNING,
+                ScraperJob.job_type.in_(_HARVEST_JOB_TYPES),
+            )
+            .group_by(ScraperJob.job_type)
+        )
+    ).all()
+    counts = {job_type: int(n) for job_type, n in rows}
+    source_runs = counts.get(JOB_TYPE_SOURCE, 0)
+    embed_batches = counts.get(JOB_TYPE_EMBED, 0)
+    return {
+        "source_runs": source_runs,
+        "embed_batches": embed_batches,
+        "total": source_runs + embed_batches,
+    }
+
+
+async def operator_status_async() -> Dict[str, Any]:
+    """Pause flag plus whether harvest/embedding Celery work is in flight (FA-F29-003)."""
+    async with SessionLocal() as session:
+        await _ensure_row(session)
+        row = await session.get(HarvestOperatorState, SINGLETON_ID)
+        paused = bool(row.paused) if row else False
+        if _legacy_file_paused() and not paused:
+            await _set_paused(session, True)
+            _clear_legacy_file()
+            paused = True
+        elif _legacy_file_paused() and paused:
+            _clear_legacy_file()
+        running = await _running_harvest_jobs(session)
+    return {
+        "paused": paused,
+        "in_flight": running["total"] > 0,
+        "running": running,
+    }
 
 
 def is_paused() -> bool:

@@ -37,6 +37,15 @@ def test_admin_start_stop_use_harvest_control():
     assert "harvest.stopped" not in text
 
 
+def test_harvest_control_status_exposes_in_flight_work():
+    root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "main.py"
+    text = root.read_text()
+    assert "operator_status_async()" in text
+    hc = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
+    body = hc.read_text()
+    assert "operator_status_async" in body and "ScraperJob" in body and "in_flight" in body
+
+
 def test_harvest_control_is_db_backed_not_file_authoritative():
     root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
     text = root.read_text()

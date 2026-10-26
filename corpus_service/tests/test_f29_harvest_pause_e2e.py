@@ -10,7 +10,16 @@ Spec: docs/audit/2026-10-13-forensic-audit.md (F29). Uses the same in-process be
 import pytest
 
 from test_f20_trust_policy_db import assert_migrated
-from test_f28_source_outcomes_e2e import fire, idle_import_folder, jobs
+from test_f28_source_outcomes_e2e import execute, fetch, fire, idle_import_folder, jobs, run
+
+
+def _harvest_control_body(paused: bool, *, in_flight: bool = False, source_runs: int = 0, embed_batches: int = 0):
+    total = source_runs + embed_batches
+    return {
+        "paused": paused,
+        "in_flight": in_flight,
+        "running": {"source_runs": source_runs, "embed_batches": embed_batches, "total": total},
+    }
 
 
 @pytest.fixture
@@ -67,10 +76,10 @@ def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tm
     headers = {"X-API-Key": settings.ADMIN_API_KEY}
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        assert client.get("/api/harvest-control", headers=headers).json() == {"paused": False}
+        assert client.get("/api/harvest-control", headers=headers).json() == _harvest_control_body(False)
         assert client.post("/api/stop", headers=headers).json() == {"status": "stopped"}
         assert harvest_control.is_paused()
-        assert client.get("/api/harvest-control", headers=headers).json() == {"paused": True}
+        assert client.get("/api/harvest-control", headers=headers).json() == _harvest_control_body(True)
 
         paused = fire("scrape-pakistanlawsite")
         assert paused.state == "SUCCESS"
@@ -81,6 +90,29 @@ def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tm
         ok = fire("scrape-pakistanlawsite")
         assert ok.state == "SUCCESS"
         assert jobs("PakistanLawSite")[1].status == "completed"
+
+
+def test_harvest_control_reports_in_flight_source_job(corpus_db, harvest_resumed):
+    """FA-F29-003: operator status must show running scraper_jobs, not only the pause flag."""
+    from fastapi.testclient import TestClient
+
+    from scraper.config import settings
+    from scraper.main import app
+
+    run(
+        execute(
+            "INSERT INTO scraper_jobs (source_site, job_type, status, started_at, celery_task_id) VALUES "
+            "('PakistanLawSite', 'incremental', 'running', now() - interval '2 minutes', 'f29-003-in-flight')"
+        )
+    )
+    headers = {"X-API-Key": settings.ADMIN_API_KEY}
+    with TestClient(app, raise_server_exceptions=False) as client:
+        body = client.get("/api/harvest-control", headers=headers).json()
+    assert body == _harvest_control_body(False, in_flight=True, source_runs=1), body
+    state = dict(
+        run(fetch("SELECT celery_task_id, status FROM scraper_jobs WHERE celery_task_id = 'f29-003-in-flight'"))
+    )
+    assert state == {"f29-003-in-flight": "running"}, state
 
 
 def test_pause_flag_lives_in_database_not_stop_file(corpus_db, tmp_path, monkeypatch, harvest_resumed):
