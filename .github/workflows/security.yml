@@ -119,9 +119,15 @@ jobs:
       - name: npm audit (root, production dependencies)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (root, full tree incl. dev)
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - name: npm audit (functions, production dependencies)
         continue-on-error: true
         run: npm --prefix functions audit --omit=dev --audit-level=high
+      - name: npm audit (functions, full tree incl. dev)
+        continue-on-error: true
+        run: npm --prefix functions audit --audit-level=high
       - name: pip-audit (corpus_service)
         continue-on-error: true
         run: |
@@ -132,13 +138,17 @@ jobs:
           mkdir -p audit
           # npm audit exits non-zero when it finds anything; the JSON is what matters.
           npm audit --omit=dev --json > audit/npm-root.json || true
+          npm audit --json > audit/npm-root-dev.json || true
           npm --prefix functions audit --omit=dev --json > audit/npm-functions.json || true
+          npm --prefix functions audit --json > audit/npm-functions-dev.json || true
           pip-audit -r corpus_service/requirements.txt -f json -o audit/pip-corpus_service.json --progress-spinner off || true
       - name: Gate - no new high/critical advisory outside the allowlist
         run: >
           node ci_gates/check_known_advisories.mjs
           --npm npm:root=audit/npm-root.json
+          --npm npm:root:dev=audit/npm-root-dev.json
           --npm npm:functions=audit/npm-functions.json
+          --npm npm:functions:dev=audit/npm-functions-dev.json
           --pip pip:corpus_service=audit/pip-corpus_service.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
