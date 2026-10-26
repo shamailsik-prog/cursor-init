@@ -159,10 +159,20 @@ def make_due():
 
 
 def operation_id(table, record_id, text, model=MODEL, dimensions=DIMENSIONS):
-    """Spec R4, written out: sha256 of the canonical JSON array (no whitespace, ASCII)."""
-    material = ["f27-embedding-op-v1", table, str(record_id), model, dimensions,
-                hashlib.sha256(text.encode("utf-8")).hexdigest()]
-    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode("ascii")).hexdigest()
+    """Spec R4 (F45 chunk 0), written out from the chunk operation formula."""
+    from scraper.tasks import embedding_chunks as ec
+
+    chunk = ec.EmbeddingChunk(
+        chunk_index=0,
+        embed_text=text,
+        content_hash=ec.content_hash(text),
+        char_start=0,
+        char_end=max(len(text), 0),
+        paragraph_start=0,
+        paragraph_end=0,
+        language="en",
+    )
+    return ec.chunk_operation_id(table, record_id, model, dimensions, chunk)
 
 
 def statute_text(row):
@@ -343,7 +353,11 @@ def test_r6_an_unchanged_operation_queued_again_is_not_paid_twice(corpus_db, mon
     assert (len(provider.calls), changed.get("reused")) == (2, 0), changed
     statute_id = run(fetch("SELECT id FROM statutes_master WHERE source_site = 'F27Fixture'"))[0][0]
     stored = run(fetch("SELECT stored_operation_id FROM embedding_queue"))[0][0]
-    assert stored == operation_id("statutes_master", statute_id, statute_text(1) + " Amended."), stored
+    from scraper.tasks import embedding_chunks as ec
+
+    section_body = run(fetch("SELECT section_text FROM statutes_master WHERE source_site = 'F27Fixture'"))[0][0]
+    amended_chunks = ec.build_embedding_chunks("Synthetic F27 Act 2099", "s1", section_body)
+    assert stored == ec.manifest_operation_id("statutes_master", statute_id, MODEL, DIMENSIONS, amended_chunks), stored
 
 
 def test_r7_a_record_changed_during_the_call_is_not_stored_with_the_stale_vector(corpus_db, monkeypatch):

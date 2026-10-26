@@ -386,6 +386,7 @@
     {"id": "postgres:courts", "kind": "postgres", "name": "courts", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:embedding_attempts", "kind": "postgres", "name": "embedding_attempts", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:embedding_queue", "kind": "postgres", "name": "embedding_queue", "profile": "public_corpus", "key": {"kind": "none"}},
+    {"id": "postgres:record_embedding_chunks", "kind": "postgres", "name": "record_embedding_chunks", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:feature_flags", "kind": "postgres", "name": "feature_flags", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "postgres:firm_decisions_register", "kind": "postgres", "name": "firm_decisions_register", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "postgres:firm_feature_overrides", "kind": "postgres", "name": "firm_feature_overrides", "profile": "firm_governance", "key": {"kind": "none"}},
