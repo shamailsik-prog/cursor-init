@@ -125,6 +125,9 @@ function buildBaseTree(): string {
     "scripts/deploy-preflight.sh",
     "app/api/p1/committee-brain/route.ts",
     "app/api/d1/documents/route.ts",
+    // Check [23] (audit F41): legacy governance quarantine manifest and flag default.
+    "platform/boundaries/legacyGovernanceQuarantine.json",
+    "platform/flags/featureFlags.ts",
     // Check [22] (audit F42): the data inventory gate finds stores in firestore.rules, Firestore collection literals,
     // object key prefixes and Postgres tables; these three files name the collections, the object prefix and the tables
     // found nowhere in the paths above, so no inventoried store reads as stale in the minimal tree.

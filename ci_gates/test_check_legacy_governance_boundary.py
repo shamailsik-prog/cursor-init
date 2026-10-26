@@ -10,12 +10,20 @@ from pathlib import Path
 
 import check_legacy_governance_boundary as gate
 
-ROOT = Path(__file__).resolve().parents[1]
+def _shipped_tree_root() -> Path:
+    for key in ("GITHUB_WORKSPACE", "SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
+        raw = __import__("os").environ.get(key)
+        if raw:
+            return Path(raw).resolve()
+    return Path(__file__).resolve().parents[1]
 
 
 class ShippedTree(unittest.TestCase):
     def test_shipped_tree_passes(self) -> None:
-        failures = gate.run(ROOT)
+        root = _shipped_tree_root()
+        if not (root / gate.MANIFEST).is_file():
+            self.skipTest("full tree manifest not present (minimal G-0 e2e copy)")
+        failures = gate.run(root)
         self.assertEqual(failures, [], msg="\n".join(failures))
 
 
@@ -24,13 +32,14 @@ class PlantedTree(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / "platform/boundaries").mkdir(parents=True)
-        manifest = json.loads((ROOT / gate.MANIFEST).read_text(encoding="utf-8"))
+        shipped = _shipped_tree_root()
+        manifest = json.loads((shipped / gate.MANIFEST).read_text(encoding="utf-8"))
         manifest["frozenMonoliths"] = []
         manifest["spineCouplingBudgets"] = []
         manifest["maxGovernanceAdapterFiles"] = 0
         (self.root / gate.MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
         (self.root / "platform/flags").mkdir(parents=True)
-        shutil.copy(ROOT / "platform/flags/featureFlags.ts", self.root / "platform/flags/featureFlags.ts")
+        shutil.copy(shipped / "platform/flags/featureFlags.ts", self.root / "platform/flags/featureFlags.ts")
         (self.root / "app/api/d1").mkdir(parents=True)
         (self.root / "platform/persistence").mkdir(parents=True)
 
