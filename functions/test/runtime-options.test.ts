@@ -23,9 +23,9 @@ describe("F32 runtime options on every export", () => {
     vi.resetModules()
   })
 
-  // Audit F34 adds p1TraceExportReconciler, FA-D3C-002 adds p1CorpusEmbedding and audit F43 adds alertChecker and
-  // alertEscalator: 18 exports.
-  it("pins memory, concurrency, identity, caps and ingress on all 18 exports", async () => {
+  // Audit F34 adds p1TraceExportReconciler, FA-D3C-002 adds p1CorpusEmbedding, audit F43 adds alertChecker and
+  // alertEscalator, audit F36 adds eventFanoutReconciler: 19 exports.
+  it("pins memory, concurrency, identity, caps and ingress on all 19 exports", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<
       string,
@@ -54,6 +54,7 @@ describe("F32 runtime options on every export", () => {
       "d1ConflictIndexChunkWritten",
       "d1ConflictPartyWritten",
       "d1ConflictReindexTick",
+      "eventFanoutReconciler",
       "health",
       "jobSweeper",
       "jobWorker",
