@@ -478,8 +478,6 @@ class _Batch:
                     self.current, self.held = row, None
                     paid = await self._process(row)
                     self.current, self.held = None, None
-                    if paid:
-                        await asyncio.sleep(PACE_SECONDS)  # after every provider request: 100 RPM (R15)
             except (Exception, *outcomes.INTERRUPTIONS) as exc:
                 # F28 R4/R19: the failing item is counted before the batch fails; R23/R26: an
                 # interruption is never an item failure.
@@ -710,12 +708,12 @@ class _Batch:
                 await self._refused(row, receipt, exc)
                 raise  # FA-D3C-002 R14: the batch stops; process_embedding_queue reports it
             await self._failed(row, receipt, exc, tokens=None, answered=False)
-            return True
+            return False
         tokens = _tokens(response)
         vector = _vector(response, row.embedding_dimensions)
         if vector is None:
             await self._failed(row, receipt, MALFORMED_RESPONSE, tokens=tokens, answered=True)
-            return True
+            return False
         answered = await self.db.execute(
             update(EmbeddingAttempt)
             .where(EmbeddingAttempt.id == receipt, EmbeddingAttempt.outcome == "started")
