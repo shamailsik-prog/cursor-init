@@ -7,6 +7,8 @@ import { adminDb } from "../src/admin"
 import { LeaseLostError } from "../src/p2/errors"
 import { logDeadLetterAlert } from "../src/p2/jobEvents"
 import { jobTestSeam, type JobHandler } from "../src/p2/registry"
+import { abortableDelay } from "../src/p2/abortable"
+import { JOB_LEASE_MS } from "../src/p2/constants"
 import { jobWorkerTestSeam } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
 import { spyRegisteredErrors } from "./registeredErrorLog"
@@ -33,6 +35,23 @@ type Deps = ReturnType<typeof testDeps>
 type MisbehaveMode = "rawParse" | "throwApply" | "badRefs" | "refs" | "leaseLost" | "createExisting"
 
 const misbehaveMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_${jobId}`)
+const timeoutCoopMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`timeout_coop_${jobId}`)
+
+/** Cooperative handler: waits longer than the budget but stops when ctx.signal aborts (F35). */
+const timeoutCooperativeHandler: JobHandler<Record<string, never>> = {
+  jobType: "test.timeout_cooperative",
+  saga: false,
+  errorCodes: {},
+  parse: () => ({}),
+  run: async (ctx) => {
+    await abortableDelay(JOB_LEASE_MS, ctx.signal)
+    return {
+      apply: (tx) => {
+        tx.set(timeoutCoopMarkerRef(ctx.job.id), { leaked: true })
+      },
+    }
+  },
+}
 /** A doc the `createExisting` test pre-creates, so the handler's `tx.create` fails only at commit (ALREADY_EXISTS). */
 const misbehaveExistingRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_existing_${jobId}`)
 
@@ -87,11 +106,13 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     d = testDeps(new FakeClock(T0))
     installTestHandlers()
     jobTestSeam.handlers.set(misbehavingHandler.jobType, misbehavingHandler as JobHandler)
+    jobTestSeam.handlers.set(timeoutCooperativeHandler.jobType, timeoutCooperativeHandler as JobHandler)
   })
 
   afterEach(() => {
     removeTestHandlers()
     jobTestSeam.handlers.delete(misbehavingHandler.jobType)
+    jobTestSeam.handlers.delete(timeoutCooperativeHandler.jobType)
     vi.restoreAllMocks()
   })
 
@@ -253,6 +274,27 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
       lastError: { code: "handler_timeout", message: "The job exceeded its time budget." },
     })
     expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
+    expect(await diagCount(firmId, jobId)).toBe(0)
+  })
+
+  it("handler_timeout aborts cooperative work: no late apply or fenced step (F35)", async () => {
+    d = testDeps(new FakeClock(T0), { handlerBudgetMs: 50 })
+    const jobId = (
+      await enqueueAt(
+        {
+          firmId,
+          jobType: timeoutCooperativeHandler.jobType,
+          classification: "internal",
+          matterId: null,
+          payload: {},
+          idempotencyKey: uniq("timeout-coop"),
+          createdBy: uid,
+        },
+        T0
+      )
+    ).jobId
+    expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("failed")
+    expect((await timeoutCoopMarkerRef(jobId).get()).exists).toBe(false)
   })
 
   it("a seq ahead of dispatchSeq, a not-yet-due delivery (> 2 s early), a cancelled, done or non-engine row is dropped; 1.5 s early runs", async () => {

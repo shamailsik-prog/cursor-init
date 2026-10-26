@@ -42,10 +42,11 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
  * `runFenced(stepId, fn)` records each committed step on the row (`fencedSteps`), so a step that
  * committed before a crash, a failure or a manual requeue is skipped on every later attempt.
  *
- * A handler that overruns its budget is not cancelled: it keeps running until it settles, and
- * until the failure commit lands its fence still holds, so a late `runFenced` step can commit (once:
- * the retry finds it recorded and skips it). That is inside the at-least-once model (handlers are idempotent, L8148);
- * an AbortSignal on `ctx` is the later fix.
+ * A handler that overruns its budget receives `ctx.signal` aborted with `handler_timeout`. Cooperative
+ * handlers must stop and must not start new side effects after abort. A handler that ignores the signal
+ * may still run until the instance ends; until the failure commit lands its fence still holds, so a late
+ * `runFenced` step can commit (once: the retry finds it recorded and skips it). That is inside the
+ * at-least-once model (handlers are idempotent, L8148).
  */
 
 export type TaskOutcome = "dropped" | "done" | "failed" | "dead_lettered" | "lease_lost"
@@ -275,14 +276,19 @@ function runFencedFor(ref: DocumentReference, owner: string, attempt: number, no
   }
 }
 
-/** Races `work` against the budget; the timer is always cleared. */
-async function withinBudget<T>(work: Promise<T>, budgetMs: number): Promise<T> {
+/** Races `work(signal)` against the budget; aborts `signal` on overrun. The timer is always cleared. */
+async function withinBudget<T>(work: (signal: AbortSignal) => Promise<T>, budgetMs: number): Promise<T> {
+  const ac = new AbortController()
   let timer: NodeJS.Timeout | undefined
   const overrun = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new JobError("handler_timeout")), budgetMs)
+    timer = setTimeout(() => {
+      const err = new JobError("handler_timeout")
+      ac.abort(err)
+      reject(err)
+    }, budgetMs)
   })
   try {
-    return await Promise.race([work, overrun])
+    return await Promise.race([work(ac.signal), overrun])
   } finally {
     clearTimeout(timer)
   }
@@ -312,22 +318,24 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
     // Audit F42: a job of a tombstoned matter never runs, so nothing is written for the matter after its deletion.
     if (row.matterId !== null && (await matterTombstoned(row.firmId, row.matterId))) throw new JobError("matter_deleted", { permanent: true })
     const result = await withinBudget(
-      handler.run({
-        job: {
-          id: ref.id,
-          firmId: row.firmId,
-          jobType: row.jobType,
-          classification: row.classification,
-          matterId: row.matterId,
-          attempt: row.attempts,
-          totalAttempts: row.totalAttempts,
-          traceId: row.traceId,
-        },
-        payload,
-        now: deps.clock,
-        runFenced: runFencedFor(ref, owner, row.attempts, deps.clock),
-        checkFence: checkFenceFor(ref, owner),
-      }),
+      (signal) =>
+        handler.run({
+          job: {
+            id: ref.id,
+            firmId: row.firmId,
+            jobType: row.jobType,
+            classification: row.classification,
+            matterId: row.matterId,
+            attempt: row.attempts,
+            totalAttempts: row.totalAttempts,
+            traceId: row.traceId,
+          },
+          payload,
+          now: deps.clock,
+          signal,
+          runFenced: runFencedFor(ref, owner, row.attempts, deps.clock),
+          checkFence: checkFenceFor(ref, owner),
+        }),
       deps.handlerBudgetMs
     )
     return { ok: true, result: result ?? {}, handler }
