@@ -2,7 +2,8 @@ import { createHash } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { logger } from "firebase-functions"
 import { adminDb } from "../src/admin"
-import { fanOutEvent, type Subscriber } from "../src/p2/fanout"
+import { ENTITY_CANDIDATE_SIGNAL_JOB_TYPE } from "../src/d1/entity/candidateSignalJob"
+import { fanOutEvent, SUBSCRIBERS, type Subscriber } from "../src/p2/fanout"
 import { jobIdFor } from "../src/p2/enqueue"
 import { jobTestSeam } from "../src/p2/registry"
 import { EMULATORS, uniq } from "./emu"
@@ -10,6 +11,9 @@ import { FakeClock, T0, installTestHandlers, jobAuditRows, newFirm, readJob, rem
 
 /** The fan-out idempotency key (P3-15 amendment): `<sha256-hex(eventId)>:<subscriberId>`. */
 const keyOf = (eventId: string, subscriberId: string) => `${createHash("sha256").update(eventId, "utf8").digest("hex")}:${subscriberId}`
+
+const productionJobId = (firm: string, eventId: string) =>
+  jobIdFor(firm, ENTITY_CANDIDATE_SIGNAL_JOB_TYPE, keyOf(eventId, SUBSCRIBERS[0].id))
 
 /** Runs `fn` with `subs` as the test subscribers, restoring the seam even if `fn` throws. */
 async function withSubscribers<T>(subs: Subscriber[], fn: () => Promise<T>): Promise<T> {
@@ -49,9 +53,10 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
   })
 
   it("one job per matching subscriber, keyed sha256(eventId):subscriberId, carrying only the event id", async () => {
+    const prod = productionJobId(firmId, eventId)
     const id = jobIdFor(firmId, "test.event", keyOf(eventId, "diag"))
     expect(await fanOutEvent(eventId, data, clock)).toEqual({
-      created: [id],
+      created: [prod, id],
       reused: [],
     })
     expect(await readJob(id)).toMatchObject({
@@ -68,12 +73,13 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
   })
 
   it("a redelivered trigger reuses the job and writes no second audit row", async () => {
+    const prod = productionJobId(firmId, eventId)
     const id = jobIdFor(firmId, "test.event", keyOf(eventId, "diag"))
     await fanOutEvent(eventId, data, clock)
     const before = await readJob(id)
     expect(await fanOutEvent(eventId, data, clock)).toEqual({
       created: [],
-      reused: [id],
+      reused: [prod, id],
     })
     expect((await readJob(id)).updateTime.isEqual(before.updateTime)).toBe(true)
     expect(await jobAuditRows(id)).toHaveLength(1)
@@ -110,7 +116,8 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
       classification: "secret",
       payload: { matterId: "m-1" },
     }
-    expect(await withSubscribers(subs, () => fanOutEvent(e2, ev, clock))).toEqual({ created: [id], reused: [] })
+    const prod = productionJobId(firmId, e2)
+    expect(await withSubscribers(subs, () => fanOutEvent(e2, ev, clock))).toEqual({ created: [prod, id], reused: [] })
     expect(await readJob(id)).toMatchObject({
       classification: "privileged-restricted",
       matterId: "m-1",
@@ -122,8 +129,9 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
       { id: "a", eventNames: ["entity.candidate"], jobType: "test.event" },
       { id: "b", eventNames: ["entity.candidate", "x"], jobType: "test.event" },
     ]
+    const prod = productionJobId(firmId, eventId)
     const ids = ["a", "b"].map((s) => jobIdFor(firmId, "test.event", keyOf(eventId, s)))
-    expect(await withSubscribers(subs, () => fanOutEvent(eventId, data, clock))).toEqual({ created: ids, reused: [] })
+    expect(await withSubscribers(subs, () => fanOutEvent(eventId, data, clock))).toEqual({ created: [prod, ...ids], reused: [] })
   })
 
   it("an event without firmId is logged and ignored", async () => {
@@ -171,8 +179,9 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
       },
       { id: "good", eventNames: ["entity.candidate"], jobType: "test.event" },
     ]
+    const prod = productionJobId(firmId, eventId)
     const good = jobIdFor(firmId, "test.event", keyOf(eventId, "good"))
-    expect(await withSubscribers(subs, () => fanOutEvent(eventId, data, clock))).toEqual({ created: [good], reused: [] })
+    expect(await withSubscribers(subs, () => fanOutEvent(eventId, data, clock))).toEqual({ created: [prod, good], reused: [] })
     expect(warn).toHaveBeenCalledWith("event.fanout_subscriber_skipped", {
       eventId,
       subscriber: "boom",
@@ -205,9 +214,10 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
     const spy = vi.spyOn(adminDb(), "runTransaction").mockRejectedValueOnce(boom)
     await expect(fanOutEvent(eventId, data, clock)).rejects.toBe(boom)
     spy.mockRestore()
+    const prod = productionJobId(firmId, eventId)
     const id = jobIdFor(firmId, "test.event", keyOf(eventId, "diag"))
     expect(await fanOutEvent(eventId, data, clock)).toEqual({
-      created: [id],
+      created: [prod, id],
       reused: [],
     })
   })
@@ -215,13 +225,14 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
     const longId = `${"m".repeat(128)}_created`
     expect(longId).toHaveLength(136)
     await adminDb().collection("events").doc(longId).set(data)
+    const prod = productionJobId(firmId, longId)
     const id = jobIdFor(firmId, "test.event", keyOf(longId, "diag"))
-    expect(await fanOutEvent(longId, data, clock)).toEqual({ created: [id], reused: [] })
+    expect(await fanOutEvent(longId, data, clock)).toEqual({ created: [prod, id], reused: [] })
     const row = await readJob(id)
     // The raw id is carried in the payload only: the key is its hash, and the ref is omitted as unsafe.
     expect(row).toMatchObject({ payload: { eventId: longId }, idempotencyKey: keyOf(longId, "diag"), inputRefs: [] })
     expect(row.idempotencyKey).not.toContain(longId)
-    expect(await fanOutEvent(longId, data, clock)).toEqual({ created: [], reused: [id] })
+    expect(await fanOutEvent(longId, data, clock)).toEqual({ created: [], reused: [prod, id] })
     expect(await jobAuditRows(id)).toHaveLength(1)
     // The handler reads the event by the payload's id.
     expect(await testDeps(new FakeClock(T0)).dispatcher.deliver({ jobId: id, seq: 0 }, T0)).toBe("done")
@@ -236,6 +247,6 @@ describe.skipIf(!EMULATORS)("P2 events fan-out (P3-15)", () => {
     for (const call of warn.mock.calls) expect(call).toEqual(["event.fanout_ignored", { code: "event_id_invalid" }])
     // 1500 bytes exactly is still a valid id.
     const edge = "e".repeat(1500)
-    expect((await fanOutEvent(edge, data, clock)).created).toHaveLength(1)
+    expect((await fanOutEvent(edge, data, clock)).created).toHaveLength(2)
   })
 })

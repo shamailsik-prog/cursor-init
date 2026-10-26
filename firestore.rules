@@ -291,6 +291,7 @@ service cloud.firestore {
     match /conflict_name_index/{id} { allow read, write: if false; }
     // F37 (PR #89 review): one marker per registry trigger event that broke a firm's name index (redelivery dedupe).
     match /conflict_index_breaks/{id} { allow read, write: if false; }
+    match /event_fanout_deliveries/{id} { allow read, write: if false; }
     match /events/{id} { allow read, write: if false; }
     // Phase 3d P1 (P3-72): the AI cost log, the month totals, the budget alerts and the firm's AI config are
     // written and read by Cloud Functions only; partners read usage through getAiUsage. The platform kill

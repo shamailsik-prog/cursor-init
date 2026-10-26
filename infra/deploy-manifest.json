@@ -210,6 +210,19 @@
       "schedule": "every 5 minutes"
     },
     {
+      "name": "eventFanoutReconciler",
+      "kind": "schedule",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 45,
+      "minInstances": 0,
+      "maxInstances": 1,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_INTERNAL_ONLY",
+      "schedule": "every 5 minutes"
+    },
+    {
       "name": "p1CorpusEmbedding",
       "kind": "https",
       "region": "asia-south1",

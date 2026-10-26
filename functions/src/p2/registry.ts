@@ -1,5 +1,6 @@
 import type { Transaction } from "firebase-admin/firestore"
 import type { Classification } from "@/platform/p1/types"
+import { entityCandidateSignalHandler } from "../d1/entity/candidateSignalJob"
 import { autoConfirmHandler } from "../d1/entity/autoConfirmJob"
 import { nameReindexHandler } from "../d1/conflict/reindexJob"
 import { unmergeChecksHandler, unmergeLinksHandler } from "../d1/entity/unmergeJobs"
@@ -73,6 +74,7 @@ export const JOB_HANDLERS: ReadonlyMap<string, JobHandler> = new Map<string, Job
   [diagnosticHandler.jobType, diagnosticHandler as JobHandler],
   [unmergeLinksHandler.jobType, unmergeLinksHandler as JobHandler],
   [unmergeChecksHandler.jobType, unmergeChecksHandler as JobHandler],
+  [entityCandidateSignalHandler.jobType, entityCandidateSignalHandler as JobHandler],
   [autoConfirmHandler.jobType, autoConfirmHandler as JobHandler],
   [nameReindexHandler.jobType, nameReindexHandler as JobHandler],
   [ocrHandler.jobType, ocrHandler as JobHandler],

@@ -136,6 +136,7 @@
     {"id": "firestore:entity_aliases", "kind": "firestore", "name": "entity_aliases", "profile": "conflict_register", "key": {"kind": "none"}},
     {"id": "firestore:entity_links", "kind": "firestore", "name": "entity_links", "profile": "conflict_register", "key": {"kind": "none"}},
     {"id": "firestore:events", "kind": "firestore", "name": "events", "profile": "audit_trail", "key": {"kind": "none"}},
+    {"id": "firestore:event_fanout_deliveries", "kind": "firestore", "name": "event_fanout_deliveries", "profile": "operational_ttl", "key": {"kind": "none"}},
     {"id": "firestore:evidence_items", "kind": "firestore", "name": "evidence_items", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
     {"id": "firestore:feature_flags", "kind": "firestore", "name": "feature_flags", "profile": "identity_platform", "key": {"kind": "none"}},
     {"id": "firestore:filing_annexures", "kind": "firestore", "name": "filing_annexures", "profile": "matter_content", "key": {"kind": "field", "field": "matterId"}},
