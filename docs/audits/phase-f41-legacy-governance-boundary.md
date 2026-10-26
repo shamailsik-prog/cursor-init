@@ -10,7 +10,7 @@ consumed review and CI attention while `LEGACY_GOVERNANCE_CHAINS` stays off.
 | State | Evidence | Result |
 | --- | --- | --- |
 | RED | `7c23e3cf` (main after PR #146 / F40): no line or adapter cap; CodeQL scanned only one path-too-long adapter; active routes had no enforced import barrier against governance adapters | Measured monoliths: ops-reporting **32,900** lines, filings **19,082**, operator console **7,338**; **45** `workflowOps*Governance.ts` files |
-| GREEN | Branch `cursor/f41-legacy-governance-boundary-1d5d`: `platform/boundaries/legacyGovernanceQuarantine.json` + G-0 check [23] `check_legacy_governance_boundary.py`; CodeQL `paths-ignore` for quarantined trees | Local: `python3 ci_gates/check_legacy_governance_boundary.py` PASS; `python3 ci_gates/test_check_legacy_governance_boundary.py` PASS |
+| GREEN | PR #147 @ `b1c4b7e8`: `platform/boundaries/legacyGovernanceQuarantine.json` + G-0 check [23] `check_legacy_governance_boundary.py`; CodeQL `paths-ignore` for quarantined trees | CI run `40322259114`: 16 pass, 0 fail, 4 skip (path-gated jobs) |
 
 ## Scope note
 
