@@ -7,7 +7,7 @@ Finding: issue #30 **F29** (`docs/audit/2026-10-13-forensic-audit.md`)
 
 - **Operator control:** `POST /api/stop` and `POST /api/start` call `scraper.harvest_control.pause_async()` / `resume_async()`, which set the singleton `harvest_operator_state.paused` row (see `docs/audits/phase-f29-fa-f29-001-db-harvest-pause.md` for FA-F29-001).
 - **Consumers:** `scraper.tasks.dispatcher._run_async` skips with `harvest_paused` when paused; `scraper.tasks.embeddings.process_embedding_queue_task` returns a skipped batch summary with `reason: harvest_paused`.
-- **Observability:** `GET /api/harvest-control` (admin) reports `{"paused": bool}`.
+- **Observability:** `GET /api/harvest-control` (admin) reports `paused`, `in_flight`, and `running` counts (FA-F29-003; see `docs/audits/phase-f29-fa-f29-003-harvest-control-in-flight.md`).
 
 In-flight Celery work is not cancelled mid-harvest; stop prevents new scheduled harvest and embedding batches from doing work. Manual `POST /admin/sources/{name}/trigger` still enqueues `run_source_job`, which respects the same pause flag.
 

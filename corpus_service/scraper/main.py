@@ -104,8 +104,8 @@ async def stop_h(_: None = Depends(require_admin_api_key)):
     return {"status": "stopped"}
 @app.get("/api/harvest-control")
 async def harvest_control_status(_: None = Depends(require_admin_api_key)):
-    """Operator view: pause flag and whether scheduled harvest/embedding tasks will run."""
-    return {"paused": await harvest_control.is_paused_async()}
+    """Operator view: pause flag, in-flight harvest/embedding work, and scheduled gate state."""
+    return await harvest_control.operator_status_async()
 @app.get("/api/vault")
 async def vault(_: None = Depends(require_admin_api_key)):
     LIVE_DIR = _live_dir()
