@@ -48,6 +48,7 @@ NUMBERED_MIGRATIONS = (
     "003_quarantine_decision_fingerprint",
     "004_embedding_queue_leases",
     "005_corpus_lifecycle",
+    "006_harvest_operator_state",
 )
 
 

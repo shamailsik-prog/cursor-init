@@ -5,7 +5,7 @@ Finding: issue #30 **F29** (`docs/audit/2026-10-13-forensic-audit.md`)
 
 ## Mechanism
 
-- **Operator control:** `POST /api/stop` and `POST /api/start` call `scraper.harvest_control.pause()` / `resume()`, which write or remove `harvest.stopped` under the shared state directory (same path the dashboard used before F29).
+- **Operator control:** `POST /api/stop` and `POST /api/start` call `scraper.harvest_control.pause_async()` / `resume_async()`, which set the singleton `harvest_operator_state.paused` row (see `docs/audits/phase-f29-fa-f29-001-db-harvest-pause.md` for FA-F29-001).
 - **Consumers:** `scraper.tasks.dispatcher._run_async` skips with `harvest_paused` when paused; `scraper.tasks.embeddings.process_embedding_queue_task` returns a skipped batch summary with `reason: harvest_paused`.
 - **Observability:** `GET /api/harvest-control` (admin) reports `{"paused": bool}`.
 

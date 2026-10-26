@@ -32,6 +32,16 @@ def test_embedding_scheduled_task_checks_harvest_pause():
 def test_admin_start_stop_use_harvest_control():
     root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "main.py"
     text = root.read_text()
-    assert "harvest_control.pause()" in text
-    assert "harvest_control.resume()" in text
+    assert "harvest_control.pause_async()" in text
+    assert "harvest_control.resume_async()" in text
     assert "harvest.stopped" not in text
+
+
+def test_harvest_control_is_db_backed_not_file_authoritative():
+    root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
+    text = root.read_text()
+    assert "HarvestOperatorState" in text
+    assert "harvest_operator_state" in text
+    assert "SessionLocal" in text
+    # Legacy file may be adopted once; scheduled work must not treat the file as the source of truth.
+    assert "is_paused_async" in text

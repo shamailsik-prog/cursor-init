@@ -125,7 +125,7 @@ async def _run_async(source_name: str):
     ``outcomes.Refused`` (the source cannot be run: F28 R5) or the harvester's own result; a harvest
     failure propagates."""
     # Audit F29: the dashboard stop flag must gate scheduled Celery harvest work, not only seat workers.
-    if harvest_control.is_paused():
+    if await harvest_control.is_paused_async():
         logger.info("%s harvest paused by operator, skip", source_name)
         return outcomes.Skipped("harvest_paused")
     async with SessionLocal() as db:

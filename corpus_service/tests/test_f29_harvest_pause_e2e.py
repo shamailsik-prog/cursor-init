@@ -14,17 +14,17 @@ from test_f28_source_outcomes_e2e import fire, idle_import_folder, jobs
 
 
 @pytest.fixture
-def harvest_state(tmp_path, monkeypatch):
-    """Isolate pause state so tests do not touch the developer's blackletter_state."""
+def harvest_resumed(corpus_db):
+    """Ensure the singleton pause row exists and harvest is running."""
     import scraper.harvest_control as hc
 
-    monkeypatch.setattr(hc, "state_dir", lambda: tmp_path)
-    return tmp_path
-
-
-def test_scheduled_harvest_skips_while_paused_and_runs_after_resume(corpus_db, monkeypatch, tmp_path, harvest_state):
-    """Beat entry ``scrape-pakistanlawsite``: paused → skipped job with harvest_paused; resumed → success."""
     assert_migrated(corpus_db.migrate(), corpus_db)
+    hc.resume()
+    yield
+
+
+def test_scheduled_harvest_skips_while_paused_and_runs_after_resume(corpus_db, monkeypatch, tmp_path, harvest_resumed):
+    """Beat entry ``scrape-pakistanlawsite``: paused → skipped job with harvest_paused; resumed → success."""
     idle_import_folder(monkeypatch, tmp_path)
 
     import scraper.harvest_control as hc
@@ -45,10 +45,8 @@ def test_scheduled_harvest_skips_while_paused_and_runs_after_resume(corpus_db, m
     assert rows[1].status == "completed", rows[1].status
 
 
-def test_scheduled_embeddings_skip_while_paused(corpus_db, harvest_state):
+def test_scheduled_embeddings_skip_while_paused(corpus_db, harvest_resumed):
     """Beat entry ``process-embeddings`` must not claim rows when the operator has stopped harvest."""
-    assert_migrated(corpus_db.migrate(), corpus_db)
-
     import scraper.harvest_control as hc
 
     hc.pause()
@@ -57,7 +55,7 @@ def test_scheduled_embeddings_skip_while_paused(corpus_db, harvest_state):
     assert result.result.get("reason") == "harvest_paused", result.result
 
 
-def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tmp_path, harvest_state):
+def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tmp_path, harvest_resumed):
     """POST /api/stop and /api/start use harvest_control; scheduled harvest respects them."""
     from fastapi.testclient import TestClient
 
@@ -65,7 +63,6 @@ def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tm
     from scraper.config import settings
     from scraper.main import app
 
-    assert_migrated(corpus_db.migrate(), corpus_db)
     idle_import_folder(monkeypatch, tmp_path)
     headers = {"X-API-Key": settings.ADMIN_API_KEY}
 
@@ -84,3 +81,13 @@ def test_api_stop_and_start_drive_the_same_pause_flag(corpus_db, monkeypatch, tm
         ok = fire("scrape-pakistanlawsite")
         assert ok.state == "SUCCESS"
         assert jobs("PakistanLawSite")[1].status == "completed"
+
+
+def test_pause_flag_lives_in_database_not_stop_file(corpus_db, tmp_path, monkeypatch, harvest_resumed):
+    """FA-F29-001: operator pause must be the DB singleton row, not a container-local stop file."""
+    import scraper.harvest_control as hc
+
+    monkeypatch.setattr(hc, "state_dir", lambda: tmp_path)
+    hc.pause()
+    assert hc.is_paused()
+    assert not (tmp_path / "harvest.stopped").exists()

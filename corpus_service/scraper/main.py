@@ -96,16 +96,16 @@ async def live_feed(_: None = Depends(require_admin_api_key)):
     return {"feed": logs[-40:]}
 @app.post("/api/start")
 async def start_h(_: None = Depends(require_admin_api_key)):
-    harvest_control.resume()
+    await harvest_control.resume_async()
     return {"status": "started"}
 @app.post("/api/stop")
 async def stop_h(_: None = Depends(require_admin_api_key)):
-    harvest_control.pause()
+    await harvest_control.pause_async()
     return {"status": "stopped"}
 @app.get("/api/harvest-control")
 async def harvest_control_status(_: None = Depends(require_admin_api_key)):
     """Operator view: pause flag and whether scheduled harvest/embedding tasks will run."""
-    return {"paused": harvest_control.is_paused()}
+    return {"paused": await harvest_control.is_paused_async()}
 @app.get("/api/vault")
 async def vault(_: None = Depends(require_admin_api_key)):
     LIVE_DIR = _live_dir()
