@@ -23,6 +23,11 @@ resource "google_project_iam_member" "runtime_3" {
   role    = "roles/eventarc.eventReceiver"
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
+resource "google_project_iam_member" "runtime_4" {
+  project = var.project_id
+  role    = "roles/cloudtasks.viewer"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
 
 resource "google_service_account_iam_member" "runtime_self_user" {
   service_account_id = google_service_account.runtime.name

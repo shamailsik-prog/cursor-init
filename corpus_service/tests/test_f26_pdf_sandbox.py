@@ -1207,10 +1207,27 @@ def test_r19_health_and_the_vault_listing_never_walk_the_raw_store(tmp_path, mon
     monkeypatch.chdir(tmp_path)  # without /app/live (CI), the routes resolve ./live
     monkeypatch.setattr(main, "_live_dir", lambda: live, raising=False)
 
-    def _no_database():
-        raise ConnectionRefusedError("F26 synthetic: no database for this test")
+    class _FakeDbSession:
+        async def execute(self, _stmt):
+            return None
 
-    monkeypatch.setattr(database, "SessionLocal", _no_database)
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def _session_local():
+        return _FakeDbSession()
+
+    monkeypatch.setattr(database, "SessionLocal", _session_local)
+    from scraper import health_probe
+
+    health_probe.refresh_vault_telemetry(
+        live_dir=main._live_dir,
+        vault_pdfs=main._vault_pdfs,
+        state_dir=main._state_dir(),
+    )
     store = str(live / "raw-pdf")
     walked = []
     real_scandir = os.scandir

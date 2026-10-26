@@ -1,6 +1,7 @@
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import logging
 import os
 import pathlib
@@ -12,6 +13,7 @@ from scraper import client_identity
 from scraper.parsers import raw_store
 from scraper.rate_limit import RateLimitedPathsMiddleware
 from scraper import harvest_control
+from scraper import health_probe
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Blackletter Legal Scraper")
@@ -34,10 +36,28 @@ app.include_router(export.router)
 # (/health is F44's route and is not listed).
 app.add_middleware(RateLimitedPathsMiddleware, paths=[app.openapi_url, app.docs_url, app.redoc_url,
                                                       app.swagger_ui_oauth2_redirect_url, "/dashboard"])
+def _state_dir() -> pathlib.Path:
+    return pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
+
+
 @app.on_event("startup")
 async def startup():
     client_identity.log_forwarded_trust_at_startup()
     await init_db()
+    from scraper.database import SessionLocal
+
+    app.state._health_telemetry_stop = asyncio.Event()
+    app.state._health_telemetry_task = asyncio.create_task(
+        health_probe.periodic_telemetry_refresh(
+            SessionLocal,
+            live_dir=_live_dir,
+            vault_pdfs=_vault_pdfs,
+            state_dir=_state_dir(),
+            stop=app.state._health_telemetry_stop,
+        )
+    )
+
+
 def _live_dir() -> pathlib.Path:
     """The PDF vault /health and /api/vault read (bootstrap_harvest.py's live/)."""
     return pathlib.Path("/app/live" if pathlib.Path("/app/live").exists() else "./live")
@@ -57,41 +77,26 @@ def _vault_pdfs(live_dir: pathlib.Path):
                 except OSError:  # removed or a dangling link: not a PDF in the vault
                     continue
                 yield path, st
+@app.get("/health/live")
+async def health_live():
+    """Process-up liveness only (no database or vault I/O)."""
+    return {"status": "ok", "probe": "liveness"}
+
+
 @app.get("/health")
 async def health():
     """
-    Readiness for the corpus API: PostgreSQL must answer. HTTP 503 when the DB probe fails.
-    Process liveness is implicit (uvicorn must serve HTTP); there is no separate shallow route.
+    Readiness: bounded PostgreSQL probe (`SELECT 1`, short timeout). Telemetry fields come from the
+    background cache only (no vault walk or `COUNT(*)` on this path). HTTP 503 when the DB probe fails.
     """
-    import pathlib, json
     from scraper.database import SessionLocal
-    from sqlalchemy import select, func
-    from scraper.models import CaseLawMaster
-    STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
-    total_pdfs = sum(1 for _, st in _vault_pdfs(_live_dir()) if st.st_size>15000)
-    seen=0
-    sf=STATE_DIR/"harvest-seen.json"
-    if sf.exists():
-        try: seen=len(json.loads(sf.read_text()).get("seen",[]))
-        except: pass
-    body = {"total_pdfs": total_pdfs, "seen": seen, "dependencies": {"postgres": "failed"}}
-    try:
-        async with SessionLocal() as db:
-            c=await db.execute(select(func.count(CaseLawMaster.id)))
-            body.update(
-                {
-                    "status": "ok",
-                    "db_connected": True,
-                    "total_cases": c.scalar(),
-                    "dependencies": {"postgres": "ok"},
-                }
-            )
-            return JSONResponse(status_code=200, content=body)
-    except Exception:
-        # Never echo the exception: driver errors can embed the DATABASE_URL (credentials, host).
-        logger.warning("health: database probe failed", exc_info=True)
-        body.update({"status": "unhealthy", "db_connected": False})
-        return JSONResponse(status_code=503, content=body)
+
+    body = {**health_probe.telemetry_snapshot(), "dependencies": {"postgres": "failed"}}
+    if await health_probe.readiness_postgres_ok(SessionLocal):
+        body.update({"status": "ok", "db_connected": True, "dependencies": {"postgres": "ok"}})
+        return JSONResponse(status_code=200, content=body)
+    body.update({"status": "unhealthy", "db_connected": False})
+    return JSONResponse(status_code=503, content=body)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     # Static shell only; the page prompts for the admin key and sends it as X-API-Key.

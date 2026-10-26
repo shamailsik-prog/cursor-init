@@ -1119,6 +1119,7 @@ describe("index exports", () => {
       "d1ConflictReindexTick",
       "eventFanoutReconciler",
       "health",
+      "healthLive",
       "jobSweeper",
       "jobWorker",
       "ocrLegacySweep",
@@ -1137,7 +1138,12 @@ describe("index exports", () => {
     // trigger, a Cloud Tasks queue and a schedule, none of them an HTTP endpoint. The api is still the only entry point to
     // the P5 operations (E-37): p1CorpusEmbedding (FA-D3C-002) is no tenant operation but the corpus service's IAM-private,
     // OIDC-verified way to P1, with no user, no firm header and the firm fixed by the deployment.
-    expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual(["api", "health", "p1CorpusEmbedding"])
+    expect(Object.keys(mod).filter((name) => mod[name]?.__endpoint?.httpsTrigger !== undefined).sort()).toEqual([
+      "api",
+      "health",
+      "healthLive",
+      "p1CorpusEmbedding",
+    ])
     expect((mod.p1CorpusEmbedding?.__endpoint?.httpsTrigger as { invoker?: unknown } | undefined)?.invoker).toEqual(["private"])
     expect(mod.api?.__endpoint?.region).toEqual(["asia-south1"])
     expect(mod.p1CorpusEmbedding?.__endpoint?.region).toEqual(["asia-south1"])

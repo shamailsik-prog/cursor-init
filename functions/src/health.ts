@@ -175,10 +175,19 @@ export async function contractReport(deps?: {
 
 export type HealthHandlerDeps = Parameters<typeof contractReport>[0] & Parameters<typeof dependencyReport>[0]
 
+/** Process-up **liveness** only: no metadata, contract or dependency I/O. */
+export function createLivenessHandler() {
+  return (_req: Request, res: Response): void => {
+    res.status(200).json({ status: "ok", probe: "liveness" })
+  }
+}
+
+export const livenessHandler = createLivenessHandler()
+
 /**
  * `GET /health` on the `health` Cloud Function is the **readiness** probe: deploy contract plus
  * Firestore and the `jobWorker` Cloud Tasks queue. It returns HTTP 503 when any required check fails.
- * Container **liveness** is implicit (the process must answer HTTP); there is no separate shallow route.
+ * Use export `healthLive` (`GET` on that function URL) for **liveness** (no dependency I/O).
  */
 export function createHealthHandler(deps?: HealthHandlerDeps) {
   return async (_req: Request, res: Response): Promise<void> => {
@@ -214,4 +223,14 @@ export const health = onRequest(
     ingressSettings: "ALLOW_ALL",
   },
   healthHandler
+)
+
+export const healthLive = onRequest(
+  {
+    ...RUNTIME_DEFAULTS,
+    maxInstances: 2,
+    timeoutSeconds: 10,
+    ingressSettings: "ALLOW_ALL",
+  },
+  livenessHandler
 )

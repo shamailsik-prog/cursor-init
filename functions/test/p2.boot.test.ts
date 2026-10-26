@@ -46,6 +46,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
       "d1ConflictReindexTick",
       "eventFanoutReconciler",
       "health",
+      "healthLive",
       "jobSweeper",
       "jobWorker",
       "ocrLegacySweep",
