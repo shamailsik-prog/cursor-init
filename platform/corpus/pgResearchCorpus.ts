@@ -42,7 +42,7 @@ import {
 export const RESEARCH_MAX_JUDGMENTS = 20_000
 export const RESEARCH_MAX_TREATMENTS = 20_000
 export const RESEARCH_MAX_VECTORS = 5_000
-/** Keyword candidate cap (FA-D5-003-R1-001): union of judgments matching any query term, then ranked in memory. */
+/** Keyword candidate cap (FA-D5-003-R1-001): any query term may match; prefer higher term coverage, then rank in memory. */
 export const RESEARCH_MAX_CANDIDATES = 10_000
 /** Distinct (model, dimension) pairs a sane corpus can hold; more breaks the contract. */
 const MAX_VECTOR_SHAPES = 100
@@ -210,10 +210,11 @@ const VECTORS_SQL = `SELECT judgment_id::text AS id, embedding::text AS v
  LIMIT $2`
 const TERM_DF_SQL = `SELECT term, doc_freq FROM public.corpus_research_term_df ORDER BY term COLLATE "C"`
 const JUDGMENT_COUNT_SQL = `SELECT value FROM public.corpus_metadata WHERE key = 'research_judgment_count'`
-const CANDIDATES_SQL = `SELECT DISTINCT t.judgment_id::text AS id
+const CANDIDATES_SQL = `SELECT t.judgment_id::text AS id
   FROM public.corpus_research_term t
  WHERE t.term = ANY ($1::text[])
- ORDER BY 1
+ GROUP BY t.judgment_id
+ ORDER BY count(DISTINCT t.term) DESC, t.judgment_id
  LIMIT $2`
 const DOCUMENTS_BY_ID_SQL = `SELECT j.judgment_id::text AS id, j.case_title AS title, j.bench_type,
        coalesce(array_agg(c.citation_text ORDER BY c.citation_text COLLATE "C") FILTER (WHERE c.citation_text IS NOT NULL),
