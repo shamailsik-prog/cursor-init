@@ -255,7 +255,9 @@ describe("idempotency helpers", () => {
     expect(Object.keys(index).filter((n) => index[n].__endpoint?.callableTrigger !== undefined)).toEqual([])
     // The job runtime's trigger, queue and schedule functions are not HTTP and run under their own
     // timeout (JOB_WORKER_TIMEOUT_SECONDS, pinned by p2.boot.test.ts).
-    const names = Object.keys(index).filter((n) => n !== "health" && index[n].__endpoint?.httpsTrigger !== undefined)
+    const names = Object.keys(index).filter(
+      (n) => n !== "health" && n !== "healthLive" && index[n].__endpoint?.httpsTrigger !== undefined,
+    )
     // U-1: the HTTP api is the only entry point to the P5 user operations. The one other HTTP export is p1CorpusEmbedding
     // (FA-D3C-002, spec R18): a service-to-service endpoint, not a P5 operation, pinned below by what makes it one. Any
     // further HTTP export fails here, by name.

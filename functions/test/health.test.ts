@@ -7,6 +7,12 @@ function mockRes() {
   return res
 }
 
+/** Deployed readiness runs Firestore and job-queue probes; unit tests inject no-op successes. */
+const healthyDependencyProbes = {
+  probeFirestore: async () => {},
+  probeJobQueue: async () => {},
+}
+
 describe("health contract report (F32 R9)", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
@@ -25,6 +31,7 @@ describe("health contract report (F32 R9)", () => {
         GCLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
@@ -34,7 +41,12 @@ describe("health contract report (F32 R9)", () => {
     const res = mockRes()
     await handler({} as never, res as never)
     expect(res.status).toHaveBeenCalledWith(200)
-    const body = res.json.mock.calls[0]?.[0] as { status: string; region: string; contract?: Record<string, Verdict> }
+    const body = res.json.mock.calls[0]?.[0] as {
+      status: string
+      region: string
+      contract?: Record<string, Verdict>
+      dependencies?: Record<string, string>
+    }
     expect(body.status).toBe("ok")
     expect(body.region).toBe("asia-south1")
     expect(body).not.toHaveProperty("contract")
@@ -45,6 +57,7 @@ describe("health contract report (F32 R9)", () => {
     const handler = createHealthHandler({
       env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1", FIREBASE_CONFIG: '{"locationId":"us-central1"}' },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
@@ -79,6 +92,7 @@ describe("health contract report (F32 R9)", () => {
     const handler = createHealthHandler({
       env: { SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB", TRUSTED_PROXY_HOPS: "1" },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({}),
       now: () => 0,
     })
@@ -101,6 +115,7 @@ describe("health contract report (F32 R9)", () => {
         GCLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@attacker-proj.iam.gserviceaccount.com",
@@ -123,6 +138,7 @@ describe("health contract report (F32 R9)", () => {
         GCLOUD_PROJECT: "sikander-legal-os-prod",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@sikander-legal-os-prod.iam.gserviceaccount.com",
@@ -146,6 +162,7 @@ describe("health contract report (F32 R9)", () => {
         GOOGLE_CLOUD_PROJECT: prodProject,
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: `sikander-functions@${prodProject}.iam.gserviceaccount.com`,
@@ -169,6 +186,7 @@ describe("health contract report (F32 R9)", () => {
         GOOGLE_CLOUD_PROJECT: "sikander-legal-os-prod",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@sikander-legal-os-prod.iam.gserviceaccount.com",
@@ -191,6 +209,7 @@ describe("health contract report (F32 R9)", () => {
         GOOGLE_CLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
@@ -211,6 +230,7 @@ describe("health contract report (F32 R9)", () => {
         FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "evil-sikander-functions@attacker-proj.iam.gserviceaccount.com",
@@ -254,5 +274,81 @@ describe("health contract report (F32 R9)", () => {
     const body = res.json.mock.calls[0]?.[0] as { status: string }
     expect(body.status).toBe("ok")
     vi.useRealTimers()
+  })
+})
+
+describe("health dependency readiness (F44)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  const deployedEnv = {
+    SIKANDER_INGRESS_SETTINGS: "ALLOW_INTERNAL_AND_GCLB",
+    TRUSTED_PROXY_HOPS: "1",
+    FIREBASE_CONFIG: '{"locationId":"asia-south1"}',
+    SIKANDER_DEPLOY_PROFILE: "staging",
+    GCLOUD_PROJECT: "demo-sikander",
+  }
+
+  const metadata = async () => ({
+    region: "asia-south1",
+    serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
+  })
+
+  it("responds 200 with dependency ok map when deployed probes succeed", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: deployedEnv,
+      deployed: true,
+      ...healthyDependencyProbes,
+      metadata,
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(200)
+    const body = res.json.mock.calls[0]?.[0] as { dependencies?: Record<string, string> }
+    expect(body.dependencies).toEqual({ firestore: "ok", job_queue: "ok" })
+  })
+
+  it("responds 503 when the Firestore probe fails", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: deployedEnv,
+      deployed: true,
+      probeFirestore: async () => {
+        throw new Error("firestore down")
+      },
+      probeJobQueue: async () => {},
+      metadata,
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+    const body = res.json.mock.calls[0]?.[0] as { status: string; dependencies?: Record<string, string> }
+    expect(body.status).toBe("unhealthy")
+    expect(body.dependencies).toEqual({ firestore: "failed", job_queue: "ok" })
+  })
+
+  it("responds 503 when the job queue probe fails", async () => {
+    const { createHealthHandler } = await import("../src/health")
+    const handler = createHealthHandler({
+      env: deployedEnv,
+      deployed: true,
+      probeFirestore: async () => {},
+      probeJobQueue: async () => {
+        throw new Error("queue down")
+      },
+      metadata,
+      now: () => 0,
+    })
+    const res = mockRes()
+    await handler({} as never, res as never)
+    expect(res.status).toHaveBeenCalledWith(503)
+    const body = res.json.mock.calls[0]?.[0] as { dependencies?: Record<string, string> }
+    expect(body.dependencies).toEqual({ firestore: "ok", job_queue: "failed" })
   })
 })

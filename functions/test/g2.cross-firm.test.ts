@@ -65,7 +65,8 @@ afterAll(() => {
 
 /** Non-endpoint exports of src/index.ts (deploy entries that are not identity reads). */
 const NOT_TENANT_ENDPOINTS: Record<string, string> = {
-  health: "health probe, no tenant data",
+  health: "health readiness probe, no tenant data",
+  healthLive: "health liveness probe, no tenant data (F44)",
   api: "HTTP router, probed route by route",
   onJobCreated: "Firestore trigger on jobs, no caller",
   onEventCreated: "Firestore trigger on events, no caller",

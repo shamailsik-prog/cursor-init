@@ -16,7 +16,8 @@
         { "role": "roles/datastore.user", "reason": "Firestore read/write for all functions" },
         { "role": "roles/firebaseauth.admin", "reason": "Admin SDK Auth in P5 identity/MFA" },
         { "role": "roles/logging.logWriter", "reason": "Structured logs" },
-        { "role": "roles/eventarc.eventReceiver", "reason": "Firestore trigger delivery" }
+        { "role": "roles/eventarc.eventReceiver", "reason": "Firestore trigger delivery" },
+        { "role": "roles/cloudtasks.viewer", "reason": "F44 readiness: GET jobWorker queue from health probe (FA-F44-004)" }
       ],
       "actAs": [{ "target": "sikander-functions@", "reason": "Cloud Tasks OIDC as the enqueuer identity" }]
     }
@@ -47,6 +48,19 @@
       "serviceAccount": "sikander-functions@",
       "ingress": "ALLOW_ALL",
       "why": { "maxInstances": "Uptime probes without the load balancer", "ingress": "No tenant data; external smoke checks" }
+    },
+    {
+      "name": "healthLive",
+      "kind": "https",
+      "region": "asia-south1",
+      "memory": "256MiB",
+      "timeoutSeconds": 10,
+      "minInstances": 0,
+      "maxInstances": 2,
+      "concurrency": 1,
+      "serviceAccount": "sikander-functions@",
+      "ingress": "ALLOW_ALL",
+      "why": { "maxInstances": "Liveness without dependency I/O (FA-F44-001)", "ingress": "No tenant data; external smoke checks" }
     },
     {
       "name": "onJobCreated",
