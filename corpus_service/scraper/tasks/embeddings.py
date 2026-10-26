@@ -634,11 +634,15 @@ class _Batch:
                     row, chunks, manifest, pending, op, list(held.embedding), held.id, held.token_count, None,
                     reconciled=True,
                 )
+                if (await self.db.execute(text(HOLD_SQL), self._params(row))).first() is None:
+                    return paid_any
                 continue
             paid = await self._attempt(row, op, pending.embed_text, chunks, manifest, pending)
             if not paid:
                 return False
             paid_any = True
+            if (await self.db.execute(text(HOLD_SQL), self._params(row))).first() is None:
+                return paid_any
             await asyncio.sleep(PACE_SECONDS)
 
     async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[List[ec.EmbeddingChunk], str, bool]]:
