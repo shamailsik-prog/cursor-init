@@ -841,7 +841,7 @@ DO UPDATE SET
                 "model": row.embedding_model,
                 "dims": row.embedding_dimensions,
                 "op": op,
-                "vec": vector,
+                "vec": json.dumps(vector, separators=(",", ":")),
             },
         )
         if chunk.chunk_index == 0:
