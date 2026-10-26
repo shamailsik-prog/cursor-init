@@ -256,6 +256,18 @@ const PLANTED: GateCase[] = [
     },
     reports: ["FAIL: functions/src/p1/zzAuditAdhoc2.ts: imports activeTransport from functions/src/p1/transport"],
   },
+  {
+    name: "F34 R1-003 T4b (direct): ad-hoc send and transport import both under platform/p1",
+    rel: "platform/p1/zzAuditAdhocDirect.ts",
+    body:
+      'import { activeTransport } from "@/functions/src/p1/transport"\n\n' +
+      "export async function adhocSummary(text: string): Promise<string | undefined> {\n" +
+      "  const gw = activeTransport()\n" +
+      '  const reply = await gw?.send({ messages: [{ role: "system", content: "You are a helpful assistant. Summarise." }, { role: "user", content: text }], model: "anthropic/claude-opus-5.5", maxTokens: 512 })\n' +
+      "  return reply?.text\n" +
+      "}\n",
+    reports: ["FAIL: platform/p1/zzAuditAdhocDirect.ts: imports activeTransport from functions/src/p1/transport"],
+  },
   // PR #129 review, Codex P2 (thread 4368766679): a granted file binding the whole transport and handing a value on.
   {
     name: "F34 R1-003 Codex P2: the granted eval CLI imports the whole transport and re-exports activeTransport()",

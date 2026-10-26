@@ -94,6 +94,14 @@ const AUDIT_T4B_PLATFORM =
 const AUDIT_T4B_FUNCTIONS =
   'import { adhocSend } from "@/platform/p1/zzAuditAdhoc"\nimport { activeTransport } from "./transport"\n' +
   "export const adhoc = (text: string) => adhocSend(activeTransport()!, text)\n"
+/** Same ad-hoc send as T4, but entirely under platform/p1 (the auditor's split-handoff variant). */
+const AUDIT_T4B_PLATFORM_DIRECT =
+  'import { activeTransport } from "@/functions/src/p1/transport"\n\n' +
+  "export async function adhocSummary(text: string): Promise<string | undefined> {\n" +
+  "  const gw = activeTransport()\n" +
+  '  const reply = await gw?.send({ messages: [{ role: "system", content: "You are a helpful assistant. Summarise." }, { role: "user", content: text }], model: "anthropic/claude-opus-5.5", maxTokens: 512 })\n' +
+  "  return reply?.text\n" +
+  "}\n"
 
 const FAILING: Case[] = [
   {
@@ -105,6 +113,11 @@ const FAILING: Case[] = [
     name: "the auditor's T4b: the send in platform/p1, the transport fetched in functions/src",
     files: { "platform/p1/zzAuditAdhoc.ts": AUDIT_T4B_PLATFORM, "functions/src/p1/zzAuditAdhoc2.ts": AUDIT_T4B_FUNCTIONS },
     reports: ["functions/src/p1/zzAuditAdhoc2.ts: imports activeTransport from functions/src/p1/transport"],
+  },
+  {
+    name: "the auditor's T4b (direct): the send and the transport import both in platform/p1",
+    files: { "platform/p1/zzAuditAdhocDirect.ts": AUDIT_T4B_PLATFORM_DIRECT },
+    reports: ["platform/p1/zzAuditAdhocDirect.ts: imports activeTransport from functions/src/p1/transport"],
   },
   {
     name: "a type-only import of P1Transport in platform/",
