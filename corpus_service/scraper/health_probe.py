@@ -54,27 +54,25 @@ def refresh_vault_telemetry(
 
 
 async def refresh_case_count(session_factory: Callable[[], Any]) -> None:
-    from sqlalchemy import func, select
-
-    from scraper.models import CaseLawMaster
-
     async with session_factory() as db:
-        c = await db.execute(select(func.count(CaseLawMaster.id)))
-        _state["total_cases"] = c.scalar()
+        result = await db.execute(text("SELECT count(*) FROM case_law_master"))
+        _state["total_cases"] = result.scalar()
     _state["at"] = time.monotonic()
 
 
 async def readiness_postgres_ok(
     session_factory: Callable[[], Any],
     *,
-    timeout_sec: float = READINESS_DB_TIMEOUT_SEC,
+    timeout_sec: float | None = None,
 ) -> bool:
+    limit = timeout_sec if timeout_sec is not None else READINESS_DB_TIMEOUT_SEC
+
     async def _probe() -> None:
         async with session_factory() as db:
             await db.execute(text("SELECT 1"))
 
     try:
-        await asyncio.wait_for(_probe(), timeout=timeout_sec)
+        await asyncio.wait_for(_probe(), timeout=limit)
         return True
     except Exception:
         logger.warning("health: database readiness probe failed", exc_info=True)

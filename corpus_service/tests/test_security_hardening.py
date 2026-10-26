@@ -203,7 +203,7 @@ class HealthDoesNotLeakErrorsTests(unittest.TestCase):
         def boom():
             raise RuntimeError(f"could not connect to {secret_url}")
 
-        with mock.patch.object(database, "SessionLocal", boom), self.assertLogs("scraper.main", "WARNING"):
+        with mock.patch.object(database, "SessionLocal", boom), self.assertLogs("scraper.health_probe", "WARNING"):
             res = TestClient(app).get("/health")
         self.assertEqual(res.status_code, 503)
         body = res.json()

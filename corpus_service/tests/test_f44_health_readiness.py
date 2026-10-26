@@ -79,7 +79,7 @@ class CorpusHealthF44Tests(unittest.TestCase):
             start = time.monotonic()
             res = TestClient(main.app).get("/health")
             elapsed = time.monotonic() - start
-        self.assertLess(elapsed, 1.0, msg=f"took {elapsed}s")
+        self.assertLess(elapsed, 0.5, msg=f"took {elapsed}s")
         self.assertEqual(res.status_code, 503)
         self.assertEqual(res.json()["status"], "unhealthy")
         self.assertEqual(res.json()["dependencies"], {"postgres": "failed"})

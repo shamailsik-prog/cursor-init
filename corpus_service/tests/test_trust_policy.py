@@ -271,7 +271,8 @@ MASTER_UPDATER_ALLOWLIST = {
     "scraper.tasks.cross_reference": "citation counts on existing master rows",
 }
 MASTER_READ_ONLY_ALLOWLIST = {
-    "scraper.main": "/health counts case_law_master rows",
+    "scraper.main": "/health readiness and telemetry startup (F44)",
+    "scraper.health_probe": "background telemetry refresh reads case_law_master count (F44)",
     # Audit F24: the public routes (scraper.routers.search) and the export (scraper.routers.export)
     # read the master tables only through this published-only helper, so neither router is listed
     # here: a direct CaseLawMaster / StatutesMaster reference in either fails this scan.
