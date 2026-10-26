@@ -148,6 +148,20 @@ def check_sbom(root: Path) -> list[str]:
     return problems
 
 
+def check_e2e_scripts(root: Path) -> list[str]:
+    problems: list[str] = []
+    for rel in (
+        CORPUS / "tests/e2e/store_security_e2e.sh",
+        CORPUS / "tests/e2e/upgrade_e2e.sh",
+    ):
+        text = (root / rel).read_text(encoding="utf-8")
+        if re.search(r"pgvector/pgvector:pg16(?!@)", text):
+            problems.append(f"{rel}: must use digest-pinned pgvector image (runtime_image_pin), not a mutable tag")
+        if re.search(r"(?<![@/])redis:7-alpine(?!@)", text):
+            problems.append(f"{rel}: must use digest-pinned redis image, not a mutable tag")
+    return problems
+
+
 def run(root: Path) -> list[str]:
     problems: list[str] = []
     for path in (REQ, REQ_TEST, REQ_IN, DOCKERFILE, COMPOSE, IMAGE_LOCK, SBOM):
@@ -160,6 +174,7 @@ def run(root: Path) -> list[str]:
     problems.extend(check_dockerfile(root))
     problems.extend(check_compose_images(root))
     problems.extend(check_sbom(root))
+    problems.extend(check_e2e_scripts(root))
     return problems
 
 

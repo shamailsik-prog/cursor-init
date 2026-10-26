@@ -27,8 +27,11 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-f30e2e}
 COMPOSE=(docker compose -f docker-compose.yml -f "$HERE/compose.e2e.yml")
 NET="${COMPOSE_PROJECT_NAME}_data"
 CA_VOL="${COMPOSE_PROJECT_NAME}_tls-ca"
+PGVECTOR_PIN=$(runtime_image_pin pgvector_pg16)
+REDIS_PIN=$(runtime_image_pin redis_7_alpine)
 PG_CLIENT=postgres:16-alpine
-REDIS_CLIENT=redis:7-alpine
+REDIS_CLIENT=$REDIS_PIN
+docker pull -q "$PGVECTOR_PIN" "$REDIS_PIN" >/dev/null
 
 # Secrets go into .env exactly as README/.env.example tell operators (re-audit D1); they are plain
 # shell variables here, never exported, so compose can only get them from .env.
@@ -86,24 +89,27 @@ fi
 
 echo "-- certificates (certs service)"
 ossl() { docker run --rm --network none "$@"; }
-CA_FP=$(ossl -v "$CA_VOL:/ca:ro" --entrypoint openssl pgvector/pgvector:pg16 x509 -in /ca/ca.crt -noout -fingerprint -sha256 2>&1)
+CA_FP=$(ossl -v "$CA_VOL:/ca:ro" --entrypoint openssl "$PGVECTOR_PIN" x509 -in /ca/ca.crt -noout -fingerprint -sha256 2>/dev/null)
 KEYS=$(ossl -v "${COMPOSE_PROJECT_NAME}_tls-postgres:/p:ro" -v "${COMPOSE_PROJECT_NAME}_tls-redis:/r:ro" \
-  --entrypoint stat pgvector/pgvector:pg16 -c '%u:%a' /p/server.key /r/server.key 2>&1 | tr '\n' ' ')
+  --entrypoint stat "$PGVECTOR_PIN" -c '%u:%a' /p/server.key /r/server.key 2>&1 | tr '\n' ' ')
 if [ "$KEYS" = "999:600 999:600 " ]; then
   pass "postgres and redis server keys are 0600 and owned by the store user (uid 999)"
 else
   fail "postgres and redis server keys are 0600 and owned by the store user (uid 999)" "$KEYS"
 fi
-if timeout 120 "${COMPOSE[@]}" run --rm -T certs >/dev/null 2>&1 \
-   && [ "$(ossl -v "$CA_VOL:/ca:ro" --entrypoint openssl pgvector/pgvector:pg16 x509 -in /ca/ca.crt -noout -fingerprint -sha256 2>&1)" = "$CA_FP" ] \
-   && printf '%s' "$CA_FP" | grep -q 'Fingerprint='; then
-  pass "certs service is idempotent (re-run keeps the existing CA)"
+if CERTS_RERUN_OUT=$(timeout 120 "${COMPOSE[@]}" run --rm -T certs 2>&1); then
+  CA_FP_AFTER=$(ossl -v "$CA_VOL:/ca:ro" --entrypoint openssl "$PGVECTOR_PIN" x509 -in /ca/ca.crt -noout -fingerprint -sha256 2>/dev/null)
+  if [ "$CA_FP_AFTER" = "$CA_FP" ] && printf '%s' "$CA_FP" | grep -q 'Fingerprint='; then
+    pass "certs service is idempotent (re-run keeps the existing CA)"
+  else
+    fail "certs service is idempotent (re-run keeps the existing CA)" "fingerprint before=$CA_FP after=$CA_FP_AFTER"
+  fi
 else
-  fail "certs service is idempotent (re-run keeps the existing CA)" "$CA_FP"
+  fail "certs service is idempotent (re-run keeps the existing CA)" "$CERTS_RERUN_OUT"
 fi
 expect_refused "certs service in TLS_CERTS_MODE=external refuses missing material instead of generating" 'refusing' \
   ossl -e TLS_CERTS_MODE=external --tmpfs /tls --tmpfs /var/lib/postgresql/data \
-  -v "$DIR/docker/certs/generate-certs.sh:/generate-certs.sh:ro" --entrypoint /bin/sh pgvector/pgvector:pg16 /generate-certs.sh
+  -v "$DIR/docker/certs/generate-certs.sh:/generate-certs.sh:ro" --entrypoint /bin/sh "$PGVECTOR_PIN" /generate-certs.sh
 
 echo "-- (a)/(b) Postgres TLS"
 APP_CONN="host=postgres port=5432 dbname=legal_scraper user=$APP_DB_USER"
