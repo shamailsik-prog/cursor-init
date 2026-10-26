@@ -30,6 +30,11 @@ export type JobContext<P> = {
   payload: P
   now(): number
   /**
+   * Aborted when the handler exceeds its time budget (`handler_timeout`). Cooperative handlers must
+   * stop work and reject in-flight external calls when this signal aborts (audit F35).
+   */
+  signal: AbortSignal
+  /**
    * Runs `fn(tx)` in a transaction that first re-reads the job and checks the claim's fence
    * (Task 3), then records `stepId` on the job in the same transaction, so a step commits at most
    * once per job: across reclaims, automatic retries and manual requeues (P3-6 amendment). If

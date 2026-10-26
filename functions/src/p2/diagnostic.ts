@@ -1,5 +1,6 @@
 import { FieldValue, type DocumentReference } from "firebase-admin/firestore"
 import { adminDb } from "../admin"
+import { abortableDelay } from "./abortable"
 import { JOB_LEASE_MS } from "./constants"
 import { JobError } from "./errors"
 import type { JobContext, JobHandler, JobResult } from "./registry"
@@ -71,8 +72,8 @@ async function run(ctx: JobContext<DiagnosticPayload>): Promise<JobResult> {
     case "permanent":
       throw new JobError("diag_permanent", { permanent: true })
     case "hang":
-      // Outlasts any handler budget; unref'd so it never holds the process open.
-      await new Promise<void>((resolve) => setTimeout(resolve, JOB_LEASE_MS).unref())
+      // Outlasts any handler budget; aborts when the worker records handler_timeout.
+      await abortableDelay(JOB_LEASE_MS, ctx.signal)
       return {}
   }
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
+import { abortableDelay, handlerTimeoutFromSignal } from "../src/p2/abortable"
 import { assertJobTimings, JOB_STATUSES } from "../src/p2/constants"
 import { diagnosticHandler } from "../src/p2/diagnostic"
 import { canonicalJson, jobIdFor } from "../src/p2/enqueue"
@@ -91,4 +92,13 @@ describe("P2 engine units", () => {
 
   it("JOB_STATUSES are the six P3-3 statuses in order", () =>
     expect(JOB_STATUSES).toEqual(["queued", "running", "failed", "done", "dead_lettered", "cancelled"]))
+
+  it("abortableDelay rejects when the worker abort signal fires (F35)", async () => {
+    const ac = new AbortController()
+    const err = new JobError("handler_timeout")
+    const pending = abortableDelay(60_000, ac.signal)
+    ac.abort(err)
+    await expect(pending).rejects.toBe(err)
+    expect(handlerTimeoutFromSignal(ac.signal).code).toBe("handler_timeout")
+  })
 })
