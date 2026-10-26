@@ -14,6 +14,7 @@ Tables:
 - quarantine_queue
 - quarantine_decisions (audit F23, append-only)
 - corpus_lifecycle_transitions (audit F21, one row per lifecycle move)
+- harvest_operator_state (audit F29, singleton pause flag for scheduled harvest/embedding)
 - embedding_queue
 - embedding_attempts (audit F27, the queue's provider attempt receipts)
 
@@ -954,6 +955,23 @@ class EmbeddingAttempt(Base):
 
     def __repr__(self) -> str:
         return f"<EmbeddingAttempt id={self.id} operation={self.operation_id[:12]} outcome={self.outcome}>"
+
+
+# ---------------------------------------------------------------------------
+# Harvest operator control (audit F29): one durable pause flag for all workers
+# ---------------------------------------------------------------------------
+class HarvestOperatorState(Base):
+    """Singleton row (id ``global``): when ``paused`` is true, scheduled harvest and embedding
+    batches skip before doing work. Written by ``POST /api/stop`` and ``/api/start``."""
+
+    __tablename__ = "harvest_operator_state"
+    __table_args__ = (CheckConstraint("id = 'global'", name="ck_harvest_operator_state_singleton"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 # ---------------------------------------------------------------------------

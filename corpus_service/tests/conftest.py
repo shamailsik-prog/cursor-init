@@ -55,7 +55,7 @@ ANNEX_A_DDL = (
 ORM_TABLES = (
     "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
     "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue", "quarantine_decisions",
-    "embedding_attempts", "corpus_lifecycle_transitions",
+    "embedding_attempts", "corpus_lifecycle_transitions", "harvest_operator_state",
 )
 
 

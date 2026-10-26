@@ -22,16 +22,26 @@ def test_embedding_scheduled_task_checks_harvest_pause():
     root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "tasks" / "embeddings.py"
     tree = ast.parse(root.read_text())
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "process_embedding_queue_task":
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run_embedding_batch":
             body = ast.unparse(ast.Module(body=node.body, type_ignores=[]))
-            assert "harvest_control" in body and "is_paused" in body, body
+            assert "harvest_control" in body and "is_paused_async" in body, body
             return
-    raise AssertionError("process_embedding_queue_task not found")
+    raise AssertionError("run_embedding_batch not found")
 
 
 def test_admin_start_stop_use_harvest_control():
     root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "main.py"
     text = root.read_text()
-    assert "harvest_control.pause()" in text
-    assert "harvest_control.resume()" in text
+    assert "harvest_control.pause_async()" in text
+    assert "harvest_control.resume_async()" in text
     assert "harvest.stopped" not in text
+
+
+def test_harvest_control_is_db_backed_not_file_authoritative():
+    root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
+    text = root.read_text()
+    assert "HarvestOperatorState" in text
+    assert "harvest_operator_state" in text
+    assert "SessionLocal" in text
+    # Legacy file may be adopted once; scheduled work must not treat the file as the source of truth.
+    assert "is_paused_async" in text

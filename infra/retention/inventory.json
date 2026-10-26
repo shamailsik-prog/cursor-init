@@ -389,6 +389,7 @@
     {"id": "postgres:feature_flags", "kind": "postgres", "name": "feature_flags", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "postgres:firm_decisions_register", "kind": "postgres", "name": "firm_decisions_register", "profile": "firm_governance", "key": {"kind": "none"}},
     {"id": "postgres:firm_feature_overrides", "kind": "postgres", "name": "firm_feature_overrides", "profile": "firm_governance", "key": {"kind": "none"}},
+    {"id": "postgres:harvest_operator_state", "kind": "postgres", "name": "harvest_operator_state", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:idempotency_keys", "kind": "postgres", "name": "idempotency_keys", "profile": "operational_ttl", "key": {"kind": "none"}},
     {"id": "postgres:instrument", "kind": "postgres", "name": "instrument", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:judge", "kind": "postgres", "name": "judge", "profile": "public_corpus", "key": {"kind": "none"}},
