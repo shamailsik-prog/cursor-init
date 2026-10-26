@@ -34,10 +34,82 @@ ENTRY_START = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\[[^\]]+\])?==([^\s\\#]+)",
     re.M,
 )
+ENTRY_LINE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\[[^\]]+\])?==([^\s\\#]+)",
+)
+SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$", re.I)
+HASH_IN_LINE = re.compile(r"--hash=sha256:([0-9a-fA-F]*)", re.I)
+FROM_DIGEST = re.compile(r"@sha256:([0-9a-fA-F]+)", re.I)
+IMAGE_DIGEST_SUFFIX = re.compile(r"@sha256:([0-9a-fA-F]+)")
 
 
 def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _digest_problems(label: str, digest: str) -> list[str]:
+    if not SHA256_DIGEST.match(digest):
+        hex_part = digest.split(":", 1)[-1] if ":" in digest else digest
+        problems = [f"{label}: digest must match sha256:[0-9a-f]{{64}} (got {len(hex_part)} hex chars)"]
+        return problems
+    return []
+
+
+def check_requirement_lines(rel: Path, text: str) -> list[str]:
+    """Reject unpinned specs (>=, bare names) and malformed hash lines."""
+    problems: list[str] = []
+    label = str(rel)
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if raw[0] in " \t" and "--hash=" in raw:
+            for m in HASH_IN_LINE.finditer(raw):
+                if len(m.group(1)) != 64:
+                    problems.append(f"{label}:{lineno}: --hash=sha256 must be 64 hex chars")
+            continue
+        if stripped.startswith("--hash="):
+            for m in HASH_IN_LINE.finditer(stripped):
+                if len(m.group(1)) != 64:
+                    problems.append(f"{label}:{lineno}: --hash=sha256 must be 64 hex chars")
+            continue
+        if ENTRY_LINE.match(stripped):
+            for m in HASH_IN_LINE.finditer(raw):
+                if len(m.group(1)) != 64:
+                    problems.append(f"{label}:{lineno}: --hash=sha256 must be 64 hex chars")
+            continue
+        if re.match(r"^[A-Za-z0-9\[]", stripped):
+            problems.append(
+                f"{label}:{lineno}: requirement must be name==version with sha256 hashes "
+                f"(unpinned or invalid spec: {stripped[:100]!r})"
+            )
+    return problems
+
+
+def check_image_lock(root: Path) -> list[str]:
+    lock = json.loads((root / IMAGE_LOCK).read_text(encoding="utf-8"))
+    problems: list[str] = []
+    for key, meta in lock.get("images", {}).items():
+        digest = meta.get("digest", "")
+        problems.extend(_digest_problems(f"{IMAGE_LOCK} images.{key}", digest))
+    return problems
+
+
+def check_sbom_base_image(root: Path) -> list[str]:
+    doc = json.loads((root / SBOM).read_text(encoding="utf-8"))
+    base = doc.get("base_image", "")
+    problems: list[str] = []
+    m = IMAGE_DIGEST_SUFFIX.search(base)
+    if not m:
+        problems.append(f"{SBOM}: base_image must include @sha256:… digest")
+        return problems
+    digest = f"sha256:{m.group(1).lower()}"
+    problems.extend(_digest_problems(f"{SBOM} base_image", digest))
+    lock = json.loads((root / IMAGE_LOCK).read_text(encoding="utf-8"))
+    expected = lock["images"]["python_base"]["digest"]
+    if digest != expected.lower():
+        problems.append(f"{SBOM}: base_image digest must match {IMAGE_LOCK} python_base ({expected})")
+    return problems
 
 
 def parse_locked_requirements(text: str) -> tuple[dict[str, str], list[str]]:
@@ -54,9 +126,14 @@ def parse_locked_requirements(text: str) -> tuple[dict[str, str], list[str]]:
         name, ver = _normalize(m.group(1)), m.group(2)
         if "--hash=sha256:" not in block:
             problems.append(f"{name}=={ver} has no --hash=sha256 lines")
-        elif name in versions and versions[name] != ver:
-            problems.append(f"{name} pinned twice with different versions ({versions[name]!r} vs {ver!r})")
         else:
+            for hm in HASH_IN_LINE.finditer(block):
+                if len(hm.group(1)) != 64:
+                    problems.append(f"{name}=={ver} has malformed --hash=sha256 (need 64 hex chars)")
+                    break
+        if name in versions and versions[name] != ver:
+            problems.append(f"{name} pinned twice with different versions ({versions[name]!r} vs {ver!r})")
+        elif "--hash=sha256:" in block:
             versions[name] = ver
     return versions, problems
 
@@ -71,6 +148,7 @@ def check_requirements_txt(root: Path) -> list[str]:
         problems.append(f"{REQ_IN}: missing (source manifest for pip-compile)")
     versions, inner = parse_locked_requirements(text)
     problems.extend(f"{REQ}: {p}" for p in inner)
+    problems.extend(check_requirement_lines(REQ, text))
     if not versions:
         problems.append(f"{REQ}: no pinned packages found")
     return problems
@@ -90,6 +168,7 @@ def check_test_superset(root: Path) -> list[str]:
             )
     if "pytest" not in test:
         problems.append(f"{REQ_TEST}: pytest must be in the test lockfile")
+    problems.extend(check_requirement_lines(REQ_TEST, test_text))
     return problems
 
 
@@ -98,6 +177,15 @@ def check_dockerfile(root: Path) -> list[str]:
     problems: list[str] = []
     lock = json.loads((root / IMAGE_LOCK).read_text(encoding="utf-8"))
     digest = lock["images"]["python_base"]["digest"]
+    problems.extend(_digest_problems(f"{IMAGE_LOCK} python_base", digest))
+    from_m = FROM_DIGEST.search(text)
+    if not from_m:
+        problems.append(f"{DOCKERFILE}: FROM must pin python base with @sha256:…")
+    else:
+        from_digest = f"sha256:{from_m.group(1).lower()}"
+        problems.extend(_digest_problems(f"{DOCKERFILE} FROM", from_digest))
+        if from_digest != digest.lower():
+            problems.append(f"{DOCKERFILE}: FROM digest must match {IMAGE_LOCK} python_base ({digest})")
     if digest not in text:
         problems.append(f"{DOCKERFILE}: base image must include digest {digest}")
     if "--require-hashes" not in text:
@@ -133,6 +221,10 @@ def check_compose_images(root: Path) -> list[str]:
         problems.append(f"{COMPOSE}: mutable tag pgvector/pgvector:pg16 still present")
     if mutable_redis:
         problems.append(f"{COMPOSE}: mutable tag redis:7-alpine still present")
+    for ref in refs:
+        dm = IMAGE_DIGEST_SUFFIX.search(ref)
+        if dm:
+            problems.extend(_digest_problems(f"{COMPOSE} image {ref}", f"sha256:{dm.group(1).lower()}"))
     return problems
 
 
@@ -169,11 +261,13 @@ def run(root: Path) -> list[str]:
             problems.append(f"missing {path}")
     if problems:
         return problems
+    problems.extend(check_image_lock(root))
     problems.extend(check_requirements_txt(root))
     problems.extend(check_test_superset(root))
     problems.extend(check_dockerfile(root))
     problems.extend(check_compose_images(root))
     problems.extend(check_sbom(root))
+    problems.extend(check_sbom_base_image(root))
     problems.extend(check_e2e_scripts(root))
     return problems
 

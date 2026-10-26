@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:e8a38829209aea82774882e5157e1c3e8c8393ff53a697b3580896e57f345c
+FROM python:3.12-slim@sha256:5b8b1421ccb6a525860a77863c049eab5847076cda34e030c75a80c58faf3f3c
 WORKDIR /app
 RUN apt-get update && apt-get install -y tesseract-ocr libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .

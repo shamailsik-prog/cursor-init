@@ -4,7 +4,7 @@
   "images": {
     "python_base": {
       "reference": "docker.io/library/python:3.12-slim",
-      "digest": "sha256:e8a38829209aea82774882e5157e1c3e8c8393ff53a697b3580896e57f345c"
+      "digest": "sha256:5b8b1421ccb6a525860a77863c049eab5847076cda34e030c75a80c58faf3f3c"
     },
     "pgvector_pg16": {
       "reference": "docker.io/pgvector/pgvector:pg16",
