@@ -37,6 +37,7 @@ class PlantedMismatch(unittest.TestCase):
             "app/api/d1/documents/route.ts",
             "docs/deploy/RELEASE_RUNBOOK.md",
             "postgres/ddl/005_research_reader.sql",
+            "postgres/ddl/006_research_terms.sql",
             "corpus_service/docker/postgres/provision-roles.sh",
             "services/d5-1/researchCorpus.ts",
             "platform/corpus/pgResearchCorpus.ts",

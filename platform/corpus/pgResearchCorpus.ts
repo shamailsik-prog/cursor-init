@@ -1,7 +1,7 @@
 /**
  * The research corpus reader (audit FA-D5-003, closes FA-D2WA-001; spec R2, R6-R12): D5 research's view of the firm's
  * published Annex A corpus on Postgres, for the court-ops core in the Next process. It reads only six relations, as a
- * login that is a member of `corpus_research_reader` (005) and, for CONNECT only, `corpus_clients`, and of nothing else:
+ * login that is a member of `corpus_research_reader` (005, 006) and, for CONNECT only, `corpus_clients`, and of nothing else:
  * - `v_research_judgment` and `v_research_embedding` (005): the judgments and vectors visible under 004's rule
  *   (promoted, a bench, public, a finished publication, complete provenance);
  * - `v_authority_citation`, `v_authority_treatment`, `v_authority_pending_adverse` (004): their citations, overrulings and
@@ -26,17 +26,24 @@ import { verdictFromTreatments, type Bench, type CitationVerdict, type Treatment
 import { CorpusUnavailableError, type CorpusUnavailableReason } from "@/services/d5-1/corpusUnavailable"
 import {
   EMBEDDING_DIM,
+  parseResearchEmbedding,
+  rankResearchCorpus,
+  type PreparedResearchQuery,
   type ResearchCorpus,
   type ResearchCorpusMeta,
   type ResearchDocument,
   type ResearchLoadPlan,
+  type ResearchResult,
   type ResearchSource,
+  type ResearchWholeCorpusIdf,
 } from "@/services/d5-1/research"
 
 /** Row caps (R9): judgments (their citations aggregated per judgment), overruling and pending rows, vectors. */
 export const RESEARCH_MAX_JUDGMENTS = 20_000
 export const RESEARCH_MAX_TREATMENTS = 20_000
 export const RESEARCH_MAX_VECTORS = 5_000
+/** Keyword candidate cap (FA-D5-003-R1-001): any query term may match; prefer higher term coverage, then rank in memory. */
+export const RESEARCH_MAX_CANDIDATES = 10_000
 /** Distinct (model, dimension) pairs a sane corpus can hold; more breaks the contract. */
 const MAX_VECTOR_SHAPES = 100
 /** Pool and timing (R9), as the F05 reader's. */
@@ -50,7 +57,7 @@ export const FUTURE_SKEW_MS = 5 * 60 * 1000
 export const PUBLICATION_CONTRACT = "1"
 export const APPLICATION_NAME = "sikander-d5-research"
 
-/** The six relations the research login may read, and nothing else (R2, R11). */
+/** The eight relations the research login may read, and nothing else (R2, R11; 006 adds the term index). */
 export const RESEARCH_READABLE: readonly string[] = [
   "v_research_judgment",
   "v_research_embedding",
@@ -58,6 +65,8 @@ export const RESEARCH_READABLE: readonly string[] = [
   "v_authority_treatment",
   "v_authority_pending_adverse",
   "corpus_metadata",
+  "corpus_research_term",
+  "corpus_research_term_df",
 ]
 
 const BENCHES: ReadonlySet<string> = new Set<Bench>(["single", "division", "full", "larger"])
@@ -199,6 +208,42 @@ const VECTORS_SQL = `SELECT judgment_id::text AS id, embedding::text AS v
  WHERE model = $1
  ORDER BY judgment_id
  LIMIT $2`
+const TERM_DF_SQL = `SELECT term, doc_freq FROM public.corpus_research_term_df ORDER BY term COLLATE "C"`
+const JUDGMENT_COUNT_SQL = `SELECT value FROM public.corpus_metadata WHERE key = 'research_judgment_count'`
+const CANDIDATES_SQL = `SELECT t.judgment_id::text AS id
+  FROM public.corpus_research_term t
+ WHERE t.term = ANY ($1::text[])
+ GROUP BY t.judgment_id
+ ORDER BY count(DISTINCT t.term) DESC, t.judgment_id
+ LIMIT $2`
+const DOCUMENTS_BY_ID_SQL = `SELECT j.judgment_id::text AS id, j.case_title AS title, j.bench_type,
+       coalesce(array_agg(c.citation_text ORDER BY c.citation_text COLLATE "C") FILTER (WHERE c.citation_text IS NOT NULL),
+                '{}'::text[]) AS citations
+  FROM public.v_research_judgment j
+  LEFT JOIN public.v_authority_citation c ON c.judgment_id = j.judgment_id
+ WHERE j.judgment_id = ANY ($1::uuid[])
+ GROUP BY j.judgment_id, j.case_title, j.bench_type
+ ORDER BY j.judgment_id`
+const VECTORS_BY_ID_SQL = `SELECT judgment_id::text AS id, embedding::text AS v
+  FROM public.v_research_embedding
+ WHERE model = $1 AND judgment_id = ANY ($2::uuid[])`
+const TREATMENTS_FOR_IDS_SQL = `SELECT k, treated, recorded, treating FROM (
+  SELECT 'pending' AS k, treated_judgment_id::text AS treated, NULL::text AS recorded, NULL::text AS treating
+    FROM public.v_authority_pending_adverse
+   WHERE treated_judgment_id = ANY ($1::uuid[])
+  UNION ALL
+  SELECT 'overruled', treated_judgment_id::text, treating_bench_type, treating_judgment_bench
+    FROM public.v_authority_treatment
+   WHERE treatment = 'overruled' AND treated_judgment_id = ANY ($1::uuid[])) t`
+
+type CorpusIdfCache = { refreshKey: string; idf: ResearchWholeCorpusIdf }
+let corpusIdfCache: CorpusIdfCache | null = null
+
+/** Test-only: drop the per-process whole-corpus IDF cache. */
+export function resetResearchCorpusIdfCacheForTests(): void {
+  if (process.env.NODE_ENV === "production") throw new Error("resetResearchCorpusIdfCacheForTests is test-only")
+  corpusIdfCache = null
+}
 
 /**
  * The Module 33 verdicts of the published corpus (R7): each judgment's overrulings, with the treating judgment's bench
@@ -276,6 +321,78 @@ export class PgResearchCorpus implements ResearchSource {
     await this.pool.end()
   }
 
+  async searchPrepared(prepared: PreparedResearchQuery): Promise<ResearchResult> {
+    const terms = prepared.text?.terms
+    if (!terms?.length) throw unavailable("contract_missing")
+    let client: pg.PoolClient | undefined
+    try {
+      client = await this.pool.connect()
+    } catch (e) {
+      throw unavailable(driverReason(e))
+    }
+    let committed = false
+    try {
+      await this.run(client, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", [])
+      await this.checkRole(client)
+      const meta = await this.checkMetadata(client)
+      const refresh = (await this.run(client, `SELECT value FROM public.corpus_metadata WHERE key = 'last_refresh'`, [])).rows[0] as
+        | { value: unknown }
+        | undefined
+      if (typeof refresh?.value !== "string") throw unavailable("contract_missing")
+      const unitQuery =
+        prepared.embedding === undefined ? null : parseResearchEmbedding(meta.embeddingModel, prepared.embedding)
+      if (!(await this.termIndexWarm(client))) {
+        await this.run(client, "ROLLBACK", [])
+        committed = true
+        client.release()
+        client = undefined
+        const corpus = await this.load((m) => ({ vectors: unitQuery !== null }))
+        if (unitQuery !== null && corpus.embeddingModel !== meta.embeddingModel) {
+          throw new Error("search refuses: embedding_model mismatch")
+        }
+        return rankResearchCorpus(corpus, prepared, unitQuery)
+      }
+      const wholeCorpusIdf = await this.wholeCorpusIdf(client, refresh.value)
+      const candidateRows = (await this.run(client, CANDIDATES_SQL, [terms, RESEARCH_MAX_CANDIDATES])).rows as Array<{
+        id: unknown
+      }>
+      const candidateIds = candidateRows.map((r) => {
+        if (typeof r.id !== "string" || !UUID.test(r.id)) throw unavailable("inconsistent")
+        return r.id
+      })
+      const { documents, benchById } = await this.documentsByIds(client, candidateIds)
+      const storedVectors = await this.vectorShapes(client)
+      const vectors = unitQuery ? await this.vectorsByIds(client, meta.embeddingModel, candidateIds) : null
+      const interim = rankResearchCorpus(
+        {
+          ...meta,
+          documents,
+          storedVectors,
+          vectors,
+          wholeCorpusIdf,
+          verdicts: () => new Map(),
+        },
+        prepared,
+        unitQuery
+      )
+      const verdicts = await this.verdictsForIds(client, benchById, interim.items.map((h) => h.entityId))
+      await this.run(client, "COMMIT", [])
+      committed = true
+      return {
+        ...interim,
+        items: interim.items.map((hit) => ({
+          ...hit,
+          treatment: verdicts.get(hit.entityId) ?? "UNVERIFIED",
+        })),
+      }
+    } finally {
+      if (client) {
+        if (!committed) await client.query("ROLLBACK").catch(() => undefined)
+        client.release(committed ? undefined : true)
+      }
+    }
+  }
+
   async load(plan: ResearchLoadPlan): Promise<ResearchCorpus> {
     let client: pg.PoolClient
     try {
@@ -348,6 +465,108 @@ export class PgResearchCorpus implements ResearchSource {
     if (refreshed - wall > FUTURE_SKEW_MS || wall - refreshed > this.maxStalenessMs) throw unavailable("stale")
     if (typeof meta.embedding_model !== "string" || typeof meta.embedding_dim !== "string") throw unavailable("contract_missing")
     return { embeddingModel: meta.embedding_model, embeddingDim: meta.embedding_dim }
+  }
+
+  /** True when a finished publication has stamped the term index (006 cold-start: missing until first refresh). */
+  private async termIndexWarm(client: pg.PoolClient): Promise<boolean> {
+    const countRow = (await this.run(client, JUDGMENT_COUNT_SQL, [])).rows[0] as { value: unknown } | undefined
+    if (typeof countRow?.value !== "string") return false
+    const judgmentCount = Number(countRow.value)
+    if (!Number.isSafeInteger(judgmentCount) || judgmentCount < 0) return false
+    if (judgmentCount === 0) return true
+    const probe = await this.run(client, `SELECT 1 AS n FROM public.corpus_research_term_df LIMIT 1`, [])
+    return probe.rows.length > 0
+  }
+
+  private async wholeCorpusIdf(client: pg.PoolClient, refreshKey: string): Promise<ResearchWholeCorpusIdf> {
+    if (corpusIdfCache?.refreshKey === refreshKey) return corpusIdfCache.idf
+    const dfRows = (await this.run(client, TERM_DF_SQL, [])).rows as Array<{ term: unknown; doc_freq: unknown }>
+    const countRow = (await this.run(client, JUDGMENT_COUNT_SQL, [])).rows[0] as { value: unknown } | undefined
+    const judgmentCount = Number(countRow?.value)
+    if (!Number.isSafeInteger(judgmentCount) || judgmentCount < 0) throw unavailable("contract_missing")
+    const docFreq = new Map<string, number>()
+    for (const r of dfRows) {
+      if (typeof r.term !== "string" || typeof r.doc_freq !== "number") throw unavailable("inconsistent")
+      docFreq.set(r.term, r.doc_freq)
+    }
+    const idf = { judgmentCount, docFreq }
+    corpusIdfCache = { refreshKey, idf }
+    return idf
+  }
+
+  private async documentsByIds(
+    client: pg.PoolClient,
+    ids: readonly string[]
+  ): Promise<{ documents: ResearchDocument[]; benchById: Map<string, Bench> }> {
+    if (ids.length === 0) return { documents: [], benchById: new Map() }
+    const rows = (await this.run(client, DOCUMENTS_BY_ID_SQL, [ids])).rows as Array<{
+      id: unknown
+      title: unknown
+      bench_type: unknown
+      citations: unknown
+    }>
+    const benchById = new Map<string, Bench>()
+    const documents = rows.map((r): ResearchDocument => {
+      if (
+        typeof r.id !== "string" ||
+        !UUID.test(r.id) ||
+        (r.title !== null && typeof r.title !== "string") ||
+        !isBench(r.bench_type) ||
+        !Array.isArray(r.citations) ||
+        !r.citations.every((c) => typeof c === "string")
+      ) {
+        throw unavailable("inconsistent")
+      }
+      benchById.set(r.id, r.bench_type)
+      return { id: r.id, title: r.title ?? "", citations: r.citations as string[], benchType: r.bench_type }
+    })
+    return { documents, benchById }
+  }
+
+  private async vectorsByIds(client: pg.PoolClient, model: string, ids: readonly string[]): Promise<Map<string, readonly number[]>> {
+    if (ids.length === 0) return new Map()
+    const rows = (await this.run(client, VECTORS_BY_ID_SQL, [model, ids])).rows as Array<{ id: unknown; v: unknown }>
+    const out = new Map<string, readonly number[]>()
+    for (const r of rows) {
+      if (typeof r.id !== "string" || typeof r.v !== "string") throw unavailable("inconsistent")
+      let vector: unknown
+      try {
+        vector = JSON.parse(r.v)
+      } catch {
+        throw unavailable("inconsistent")
+      }
+      if (!Array.isArray(vector) || vector.length !== EMBEDDING_DIM || !vector.every((x) => typeof x === "number")) {
+        throw unavailable("inconsistent")
+      }
+      out.set(r.id, vector as number[])
+    }
+    return out
+  }
+
+  private async verdictsForIds(
+    client: pg.PoolClient,
+    benchById: ReadonlyMap<string, Bench>,
+    ids: readonly string[]
+  ): Promise<ReadonlyMap<string, CitationVerdict>> {
+    if (ids.length === 0) return new Map()
+    const rows = (await this.run(client, TREATMENTS_FOR_IDS_SQL, [ids])).rows as Array<{
+      k: unknown
+      treated: unknown
+      recorded: unknown
+      treating: unknown
+    }>
+    const pending = new Set<string>()
+    const overrulings: { treatedId: string; recordedBench: Bench; treatingBench: Bench }[] = []
+    for (const r of rows) {
+      if (typeof r.treated !== "string") throw unavailable("inconsistent")
+      if (r.k === "pending") {
+        pending.add(r.treated)
+        continue
+      }
+      if (r.k !== "overruled" || !isBench(r.recorded) || !isBench(r.treating)) throw unavailable("inconsistent")
+      overrulings.push({ treatedId: r.treated, recordedBench: r.recorded, treatingBench: r.treating })
+    }
+    return researchVerdicts(benchById, overrulings, pending)(ids)
   }
 
   private async documents(client: pg.PoolClient): Promise<{ documents: ResearchDocument[]; benchById: Map<string, Bench> }> {

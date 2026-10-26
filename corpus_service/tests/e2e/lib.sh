@@ -194,7 +194,7 @@ annex_a_checks() {
   local p=$1 roles="(values ('$APP_DB_USER'), ('$MIGRATE_DB_USER')) u(n)"
   expect_out "$p: server is PostgreSQL 16 (pgvector/pgvector:pg16)" '^16$' \
     as_superuser_local "select current_setting('server_version_num')::int / 10000"
-  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 35 relations, 004's four and 005's two views included)" '^35$' \
+  expect_out "$p: Annex A is applied (corpus_contract_relations() lists all 37 relations, 004's four, 005's two views and 006's two term tables included)" '^37$' \
     as_superuser_local "select count(*) from public.corpus_contract_relations()"
   # Audit F05 (004), independent of the inventory function: the authority views exist, belong to the bootstrap
   # superuser, and neither application role, corpus_clients nor PUBLIC holds any privilege on them.
@@ -210,7 +210,7 @@ annex_a_checks() {
     as_superuser_local "select count(*) filter (where t.tgenabled = 'O') || '/' || count(*) from pg_trigger t
       join pg_class c on c.oid = t.tgrelid
       where not t.tgisinternal and t.tgname = c.relname || '_publication_guard' and c.relnamespace = 'public'::regnamespace"
-  expect_out "$p: corpus_contract_routines() lists the 12 Annex A routines" '^12$' \
+  expect_out "$p: corpus_contract_routines() lists the 14 Annex A routines" '^14$' \
     as_superuser_local "select count(*) from public.corpus_contract_routines()"
   expect_out "$p: every Annex A relation and routine is owned by the bootstrap superuser" '^0$' \
     as_superuser_local "select (select count(*) from public.corpus_contract_relations() r join pg_class c on c.oid = r

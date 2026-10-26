@@ -51,6 +51,7 @@ from scraper.publication.batch import (
     entity_sha256,
 )
 from scraper.publication.citations import CitationError, CitationParts, build_canonical, is_canonical, parse_parts, ts_court
+from scraper.publication.research_terms import refresh_research_terms
 from scraper.trust import publication_decision
 
 logger = logging.getLogger(__name__)
@@ -766,6 +767,7 @@ async def publish_batch(conn: AsyncConnection, batch: PublicationBatch, actor_id
         seq = (await conn.execute(text(
             "SELECT public.corpus_publication_finish(:pid, CAST(:counts AS jsonb))"
         ), {"pid": publication_id, "counts": canonical_json(counts).decode("utf-8")})).scalar()
+        await refresh_research_terms(conn)
     except DBAPIError as exc:
         code, _token = _pg_error(exc)
         if code in _STATE_ERRORS:

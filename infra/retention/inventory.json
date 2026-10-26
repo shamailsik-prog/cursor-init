@@ -376,6 +376,8 @@
     {"id": "postgres:corpus_embeddings", "kind": "postgres", "name": "corpus_embeddings", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:corpus_lifecycle_transitions", "kind": "postgres", "name": "corpus_lifecycle_transitions", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:corpus_metadata", "kind": "postgres", "name": "corpus_metadata", "profile": "public_corpus", "key": {"kind": "none"}},
+    {"id": "postgres:corpus_research_term", "kind": "postgres", "name": "corpus_research_term", "profile": "public_corpus", "key": {"kind": "none"}},
+    {"id": "postgres:corpus_research_term_df", "kind": "postgres", "name": "corpus_research_term_df", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:corpus_publication", "kind": "postgres", "name": "corpus_publication", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:corpus_publication_grant", "kind": "postgres", "name": "corpus_publication_grant", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:corpus_publication_item", "kind": "postgres", "name": "corpus_publication_item", "profile": "public_corpus", "key": {"kind": "none"}},

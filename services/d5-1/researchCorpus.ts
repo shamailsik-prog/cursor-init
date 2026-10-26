@@ -46,17 +46,19 @@ export function noteCorpusUnavailable(reason: CorpusUnavailableReason, now: numb
 
 /** Logs a corpus failure (throttled) and passes every error on unchanged. */
 function logged(source: ResearchSource): ResearchSource {
-  return {
-    async load(plan: ResearchLoadPlan) {
-      try {
-        return await source.load(plan)
-      } catch (err) {
-        if (err instanceof CorpusUnavailableError && noteCorpusUnavailable(err.reason)) {
-          console.warn(UNAVAILABLE_LOG_EVENT, { reason: err.reason })
-        }
-        throw err
+  const wrap = async <T>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn()
+    } catch (err) {
+      if (err instanceof CorpusUnavailableError && noteCorpusUnavailable(err.reason)) {
+        console.warn(UNAVAILABLE_LOG_EVENT, { reason: err.reason })
       }
-    },
+      throw err
+    }
+  }
+  return {
+    load: (plan) => wrap(() => source.load(plan)),
+    searchPrepared: source.searchPrepared ? (prepared) => wrap(() => source.searchPrepared!(prepared)) : undefined,
   }
 }
 
@@ -96,7 +98,14 @@ function postgresSource(config: CorpusReaderConfig): ResearchSource {
     if (previous) void previous.source.then((s) => s.end()).catch(() => undefined)
   }
   const current = pgSource.source
-  return logged({ load: async (plan) => (await current).load(plan) })
+  return logged({
+    load: async (plan) => (await current).load(plan),
+    searchPrepared: async (prepared) => {
+      const store = await current
+      if (!store.searchPrepared) throw new Error("research: postgres source missing searchPrepared")
+      return store.searchPrepared(prepared)
+    },
+  })
 }
 
 function hostedRuntime(env: Record<string, string | undefined>): boolean {
