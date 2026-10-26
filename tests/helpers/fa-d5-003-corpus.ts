@@ -307,6 +307,12 @@ export async function bulkInsertVisibleJudgments(admin: pg.Client, count: number
       [marker, sourceId, publicationId, start, end]
     )
   }
+  await admin.query(
+    `INSERT INTO corpus_metadata (key, value, updated_at) VALUES
+       ('publication_contract', '1', now()),
+       ('last_refresh', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`
+  )
 }
 
 export async function insertEmbeddings(admin: pg.Client, ids: readonly string[], model = LIVE_MODEL, rank = 0): Promise<void> {
