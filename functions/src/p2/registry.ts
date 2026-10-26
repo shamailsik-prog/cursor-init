@@ -30,8 +30,9 @@ export type JobContext<P> = {
   payload: P
   now(): number
   /**
-   * Aborted when the handler exceeds its time budget (`handler_timeout`). Cooperative handlers must
-   * stop work and reject in-flight external calls when this signal aborts (audit F35).
+   * Aborted when the handler exceeds its time budget (`handler_timeout`) or when this worker's claim
+   * loses its lease fence (`LeaseLostError` on reclaim/overwrite). Cooperative handlers must stop work
+   * and reject in-flight external calls when this signal aborts (audit F35).
    */
   signal: AbortSignal
   /**

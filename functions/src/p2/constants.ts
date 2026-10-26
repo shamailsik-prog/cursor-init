@@ -24,6 +24,8 @@ export const JOB_LEASE_MS = 600_000
 export const JOB_WORKER_TIMEOUT_SECONDS = 300
 /** The handler's time budget inside one attempt (P3-6). */
 export const JOB_HANDLER_BUDGET_MS = 240_000
+/** How often the worker re-reads the job row while a handler runs to detect lease loss (audit F35 R1). */
+export const JOB_LEASE_WATCH_POLL_MS = 500
 /** The sweeper re-dispatches only rows due, and last dispatched, this long ago (P3-8). */
 export const DISPATCH_GRACE_MS = 30_000
 /** A delivery up to this early still runs (P3-6, P3-8). */
