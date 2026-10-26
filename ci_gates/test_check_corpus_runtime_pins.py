@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,9 +12,17 @@ from pathlib import Path
 from check_corpus_runtime_pins import run
 
 
+def _shipped_tree_root() -> Path:
+    for key in ("GITHUB_WORKSPACE", "SIKANDER_GATE_TOOL_ROOT", "WORKSPACE_ROOT"):
+        raw = os.environ.get(key)
+        if raw:
+            return Path(raw).resolve()
+    return Path(__file__).resolve().parents[1]
+
+
 class CorpusRuntimePinsGuardTest(unittest.TestCase):
     def test_shipped_repo_passes(self):
-        root = Path(__file__).resolve().parents[1]
+        root = _shipped_tree_root()
         self.assertEqual(run(root), [])
 
     def test_unpinned_requirements_fail(self):
@@ -52,6 +61,15 @@ class CorpusRuntimePinsGuardTest(unittest.TestCase):
             (corpus / "runtime-sbom.json").write_text(
                 json.dumps({"parsers_and_media": {}, "data_stack": {}}), encoding="utf-8"
             )
+            e2e = corpus / "tests" / "e2e"
+            e2e.mkdir(parents=True)
+            pg_ref = f"pgvector/pgvector:pg16@sha256:{('c' * 64)}"
+            redis_ref = f"redis:7-alpine@sha256:{('d' * 64)}"
+            for name in ("store_security_e2e.sh", "upgrade_e2e.sh"):
+                (e2e / name).write_text(
+                    f'PG_IMAGE="{pg_ref}"\nREDIS_IMAGE="{redis_ref}"\n',
+                    encoding="utf-8",
+                )
             problems = run(root)
             self.assertTrue(problems, problems)
 
