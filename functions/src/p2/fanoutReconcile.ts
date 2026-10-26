@@ -33,6 +33,21 @@ async function writeCursor(db: Firestore, cursor: string | null): Promise<void> 
   await cursorRef(db).set({ cursor, updatedAt: Date.now() }, { merge: true })
 }
 
+/** Repairs one event when a production subscriber lacks a delivery row; idempotent. */
+export async function repairFanoutForEvent(
+  eventId: string,
+  data: DocumentData,
+  deps: Pick<JobDeps, "clock">
+): Promise<boolean> {
+  const targets = subscribersForEventData(data)
+  if (targets.length === 0) return false
+  if (await fanoutDeliveriesComplete(eventId, targets)) return false
+  const outcome = await fanOutEvent(eventId, data, deps)
+  if (outcome.created.length + outcome.reused.length > 0) return true
+  logger.warn("event.fanout_reconcile_skipped", { eventId })
+  return false
+}
+
 function subscribersForEventData(data: DocumentData | undefined): { subscriberId: string }[] {
   const name = data?.name
   if (typeof name !== "string") return []
@@ -62,11 +77,7 @@ export async function reconcileEventFanout(deps: Pick<JobDeps, "clock">): Promis
     if (!isSafeDocId(firmId)) continue
     const targets = subscribersForEventData(data)
     if (targets.length === 0) continue
-    const complete = await fanoutDeliveriesComplete(doc.id, targets)
-    if (complete) continue
-    const outcome = await fanOutEvent(doc.id, data, deps)
-    if (outcome.created.length + outcome.reused.length > 0) repaired += 1
-    else logger.warn("event.fanout_reconcile_skipped", { eventId: doc.id })
+    if (await repairFanoutForEvent(doc.id, data, deps)) repaired += 1
   }
 
   const lastId = page.docs[page.docs.length - 1].id

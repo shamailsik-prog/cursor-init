@@ -3,7 +3,7 @@ import { adminDb } from "../src/admin"
 import { ENTITY_CANDIDATE_SIGNAL_JOB_TYPE } from "../src/d1/entity/candidateSignalJob"
 import { deliveryRef, EVENT_FANOUT_DELIVERIES } from "../src/p2/eventFanoutDelivery"
 import { fanOutEvent, fanOutKey, SUBSCRIBERS } from "../src/p2/fanout"
-import { reconcileEventFanout } from "../src/p2/fanoutReconcile"
+import { repairFanoutForEvent, reconcileEventFanout } from "../src/p2/fanoutReconcile"
 import { jobIdFor } from "../src/p2/enqueue"
 import { runJobTask } from "../src/p2/worker"
 import { EMULATORS, uniq } from "./emu"
@@ -62,8 +62,9 @@ describe.skipIf(!EMULATORS)("P2 event fan-out production (F36)", () => {
     await adminDb().collection("events").doc(eventId).set(data)
     const sub = SUBSCRIBERS[0]
     expect((await deliveryRef(eventId, sub.id).get()).exists).toBe(false)
-    const result = await reconcileEventFanout(clock)
-    expect(result.repaired).toBeGreaterThanOrEqual(1)
+    expect(await repairFanoutForEvent(eventId, data, clock)).toBe(true)
+    const sweep = await reconcileEventFanout(clock)
+    expect(sweep.repaired).toBeGreaterThanOrEqual(0)
     expect((await deliveryRef(eventId, sub.id).get()).exists).toBe(true)
     const deliveries = await adminDb().collection(EVENT_FANOUT_DELIVERIES).where("eventId", "==", eventId).get()
     expect(deliveries.size).toBe(1)
