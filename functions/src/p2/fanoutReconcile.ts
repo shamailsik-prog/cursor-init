@@ -33,10 +33,10 @@ async function writeCursor(db: Firestore, cursor: string | null): Promise<void> 
   await cursorRef(db).set({ cursor, updatedAt: Date.now() }, { merge: true })
 }
 
-function subscribersForEventData(data: DocumentData | undefined): { id: string }[] {
+function subscribersForEventData(data: DocumentData | undefined): { subscriberId: string }[] {
   const name = data?.name
   if (typeof name !== "string") return []
-  return productionSubscribersForEvent(name).map((s) => ({ id: s.id }))
+  return productionSubscribersForEvent(name).map((s) => ({ subscriberId: s.id }))
 }
 
 /**
