@@ -17,7 +17,7 @@ consumed review and CI attention while `LEGACY_GOVERNANCE_CHAINS` stays off.
 | State | Evidence | Result |
 | --- | --- | --- |
 | RED | PR #147 @ `0ac8d9e3`–`4b5e91d5`: `.github/codeql/codeql-config.yml` ignored `app/api/d4/filings`, ops-reporting, operator console, and all `workflowOps*Governance.ts` adapters | Filings core (`create_package` / `decide_package` / package list) and spine-linked adapters left unscanned vs base (`7c23e3cf`, one filename only) |
-| GREEN | Same PR after FA-F41-001 fix: broad `paths-ignore` reverted; only the single trap-path-limit adapter excluded (same as base) | CodeQL (javascript-typescript) PASS on CI; G-0 check [23] unchanged |
+| GREEN | PR #147 @ `782f7e60`: broad `paths-ignore` reverted; only the single trap-path-limit adapter excluded (same as `7c23e3cf`) | CI `40332948915`: CodeQL (javascript-typescript) PASS; 16 pass / 0 fail / 4 skip |
 
 ## Scope note
 
