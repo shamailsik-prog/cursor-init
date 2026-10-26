@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { DocumentData } from "firebase-admin/firestore"
+import { Timestamp, type DocumentData } from "firebase-admin/firestore"
 import { logger } from "firebase-functions"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
@@ -7,13 +7,20 @@ import { HttpError } from "../http/errors"
 import { isKnownClassification } from "../p5/classification"
 import { isFirestoreDocId, isSafeDocId } from "../p5/common"
 import type { JobDeps } from "./dispatch"
+import {
+  deliveryTargetsFromEnqueue,
+  readFanoutDeliverySnaps,
+  stageFanoutDeliveries,
+} from "./eventFanoutDelivery"
 import { enqueueJobs, isSafeRef, type JobSpec } from "./enqueue"
+import { entityCandidateSignalHandler } from "../d1/entity/candidateSignalJob"
 import { handlerFor, jobTestSeam } from "./registry"
 
 /**
  * Events fan-out (spec P3-15): each new `events/{eventId}` row becomes one job per registered
  * subscriber whose `eventNames` include the event's name. The job carries only the event id; the
- * handler reads the event itself. The idempotency key is `<sha256-hex(eventId)>:<subscriberId>`
+ * handler reads the event itself. Each successful enqueue also writes `event_fanout_deliveries`
+ * (audit F36). The idempotency key is `<sha256-hex(eventId)>:<subscriberId>`
  * (`fanOutKey`), so a redelivered trigger reuses the rows (delivery is at least once) and the key
  * stays far below the 512-character cap whatever the event id's length (P3-15 amendment).
  */
@@ -30,8 +37,22 @@ export type Subscriber = {
   matterIdOf?: (event: DocumentData) => string | null
 }
 
-/** Production subscribers. 3a registers none (P3-15). */
-export const SUBSCRIBERS: readonly Subscriber[] = []
+/**
+ * Production subscribers (audit F36). Each entry must name a registered `jobType` and must not listen
+ * to `job.*` events (validated at load).
+ */
+export const SUBSCRIBERS: readonly Subscriber[] = [
+  {
+    id: "entity-candidate-signal",
+    eventNames: ["entity.candidate"],
+    jobType: entityCandidateSignalHandler.jobType,
+  },
+]
+
+/** Production subscribers whose `eventNames` include `eventName` (test seam excluded). */
+export function productionSubscribersForEvent(eventName: string): readonly Subscriber[] {
+  return SUBSCRIBERS.filter((s) => s.eventNames.includes(eventName))
+}
 
 /**
  * The matter an event names (audit F14 R3-D1): its `payload.matterId`, the platform's event contract (matter.created,
@@ -98,6 +119,7 @@ export async function fanOutEvent(
   const classification: Classification = isKnownClassification(event.classification) ? event.classification : "privileged-restricted"
   const named = matterNamedBy(event)
   const specs: JobSpec[] = []
+  const subscriberIds: string[] = []
   for (const s of subscribers) {
     if (typeof event.name !== "string" || !s.eventNames.includes(event.name)) continue
     // A subscriber's matterIdOf decides; without one, the job takes the matter the event names (audit F14 R3-D1).
@@ -140,10 +162,23 @@ export async function fanOutEvent(
       idempotencyKey: fanOutKey(eventId, s.id),
       createdBy: "system",
     })
+    subscriberIds.push(s.id)
   }
   if (specs.length === 0) return none
+  const eventName = typeof event.name === "string" ? event.name : ""
   try {
-    const results = await adminDb().runTransaction((tx) => enqueueJobs(tx, specs, { now: deps.clock() }))
+    const now = deps.clock()
+    const results = await adminDb().runTransaction(async (tx) => {
+      const deliverySnaps = await readFanoutDeliverySnaps(
+        tx,
+        eventId,
+        subscriberIds.map((id) => ({ subscriberId: id }))
+      )
+      const enqueued = await enqueueJobs(tx, specs, { now })
+      const targets = deliveryTargetsFromEnqueue(eventName, subscriberIds, enqueued)
+      stageFanoutDeliveries(tx, firmId, eventId, targets, deliverySnaps, Timestamp.fromMillis(now))
+      return enqueued
+    })
     return {
       created: results.filter((r) => !r.reused).map((r) => r.jobId),
       reused: results.filter((r) => r.reused).map((r) => r.jobId),

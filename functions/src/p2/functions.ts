@@ -9,6 +9,7 @@ import { isSafeDocId } from "../p5/common"
 import { JOB_ENGINE, JOB_WORKER_TIMEOUT_SECONDS, SWEEP_BUDGET_MS } from "./constants"
 import { runtimeDeps, type JobDeps, type JobTask } from "./dispatch"
 import { fanOutEvent } from "./fanout"
+import { reconcileEventFanout } from "./fanoutReconcile"
 import { acceptLegacyOcrJob } from "./ocrDrain"
 import { isCompleteLegacyOcrJob } from "./ocrJob"
 import { sweepLegacyOcr } from "./ocrSweep"
@@ -76,7 +77,7 @@ export const onJobCreated = onDocumentCreated(
  * A new event row → one job per registered subscriber (P3-15). `retry: true` makes the platform
  * redeliver after a thrown (transient store) error, for up to 7 days; `fanOutEvent` never throws
  * for a permanent cause, and the deterministic job ids make a redelivery safe. An event whose
- * retries run out is not recovered (open item O-37).
+ * retries run out is repaired by `eventFanoutReconciler` (audit F36, O-37).
  */
 export const onEventCreated = onDocumentCreated(
   { ...RUNTIME_DEFAULTS, document: "events/{eventId}", maxInstances: 10, timeoutSeconds: 60, ingressSettings: INTERNAL_ONLY, retry: true },
@@ -151,3 +152,14 @@ export const d1AutoConfirmTick = scheduledJobFunction(AUTO_CONFIRM_SPEC)
 
 /** The daily conflict name index reconciliation tick (audit F37): enqueues `d1.conflict.reindex` for every firm, once per PKT day. */
 export const d1ConflictReindexTick = scheduledJobFunction(NAME_REINDEX_SPEC)
+
+/**
+ * Event fan-out reconciliation (audit F36, O-37): every five minutes, scans `events` for rows that
+ * lack a delivery ledger entry for a production subscriber and re-runs `fanOutEvent`.
+ */
+export const eventFanoutReconciler = onSchedule(
+  { ...RUNTIME_DEFAULTS, schedule: "every 5 minutes", maxInstances: 1, timeoutSeconds: 45, ingressSettings: INTERNAL_ONLY },
+  async () => {
+    await reconcileEventFanout(runtimeDeps())
+  }
+)

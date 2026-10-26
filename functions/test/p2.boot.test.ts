@@ -34,7 +34,29 @@ describe("P2 boot (P3-5, P3-8)", () => {
   it("the index exports api, health and the job runtime functions, each in asia-south1 with its trigger kind", async () => {
     vi.resetModules()
     const index = (await import("../src/index")) as unknown as Record<string, { __endpoint: Endpoint }>
-    expect(Object.keys(index).sort()).toEqual(["alertChecker", "alertEscalator", "api", "auditOutboxReconciler", "d1AutoConfirmTick", "d1ConflictClientWritten", "d1ConflictIndexChunkWritten", "d1ConflictPartyWritten", "d1ConflictReindexTick", "health", "jobSweeper", "jobWorker", "ocrLegacySweep", "onEventCreated", "onJobCreated", "p1CorpusEmbedding", "p1ReservationReconciler", "p1TraceExportReconciler", "retentionApplyTick", "retentionDeletionWatch"])
+    expect(Object.keys(index).sort()).toEqual([
+      "alertChecker",
+      "alertEscalator",
+      "api",
+      "auditOutboxReconciler",
+      "d1AutoConfirmTick",
+      "d1ConflictClientWritten",
+      "d1ConflictIndexChunkWritten",
+      "d1ConflictPartyWritten",
+      "d1ConflictReindexTick",
+      "eventFanoutReconciler",
+      "health",
+      "jobSweeper",
+      "jobWorker",
+      "ocrLegacySweep",
+      "onEventCreated",
+      "onJobCreated",
+      "p1CorpusEmbedding",
+      "p1ReservationReconciler",
+      "p1TraceExportReconciler",
+      "retentionApplyTick",
+      "retentionDeletionWatch",
+    ])
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) expect([n, index[n].__endpoint.region]).toEqual([n, ["asia-south1"]])
     expect(index.onJobCreated.__endpoint.eventTrigger).toMatchObject({
       eventType: "google.cloud.firestore.document.v1.created",
@@ -100,6 +122,7 @@ describe("P2 boot (P3-5, P3-8)", () => {
     }
     // Audit F34: the trace export reconciler, the same pattern on a five-minute schedule (its own backoff is 5 minutes and up).
     expect(index.p1TraceExportReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 5 minutes" } })
+    expect(index.eventFanoutReconciler.__endpoint).toMatchObject({ region: ["asia-south1"], timeoutSeconds: 45, scheduleTrigger: { schedule: "every 5 minutes" } })
     expect(index.p1TraceExportReconciler.__endpoint.scheduleTrigger).not.toMatchObject({ retryConfig: { retryCount: expect.anything() } })
     expect([index.p1TraceExportReconciler.__endpoint.httpsTrigger, index.p1TraceExportReconciler.__endpoint.callableTrigger]).toEqual([undefined, undefined])
     // F32: the worker invoker is exactly the runtime service account (not public).
@@ -107,8 +130,19 @@ describe("P2 boot (P3-5, P3-8)", () => {
     for (const n of ["onJobCreated", "onEventCreated", "jobWorker", "jobSweeper"]) {
       expect([n, index[n].__endpoint.httpsTrigger, index[n].__endpoint.callableTrigger]).toEqual([n, undefined, undefined])
     }
-    expect([...JOB_HANDLERS.keys()]).toEqual(["platform.diagnostic", "d1.unmerge.links", "d1.unmerge.checks", "d1.autoconfirm", "d1.conflict.reindex", "d3.ocr", "retention.matter.prepare", "retention.store.purge", "retention.apply"])
-    expect(SUBSCRIBERS).toEqual([])
+    expect([...JOB_HANDLERS.keys()]).toEqual([
+      "platform.diagnostic",
+      "d1.unmerge.links",
+      "d1.unmerge.checks",
+      "d1.entity.candidateSignal",
+      "d1.autoconfirm",
+      "d1.conflict.reindex",
+      "d3.ocr",
+      "retention.matter.prepare",
+      "retention.store.purge",
+      "retention.apply",
+    ])
+    expect(SUBSCRIBERS.map((s) => s.id)).toEqual(["entity-candidate-signal"])
   })
 
   it("the router builds with every layer flag off and serves exactly the four /api/platform/jobs routes (P2 is CORE, L8456)", async () => {
