@@ -74,7 +74,6 @@ describe.skipIf(!EMULATORS)("P2 event fan-out production (F36)", () => {
 
   it("a redelivered fan-out reuses the job and does not duplicate the delivery row", async () => {
     await adminDb().collection("events").doc(eventId).set(data)
-    const sub = SUBSCRIBERS[0]
     const first = await fanOutEvent(eventId, data, clock)
     const second = await fanOutEvent(eventId, data, clock)
     expect(first.created).toHaveLength(1)
