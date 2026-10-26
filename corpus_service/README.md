@@ -557,7 +557,6 @@ image. Each container gets only what it uses:
 |---|---|
 | `api`, `worker-embed`, `celery-beat` | runtime role (`APP_DB_*`) inside `DATABASE_URL`, Redis ACL user inside `REDIS_URL` |
 | `migrate` (one-shot) | migration role (`MIGRATE_DB_*`) inside `DATABASE_URL`; no Redis |
-| `worker-a`, `worker-b` (idle seats) | none (and no data-network access) |
 | `postgres` | `POSTGRES_USER`, `APP_DB_USER`, `MIGRATE_DB_USER`; the three passwords as files under `/run/secrets` |
 | `redis` | its ACL rules (on the command line) and its password as a `/run/secrets` file |
 | `secrets-preflight` (one-shot, no network) | the four store passwords as files, to check them |

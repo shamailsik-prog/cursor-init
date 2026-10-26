@@ -451,7 +451,9 @@ class ShippedComposeMutations(unittest.TestCase):
             ("    env_file: app.env\n", "    env_file: .env\n", "app-env-file"),
             ("  REDIS_TLS_CA_FILE: /run/tls-ca/ca.crt\n",
              "  REDIS_TLS_CA_FILE: /run/tls-ca/ca.crt\n  MIGRATE_DB_PASSWORD: ${MIGRATE_DB_PASSWORD:?x}\n", "app-credential-scope"),
-            ("      PLS_SEAT: A\n", "      PLS_SEAT: A\n      PG_SUPER: ${POSTGRES_PASSWORD:?x}\n", "app-credential-scope"),
+            ("  celery-beat:\n    build: .\n    env_file: app.env\n    environment:\n      <<: *runtime-env\n",
+             "  celery-beat:\n    build: .\n    env_file: app.env\n    environment:\n      <<: *runtime-env\n      PG_SUPER: ${POSTGRES_PASSWORD:?x}\n",
+             "app-credential-scope"),
             # Re-audit D2: an image-only service is not vetted.
             ("  api:\n    build: .\n", "  api:\n    image: corpus:latest\n", "unknown-service"),
         ]

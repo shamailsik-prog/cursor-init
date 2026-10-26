@@ -7,7 +7,7 @@
 #   corpus_service/tests/e2e/store_security_e2e.sh [CORPUS_SERVICE_DIR]
 #
 # Brings up the shipped docker-compose.yml (secrets-preflight, certs, postgres, redis, then the
-# app's own migrate / api / worker-embed / celery-beat / worker-a / worker-b services) with random
+# app's own migrate / api / worker-embed / celery-beat services) with random
 # secrets written to .env exactly as the README tells operators (never exported to compose), and
 # asserts every clause from the outside, including which credentials each container ends up with:
 # real clients (psql, redis-cli) and the app's own code path (tests/e2e/probe.py through
@@ -504,7 +504,7 @@ run_probe "app redis client, wrong hostname" \
   timeout 600 "${COMPOSE[@]}" run --rm -T --no-deps \
   -e REDIS_URL="rediss://$REDIS_APP_USER:$REDIS_APP_PASSWORD@$REDIS_IP:6379/0" \
   api python tests/e2e/probe.py redis-must-fail 'mismatch|not valid for'
-APP_SERVICES="api worker-embed celery-beat worker-a worker-b"
+APP_SERVICES="api worker-embed celery-beat"
 # shellcheck disable=SC2086
 if "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 180 $APP_SERVICES; then
   pass "app services start (after migrate completes): $APP_SERVICES"
@@ -521,9 +521,6 @@ inspect_env() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$
 for svc in api worker-embed celery-beat; do
   scope_check "D1: $svc env holds only its runtime URLs' credentials (no POSTGRES_*/MIGRATE_*; APP/REDIS passwords only inside DATABASE_URL/REDIS_URL)" \
     "$(exec_env "$svc")" 1 APP_DB_PASSWORD@DATABASE_URL REDIS_APP_PASSWORD@REDIS_URL
-done
-for svc in worker-a worker-b; do
-  scope_check "D1: $svc (idle seat) env holds no store credential at all" "$(exec_env "$svc")" 1
 done
 scope_check "D1: migrate env holds only the migration role, inside DATABASE_URL (no Redis, app or superuser credential)" \
   "$(inspect_env migrate)" 1 MIGRATE_DB_PASSWORD@DATABASE_URL
@@ -570,13 +567,10 @@ for svc in api worker-embed celery-beat; do
   scope_check "R2-D2: $svc PID 1 environment holds only its runtime URLs' credentials" \
     "$(proc1_env "$svc")" 1 APP_DB_PASSWORD@DATABASE_URL REDIS_APP_PASSWORD@REDIS_URL
 done
-for svc in worker-a worker-b; do
-  scope_check "R2-D2: $svc PID 1 environment holds no store credential" "$(proc1_env "$svc")" 1
-done
-for svc in api worker-embed celery-beat worker-a worker-b; do
+for svc in api worker-embed celery-beat; do
   no_store_secret "R2-D2: no process command line in $svc carries a store password" "$(proc_cmdlines "$svc")"
 done
-for svc in api worker-embed celery-beat worker-a worker-b migrate; do
+for svc in api worker-embed celery-beat migrate; do
   expect_lines "R2-D2: $svc has no /run/secrets files (no store secret mounted)" "" "$(secrets_in "$svc")"
   expect_lines "R2-D2: $svc mounts no store volume (pgdata, tls-postgres, tls-redis) and the CA volume only read-only" \
     "" "$(store_mounts_of "$svc")"
@@ -611,7 +605,7 @@ shared_with_helpers() { # an app's mounts that a one-shot also mounts (a bind co
     done <<<"$HELPER_MOUNTS"
   done < <(mount_keys_of "$1")
 }
-for svc in api worker-embed celery-beat worker-a worker-b migrate; do
+for svc in api worker-embed celery-beat migrate; do
   expect_lines "review: $svc shares no mount with secrets-preflight or certs (the CA volume read-only excepted)" \
     "" "$(shared_with_helpers "$svc")"
 done

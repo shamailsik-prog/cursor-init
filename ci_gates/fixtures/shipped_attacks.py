@@ -35,6 +35,15 @@ PG_ENV_DB = "      POSTGRES_DB: legal_scraper\n"
 API_VOLUMES_END = "      - tls-ca:/run/tls-ca:ro\n    networks: [edge, data]"
 HBA_APP_LINE = "hostssl    legal_scraper   +corpus_clients  all       scram-sha-256"
 MIGRATE_CMD = '    command: python -m scraper.migrate\n    restart: "no"\n'
+WORKER_EMBED_TAIL = (
+    "    networks: [edge, data]\n    depends_on: *runtime-depends\n"
+    "    command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO\n"
+    "    restart: unless-stopped\n\n  # Beat imports"
+)
+CELERY_BEAT_VOLUMES = "    volumes:\n      - tls-ca:/run/tls-ca:ro\n    networks: [data]\n"
+CELERY_BEAT_HDR = (
+    "  celery-beat:\n    build: .\n    env_file: app.env\n    environment:\n      <<: *runtime-env\n"
+)
 # A one-shot, network-isolated helper (C cases): {creds} gives it a store credential, {mounts} its storage.
 HELPER = ('  pw-copier:\n    image: pgvector/pgvector:pg16\n'
           '    entrypoint: ["/bin/sh", "-c", "cp /run/secrets/postgres_password /out/pw"]\n'
@@ -68,12 +77,12 @@ CASES = [
      "expect": ["app-host-access"],
      "edits": [("replace", "    networks: [edge, data]\n    depends_on: *runtime-depends\n" + API_CMD,
                 "    network_mode: host\n    depends_on: *runtime-depends\n" + API_CMD)]},
-    {"id": "A03", "title": "network_mode: service:postgres on worker-a (joins the store's namespace)",
+    {"id": "A03", "title": "network_mode: service:postgres on worker-embed (joins the store's namespace)",
      "expect": ["app-host-access"],
-     "edits": [("replace",
-                "    networks: [edge]\n    command: python -m scraper.workers.harvester\n    restart: unless-stopped\n\n  worker-b",
-                '    network_mode: "service:postgres"\n    command: python -m scraper.workers.harvester\n'
-                "    restart: unless-stopped\n\n  worker-b")]},
+     "edits": [("replace", WORKER_EMBED_TAIL,
+                '    network_mode: "service:postgres"\n    depends_on: *runtime-depends\n'
+                "    command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO\n"
+                "    restart: unless-stopped\n\n  # Beat imports")]},
     {"id": "A04", "title": "long-syntax port with host_ip on redis (control)",
      "expect": ["store-ports"],
      "edits": [("replace", REDIS_NOPORTS,
@@ -159,9 +168,10 @@ CASES = [
      "expect": ["app-store-volume"],
      "edits": [("replace", API_VOLUMES_END,
                 "      - tls-ca:/run/tls-ca:ro\n      - tls-postgres:/srv/pgtls:ro\n    networks: [edge, data]")]},
-    {"id": "A29", "title": "environment as a list with a bare MIGRATE_DB_PASSWORD key on worker-a (control)",
+    {"id": "A29", "title": "environment as a list with a bare MIGRATE_DB_PASSWORD key on celery-beat (control)",
      "expect": ["app-credential-scope", "literal-credential"],
-     "edits": [("replace", "    environment:\n      PLS_SEAT: A\n", "    environment:\n      - PLS_SEAT=A\n      - MIGRATE_DB_PASSWORD\n")]},
+     "edits": [("replace", CELERY_BEAT_HDR,
+                "  celery-beat:\n    build: .\n    env_file: app.env\n    environment:\n      - MIGRATE_DB_PASSWORD\n      - PLACEHOLDER=1\n")]},
     {"id": "A30", "title": "long-running API that runs 'scraper.migrate' first, as the migration role (one-shot exemption)",
      "expect": ["app-credential-scope", "app-host-access"],
      "edits": [("replace", MIGRATE_HDR, "  api2:\n    build: .\n    env_file: app.env\n    environment:\n      <<: *app-secrets\n"
@@ -194,16 +204,18 @@ CASES = [
      "edits": [("replace", API_CMD, API_CMD + "    devices: [/dev/sda:/dev/sda]\n")]},
     {"id": "S03", "title": "userns_mode: host on api", "expect": ["app-host-access"],
      "edits": [("replace", API_CMD, API_CMD + "    userns_mode: host\n")]},
-    {"id": "S04", "title": "worker-a joins another container's network namespace", "expect": ["app-host-access"],
-     "edits": [("replace", "    networks: [edge]\n    command: python -m scraper.workers.harvester\n    restart: unless-stopped\n\n  worker-b",
-                '    network_mode: "container:f30-other"\n    command: python -m scraper.workers.harvester\n'
-                "    restart: unless-stopped\n\n  worker-b")]},
-    {"id": "S05", "title": "worker-a bind-mounts the Docker socket (a path outside the repository)", "expect": ["app-host-access"],
-     "edits": [("replace", "      PLS_SEAT: A\n    volumes:\n", "      PLS_SEAT: A\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n")]},
+    {"id": "S04", "title": "worker-embed joins another container's network namespace", "expect": ["app-host-access"],
+     "edits": [("replace", WORKER_EMBED_TAIL,
+                '    network_mode: "container:f30-other"\n    depends_on: *runtime-depends\n'
+                "    command: celery -A scraper.tasks.celery_app worker -Q celery,embeddings --loglevel=INFO\n"
+                "    restart: unless-stopped\n\n  # Beat imports")]},
+    {"id": "S05", "title": "celery-beat bind-mounts the Docker socket (a path outside the repository)", "expect": ["app-host-access"],
+     "edits": [("replace", CELERY_BEAT_VOLUMES,
+                "    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n      - tls-ca:/run/tls-ca:ro\n    networks: [data]\n")]},
     {"id": "S06", "title": "api binds 0.0.0.0 instead of loopback", "expect": ["app-host-access"],
      "edits": [("replace", '      - "${API_BIND:-127.0.0.1}:8000:8000"\n', '      - "0.0.0.0:8000:8000"\n')]},
-    {"id": "S07", "title": "worker-a publishes a port", "expect": ["app-host-access"],
-     "edits": [("replace", "      PLS_SEAT: A\n", "      PLS_SEAT: A\n    ports: [\"127.0.0.1:9000:9000\"]\n")]},
+    {"id": "S07", "title": "celery-beat publishes a port", "expect": ["app-host-access"],
+     "edits": [("replace", CELERY_BEAT_HDR, CELERY_BEAT_HDR + '    ports: ["127.0.0.1:9000:9000"]\n')]},
     # R2-D2: store volumes and credentials reaching an app another way.
     {"id": "S08", "title": "api inherits every postgres mount via volumes_from", "expect": ["app-store-volume"],
      "edits": [("replace", API_CMD, API_CMD + "    volumes_from: [postgres]\n")]},
@@ -216,9 +228,10 @@ CASES = [
     {"id": "S11", "title": "api mounts an external volume (contents unknown to the policy)", "expect": ["app-host-access"],
      "edits": [("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - ext:/srv/ext:ro\n    networks: [edge, data]"),
                ("replace", "volumes:\n  pgdata:\n", "volumes:\n  ext:\n    external: true\n  pgdata:\n")]},
-    {"id": "S23", "title": "worker-a bind-mounts the whole project (the compose .env and the store's mounted files)",
+    {"id": "S23", "title": "celery-beat bind-mounts the whole project (the compose .env and the store's mounted files)",
      "expect": ["app-credential-scope", "app-store-volume"],
-     "edits": [("replace", "      PLS_SEAT: A\n    volumes:\n", "      PLS_SEAT: A\n    volumes:\n      - .:/srv/repo:ro\n")]},
+     "edits": [("replace", CELERY_BEAT_VOLUMES,
+                "    volumes:\n      - .:/srv/repo:ro\n      - tls-ca:/run/tls-ca:ro\n    networks: [data]\n")]},
     {"id": "S12", "title": "api mounts a compose config sourced from the superuser password", "expect": ["app-credential-scope"],
      "edits": [("replace", API_CMD, API_CMD + "    configs: [pgpw]\n"),
                ("replace", "secrets:\n  postgres_password:\n", "configs:\n  pgpw:\n    environment: POSTGRES_PASSWORD\n\n"
@@ -346,9 +359,10 @@ CASES = [
      "expect": ["app-credential-scope"],
      "edits": [("replace", API_VOLUMES_END, "      - tls-ca:/run/tls-ca:ro\n      - ./docker/preflight:/srv/pf:ro\n"
                 "    networks: [edge, data]")]},
-    {"id": "C10", "title": "worker-a binds the directory whose script the shipped certs one-shot mounts",
+    {"id": "C10", "title": "celery-beat binds the directory whose script the shipped certs one-shot mounts",
      "expect": ["app-credential-scope"],
-     "edits": [("replace", "      PLS_SEAT: A\n    volumes:\n", "      PLS_SEAT: A\n    volumes:\n      - ./docker/certs:/srv/certs:ro\n")]},
+     "edits": [("replace", CELERY_BEAT_VOLUMES,
+                "    volumes:\n      - ./docker/certs:/srv/certs:ro\n      - tls-ca:/run/tls-ca:ro\n    networks: [data]\n")]},
 
     # ---- review MEDIUM on dc265e3: hostssl lines accept SCRAM only ----------------------------------
     {"id": "H01", "title": "pg_hba.conf: the application line uses cert instead of scram-sha-256", "expect": ["pg-hba"],
