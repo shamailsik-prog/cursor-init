@@ -66,10 +66,20 @@ def summary(result):
 
 
 def operation_id(record_id, text):
-    """F27 R4, written out."""
-    material = ["f27-embedding-op-v1", "statutes_master", str(record_id), MODEL, DIMENSIONS,
-                hashlib.sha256(text.encode("utf-8")).hexdigest()]
-    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode("ascii")).hexdigest()
+    """F27 R4 (F45 chunk 0), written out."""
+    from scraper.tasks import embedding_chunks as ec
+
+    chunk = ec.EmbeddingChunk(
+        chunk_index=0,
+        embed_text=text,
+        content_hash=ec.content_hash(text),
+        char_start=0,
+        char_end=max(len(text), 0),
+        paragraph_start=0,
+        paragraph_end=0,
+        language="en",
+    )
+    return ec.chunk_operation_id("statutes_master", record_id, MODEL, DIMENSIONS, chunk)
 
 
 def test_the_seam_sends_the_f27_operation_id_with_the_rows_model_and_dimensions(corpus_db, monkeypatch):

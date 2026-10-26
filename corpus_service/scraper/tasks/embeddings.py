@@ -44,6 +44,7 @@ from sqlalchemy import func, select, text, update
 from scraper import p1_client
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster, EmbeddingAttempt, StatutesMaster
+from scraper.tasks import embedding_chunks as ec
 from scraper.tasks import job_record, outcomes
 from scraper import harvest_control
 
@@ -62,8 +63,8 @@ GIVE_BACK_LOCK_TIMEOUT = "5s"  # the give-back never waits long on a lock the fa
 # Review round 2: failed stores of one held, paid answer (refused by the database, or a batch lost while
 # storing it) before the row goes to the dead letter as `store_failed`, the answer kept for a requeue.
 STORE_RETRY_LIMIT = 3
-TEXT_WINDOW = 2000  # characters of the body that are embedded (unchanged; F45 owns the representation)
-OPERATION_VERSION = "f27-embedding-op-v1"
+OPERATION_VERSION = ec.OPERATION_VERSION
+CHUNK_SPEC_VERSION = ec.CHUNK_SPEC_VERSION
 # The models the vector(1536) columns can hold (R9).
 SUPPORTED_MODELS = {"text-embedding-3-small": 1536}
 
@@ -97,9 +98,9 @@ STORE_FAILED_TEXT = (
     "receipt: fix the cause and requeue the row to store it with no new request"
 )
 
-# The text embedded per table: (title-like, label-like, body) columns, as main built it.
+# Columns per table: title-like, label-like, body; case law also exposes ``language`` for chunk metadata.
 SOURCES = {
-    "case_law_master": ("citation", "case_title", "full_text"),
+    "case_law_master": ("citation", "case_title", "full_text", "language"),
     "statutes_master": ("statute_name", "section_number", "section_text"),
 }
 _MODELS = {"case_law_master": CaseLawMaster, "statutes_master": StatutesMaster}
@@ -121,8 +122,9 @@ class LeaseLost(Exception):
 # Rules (no database)
 # ---------------------------------------------------------------------------------------------
 def embed_text(title: Optional[str], label: Optional[str], body: Optional[str]) -> str:
-    """The text sent to the provider: main's formula, the body cut to TEXT_WINDOW characters."""
-    return f"{title or ''} {label or ''} {(body or '')[:TEXT_WINDOW]}"
+    """The first chunk's provider input (F45); empty when there is no embeddable body."""
+    chunks = ec.build_embedding_chunks(title, label, body)
+    return chunks[0].embed_text if chunks else ""
 
 
 def text_problem(value: str) -> Optional[str]:
@@ -135,11 +137,18 @@ def text_problem(value: str) -> Optional[str]:
 
 
 def operation_id(table_name: str, record_id: Any, model: str, dimensions: int, text: str) -> str:
-    """R4: sha256 of the canonical JSON array [version, table, record id, model, dimensions,
-    sha256(text)], no whitespace, ASCII."""
-    material = [OPERATION_VERSION, table_name, str(record_id), model, int(dimensions),
-                hashlib.sha256(text.encode("utf-8")).hexdigest()]
-    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode("ascii")).hexdigest()
+    """R4 (F45): operation id for chunk 0 when ``text`` is exactly the provider input."""
+    chunk = ec.EmbeddingChunk(
+        chunk_index=0,
+        embed_text=text,
+        content_hash=ec.content_hash(text),
+        char_start=0,
+        char_end=max(len(text), 0),
+        paragraph_start=0,
+        paragraph_end=0,
+        language="en",
+    )
+    return ec.chunk_operation_id(table_name, record_id, model, dimensions, chunk)
 
 
 def retry_delay_seconds(attempts: int) -> int:
@@ -369,10 +378,20 @@ SELECT now(),
                                LIMIT :cap_plus_one) d)"""
 
 
+CHUNK_STATE_SQL = """
+SELECT chunk_index, content_hash FROM record_embedding_chunks
+ WHERE table_name = :table_name AND record_id = :record_id AND chunk_spec_version = :spec
+   AND embedding_model = :model AND embedding IS NOT NULL"""
+
+
 def _record_sql(table_name: str, lock: bool) -> str:
-    title, label, body = SOURCES[table_name]  # fixed names, never row data
-    return (f"SELECT {title}, {label}, substr({body}, 1, {TEXT_WINDOW}), embedding IS NOT NULL "
-            f"FROM {table_name} WHERE id = :id" + (" FOR UPDATE" if lock else ""))
+    cols = SOURCES[table_name]
+    title, label, body = cols[0], cols[1], cols[2]
+    language = cols[3] if len(cols) > 3 else "'en'"
+    return (
+        f"SELECT {title}, {label}, {body}, {language}, embedding IS NOT NULL "
+        f"FROM {table_name} WHERE id = :id" + (" FOR UPDATE" if lock else "")
+    )
 
 
 def _fenced(result, row) -> None:
@@ -535,14 +554,23 @@ class _Batch:
                            len(exhausted), STORE_RETRY_LIMIT)
 
     async def _current_operation(self, row) -> Optional[str]:
-        """The operation a row would embed now, or None when it cannot be embedded (R9 would
-        dead-letter it on its next claim)."""
+        """The operation a row would embed now (next chunk, or the manifest when complete), or None
+        when it cannot be embedded (R9 would dead-letter it on its next claim)."""
         if row.table_name not in SOURCES or SUPPORTED_MODELS.get(row.embedding_model) != row.embedding_dimensions:
             return None
-        record = await self._read_record(row, lock=False)
-        if record is None or text_problem(record[0]) is not None:
+        parsed = await self._read_record(row, lock=False)
+        if parsed is None:
             return None
-        return operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, record[0])
+        chunks, manifest, _ = parsed
+        if not chunks or text_problem(chunks[0].embed_text) is not None:
+            return None
+        stored = await self._stored_chunks(row)
+        pending = ec.first_incomplete_chunk(chunks, stored)
+        if pending is None:
+            return manifest
+        return ec.chunk_operation_id(
+            row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, pending,
+        )
 
     # -- R1 ------------------------------------------------------------------------------------
     async def _claim(self) -> List[Any]:
@@ -563,45 +591,77 @@ class _Batch:
                 row, UNSUPPORTED_MODEL,
                 f"{UNSUPPORTED_MODEL}: only " + ", ".join(f"{m}/{d}" for m, d in SUPPORTED_MODELS.items()) + " is stored",
             )
-        record = await self._read_record(row, lock=False)
-        if record is None:
+        parsed = await self._read_record(row, lock=False)
+        if parsed is None:
             self.counts.missing += 1
             return await self._dead_letter(row, RECORD_MISSING, f"{RECORD_MISSING}: no {row.table_name} row with this id")
-        value, has_vector = record
-        problem = text_problem(value)
+        chunks, manifest, has_vector = parsed
+        problem = text_problem(chunks[0].embed_text) if chunks else EMPTY_TEXT
         if problem is not None:
             return await self._dead_letter(row, problem, f"{problem}: nothing to embed in this record")
-        op = operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, value)
-        if row.stored_operation_id == op and has_vector:  # R6 (a): the record already holds this operation
-            _fenced(await self.db.execute(text(COMPLETE_SQL), self._params(row, op=op, tokens=None, ms=None)), row)
+        if row.stored_operation_id == manifest and has_vector and ec.first_incomplete_chunk(chunks, await self._stored_chunks(row)) is None:
+            _fenced(await self.db.execute(text(COMPLETE_SQL), self._params(row, op=manifest, tokens=None, ms=None)), row)
             await self.db.commit()
             self.counts.tally.item_ok(0)
             self.counts.reused += 1
             return False
-        held = (await self.db.execute(
-            select(EmbeddingAttempt.id, EmbeddingAttempt.embedding, EmbeddingAttempt.token_count)
-            .where(EmbeddingAttempt.operation_id == op, EmbeddingAttempt.outcome == "answered",
-                   EmbeddingAttempt.embedding.is_not(None))
-            .order_by(EmbeddingAttempt.answered_at.desc())
-            .limit(1)
-            .with_for_update()
-        )).first()
-        if held is not None:  # R6 (b): a vector already paid for, never stored
-            _fenced(await self.db.execute(text(TAKE_OVER_RECEIPT_SQL), {
-                "owner": self.owner, "queue_id": row.id, "receipt": held.id,
-            }), row)
-            _fenced(await self.db.execute(text(MARK_OPERATION_SQL), self._params(row, op=op)), row)
-            await self.db.commit()
-            self.held = held.id
-            await self._store(row, op, list(held.embedding), held.id, held.token_count, None, reconciled=True)
-            return False
-        return await self._attempt(row, op, value)
+        paid_any = False
+        while True:
+            stored = await self._stored_chunks(row)
+            pending = ec.first_incomplete_chunk(chunks, stored)
+            if pending is None:
+                _fenced(await self.db.execute(text(COMPLETE_SQL), self._params(row, op=manifest, tokens=None, ms=None)), row)
+                await self.db.commit()
+                self.counts.tally.item_ok(0 if not paid_any else 1)
+                return paid_any
+            op = ec.chunk_operation_id(
+                row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, pending,
+            )
+            held = (await self.db.execute(
+                select(EmbeddingAttempt.id, EmbeddingAttempt.embedding, EmbeddingAttempt.token_count)
+                .where(EmbeddingAttempt.operation_id == op, EmbeddingAttempt.outcome == "answered",
+                       EmbeddingAttempt.embedding.is_not(None))
+                .order_by(EmbeddingAttempt.answered_at.desc())
+                .limit(1)
+                .with_for_update()
+            )).first()
+            if held is not None:
+                _fenced(await self.db.execute(text(TAKE_OVER_RECEIPT_SQL), {
+                    "owner": self.owner, "queue_id": row.id, "receipt": held.id,
+                }), row)
+                _fenced(await self.db.execute(text(MARK_OPERATION_SQL), self._params(row, op=op)), row)
+                await self.db.commit()
+                self.held = held.id
+                await self._store_chunk(
+                    row, chunks, manifest, pending, op, list(held.embedding), held.id, held.token_count, None,
+                    reconciled=True,
+                )
+                continue
+            paid = await self._attempt(row, op, pending.embed_text, chunks, manifest, pending)
+            if not paid:
+                return False
+            paid_any = True
+            await asyncio.sleep(PACE_SECONDS)
 
-    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[str, bool]]:
+    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[List[ec.EmbeddingChunk], str, bool]]:
         found = (await self.db.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
         if found is None:
             return None
-        return embed_text(found[0], found[1], found[2]), bool(found[3])
+        title, label, body, language, has_vector = found[0], found[1], found[2], found[3], found[4]
+        chunks = ec.build_embedding_chunks(title, label, body, language=language or "en")
+        manifest = ec.manifest_operation_id(
+            row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, chunks,
+        )
+        return chunks, manifest, bool(has_vector)
+
+    async def _stored_chunks(self, row) -> List[Tuple[int, str]]:
+        rows = (await self.db.execute(text(CHUNK_STATE_SQL), {
+            "table_name": row.table_name,
+            "record_id": row.record_id,
+            "spec": CHUNK_SPEC_VERSION,
+            "model": row.embedding_model,
+        })).all()
+        return [(int(r[0]), str(r[1])) for r in rows]
 
     async def _dead_letter(self, row, reason: str, message: str) -> bool:
         _fenced(await self.db.execute(text(DEAD_LETTER_SQL), self._params(row, reason=reason, message=message)), row)
@@ -609,7 +669,15 @@ class _Batch:
         self.counts.dead_lettered[reason] += 1
         return False
 
-    async def _attempt(self, row, op: str, value: str) -> bool:
+    async def _attempt(
+        self,
+        row,
+        op: str,
+        value: str,
+        chunks: List[ec.EmbeddingChunk],
+        manifest: str,
+        chunk: ec.EmbeddingChunk,
+    ) -> bool:
         """R5: the `started` receipt is committed before the request, the `answered` one right after."""
         receipt = (await self.db.execute(text(START_RECEIPT_SQL), {
             "op": op, "queue_id": row.id, "table_name": row.table_name, "record_id": row.record_id,
@@ -657,7 +725,7 @@ class _Batch:
         _fenced(answered, row)  # the receipt is this batch's until it is stored
         await self.db.commit()
         self.held = receipt
-        await self._store(row, op, vector, receipt, tokens, started, reconciled=False)
+        await self._store_chunk(row, chunks, manifest, chunk, op, vector, receipt, tokens, started, reconciled=False)
         return True
 
     async def _refused(self, row, receipt, refused: "p1_client.P1Refused") -> None:
@@ -695,35 +763,99 @@ class _Batch:
             self.counts.dead_lettered[MAX_ATTEMPTS] += 1
         return status
 
-    async def _store(self, row, op: str, vector, receipt, tokens, started, *, reconciled: bool) -> None:
-        """R7: the vector, the row's completion and the receipt in one transaction, only if the record
-        still has the text this operation embedded (read under its row lock)."""
+    async def _store_chunk(
+        self,
+        row,
+        chunks: List[ec.EmbeddingChunk],
+        manifest: str,
+        chunk: ec.EmbeddingChunk,
+        op: str,
+        vector,
+        receipt,
+        tokens,
+        started,
+        *,
+        reconciled: bool,
+    ) -> None:
+        """R7 (F45): store one chunk vector when the record still matches this chunk's content hash."""
         record = await self._read_record(row, lock=True)
-        if record is None:  # deleted while the request was out
+        if record is None:
             await self.db.execute(text(DROP_RECEIPT_SQL), {"id": receipt})
             self.counts.missing += 1
             await self._dead_letter(row, RECORD_MISSING, f"{RECORD_MISSING}: the record was deleted while it was embedded")
             return
-        if operation_id(row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, record[0]) != op:
+        live_chunks, live_manifest, _ = record
+        expected = next((c for c in live_chunks if c.chunk_index == chunk.chunk_index), None)
+        if (
+            live_manifest != manifest
+            or expected is None
+            or expected.content_hash != chunk.content_hash
+            or ec.chunk_operation_id(
+                row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, expected,
+            )
+            != op
+        ):
             await self.db.execute(text(DROP_RECEIPT_SQL), {"id": receipt})
             _fenced(await self.db.execute(text(REQUEUE_SQL), self._params(row)), row)
             await self.db.commit()
             self.counts.superseded += 1
             logger.info("F27: embedding row %s superseded: its record changed while it was embedded", row.id)
             return
-        model = _MODELS[row.table_name]
         await self.db.execute(
-            update(model).where(model.id == row.record_id).values(embedding=vector)
-            .execution_options(synchronize_session=False)
+            text(
+                """
+INSERT INTO record_embedding_chunks (
+  table_name, record_id, chunk_index, chunk_spec_version, content_hash,
+  char_start, char_end, paragraph_start, paragraph_end, language,
+  embedding_model, embedding_dimensions, operation_id, embedding, updated_at
+) VALUES (
+  :table_name, :record_id, :chunk_index, :spec, :content_hash,
+  :char_start, :char_end, :paragraph_start, :paragraph_end, :language,
+  :model, :dims, :op, CAST(:vec AS vector), now()
+)
+ON CONFLICT (table_name, record_id, chunk_index, chunk_spec_version, embedding_model)
+DO UPDATE SET
+  content_hash = EXCLUDED.content_hash,
+  char_start = EXCLUDED.char_start,
+  char_end = EXCLUDED.char_end,
+  paragraph_start = EXCLUDED.paragraph_start,
+  paragraph_end = EXCLUDED.paragraph_end,
+  language = EXCLUDED.language,
+  embedding_dimensions = EXCLUDED.embedding_dimensions,
+  operation_id = EXCLUDED.operation_id,
+  embedding = EXCLUDED.embedding,
+  updated_at = now()
+"""
+            ),
+            {
+                "table_name": row.table_name,
+                "record_id": row.record_id,
+                "chunk_index": chunk.chunk_index,
+                "spec": CHUNK_SPEC_VERSION,
+                "content_hash": chunk.content_hash,
+                "char_start": chunk.char_start,
+                "char_end": chunk.char_end,
+                "paragraph_start": chunk.paragraph_start,
+                "paragraph_end": chunk.paragraph_end,
+                "language": chunk.language,
+                "model": row.embedding_model,
+                "dims": row.embedding_dimensions,
+                "op": op,
+                "vec": vector,
+            },
         )
-        elapsed = None if started is None else int((time.monotonic() - started) * 1000)
-        _fenced(await self.db.execute(text(COMPLETE_SQL), self._params(row, op=op, tokens=tokens, ms=elapsed)), row)
+        if chunk.chunk_index == 0:
+            master = _MODELS[row.table_name]
+            await self.db.execute(
+                update(master).where(master.id == row.record_id).values(embedding=vector)
+                .execution_options(synchronize_session=False)
+            )
+        _fenced(await self.db.execute(text(MARK_OPERATION_SQL), self._params(row, op=op)), row)
         _fenced(await self.db.execute(text(STORE_RECEIPT_SQL), {"id": receipt, "reconciled": reconciled}), row)
         await self.db.execute(text(SUPERSEDE_OTHERS_SQL), {
             "table_name": row.table_name, "record_id": row.record_id, "op": op,
         })
         await self.db.commit()
-        self.counts.tally.item_ok(1)
         if reconciled:
             self.counts.reused += 1
 

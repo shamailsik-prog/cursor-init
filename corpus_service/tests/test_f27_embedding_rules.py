@@ -17,9 +17,19 @@ TEXT = "Synthetic F27 Act 2099 s1 Section text. Synthetic F27 fixture, not a rea
 
 
 def spec_operation_id(table, record_id, model, dimensions, text):
-    material = ["f27-embedding-op-v1", table, str(record_id), model, dimensions,
-                hashlib.sha256(text.encode("utf-8")).hexdigest()]
-    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode("ascii")).hexdigest()
+    from scraper.tasks import embedding_chunks as ec
+
+    chunk = ec.EmbeddingChunk(
+        chunk_index=0,
+        embed_text=text,
+        content_hash=ec.content_hash(text),
+        char_start=0,
+        char_end=max(len(text), 0),
+        paragraph_start=0,
+        paragraph_end=0,
+        language="en",
+    )
+    return ec.chunk_operation_id(table, record_id, model, dimensions, chunk)
 
 
 def test_r4_the_operation_id_is_the_spec_formula_and_64_lower_case_hex():

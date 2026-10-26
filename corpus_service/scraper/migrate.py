@@ -49,6 +49,7 @@ NUMBERED_MIGRATIONS = (
     "004_embedding_queue_leases",
     "005_corpus_lifecycle",
     "006_harvest_operator_state",
+    "007_record_embedding_chunks",
 )
 
 

@@ -958,6 +958,60 @@ class EmbeddingAttempt(Base):
 
 
 # ---------------------------------------------------------------------------
+# 9c. RecordEmbeddingChunk - versioned chunk vectors for a master row (audit F45)
+# ---------------------------------------------------------------------------
+class RecordEmbeddingChunk(Base):
+    """One embedded chunk of a master record's body, with stable content identity (F45)."""
+
+    __tablename__ = "record_embedding_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "table_name",
+            "record_id",
+            "chunk_index",
+            "chunk_spec_version",
+            "embedding_model",
+            name="uq_record_embedding_chunk_identity",
+        ),
+        Index("ix_record_embedding_chunks_record", "table_name", "record_id"),
+        CheckConstraint("chunk_index >= 0", name="ck_record_embedding_chunks_index_nonneg"),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="ck_record_embedding_chunks_content_hash"),
+        CheckConstraint(
+            "operation_id IS NULL OR operation_id ~ '^[0-9a-f]{64}$'",
+            name="ck_record_embedding_chunks_operation_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    table_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_spec_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    paragraph_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    paragraph_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    language: Mapped[str] = mapped_column(String(20), default="en", server_default=text("'en'"), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(1536), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<RecordEmbeddingChunk {self.table_name} {self.record_id} "
+            f"chunk={self.chunk_index} spec={self.chunk_spec_version}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Harvest operator control (audit F29): one durable pause flag for all workers
 # ---------------------------------------------------------------------------
 class HarvestOperatorState(Base):
