@@ -247,10 +247,16 @@ INTERRUPTIONS = (SoftTimeLimitExceeded, asyncio.CancelledError)
 
 REASON_TIME_LIMIT = "time limit exceeded"
 REASON_CANCELLED = "cancelled before it finished"
+# F29 FA-F29-005: operator stop while a harvest or embedding batch was already running.
+REASON_HARVEST_STOPPED = "harvest_stopped_by_operator"
+
+
+class HarvestOperatorPaused(Exception):
+    """Raised when harvest was paused while this Celery task was in flight (cooperative cancel)."""
 
 
 def is_interruption(exc: BaseException) -> bool:
-    return isinstance(exc, INTERRUPTIONS)
+    return isinstance(exc, INTERRUPTIONS) or isinstance(exc, HarvestOperatorPaused)
 
 
 def interruption_reason(exc: BaseException) -> str:
@@ -262,6 +268,8 @@ def interruption_reason(exc: BaseException) -> str:
     candidate: Optional[BaseException] = exc
     while candidate is not None and id(candidate) not in seen:
         seen.add(id(candidate))
+        if isinstance(candidate, HarvestOperatorPaused):
+            return REASON_HARVEST_STOPPED
         if isinstance(candidate, SoftTimeLimitExceeded):
             return REASON_TIME_LIMIT
         candidate = candidate.__cause__ or candidate.__context__
@@ -289,7 +297,7 @@ class RunInterrupted(Exception):
 
 _NEVER_RETRIED = (
     SourceRefused, HarvesterContractError, RunRecordFailed, BatchFailed, fetch_policy.FetchRefused,
-    RunInterrupted, *INTERRUPTIONS,  # R25
+    RunInterrupted, HarvestOperatorPaused, *INTERRUPTIONS,  # R25
 )
 
 

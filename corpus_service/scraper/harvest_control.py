@@ -13,13 +13,19 @@ from datetime import datetime, timezone
 
 from typing import Any, Dict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from scraper.config import settings
 from scraper.database import SessionLocal
 from scraper.models import HarvestOperatorState, ScraperJob
-from scraper.tasks.job_record import JOB_TYPE_EMBED, JOB_TYPE_SOURCE, STATUS_RUNNING
+from scraper.tasks import outcomes
+from scraper.tasks.job_record import (
+    JOB_TYPE_EMBED,
+    JOB_TYPE_SOURCE,
+    STATUS_CANCELLED,
+    STATUS_RUNNING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +99,83 @@ async def is_paused_async() -> bool:
         return paused
 
 
-async def pause_async() -> None:
+def _revoke_celery_tasks(task_ids: list[str]) -> int:
+    """Cooperative revoke (terminate=False): safe when the worker will observe pause / DB cancel."""
+    ids = [tid for tid in task_ids if tid]
+    if not ids:
+        return 0
+    try:
+        from scraper.tasks.celery_app import app
+
+        for tid in ids:
+            app.control.revoke(tid, terminate=False)
+        return len(ids)
+    except Exception as exc:
+        logger.warning("F29: could not revoke in-flight Celery task(s): %s", exc)
+        return 0
+
+
+async def cancel_in_flight_harvest_work_async() -> Dict[str, Any]:
+    """FA-F29-005: close running harvest/embedding scraper_jobs and revoke their Celery tasks."""
+    now = datetime.now(timezone.utc)
+    task_ids: list[str] = []
+    cancelled = 0
+    summary = {
+        "outcome": outcomes.OUTCOME_SKIPPED,
+        "reason": outcomes.REASON_HARVEST_STOPPED,
+    }
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(ScraperJob.id, ScraperJob.celery_task_id)
+                .where(
+                    ScraperJob.status == STATUS_RUNNING,
+                    ScraperJob.job_type.in_(_HARVEST_JOB_TYPES),
+                )
+                .with_for_update()
+            )
+        ).all()
+        if rows:
+            job_ids = [row.id for row in rows]
+            task_ids = [row.celery_task_id for row in rows if row.celery_task_id]
+            await session.execute(
+                update(ScraperJob)
+                .where(ScraperJob.id.in_(job_ids), ScraperJob.status == STATUS_RUNNING)
+                .values(
+                    status=STATUS_CANCELLED,
+                    finished_at=now,
+                    duration_seconds=func.greatest(
+                        func.floor(func.extract("epoch", now - ScraperJob.started_at)),
+                        0,
+                    ),
+                    error_message=None,
+                    result_summary=summary,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            cancelled = len(job_ids)
+            await session.commit()
+    revoked = _revoke_celery_tasks(task_ids)
+    if cancelled or revoked:
+        logger.info(
+            "F29: operator stop cancelled %d in-flight harvest job(s), revoked %d Celery task(s)",
+            cancelled,
+            revoked,
+        )
+    return {"cancelled_jobs": cancelled, "revoked_tasks": revoked}
+
+
+async def cooperative_cancel_if_paused_async() -> None:
+    """Raise when the operator has paused harvest (checkpoints in long-running tasks)."""
+    if await is_paused_async():
+        raise outcomes.HarvestOperatorPaused()
+
+
+async def pause_async() -> Dict[str, Any]:
     async with SessionLocal() as session:
         await _set_paused(session, True)
     _clear_legacy_file()
+    return await cancel_in_flight_harvest_work_async()
 
 
 async def resume_async() -> None:
@@ -158,13 +237,23 @@ def is_paused() -> bool:
     )
 
 
-def pause() -> None:
+def pause() -> Dict[str, Any]:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(pause_async())
-        return
+        return asyncio.run(pause_async())
     raise RuntimeError("harvest_control.pause() cannot run inside an event loop; use await pause_async()")
+
+
+def cancel_in_flight_harvest_work() -> Dict[str, Any]:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(cancel_in_flight_harvest_work_async())
+    raise RuntimeError(
+        "harvest_control.cancel_in_flight_harvest_work() cannot run inside an event loop; "
+        "use await cancel_in_flight_harvest_work_async()"
+    )
 
 
 def resume() -> None:

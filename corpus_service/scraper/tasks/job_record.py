@@ -243,6 +243,14 @@ async def _close(
     now = utcnow()
     alerts: List[str] = []
     async with database.SessionLocal() as db:
+        existing = await db.get(ScraperJob, job_id)
+        if existing is not None and existing.status != STATUS_RUNNING:
+            logger.info(
+                "F29: scraper_jobs %s already %s; leaving operator cancel in place",
+                job_id,
+                existing.status,
+            )
+            return dict(existing.result_summary or summary)
         if effect != "none":
             source = (
                 await db.execute(
@@ -269,7 +277,10 @@ async def _close(
             if source is not None:
                 alerts = await _alerts(db, source, job_id, now, status=status, written=written)
         summary = {**summary, "alerts": alerts}
-        job = await db.get(ScraperJob, job_id)
+        job = existing if existing is not None else await db.get(ScraperJob, job_id)
+        if job is None:
+            await db.commit()
+            return summary
         job.status = status
         job.finished_at = now
         job.duration_seconds = max(int((now - started).total_seconds()), 0)

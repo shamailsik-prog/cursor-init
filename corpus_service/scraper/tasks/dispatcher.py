@@ -83,6 +83,10 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
             raise outcomes.SourceRefused(source_name, decision.reason)
         if not isinstance(decision, outcomes.Skipped) and not isinstance(decision, outcomes.HarvestResult):
             raise outcomes.HarvesterContractError(source_name, decision)
+    except outcomes.HarvestOperatorPaused:
+        return await job_record.finish_skipped(
+            job_id, source_name, outcomes.REASON_HARVEST_STOPPED, started
+        )
     except outcomes.INTERRUPTIONS as exc:
         # F28 R21 (re-audit M1): Celery's soft time limit, or the CancelledError asyncio.run throws in
         # when that limit escapes the event loop, ends the run. Record it as a failed attempt with the
@@ -103,6 +107,8 @@ async def run_source(source_name: str, *, celery_task_id=None, worker=None, atte
     # F28 R18 (Bugbot 4305696998; the isolation of the skip is Cursor's c6af66d): a run that
     # succeeded or was skipped and whose record cannot be written is not a harvest failure. It never
     # goes through finish_failed, never changes freshness and is never retried: RunRecordFailed.
+    if isinstance(decision, outcomes.HarvestResult) and await harvest_control.is_paused_async():
+        return await job_record.finish_skipped(job_id, source_name, outcomes.REASON_HARVEST_STOPPED, started)
     outcome = outcomes.OUTCOME_SKIPPED if isinstance(decision, outcomes.Skipped) else decision.outcome
     try:
         if isinstance(decision, outcomes.Skipped):

@@ -115,6 +115,64 @@ def test_harvest_control_reports_in_flight_source_job(corpus_db, harvest_resumed
     assert state == {"f29-003-in-flight": "running"}, state
 
 
+def test_pause_cancels_in_flight_harvest_jobs(corpus_db, harvest_resumed, monkeypatch):
+    """FA-F29-005: operator stop closes running incremental/embed scraper_jobs and clears in_flight."""
+    import scraper.harvest_control as hc
+
+    monkeypatch.setattr(
+        hc,
+        "_revoke_celery_tasks",
+        lambda task_ids: len([tid for tid in task_ids if tid]),
+    )
+    run(
+        execute(
+            "INSERT INTO scraper_jobs (source_site, job_type, status, started_at, celery_task_id) VALUES "
+            "('PakistanLawSite', 'incremental', 'running', now() - interval '1 minute', 'f29-005-source'), "
+            "('embedding_queue', 'embed', 'running', now() - interval '30 seconds', 'f29-005-embed')"
+        )
+    )
+    cancelled = hc.pause()
+    assert cancelled == {"cancelled_jobs": 2, "revoked_tasks": 2}, cancelled
+    rows = {
+        tid: (status, reason)
+        for tid, status, reason in run(
+            fetch(
+                "SELECT celery_task_id, status, result_summary->>'reason' AS reason "
+                "FROM scraper_jobs WHERE celery_task_id LIKE 'f29-005-%' ORDER BY celery_task_id"
+            )
+        )
+    }
+    assert rows == {
+        "f29-005-embed": ("cancelled", "harvest_stopped_by_operator"),
+        "f29-005-source": ("cancelled", "harvest_stopped_by_operator"),
+    }, rows
+    assert hc.is_paused()
+    status = hc.pause()  # idempotent pause
+    assert status["cancelled_jobs"] == 0
+
+
+def test_api_stop_cancels_in_flight_jobs(corpus_db, harvest_resumed):
+    """POST /api/stop must cancel running harvest work, not only set paused."""
+    from fastapi.testclient import TestClient
+
+    from scraper.config import settings
+    from scraper.main import app
+
+    run(
+        execute(
+            "INSERT INTO scraper_jobs (source_site, job_type, status, started_at, celery_task_id) VALUES "
+            "('PakistanLawSite', 'incremental', 'running', now(), 'f29-005-api-stop')"
+        )
+    )
+    headers = {"X-API-Key": settings.ADMIN_API_KEY}
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.post("/api/stop", headers=headers).json() == {"status": "stopped"}
+        body = client.get("/api/harvest-control", headers=headers).json()
+    assert body == _harvest_control_body(True, in_flight=False), body
+    status = dict(run(fetch("SELECT status, result_summary->>'reason' FROM scraper_jobs WHERE celery_task_id = 'f29-005-api-stop'")))
+    assert status == {"cancelled": "harvest_stopped_by_operator"}, status
+
+
 def test_pause_flag_lives_in_database_not_stop_file(corpus_db, tmp_path, monkeypatch, harvest_resumed):
     """FA-F29-001: operator pause must be the DB singleton row, not a container-local stop file."""
     import scraper.harvest_control as hc

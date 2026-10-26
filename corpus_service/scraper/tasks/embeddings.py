@@ -455,6 +455,7 @@ class _Batch:
             rows = await self._claim()
             try:
                 for row in rows:
+                    await harvest_control.cooperative_cancel_if_paused_async()
                     self.current, self.held = row, None
                     paid = await self._process(row)
                     self.current, self.held = None, None
@@ -889,6 +890,30 @@ async def run_embedding_batch(*, celery_task_id=None, worker=None):
     counts = BatchCounts()
     try:
         summary = await process_embedding_queue(counts)
+    except outcomes.HarvestOperatorPaused:
+        summary = {
+            **counts.summary(outcomes.OUTCOME_SKIPPED),
+            "reason": outcomes.REASON_HARVEST_STOPPED,
+        }
+        tally = counts.tally
+        if counts.claimed or counts.reclaimed:
+            try:
+                await job_record.record_batch(
+                    status=job_record.STATUS_CANCELLED,
+                    summary=summary,
+                    started=started,
+                    attempted=tally.attempted,
+                    written=tally.succeeded,
+                    failed=tally.failed,
+                    celery_task_id=celery_task_id,
+                    worker=worker,
+                )
+            except Exception as record_exc:
+                logger.error(
+                    "F29: could not record operator-cancelled embedding batch (%s)",
+                    outcomes.describe_error(record_exc),
+                )
+        return summary
     except (Exception, *outcomes.INTERRUPTIONS) as exc:
         # F28 R19: the failed record comes from the batch's own counters, so items done before the
         # failure are kept (an exception escaping the item loop carries no counts of its own).
