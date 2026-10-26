@@ -8,11 +8,7 @@ paths-ignore:
   - reports
   - .stryker-tmp
   - artifacts
-  # F41 / E-24 quarantine (LEGACY_GOVERNANCE_CHAINS off): frozen governance monoliths
-  # and adapters are not active product surface; keep CodeQL focused on live routes.
-  - app/api/d2/ops-reporting
-  - app/api/d4/filings
-  - app/ops/operator-audit-console.tsx
-  - platform/persistence/workflowOps*Governance.ts
-  # One adapter filename alone exceeds CodeQL's 255-byte trap path limit and aborts JS extraction.
+  # Frozen legacy governance chain (E-24, LEGACY_GOVERNANCE_CHAINS off): its
+  # 254-character file name plus CodeQL's ".trap.gz" suffix exceeds the 255-byte
+  # filename limit, which aborts JavaScript extraction for the whole repository.
   - platform/persistence/workflowOpsAlertArchivalExportCustodyHandoffExternalTransportReceiptAcknowledgmentClosureAttestationExternalTransportReceiptAcknowledgmentReconciliationExternalDistributionAuditLedgerPartnerHandoffAttestationOutboundRegistryAttestationLedgerGovernance.ts
