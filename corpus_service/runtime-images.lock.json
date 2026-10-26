@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "updated": "2026-10-26",
+  "images": {
+    "python_base": {
+      "reference": "docker.io/library/python:3.12-slim",
+      "digest": "sha256:e8a38829209aea82774882e5157e1c3e8c8393ff53a697b3580896e57f345c"
+    },
+    "pgvector_pg16": {
+      "reference": "docker.io/pgvector/pgvector:pg16",
+      "digest": "sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30"
+    },
+    "redis_7_alpine": {
+      "reference": "docker.io/library/redis:7-alpine",
+      "digest": "sha256:1cf73a2f04808e55a8bd2f5706c2aa0ebb0f71938f93deb7af79f48311cd5cb9"
+    }
+  }
+}

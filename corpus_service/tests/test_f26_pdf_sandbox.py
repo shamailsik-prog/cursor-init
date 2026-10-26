@@ -1252,8 +1252,14 @@ def test_r19_health_and_the_vault_listing_never_walk_the_raw_store(tmp_path, mon
 def test_r22_the_test_set_pins_the_billiard_it_runs():
     import importlib.metadata
 
-    pins = [line.strip() for line in (PROJECT_ROOT / "requirements-test.txt").read_text(encoding="utf-8").splitlines()
-            if line.strip().lower().startswith("billiard")]
+    import re
+
+    text = (PROJECT_ROOT / "requirements-test.txt").read_text(encoding="utf-8")
+    pins = [
+        re.match(r"^(billiard==[^\s\\]+)", line.strip(), re.I).group(1)
+        for line in text.splitlines()
+        if line.strip().lower().startswith("billiard==")
+    ]
     assert pins == [f"billiard=={importlib.metadata.version('billiard')}"], pins
 
 

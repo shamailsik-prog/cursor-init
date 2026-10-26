@@ -8,6 +8,6 @@ FROM python:3.12-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY requirements-test.txt .
-RUN pip install --no-cache-dir -r requirements-test.txt uvicorn==0.54.0
+RUN pip install --require-hashes --no-cache-dir -r requirements-test.txt
 COPY . .
 RUN mkdir -p /app/live /app/state

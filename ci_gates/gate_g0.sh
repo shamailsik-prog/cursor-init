@@ -92,6 +92,10 @@ echo "[23] legacy-governance boundary guard (audit F41: quarantine budgets and a
 python3 ci_gates/check_legacy_governance_boundary.py || fail=1
 python3 ci_gates/test_check_legacy_governance_boundary.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_legacy_governance_boundary.py"; fail=1; }
 
+echo "[24] corpus runtime pins guard (audit F46: hashed requirements.txt, test superset, image digests, SBOM)"
+python3 ci_gates/check_corpus_runtime_pins.py || fail=1
+python3 ci_gates/test_check_corpus_runtime_pins.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_corpus_runtime_pins.py"; fail=1; }
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

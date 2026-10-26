@@ -1,0 +1,6 @@
+# Test-only additions on top of the locked production set (audit F46). Compiled to
+# requirements-test.txt; CI installs that file, which includes -r requirements.txt.
+-r requirements.txt
+pytest==9.1.1
+# Audit F26: golden PDF texts use pdfplumber's pypdfium2 backend in tests.
+pypdfium2==5.14.0

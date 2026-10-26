@@ -40,8 +40,18 @@ def test_models_import_pgvector_and_requirements_txt_declares_it():
     runtime = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
     test_set = (PROJECT_ROOT / "requirements-test.txt").read_text(encoding="utf-8")
     assert "pgvector" in ic.parse_requirements(runtime)
-    pin = [line.strip() for line in test_set.splitlines() if line.strip().startswith("pgvector")]
-    assert pin and pin[0] in [line.strip() for line in runtime.splitlines()], (pin, "requirements.txt must pin the tested pgvector")
+    import re
+
+    def _pin(name: str, blob: str) -> str | None:
+        for line in blob.splitlines():
+            m = re.match(rf"^{name}==([^\s\\]+)", line.strip(), re.I)
+            if m:
+                return f"{name}=={m.group(1)}"
+        return None
+
+    test_pin = _pin("pgvector", test_set)
+    runtime_pin = _pin("pgvector", runtime)
+    assert test_pin and runtime_pin == test_pin, (runtime_pin, test_pin)
 
 
 def test_dispatcher_dynamic_import_targets_are_scanned_first_party_modules():
