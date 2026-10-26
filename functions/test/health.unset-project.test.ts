@@ -6,6 +6,11 @@ function mockRes() {
   return res
 }
 
+const healthyDependencyProbes = {
+  probeFirestore: async () => {},
+  probeJobQueue: async () => {},
+}
+
 describe("health runtime identity without GCP project (R117-005)", () => {
   afterEach(() => {
     vi.resetModules()
@@ -22,6 +27,7 @@ describe("health runtime identity without GCP project (R117-005)", () => {
         SIKANDER_DEPLOY_PROFILE: "staging",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",
@@ -43,6 +49,7 @@ describe("health runtime identity without GCP project (R117-005)", () => {
         GCLOUD_PROJECT: "demo-sikander",
       },
       deployed: true,
+      ...healthyDependencyProbes,
       metadata: async () => ({
         region: "asia-south1",
         serviceAccount: "sikander-functions@demo-sikander.iam.gserviceaccount.com",

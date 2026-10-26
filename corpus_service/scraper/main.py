@@ -1,5 +1,5 @@
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
@@ -59,6 +59,10 @@ def _vault_pdfs(live_dir: pathlib.Path):
                 yield path, st
 @app.get("/health")
 async def health():
+    """
+    Readiness for the corpus API: PostgreSQL must answer. HTTP 503 when the DB probe fails.
+    Process liveness is implicit (uvicorn must serve HTTP); there is no separate shallow route.
+    """
     import pathlib, json
     from scraper.database import SessionLocal
     from sqlalchemy import select, func
@@ -70,14 +74,24 @@ async def health():
     if sf.exists():
         try: seen=len(json.loads(sf.read_text()).get("seen",[]))
         except: pass
+    body = {"total_pdfs": total_pdfs, "seen": seen, "dependencies": {"postgres": "failed"}}
     try:
         async with SessionLocal() as db:
             c=await db.execute(select(func.count(CaseLawMaster.id)))
-            return {"status":"ok","db_connected":True,"total_cases":c.scalar(),"total_pdfs":total_pdfs,"seen":seen}
+            body.update(
+                {
+                    "status": "ok",
+                    "db_connected": True,
+                    "total_cases": c.scalar(),
+                    "dependencies": {"postgres": "ok"},
+                }
+            )
+            return JSONResponse(status_code=200, content=body)
     except Exception:
         # Never echo the exception: driver errors can embed the DATABASE_URL (credentials, host).
         logger.warning("health: database probe failed", exc_info=True)
-        return {"status":"degraded","db_connected":False,"total_pdfs":total_pdfs,"seen":seen}
+        body.update({"status": "unhealthy", "db_connected": False})
+        return JSONResponse(status_code=503, content=body)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     # Static shell only; the page prompts for the admin key and sends it as X-API-Key.

@@ -3,7 +3,10 @@ import type { Request } from "firebase-functions/v2/https"
 import type { Response } from "express"
 import { deployContractViolations, INGRESS_SETTINGS, isDeployedRuntime, type Ingress } from "./deployConfig"
 import { gcpProjectIdForDeployProfile } from "./deployManifestProfile"
+import { dependencyReport, type DependencyKey, type DependencyVerdict } from "./healthDependencies"
 import { REGION, RUNTIME_DEFAULTS, RUNTIME_SERVICE_ACCOUNT } from "./runtimeOptions"
+
+export type { DependencyKey, DependencyVerdict } from "./healthDependencies"
 
 export { REGION } from "./runtimeOptions"
 
@@ -170,18 +173,34 @@ export async function contractReport(deps?: {
   }
 }
 
-export function createHealthHandler(deps?: Parameters<typeof contractReport>[0]) {
+export type HealthHandlerDeps = Parameters<typeof contractReport>[0] & Parameters<typeof dependencyReport>[0]
+
+/**
+ * `GET /health` on the `health` Cloud Function is the **readiness** probe: deploy contract plus
+ * Firestore and the `jobWorker` Cloud Tasks queue. It returns HTTP 503 when any required check fails.
+ * Container **liveness** is implicit (the process must answer HTTP); there is no separate shallow route.
+ */
+export function createHealthHandler(deps?: HealthHandlerDeps) {
   return async (_req: Request, res: Response): Promise<void> => {
     const env = deps?.env ?? process.env
     const deployed = deps?.deployed ?? isDeployedRuntime(env)
     const contract = await contractReport(deps)
+    const dependencies = await dependencyReport(deps)
     const violated = Object.values(contract).some((v) => v === "violated")
     const unknownWhenDeployed = deployed && Object.values(contract).some((v) => v === "unknown")
-    const unhealthy = violated || unknownWhenDeployed
-    res.status(unhealthy ? 503 : 200).json({
+    const dependencyFailed =
+      dependencies !== null && Object.values(dependencies).some((v) => v === "failed")
+    const unhealthy = violated || unknownWhenDeployed || dependencyFailed
+    const body: {
+      status: "ok" | "unhealthy"
+      region: string
+      dependencies?: Record<DependencyKey, DependencyVerdict>
+    } = {
       status: unhealthy ? "unhealthy" : "ok",
       region: REGION,
-    })
+    }
+    if (dependencies) body.dependencies = dependencies
+    res.status(unhealthy ? 503 : 200).json(body)
   }
 }
 

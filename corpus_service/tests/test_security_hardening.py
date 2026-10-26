@@ -205,10 +205,11 @@ class HealthDoesNotLeakErrorsTests(unittest.TestCase):
 
         with mock.patch.object(database, "SessionLocal", boom), self.assertLogs("scraper.main", "WARNING"):
             res = TestClient(app).get("/health")
-        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.status_code, 503)
         body = res.json()
-        self.assertEqual(body["status"], "degraded")
+        self.assertEqual(body["status"], "unhealthy")
         self.assertFalse(body["db_connected"])
+        self.assertEqual(body["dependencies"], {"postgres": "failed"})
         self.assertNotIn("hunter2", res.text)
         self.assertNotIn("db.internal", res.text)
 
