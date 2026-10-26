@@ -36,6 +36,7 @@ type MisbehaveMode = "rawParse" | "throwApply" | "badRefs" | "refs" | "leaseLost
 
 const misbehaveMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`misbehave_${jobId}`)
 const timeoutCoopMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`timeout_coop_${jobId}`)
+const leaseCoopMarkerRef = (jobId: string) => adminDb().collection("counters").doc(`lease_coop_${jobId}`)
 
 /** Cooperative handler: waits longer than the budget but stops when ctx.signal aborts (F35). */
 const timeoutCooperativeHandler: JobHandler<Record<string, never>> = {
@@ -48,6 +49,22 @@ const timeoutCooperativeHandler: JobHandler<Record<string, never>> = {
     return {
       apply: (tx) => {
         tx.set(timeoutCoopMarkerRef(ctx.job.id), { leaked: true })
+      },
+    }
+  },
+}
+
+/** Cooperative handler: waits until lease loss aborts ctx.signal (F35 R1-001). */
+const leaseCooperativeHandler: JobHandler<Record<string, never>> = {
+  jobType: "test.lease_cooperative",
+  saga: false,
+  errorCodes: {},
+  parse: () => ({}),
+  run: async (ctx) => {
+    await abortableDelay(JOB_LEASE_MS, ctx.signal)
+    return {
+      apply: (tx) => {
+        tx.set(leaseCoopMarkerRef(ctx.job.id), { leaked: true })
       },
     }
   },
@@ -107,12 +124,14 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     installTestHandlers()
     jobTestSeam.handlers.set(misbehavingHandler.jobType, misbehavingHandler as JobHandler)
     jobTestSeam.handlers.set(timeoutCooperativeHandler.jobType, timeoutCooperativeHandler as JobHandler)
+    jobTestSeam.handlers.set(leaseCooperativeHandler.jobType, leaseCooperativeHandler as JobHandler)
   })
 
   afterEach(() => {
     removeTestHandlers()
     jobTestSeam.handlers.delete(misbehavingHandler.jobType)
     jobTestSeam.handlers.delete(timeoutCooperativeHandler.jobType)
+    jobTestSeam.handlers.delete(leaseCooperativeHandler.jobType)
     vi.restoreAllMocks()
   })
 
@@ -275,6 +294,32 @@ describe.skipIf(!EMULATORS)("P2 worker (P3-3, P3-6, P3-7, P3-9)", () => {
     })
     expect(d.dispatcher.tasks).toEqual([{ jobId, seq: 1, scheduleAt: T0 + 1000 }])
     expect(await diagCount(firmId, jobId)).toBe(0)
+  })
+
+  it("lease loss aborts cooperative work: no late apply (F35 R1-001)", async () => {
+    const jobId = (
+      await enqueueAt(
+        {
+          firmId,
+          jobType: leaseCooperativeHandler.jobType,
+          classification: "internal",
+          matterId: null,
+          payload: {},
+          idempotencyKey: uniq("lease-coop"),
+          createdBy: uid,
+        },
+        T0
+      )
+    ).jobId
+    jobWorkerTestSeam.afterClaim = async ({ jobId: id }) => {
+      await jobsRef().doc(id).update({ "lease.owner": "intruder" })
+    }
+    try {
+      expect(await d.dispatcher.deliver({ jobId, seq: 0 }, T0)).toBe("lease_lost")
+    } finally {
+      delete jobWorkerTestSeam.afterClaim
+    }
+    expect((await leaseCoopMarkerRef(jobId).get()).exists).toBe(false)
   })
 
   it("handler_timeout aborts cooperative work: no late apply or fenced step (F35)", async () => {

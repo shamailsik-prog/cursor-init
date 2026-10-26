@@ -1,10 +1,17 @@
-import { JobError } from "./errors"
+import { JobError, LeaseLostError } from "./errors"
+
+/** The error cooperative handlers should surface when the worker aborts `signal`. */
+export function abortErrorFromSignal(signal: AbortSignal): Error {
+  const reason = signal.reason
+  if (reason instanceof JobError && reason.code === "handler_timeout") return reason
+  if (reason instanceof LeaseLostError) return reason
+  return new JobError("handler_timeout")
+}
 
 /** The error handlers should treat as a budget overrun when `signal` aborts. */
 export function handlerTimeoutFromSignal(signal: AbortSignal): JobError {
-  const reason = signal.reason
-  if (reason instanceof JobError && reason.code === "handler_timeout") return reason
-  return new JobError("handler_timeout")
+  const err = abortErrorFromSignal(signal)
+  return err instanceof JobError ? err : new JobError("handler_timeout")
 }
 
 /**
@@ -12,14 +19,14 @@ export function handlerTimeoutFromSignal(signal: AbortSignal): JobError {
  * The timer is unref'd so a stray delay never holds the process open.
  */
 export async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw handlerTimeoutFromSignal(signal)
+  if (signal.aborted) throw abortErrorFromSignal(signal)
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, ms)
     timer.unref?.()
     const onAbort = () => {
       clearTimeout(timer)
       signal.removeEventListener("abort", onAbort)
-      reject(handlerTimeoutFromSignal(signal))
+      reject(abortErrorFromSignal(signal))
     }
     signal.addEventListener("abort", onAbort)
   })

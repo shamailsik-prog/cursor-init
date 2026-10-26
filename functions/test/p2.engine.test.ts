@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { abortableDelay, handlerTimeoutFromSignal } from "../src/p2/abortable"
+import { abortableDelay, abortErrorFromSignal, handlerTimeoutFromSignal } from "../src/p2/abortable"
+import { LeaseLostError } from "../src/p2/errors"
+import { leaseFenceHolds, startLeaseFenceWatch } from "../src/p2/leaseWatch"
 import { assertJobTimings, JOB_STATUSES } from "../src/p2/constants"
 import { diagnosticHandler } from "../src/p2/diagnostic"
 import { canonicalJson, jobIdFor } from "../src/p2/enqueue"
@@ -100,5 +102,38 @@ describe("P2 engine units", () => {
     ac.abort(err)
     await expect(pending).rejects.toBe(err)
     expect(handlerTimeoutFromSignal(ac.signal).code).toBe("handler_timeout")
+  })
+
+  it("abortableDelay rejects with LeaseLostError when the worker aborts for lease loss (F35 R1-001)", async () => {
+    const ac = new AbortController()
+    const err = new LeaseLostError()
+    const pending = abortableDelay(60_000, ac.signal)
+    ac.abort(err)
+    await expect(pending).rejects.toBe(err)
+    expect(abortErrorFromSignal(ac.signal)).toBe(err)
+  })
+
+  it("leaseFenceHolds matches running + owner; startLeaseFenceWatch fires on loss (F35 R1-001)", async () => {
+    const owner = "w-a"
+    const row = { status: "running" as const, lease: { owner, expiresAt: {} } }
+    expect(leaseFenceHolds(row as never, owner)).toBe(true)
+    expect(leaseFenceHolds({ ...row, lease: { ...row.lease, owner: "other" } } as never, owner)).toBe(false)
+    let current = row
+    const ref = {} as import("firebase-admin/firestore").DocumentReference
+    const lost: LeaseLostError[] = []
+    const stop = startLeaseFenceWatch(
+      ref,
+      owner,
+      (e) => lost.push(e),
+      async () => current as never,
+      20
+    )
+    await new Promise((r) => setTimeout(r, 5))
+    expect(lost).toHaveLength(0)
+    current = { status: "running", lease: { owner: "intruder", expiresAt: {} } }
+    await new Promise((r) => setTimeout(r, 30))
+    stop()
+    expect(lost).toHaveLength(1)
+    expect(lost[0]).toBeInstanceOf(LeaseLostError)
   })
 })

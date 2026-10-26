@@ -12,6 +12,7 @@ import type { JobDeps, JobTask } from "./dispatch"
 import { areValidRefs, jobsRef, stageJobUpdate, type FencedStepRecord, type JobLogEntry, type JobLogEvent, type JobRow } from "./enqueue"
 import { JobError, LeaseLostError, sanitizeError, type SanitizedError } from "./errors"
 import { stageJobDeadLetteredEvent, stageJobFailedEvent } from "./jobEvents"
+import { readJobRowForLeaseWatch, leaseFenceHolds, startLeaseFenceWatch } from "./leaseWatch"
 import { handlerFor, type JobHandler, type JobResult } from "./registry"
 
 /**
@@ -42,8 +43,9 @@ import { handlerFor, type JobHandler, type JobResult } from "./registry"
  * `runFenced(stepId, fn)` records each committed step on the row (`fencedSteps`), so a step that
  * committed before a crash, a failure or a manual requeue is skipped on every later attempt.
  *
- * A handler that overruns its budget receives `ctx.signal` aborted with `handler_timeout`. Cooperative
- * handlers must stop and must not start new side effects after abort. A handler that ignores the signal
+ * A handler that overruns its budget receives `ctx.signal` aborted with `handler_timeout`; when the
+ * claim's lease fence is lost (reclaim or overwrite) the worker aborts `ctx.signal` with `LeaseLostError`.
+ * Cooperative handlers must stop and must not start new side effects after abort. A handler that ignores the signal
  * may still run until the instance ends; until the failure commit lands its fence still holds, so a late
  * `runFenced` step can commit (once: the retry finds it recorded and skips it). That is inside the
  * at-least-once model (handlers are idempotent, L8148).
@@ -222,7 +224,7 @@ async function claim(ref: DocumentReference, task: JobTask, deps: JobDeps): Prom
   })
 }
 
-const fenceHolds = (row: JobRow | undefined, owner: string): row is JobRow => row?.status === "running" && row.lease?.owner === owner
+const fenceHolds = (row: JobRow | undefined, owner: string): row is JobRow => leaseFenceHolds(row, owner)
 
 const STEP_ID = /^[A-Za-z0-9_-]{1,100}$/
 const RESERVED_ID = /^__.*__$/
@@ -276,21 +278,38 @@ function runFencedFor(ref: DocumentReference, owner: string, attempt: number, no
   }
 }
 
-/** Races `work(signal)` against the budget; aborts `signal` on overrun. The timer is always cleared. */
-async function withinBudget<T>(work: (signal: AbortSignal) => Promise<T>, budgetMs: number): Promise<T> {
+/**
+ * Runs `work(signal)` under the handler budget and a lease-fence watch (audit F35). Aborts `signal` on
+ * budget overrun (`handler_timeout`) or when the claim's fence no longer holds (`LeaseLostError`).
+ */
+async function runWithHandlerAbort<T>(
+  ref: DocumentReference,
+  owner: string,
+  budgetMs: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
   const ac = new AbortController()
-  let timer: NodeJS.Timeout | undefined
+  let budgetTimer: NodeJS.Timeout | undefined
   const overrun = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
+    budgetTimer = setTimeout(() => {
       const err = new JobError("handler_timeout")
       ac.abort(err)
       reject(err)
     }, budgetMs)
   })
+  const stopWatch = startLeaseFenceWatch(
+    ref,
+    owner,
+    (err) => {
+      if (!ac.signal.aborted) ac.abort(err)
+    },
+    readJobRowForLeaseWatch
+  )
   try {
     return await Promise.race([work(ac.signal), overrun])
   } finally {
-    clearTimeout(timer)
+    clearTimeout(budgetTimer)
+    stopWatch()
   }
 }
 
@@ -317,7 +336,10 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
     }
     // Audit F42: a job of a tombstoned matter never runs, so nothing is written for the matter after its deletion.
     if (row.matterId !== null && (await matterTombstoned(row.firmId, row.matterId))) throw new JobError("matter_deleted", { permanent: true })
-    const result = await withinBudget(
+    const result = await runWithHandlerAbort(
+      ref,
+      owner,
+      deps.handlerBudgetMs,
       (signal) =>
         handler.run({
           job: {
@@ -335,8 +357,7 @@ async function runHandler(ref: DocumentReference, claimed: Claimed, deps: JobDep
           signal,
           runFenced: runFencedFor(ref, owner, row.attempts, deps.clock),
           checkFence: checkFenceFor(ref, owner),
-        }),
-      deps.handlerBudgetMs
+        })
     )
     return { ok: true, result: result ?? {}, handler }
   } catch (err) {
