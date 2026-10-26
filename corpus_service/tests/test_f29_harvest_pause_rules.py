@@ -46,6 +46,14 @@ def test_harvest_control_status_exposes_in_flight_work():
     assert "operator_status_async" in body and "ScraperJob" in body and "in_flight" in body
 
 
+def test_pause_cancels_in_flight_harvest_work():
+    hc = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
+    text = hc.read_text()
+    assert "cancel_in_flight_harvest_work_async" in text
+    assert "return await cancel_in_flight_harvest_work_async()" in text
+    assert "app.control.revoke" in text and "terminate=False" in text
+
+
 def test_harvest_control_is_db_backed_not_file_authoritative():
     root = pathlib.Path(__file__).resolve().parents[1] / "scraper" / "harvest_control.py"
     text = root.read_text()
