@@ -88,6 +88,10 @@ echo "[22] data-inventory guard (audit F42: every Firestore collection, object p
 python3 ci_gates/check_data_inventory.py || fail=1
 python3 ci_gates/test_check_data_inventory.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_data_inventory.py"; fail=1; }
 
+echo "[23] legacy-governance boundary guard (audit F41: quarantine budgets and active-product import barrier for LEGACY_GOVERNANCE_CHAINS)"
+python3 ci_gates/check_legacy_governance_boundary.py || fail=1
+python3 ci_gates/test_check_legacy_governance_boundary.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_legacy_governance_boundary.py"; fail=1; }
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi
