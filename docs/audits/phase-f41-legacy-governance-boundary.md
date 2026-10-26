@@ -24,7 +24,7 @@ consumed review and CI attention while `LEGACY_GOVERNANCE_CHAINS` stays off.
 | State | Evidence | Result |
 | --- | --- | --- |
 | RED | PR #147 @ `5b05c43b`: G-0 [23] capped only named file `maxLines`; missing listed paths skipped; adapters counted only in `platform/persistence/` top level; no folder totals or adapter line budgets | Re-audit escapes E4 (new 5k-line file under `filings/`), E5/E5b (rename/delete listed monolith), E7 (double adapter size) exited **0** |
-| GREEN | PR #147 @ `7121e0d9`: manifest inventory v2 — `quarantineFolderBudgets`, `listedBudgetPathsMustExist`, recursive adapter `rglob`, `maxGovernanceAdapterTotalLines` / `maxGovernanceAdapterLinesPerFile`; regressions E4/E5b/E7 in `test_check_legacy_governance_boundary.py` | CI `40342294385`: 17 pass / 0 fail / 4 skip |
+| GREEN | PR #147 @ `f83f6570` (FA-F41-002 code @ `7121e0d9`): manifest inventory v2 — `quarantineFolderBudgets`, `listedBudgetPathsMustExist`, recursive adapter `rglob`, `maxGovernanceAdapterTotalLines` / `maxGovernanceAdapterLinesPerFile`; regressions E4/E5b/E7 in `test_check_legacy_governance_boundary.py` | CI `40347849890`: 17 pass / 0 fail / 4 skip |
 
 ## Scope note
 
