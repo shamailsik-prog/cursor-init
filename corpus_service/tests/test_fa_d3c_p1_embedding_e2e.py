@@ -352,8 +352,21 @@ def test_embeddings_go_through_p1_and_every_call_is_in_its_ledger(deployment):
     assert len(rows) == 3, f"P1's ledger must hold one usage row per embedding, got {len(rows)}"
     assert {(r["taskType"], r["outcome"], r["model"], r["caller"], r["actorId"], r["classification"], r["outputTokens"])
             for r in rows} == {("embedding", "ok", GATEWAY_MODEL, env("FA_D3C_CALLER"), "system", "public", 0)}
-    ops = {r for (r,) in run(fetch("SELECT operation_id FROM embedding_queue"))}
-    assert {r["corpusOperationId"] for r in rows} == ops, "each P1 charge names the corpus operation it paid for"
+    from scraper.tasks import embedding_chunks as ec
+
+    expected_ops = set()
+    for record_id, statute_name, section_number, section_text in run(fetch(
+        "SELECT id, statute_name, section_number, section_text FROM statutes_master WHERE source_site = 'F27Fixture'"
+    )):
+        for chunk in ec.build_embedding_chunks(statute_name, section_number, section_text):
+            expected_ops.add(ec.chunk_operation_id(
+                "statutes_master", record_id, "text-embedding-3-small", DIMENSIONS, chunk,
+            ))
+    assert {r["corpusOperationId"] for r in rows} == expected_ops, (
+        "each P1 charge names the chunk-level corpus operation it paid for"
+    )
+    manifests = {r for (r,) in run(fetch("SELECT stored_operation_id FROM embedding_queue"))}
+    assert len(manifests) == 3 and all(m and len(m) == 64 for m in manifests)
     assert month(deployment.store).get("spentMicroUsd") == 3 and month(deployment.store).get("calls", {}).get("ok") == 3
     sent = sorted(c["input"] for c in transport_calls(deployment.store))
     assert len(sent) == 3 and masked_row_2 in sent and not any(CNIC in s for s in sent), (
