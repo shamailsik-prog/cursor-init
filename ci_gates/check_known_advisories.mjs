@@ -9,7 +9,8 @@
 // longer appear are reported as stale (prune them) but do not fail.
 //
 //   node ci_gates/check_known_advisories.mjs \
-//     --npm npm:root=root-audit.json --npm npm:functions=functions-audit.json \
+//     --npm npm:root=root-prod.json --npm npm:root:dev=root-full.json \
+//     --npm npm:functions=functions-prod.json --npm npm:functions:dev=functions-full.json \
 //     --pip pip:corpus_service=pip-audit.json [--allowlist docs/audits/known-advisories.md]
 import fs from "node:fs"
 import path from "node:path"
