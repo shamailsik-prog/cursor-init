@@ -1,0 +1,56 @@
+{
+  "inventoryVersion": 2,
+  "finding": "F41",
+  "featureFlag": "LEGACY_GOVERNANCE_CHAINS",
+  "specRef": "Erratum E-24 (ERRATUM_SET_2_PROPOSED.md); docs/architecture/README.md frozen layers",
+  "listedBudgetPathsMustExist": true,
+  "activeProductImportScanRoots": [
+    "app/api/d1",
+    "app/api/d2/court-ops",
+    "app/api/d5",
+    "functions/src"
+  ],
+  "quarantinePathPrefixes": [
+    "app/api/d2/ops-reporting/",
+    "app/api/d4/filings/",
+    "app/ops/"
+  ],
+  "quarantineModules": [
+    "platform/persistence/denyByDefaultWorkflowOpsRepository.ts"
+  ],
+  "quarantinePersistenceModuleRule": {
+    "directories": ["platform/persistence"],
+    "basenamePrefix": "workflowOps",
+    "basenameSuffix": "Governance.ts"
+  },
+  "quarantineFolderBudgets": [
+    {
+      "prefix": "app/api/d2/ops-reporting/",
+      "maxTotalLines": 33411,
+      "maxSourceFiles": 2
+    },
+    {
+      "prefix": "app/api/d4/filings/",
+      "maxTotalLines": 19082,
+      "maxSourceFiles": 1
+    },
+    {
+      "prefix": "app/ops/",
+      "maxTotalLines": 7426,
+      "maxSourceFiles": 3
+    }
+  ],
+  "frozenMonoliths": [
+    { "path": "app/api/d2/ops-reporting/route.ts", "maxLines": 32900 },
+    { "path": "app/api/d4/filings/route.ts", "maxLines": 19082 },
+    { "path": "app/ops/operator-audit-console.tsx", "maxLines": 7338 }
+  ],
+  "spineCouplingBudgets": [
+    { "path": "platform/spine/store.ts", "maxLines": 6446 },
+    { "path": "platform/persistence/firestoreSpineRepositories.ts", "maxLines": 5230 },
+    { "path": "platform/persistence/spineRepositories.ts", "maxLines": 6309 }
+  ],
+  "maxGovernanceAdapterFiles": 45,
+  "maxGovernanceAdapterTotalLines": 11943,
+  "maxGovernanceAdapterLinesPerFile": 871
+}

@@ -1,0 +1,30 @@
+{
+  "inventoryVersion": 2,
+  "finding": "F41",
+  "featureFlag": "LEGACY_GOVERNANCE_CHAINS",
+  "specRef": "Erratum E-24",
+  "listedBudgetPathsMustExist": false,
+  "activeProductImportScanRoots": [
+    "app/api/d1",
+    "app/api/d2/court-ops",
+    "app/api/d5",
+    "functions/src"
+  ],
+  "quarantinePathPrefixes": [
+    "app/api/d2/ops-reporting/",
+    "app/api/d4/filings/",
+    "app/ops/"
+  ],
+  "quarantineModules": [],
+  "quarantinePersistenceModuleRule": {
+    "directories": ["platform/persistence"],
+    "basenamePrefix": "workflowOps",
+    "basenameSuffix": "Governance.ts"
+  },
+  "quarantineFolderBudgets": [],
+  "frozenMonoliths": [],
+  "spineCouplingBudgets": [],
+  "maxGovernanceAdapterFiles": 999,
+  "maxGovernanceAdapterTotalLines": 999999,
+  "maxGovernanceAdapterLinesPerFile": 999999
+}

@@ -72,6 +72,10 @@ Re-enabling:
   `feature_disabled`.
 - **`/ops` console:** a step that reaches a frozen route shows "<step>: disabled (LEGACY_GOVERNANCE_CHAINS is off)"
   as a notice instead of failing.
+- **Quarantine manifest (audit F41):** `platform/boundaries/legacyGovernanceQuarantine.json` lists frozen monolith
+  line budgets, the governance-adapter file cap, active-product import scan roots and quarantine path prefixes.
+  G-0 check [23] (`ci_gates/check_legacy_governance_boundary.py`) fails when frozen code grows past those budgets
+  or when an active-product route imports a quarantined governance adapter.
 
 ## Running the gates and scans locally
 
@@ -140,6 +144,14 @@ Gates:
   runs `npm ci --dry-run --ignore-scripts` for each lockfile: npm's own validator, which catches an override added,
   changed or removed in `package.json` without the lock. Regenerate a lockfile only with the pinned npm
   (`npm install --package-lock-only --ignore-scripts`), never by hand.
+- **Legacy-governance boundary guard (audit F41):** `python3 ci_gates/check_legacy_governance_boundary.py` is G-0
+  check [23]: listed monolith/spine paths must exist; per-folder line and file caps under quarantine prefixes;
+  recursive `workflowOps*Governance.ts` discovery with per-file, total-line and file-count adapter budgets; blocks
+  imports of those adapters from active-product trees (`app/api/d1`, `app/api/d2/court-ops`, `app/api/d5`,
+  `functions/src`); requires `LEGACY_GOVERNANCE_CHAINS` to default off. Budgets live in
+  `platform/boundaries/legacyGovernanceQuarantine.json` (inventory v2, FA-F41-002). CodeQL still analyses filings,
+  ops-reporting, the operator console and governance adapters; only the one adapter path that exceeds CodeQL's trap
+  filename limit is excluded (`.github/codeql/codeql-config.yml`, FA-F41-001).
 - **G-1 (spine):** `python3 ci_gates/gate_g1.py` runs `tests/gate_g1.test.ts` (G1-1 to G1-10), in memory.
 - **G-2 (cross-firm isolation):** `npm run gate:g2`. Locally it starts the Auth and Firestore emulators on ephemeral
   ports with a private `demo-g2-*` project, so it can run beside other emulators. With `CI` set it uses the repo

@@ -125,6 +125,9 @@ function buildBaseTree(): string {
     "scripts/deploy-preflight.sh",
     "app/api/p1/committee-brain/route.ts",
     "app/api/d1/documents/route.ts",
+    // Check [23] (audit F41): minimal manifest (no listed monolith paths) + flag default.
+    "ci_gates/fixtures/legacy_governance_quarantine_g0_e2e.json",
+    "platform/flags/featureFlags.ts",
     // Check [22] (audit F42): the data inventory gate finds stores in firestore.rules, Firestore collection literals,
     // object key prefixes and Postgres tables; these three files name the collections, the object prefix and the tables
     // found nowhere in the paths above, so no inventoried store reads as stale in the minimal tree.
@@ -153,6 +156,11 @@ function buildBaseTree(): string {
   ) as Record<string, string[]>;
   const allowlisted = new Set(Object.values(allow).flat().map((entry) => entry.split(":")[0]));
   for (const rel of allowlisted) copyFromRepo(dir, rel);
+  fs.mkdirSync(path.join(dir, "platform", "boundaries"), { recursive: true });
+  fs.copyFileSync(
+    path.join(dir, "ci_gates", "fixtures", "legacy_governance_quarantine_g0_e2e.json"),
+    path.join(dir, "platform", "boundaries", "legacyGovernanceQuarantine.json"),
+  );
   // Legitimate provider SDK imports inside the P1 boundary: Cloud Functions P1 only. Audit F18: platform/p1 is the Next
   // and eve half of P1, which holds no provider path; check [19] fails a provider import there (case below).
   plant(
