@@ -102,9 +102,10 @@ def runtime_files() -> Iterator[Path]:
 
 
 def requirement_files() -> List[Path]:
+    # Audit F46: pip-compile sources (*.in) may use -r includes; guards scan install manifests (*.txt) only.
     found = sorted(
         p for p in PROJECT_ROOT.rglob("*")
-        if p.is_file() and re.fullmatch(r"(?:[\w.-]+[-_.])?requirements(?:[-_.][\w.-]+)?\.(?:txt|in)", p.name, re.I)
+        if p.is_file() and re.fullmatch(r"(?:[\w.-]+[-_.])?requirements(?:[-_.][\w.-]+)?\.txt", p.name, re.I)
         and "__pycache__" not in p.parts
     )
     assert found, "no requirements file found under corpus_service/ (the guard would pass vacuously)"

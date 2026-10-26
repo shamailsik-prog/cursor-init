@@ -338,7 +338,21 @@ def test_lxml_is_loaded_by_name_in_bootstrap_harvest_and_must_be_declared():
     assert "lxml" in ic.LOADED_BY_NAME and "bootstrap_harvest.py" in ic.LOADED_BY_NAME["lxml"]
     # The re-audit's demonstration as a test: the real tree with lxml dropped from the manifest.
     runtime = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
-    without = "\n".join(line for line in runtime.splitlines() if line.strip() != "lxml") + "\n"
+    without_lines: list[str] = []
+    skip = False
+    for line in runtime.splitlines():
+        if re.match(r"^lxml==", line.strip()):
+            skip = True
+            continue
+        if skip:
+            if line.strip().startswith("--hash=") or line.rstrip().endswith("\\"):
+                continue
+            if line.strip().startswith("#"):
+                skip = False
+                continue
+            skip = False
+        without_lines.append(line)
+    without = "\n".join(without_lines) + "\n"
     assert without != runtime
     problems = ic.check(PROJECT_ROOT, requirements=without)
     assert any(p.startswith("undeclared: lxml is loaded by name") and "bootstrap_harvest.py:" in p for p in problems), problems
