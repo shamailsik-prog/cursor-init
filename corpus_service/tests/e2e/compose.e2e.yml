@@ -15,5 +15,3 @@ services:
   api: *e2e-app
   worker-embed: *e2e-app
   celery-beat: *e2e-app
-  worker-a: *e2e-app
-  worker-b: *e2e-app
