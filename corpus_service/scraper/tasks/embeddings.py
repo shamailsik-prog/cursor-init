@@ -881,6 +881,10 @@ async def process_embedding_queue(counts=None):
 async def run_embedding_batch(*, celery_task_id=None, worker=None):
     """One batch with its run record: a `scraper_jobs` row (job type `embed`) when the batch claimed
     or reclaimed work, or failed; an empty queue or a skipped batch writes none (F28 R13, F27 R12)."""
+    if await harvest_control.is_paused_async():
+        logger.info("Harvester paused by operator; skipping scheduled embedding batch")
+        counts = BatchCounts()
+        return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "harvest_paused"}
     started = job_record.utcnow()
     counts = BatchCounts()
     try:
@@ -930,9 +934,6 @@ def process_embedding_queue_sync(celery_task_id=None, worker=None):
 @shared_task(name="scraper.tasks.embeddings.process_embedding_queue", bind=True)
 def process_embedding_queue_task(self):
     # No Celery retry (F28 R7): beat fires this every 5 minutes and each row has its own attempt
-    # bound and next_attempt_at (F27 R8).
-    if harvest_control.is_paused():
-        logger.info("Harvester paused by operator; skipping scheduled embedding batch")
-        counts = BatchCounts()
-        return {**counts.summary(outcomes.OUTCOME_SKIPPED), "reason": "harvest_paused"}
+    # bound and next_attempt_at (F27 R8). Pause is checked inside run_embedding_batch (F29) so the
+    # gate shares the task's one asyncio.run / in_task_loop lifecycle (F27 prefork).
     return process_embedding_queue_sync(celery_task_id=self.request.id, worker=self.request.hostname)

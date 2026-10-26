@@ -276,7 +276,8 @@ def test_b_migrate_as_schema_owner_upgrades_and_api_init_db_stays_dml_only(corpu
         # As provision-roles.sh does for a pre-F30 volume: application tables move to the owner.
         *[f'ALTER TABLE "{t}" OWNER TO "{mig}"' for t in (
             "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
-            "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue")],
+            "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue",
+            "harvest_operator_state")],
         f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app}"',
         f'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "{app}"',
     )
@@ -1239,7 +1240,8 @@ def test_j_the_probe_is_built_next_to_scraper_sources_not_in_the_first_search_pa
         f'GRANT USAGE, CREATE ON SCHEMA public TO "{mig}"',
         *[f'ALTER TABLE "{t}" OWNER TO "{mig}"' for t in (
             "courts", "scraper_sources", "case_law_master", "statutes_master", "scraper_staging",
-            "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue")],
+            "statutes_staging", "scraper_jobs", "quarantine_queue", "embedding_queue",
+            "harvest_operator_state")],
         # A "$user" schema the role can use but not create in.
         f'CREATE SCHEMA "{mig}"',
         f'GRANT USAGE ON SCHEMA "{mig}" TO "{mig}"',
