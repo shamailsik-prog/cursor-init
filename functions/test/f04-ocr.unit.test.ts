@@ -12,6 +12,7 @@ import {
   DeterministicLocalOcrEngine,
   LOCAL_OCR_PROVIDER,
   MAX_OCR_TEXT_BYTES,
+  measureOcrText,
   OcrTimeoutError,
   isProdLikeOcrRuntime,
   resolveOcrEngine,
@@ -43,6 +44,7 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     expect(Buffer.from(out.text, "utf8").toString("utf8")).toBe(out.text)
     expect(out.text.endsWith(ch)).toBe(true)
     expect(out.lowConfidence).toBe(false)
+    expect(out.truncated).toBe(true)
   })
 
   it("FA-F04-004: a byte cap cuts on a code-point boundary", () => {
@@ -137,6 +139,16 @@ if (resolveOcrEngine({}) !== null) process.exit(2);`
       rmSync(outfile, { force: true })
     }
   }, 60_000)
+
+  it("FA-F04-008: measureOcrText reports truncation without dropping valid UTF-8", () => {
+    const ch = "\u{FBAB}"
+    const full = ch.repeat(400_000)
+    const measured = measureOcrText(full)
+    expect(measured.truncated).toBe(true)
+    expect(Buffer.byteLength(measured.text, "utf8")).toBeLessThanOrEqual(MAX_OCR_TEXT_BYTES)
+    expect(Buffer.from(measured.text, "utf8").toString("utf8")).toBe(measured.text)
+    expect(measureOcrText(TEXT)).toEqual({ text: TEXT, truncated: false })
+  })
 
   it("FA-F04-008: text over the UTF-8 cap is marked truncated, and shorter text is not", async () => {
     const engine = new DeterministicLocalOcrEngine()
