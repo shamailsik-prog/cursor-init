@@ -687,6 +687,21 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     })
   })
 
+  it("FA-F04-007: create-time drain still hands off without running the sweep", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-create-only")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+
+    await onJobCreatedCore(jobId, row, deps)
+    expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["done"])
+    const legacy = await adminDb().collection("jobs").doc(jobId).get()
+    expect(legacy.get("ocrStatus")).toBe("done")
+    expect((await adminDb().collection("ocr_texts").doc(legacy.get("ocrResultId")).get()).get("text")).toBe(TEXT)
+  })
+
   it("FA-F04-007: a sweep drains an older legacy row the create trigger never saw", async () => {
     const { sweepLegacyOcr } = await import("../src/p2/ocrSweep")
     const firmId = await firm()
