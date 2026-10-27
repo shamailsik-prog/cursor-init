@@ -4,6 +4,17 @@
 FAILS=0
 CHECKS=0
 
+# Audit F46: e2e helpers use the same digest-pinned store images as docker-compose.yml.
+runtime_image_pin() {
+  python3 - "$1" "${DIR:-.}/runtime-images.lock.json" <<'PY'
+import json, sys
+key, path = sys.argv[1], sys.argv[2]
+meta = json.load(open(path, encoding="utf-8"))["images"][key]
+ref = meta["reference"].removeprefix("docker.io/")
+print(f"{ref}@{meta['digest']}")
+PY
+}
+
 # Every secret value the scripts hold; nothing they print may contain one.
 SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY F05_READER_PASSWORD"
 

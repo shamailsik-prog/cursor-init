@@ -21,6 +21,7 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-f30upgrade}
 NET="${COMPOSE_PROJECT_NAME}_data"
 CA_VOL="${COMPOSE_PROJECT_NAME}_tls-ca"
 LEGACY="${COMPOSE_PROJECT_NAME}-legacy-postgres"
+PGVECTOR_PIN=$(runtime_image_pin pgvector_pg16)
 PG_CLIENT=postgres:16-alpine
 
 # New credentials, written to .env as the README's upgrade steps say (never exported). The
@@ -52,14 +53,14 @@ as_superuser_local() {
 }
 
 echo "== F30 upgrade e2e against $DIR (project $COMPOSE_PROJECT_NAME)"
-docker pull -q "$PG_CLIENT" >/dev/null
+docker pull -q "$PG_CLIENT" "$PGVECTOR_PIN" >/dev/null
 
 # 1. Pre-F30 state, exactly as the old manifest produced it.
 docker volume create --label com.docker.compose.project="$COMPOSE_PROJECT_NAME" \
   --label com.docker.compose.volume=pgdata "${COMPOSE_PROJECT_NAME}_pgdata" >/dev/null
 docker run -d --name "$LEGACY" -e POSTGRES_USER=legal -e POSTGRES_PASSWORD=legal -e POSTGRES_DB=legal_scraper \
   -v "${COMPOSE_PROJECT_NAME}_pgdata:/var/lib/postgresql/data" -v "$DIR/init.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
-  pgvector/pgvector:pg16 >/dev/null
+  "$PGVECTOR_PIN" >/dev/null
 for _ in $(seq 1 60); do
   # TCP readiness only after the image's init (its temporary server is socket-only).
   docker exec "$LEGACY" pg_isready -h 127.0.0.1 -U legal -d legal_scraper >/dev/null 2>&1 && break

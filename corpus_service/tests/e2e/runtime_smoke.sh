@@ -60,7 +60,7 @@ trap '[ -z "$cleanup" ] || rm -rf "$cleanup"' EXIT
 
 echo "-- F31: clean venv from corpus_service/requirements.txt only ($("$PY" --version 2>&1), $venv)"
 "$PY" -m venv "$venv"
-"$venv/bin/python" -m pip install --disable-pip-version-check --quiet -r "$PROJECT/requirements.txt"
+"$venv/bin/python" -m pip install --require-hashes --disable-pip-version-check --quiet -r "$PROJECT/requirements.txt"
 echo "-- F31: $("$venv/bin/python" -m pip list --disable-pip-version-check --format=freeze | wc -l) distributions installed"
 
 echo "-- F31: runtime smoke inside that venv (cwd corpus_service, as the image's WORKDIR)"

@@ -140,6 +140,18 @@ function buildBaseTree(): string {
     "platform/retention/tombstone.ts",
     // Check [20] (audit F42): the runbook of the retention.deletion_unacknowledged alert.
     "docs/runbooks/retention-deletion.md",
+    // Check [24] (audit F46): hash-pinned runtime manifests, image digests, SBOM, and e2e scripts that must match.
+    "corpus_service/requirements.txt",
+    "corpus_service/requirements-test.txt",
+    "corpus_service/requirements.in",
+    "corpus_service/requirements-test.in",
+    "corpus_service/Dockerfile",
+    "corpus_service/docker-compose.yml",
+    "corpus_service/runtime-images.lock.json",
+    "corpus_service/runtime-sbom.json",
+    "corpus_service/tests/e2e/lib.sh",
+    "corpus_service/tests/e2e/store_security_e2e.sh",
+    "corpus_service/tests/e2e/upgrade_e2e.sh",
     // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
     "corpus_service/docker/postgres/provision-roles.sh",
     "services/d5-1/researchCorpus.ts",

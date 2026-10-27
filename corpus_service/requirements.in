@@ -1,0 +1,32 @@
+# Top-level corpus runtime dependencies (audit F46). The locked, hash-pinned set is
+# requirements.txt (pip-compile --generate-hashes). Refresh: corpus_service/scripts/compile_requirements.sh
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+alembic
+celery[redis]
+redis
+# Audit F25: scraper/net/fetch_policy.py guards httpx 0.28's transport layout.
+httpx==0.28.1
+beautifulsoup4
+lxml
+pdfplumber
+pytesseract
+pillow
+cryptography
+pydantic-settings
+python-multipart
+reportlab
+weasyprint
+python-dateutil
+# Audit F31: scraper/models.py imports pgvector.sqlalchemy at module load.
+pgvector==0.5.0
+# Direct imports (F31 import contract); pinned here so the runtime set matches the code.
+anyio
+certifi
+httpcore
+pydantic
+# Audit F26: PDF sandbox uses billiard; pdf_extractor imports pdfminer.six.
+billiard
+pdfminer.six

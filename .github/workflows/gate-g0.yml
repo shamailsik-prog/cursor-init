@@ -471,7 +471,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -522,7 +522,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -559,7 +559,7 @@ jobs:
           cache: pip
           cache-dependency-path: corpus_service/requirements-test.txt
       # The publication CLI (scraper.publication.cli) that seeds the corpus.
-      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: python -m pip install --require-hashes -r corpus_service/requirements-test.txt
       - run: npm ci
       - name: Functions install
         run: npm --prefix functions ci
@@ -595,7 +595,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -618,7 +618,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: python -m pip install --require-hashes -r corpus_service/requirements-test.txt
       - name: Annex A DDL (001, 003, 004, 005) applies as the superuser, twice (idempotent)
         run: |
           set -euo pipefail
@@ -642,14 +642,13 @@ jobs:
     # real Postgres: the strict import contract, `import scraper.models`, every scraper module, `python -m
     # scraper.migrate`, the API started as compose starts it (uvicorn scraper.main:app) answering /health with
     # db_connected, and the Celery app with its Redis broker transport and result backend (no Redis server: the live
-    # broker round trip is the F30 compose e2e). requirements.txt is unpinned until F46, so this job resolves current
-    # releases; a failure without a source change is a real break in what the image would install. The production
-    # Docker image itself (apt packages; no browser since FA-D3C-001) is not built here (F46).
+    # broker round trip is the F30 compose e2e). requirements.txt is hash-pinned (F46); this job installs that lock with
+    # --require-hashes. The production Docker image itself (apt packages; no browser since FA-D3C-001) is not built here.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -688,7 +687,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -724,7 +723,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: corpus_service/requirements-test.txt
-      - run: python -m pip install -r corpus_service/requirements-test.txt
+      - run: python -m pip install --require-hashes -r corpus_service/requirements-test.txt
       - run: npm ci
       - name: Functions install
         run: npm --prefix functions ci

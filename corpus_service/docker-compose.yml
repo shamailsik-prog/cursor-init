@@ -112,7 +112,7 @@ services:
   # One-shot, no network: refuses to let the stores start unless every store password is at
   # least 16 URL-safe characters, not a known default, and all four differ (audit F30).
   secrets-preflight:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
     entrypoint: ["/bin/bash", "/usr/local/bin/check-secrets.sh"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER_required}
@@ -130,7 +130,7 @@ services:
   # One-shot: issue (or validate operator-supplied) TLS material for the stores. Same pinned image
   # as Postgres (it ships openssl), no network.
   certs:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
     entrypoint: ["/bin/sh", "/usr/local/bin/generate-certs.sh"]
     environment:
       TLS_CERTS_MODE: ${TLS_CERTS_MODE:-auto}
@@ -147,7 +147,7 @@ services:
     restart: "no"
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a97d77306ff47cc1d8add4d000cec2207da2e110746318df3137ce53c337ca30
     command:
       - postgres
       - -c
@@ -203,7 +203,7 @@ services:
     # No "ports:" on purpose: reachable only from the internal data network.
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:1cf73a2f04808e55a8bd2f5706c2aa0ebb0f71938f93deb7af79f48311cd5cb9
     command:
       - redis-server
       - --port

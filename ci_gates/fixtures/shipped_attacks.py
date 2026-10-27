@@ -25,6 +25,21 @@ matches inside x-runtime-depends, so it moves celery-beat (not the store) onto [
 store itself stays on the internal network and is caught for its build, ports and flags.
 """
 
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+_LOCK = json.loads(
+    (Path(__file__).resolve().parents[2] / "corpus_service" / "runtime-images.lock.json").read_text(
+        encoding="utf-8"
+    )
+)
+_REDIS_IMAGE = f"redis:7-alpine@{_LOCK['images']['redis_7_alpine']['digest']}\n"
+_PG_IMAGE = f"pgvector/pgvector:pg16@{_LOCK['images']['pgvector_pg16']['digest']}\n"
+_SHIPPED_REDIS_HDR = f"  redis:\n    image: {_REDIS_IMAGE}"
+_SHIPPED_PG_HDR = f"  postgres:\n    image: {_PG_IMAGE}"
+
 API_CMD = "    command: uvicorn scraper.main:app --host 0.0.0.0 --port 8000\n"
 PG_LAST_C = "      - ident_file=/etc/postgresql/corpus/pg_ident.conf\n"
 PG_NOPORTS = '    # No "ports:" on purpose: reachable only from the internal data network.\n'
@@ -183,14 +198,14 @@ CASES = [
                 '--port 8000"\n\n' + MIGRATE_HDR)]},
     {"id": "A31", "title": "the redis service rebuilt from a repo Dockerfile (FROM redis), plaintext and published",
      "expect": ["store-image", "store-ports", "redis-tls", "redis-default-user", "redis-acl-user", "redis-weakening-flag"],
-     "edits": [("splice", "  redis:\n    image: redis:7-alpine\n", "    environment:\n      REDIS_APP_USER",
+     "edits": [("splice", _SHIPPED_REDIS_HDR, "    environment:\n      REDIS_APP_USER",
                 '  redis:\n    build: ./docker/redis\n    command: ["redis-server", "--protected-mode", "no"]\n'
                 '    ports: ["0.0.0.0:6379:6379"]\n'),
                ("replace_after", "  redis:\n", "    networks: [data]\n", "    networks: [edge, data]\n")],
      "files": {"docker/redis/Dockerfile": "FROM redis:7-alpine\n"}},
     {"id": "A32", "title": "the postgres service rebuilt from a repo Dockerfile (FROM pgvector), ssl=off and published",
      "expect": ["store-image", "store-ports", "pg-tls", "pg-password-encryption", "pg-hba"],
-     "edits": [("splice", "  postgres:\n    image: pgvector/pgvector:pg16\n", "    environment:\n      POSTGRES_USER",
+     "edits": [("splice", _SHIPPED_PG_HDR, "    environment:\n      POSTGRES_USER",
                 '  postgres:\n    build: ./docker/pgimage\n    command: ["postgres", "-c", "ssl=off"]\n'
                 '    ports: ["0.0.0.0:5432:5432"]\n'),
                ("replace_after", "  postgres:\n", "    networks: [data]\n", "    networks: [edge, data]\n")],
@@ -261,7 +276,7 @@ CASES = [
      "hba": (HBA_APP_LINE, "hostssl    legal_scraper   +corpus_clients,boot  all       scram-sha-256")},
     # R2-D4: store classification by name, and FROM given by a build variable.
     {"id": "S21", "title": "the redis service built from the repo (otherwise unchanged)", "expect": ["store-image"],
-     "edits": [("replace", "  redis:\n    image: redis:7-alpine\n", "  redis:\n    build: ./docker/redis\n")],
+     "edits": [("replace", _SHIPPED_REDIS_HDR, "  redis:\n    build: ./docker/redis\n")],
      "files": {"docker/redis/Dockerfile": "FROM alpine:3.20\n"}},
     {"id": "S22", "title": "repo-built service whose base image is a build variable", "expect": ["unknown-service"],
      "edits": [("replace", MIGRATE_HDR, "  cache2:\n    build:\n      context: .\n      dockerfile_inline: |\n"
