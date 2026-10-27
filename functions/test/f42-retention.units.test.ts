@@ -20,7 +20,7 @@ import {
 } from "../src/retention/config"
 import type { Transaction } from "firebase-admin/firestore"
 import { JobError } from "../src/p2/errors"
-import { readLateIds, stageLateIds } from "../src/retention/lateTraces"
+import { capturesFor, exportedIds, readLateIds, stageLateIds } from "../src/retention/lateTraces"
 import { purgeGroups, sagaInternals } from "../src/retention/saga"
 
 /** Audit F42: the pure parts of the retention mechanism (no emulator). */
@@ -357,6 +357,60 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(refused(() => traceIdParts(["y".repeat(256 * 1024)]))).toBe("external_ids_over_limit true")
     expect(refused(() => traceIdParts(Array.from({ length: 24 * 5_000 + 1 }, (_, i) => `t-${i}`)))).toBe("external_ids_over_limit true")
     expect(traceIdParts(Array.from({ length: 24 * 5_000 }, (_, i) => `t-${i}`))).toHaveLength(24)
+  })
+})
+
+describe("FA-F42-R1-007: late trace ids are captured for Opik before rows lose the matter", () => {
+  const plan = () => Object.fromEntries(planDeletion(purgePolicy()).map((x) => [x.key, x.treatment]))
+
+  it("capturesFor maps ai_usage_logs and p1_decisions to the opik processor when the plan is external", () => {
+    const p = plan()
+    const usage = capturesFor("firestore:ai_usage_logs", p)
+    expect(usage).toHaveLength(1)
+    expect(usage[0]).toMatchObject({ processor: "opik", key: "external_opik" })
+    expect(usage[0]!.specs.map((s) => s.source)).toEqual(["firestore:ai_usage_logs"])
+    const decisions = capturesFor("firestore:p1_decisions", p)
+    expect(decisions[0]!.specs.map((s) => s.source)).toEqual(["firestore:p1_decisions"])
+  })
+
+  it("exportedIds keeps only exported traces from usage rows and pending/exported from decision rows", () => {
+    const usageSpecs = capturesFor("firestore:ai_usage_logs", plan())[0]!.specs
+    expect(
+      exportedIds(
+        [
+          { trace: { id: "t-exported", status: "exported" } },
+          { trace: { id: "t-disabled", status: "disabled" } },
+          { trace: { id: "t-pending", status: "pending" } },
+        ],
+        usageSpecs
+      )
+    ).toEqual(["t-exported"])
+    const decisionSpecs = capturesFor("firestore:p1_decisions", plan())[0]!.specs
+    expect(
+      exportedIds(
+        [{ traceId: "d-pending", export: { state: "pending" } }, { traceId: "d-failed", export: { state: "failed" } }],
+        decisionSpecs
+      )
+    ).toEqual(["d-pending"])
+  })
+
+  it("stageLateIds appends only fresh ids to a new late part in the same transaction", () => {
+    const sets: Array<{ id: string; data: Record<string, unknown> }> = []
+    const updates: Record<string, unknown>[] = []
+    const tx = {
+      set: (ref: { id: string }, data: Record<string, unknown>) => {
+        sets.push({ id: ref.id, data })
+      },
+      update: (_ref: unknown, data: Record<string, unknown>) => {
+        updates.push(data)
+      },
+    } as unknown as Transaction
+    const read = { processor: "opik", exists: true, parts: 1, recorded: new Set(["trace-before"]) }
+    expect(stageLateIds(tx, read, ["trace-before", "trace-inflight"], { firmId: "f", requestId: "req", matterId: "m" }, 42)).toBe(1)
+    expect(sets).toHaveLength(1)
+    expect(sets[0]).toMatchObject({ id: "req_opik_p1", data: { traceIds: ["trace-inflight"], late: true, part: 1 } })
+    expect(updates[0]?.parts).toBe(2)
+    expect((updates[0]?.lateIds as { operand: number }).operand).toBe(1)
   })
 })
 
