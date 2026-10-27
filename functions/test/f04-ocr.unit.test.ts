@@ -9,6 +9,7 @@ import {
   LOCAL_OCR_PROVIDER,
   MAX_OCR_TEXT_BYTES,
   OcrTimeoutError,
+  isProdLikeOcrRuntime,
   resolveOcrEngine,
   withOcrTimeout,
 } from "../src/p1/ocrEngine"
@@ -79,12 +80,23 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     expect(resolveOcrEngine({ OCR_PROVIDER: "tesseract" })).toBeNull()
   })
 
-  it("FA-F04-006: production does not fall back to the stub when OCR_PROVIDER is unset or local", () => {
+  it("FA-F04-006: prod-like runtimes do not fall back to the stub when OCR_PROVIDER is unset or local", () => {
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "production" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ SIKANDER_DEPLOY_PROFILE: "staging" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ SIKANDER_DEPLOY_PROFILE: "production" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "test" })).toBe(false)
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "development" })).toBe(false)
+
     expect(resolveOcrEngine({ NODE_ENV: "production" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local-ocr-stub" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "  Local  " })).toBeNull()
+    expect(resolveOcrEngine({ SIKANDER_DEPLOY_PROFILE: "staging" })).toBeNull()
+    expect(resolveOcrEngine({ SIKANDER_DEPLOY_PROFILE: "staging", OCR_PROVIDER: "local" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "test", SIKANDER_DEPLOY_PROFILE: "staging" })).toBeNull()
+    // Dev/test without a deploy profile may still use the stub.
+    expect(resolveOcrEngine({ NODE_ENV: "test" })).toBeInstanceOf(DeterministicLocalOcrEngine)
     // A name this build has not registered through the egress gate stays closed in every environment.
     expect(resolveOcrEngine({ NODE_ENV: "test", OCR_PROVIDER: "vision" })).toBeNull()
   })

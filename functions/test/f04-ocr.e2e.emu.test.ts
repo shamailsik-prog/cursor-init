@@ -302,6 +302,33 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     expect((await adminDb().collection("jobs").doc(jobId).get()).get("ocrStatus")).toBe("done")
   })
 
+  it("FA-F04-006: prod-like runtime blocks upload→OCR with provider_unsupported (no stub text)", async () => {
+    const firmId = await firm()
+    const matterId = await matter(firmId, "internal")
+    const doc = await seedDoc({ firmId, matterId, classification: "internal" })
+    const jobId = uniq("f04-prod-stub")
+    const row = legacyRow({ id: jobId, firmId, documentId: doc.docId, matterId, classification: "internal" })
+    await writeLegacy(row)
+
+    await onJobCreatedCore(jobId, row, deps)
+    const previousProfile = process.env.SIKANDER_DEPLOY_PROFILE
+    process.env.SIKANDER_DEPLOY_PROFILE = "staging"
+    try {
+      expect(await deps.dispatcher.drainDue(clock.now())).toEqual(["dead_lettered"])
+      const legacy = await adminDb().collection("jobs").doc(jobId).get()
+      expect(legacy.get("ocrStatus")).toBe("failed")
+      expect(legacy.get("ocrFailureCode")).toBe("provider_unsupported")
+      expect((await adminDb().collection("ocr_texts").where("documentId", "==", doc.docId).get()).empty).toBe(true)
+      const operation = await adminDb().collection("p1_ocr_operations").doc(deps.dispatcher.tasks[0]!.jobId).get()
+      expect(operation.get("outcome")).toBe("blocked")
+      expect(operation.get("blockReason")).toBe("provider_unsupported")
+      expect(operation.get("provider")).toBeNull()
+    } finally {
+      if (previousProfile === undefined) delete process.env.SIKANDER_DEPLOY_PROFILE
+      else process.env.SIKANDER_DEPLOY_PROFILE = previousProfile
+    }
+  })
+
   it("refuses another firm's document and publishes nothing", async () => {
     const firmA = await firm()
     const firmB = await firm()
