@@ -44,3 +44,41 @@ describe("FA-F04-006-002: prod-like runtime profile buckets off-bundle", () => {
     expect(resolveOcrEngine(env)).toBeInstanceOf(DeterministicLocalOcrEngine)
   })
 })
+
+describe("FA-F04-006-002-002: hosted-bucket prod-like edges", () => {
+  it.each(["local", "dev", "development", "test"])(
+    "keeps SIKANDER_DEPLOY_PROFILE=%s non-prod-like on a hosted runtime (K_SERVICE)",
+    (profile) => {
+      const env = {
+        NODE_ENV: "test",
+        SIKANDER_DEPLOY_PROFILE: profile,
+        K_SERVICE: "legal-os-api",
+      }
+      expect(isProdLikeFunctionsRuntime(env)).toBe(false)
+      expect(isProdLikeOcrRuntime(env)).toBe(false)
+      expect(resolveOcrEngine(env)).toBeInstanceOf(DeterministicLocalOcrEngine)
+    },
+  )
+
+  it("does not treat emulator + odd deploy profile + K_SERVICE as prod-like (not hosted)", () => {
+    const env = {
+      NODE_ENV: "test",
+      FUNCTIONS_EMULATOR: "true",
+      K_SERVICE: "legal-os-api",
+      SIKANDER_DEPLOY_PROFILE: "not-a-manifest-profile",
+    }
+    expect(isProdLikeFunctionsRuntime(env)).toBe(false)
+    expect(isProdLikeOcrRuntime(env)).toBe(false)
+    expect(resolveOcrEngine(env)).toBeInstanceOf(DeterministicLocalOcrEngine)
+  })
+
+  it("still treats odd deploy profile on real hosted runtime (no emulator) as prod-like", () => {
+    const env = {
+      NODE_ENV: "test",
+      K_SERVICE: "legal-os-api",
+      SIKANDER_DEPLOY_PROFILE: "not-a-manifest-profile",
+    }
+    expect(isProdLikeFunctionsRuntime(env)).toBe(true)
+    expect(resolveOcrEngine(env)).toBeNull()
+  })
+})
