@@ -26,8 +26,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # functions/ declares engines.node 22 and deploys on 22; every Node job runs on it.
+  # functions/ declares engines.node 22 and deploys on 22; every production Node job runs on it (audit F48).
   NODE_VERSION: "22"
+  # Optional eve agent CLI (eve@>=0.56); not on the Functions deploy path — see job eve-toolchain.
+  EVE_NODE_VERSION: "24"
   JAVA_VERSION: "21"
   PYTHON_VERSION: "3.12"
 
@@ -348,6 +350,21 @@ jobs:
       - run: npm ci
       - name: next build
         run: npm run build
+
+  eve-toolchain:
+    name: Optional eve toolchain (Node 24, audit F48)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.EVE_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Prove eve CLI on Node 24 (production jobs stay on Node 22)
+        run: bash scripts/eve-toolchain-check.sh
 
   document-object-s3:
     name: Document vault on S3 (F03, FA-D16-001/002/003)

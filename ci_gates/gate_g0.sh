@@ -96,6 +96,10 @@ echo "[24] corpus runtime pins guard (audit F46: hashed requirements.txt, test s
 python3 ci_gates/check_corpus_runtime_pins.py || fail=1
 python3 ci_gates/test_check_corpus_runtime_pins.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_corpus_runtime_pins.py"; fail=1; }
 
+echo "[25] node toolchain split guard (audit F48: production Node 22 vs optional eve Node 24; eve job proves runtime)"
+python3 ci_gates/check_node_toolchains.py || fail=1
+python3 ci_gates/test_check_node_toolchains.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_node_toolchains.py"; fail=1; }
+
 if [ "${SIKANDER_LIVE:-0}" = "1" ] && [ -x ci_gates/gate_g0_live.sh ]; then ./ci_gates/gate_g0_live.sh || fail=1; fi
 
 if [ $fail -ne 0 ]; then echo "=== Gate G-0 FAILED ==="; exit 1; fi

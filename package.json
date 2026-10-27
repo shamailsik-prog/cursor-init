@@ -2,6 +2,9 @@
   "name": "sikander-ai",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22"
+  },
   "packageManager": "npm@10.9.9",
   "devEngines": {
     "packageManager": {
@@ -35,6 +38,7 @@
     "test:e2e:console-auth": "npm run functions:build && firebase emulators:exec --only auth,firestore,functions --project demo-sikander \"FIREBASE_FUNCTIONS_EMULATOR_HOST=127.0.0.1:15001 bash scripts/e2e-console-auth.sh\"",
     "gate:g0": "bash ci_gates/gate_g0.sh",
     "gate:lockfiles": "python3 ci_gates/check_lockfiles.py --npm-ci",
+    "gate:node-toolchains": "python3 ci_gates/check_node_toolchains.py",
     "gate:f17-eval-record": "python3 ci_gates/check_committee_eval_record.py",
     "gate:g1": "python3 ci_gates/gate_g1.py",
     "gate:g2": "bash ci_gates/gate_g2.sh",
@@ -50,6 +54,7 @@
     "mutation:documents": "stryker run stryker.documents.config.mjs",
     "eve:dev": "eve dev",
     "eve:info": "eve info",
+    "eve:toolchain-check": "bash scripts/eve-toolchain-check.sh",
     "backfill:matter-shapes": "tsx scripts/backfill-matter-shapes.ts",
     "backfill:document-bytes": "tsx scripts/backfill-document-bytes.ts",
     "backfill:template-analytics": "tsx scripts/backfill-template-analytics.ts",

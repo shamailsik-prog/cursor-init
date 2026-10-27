@@ -79,10 +79,10 @@ Re-enabling:
 
 ## Running the gates and scans locally
 
-CI is `.github/workflows/gate-g0.yml` (eleven independent jobs and the `changes` path-gate job) plus `pr-phase-claim-gate.yml`. Each command below is
-what the matching CI job runs. Requirements: Node 22 with npm 10.9 (pinned in both manifests, audit F39; another npm
+CI is `.github/workflows/gate-g0.yml` (twelve independent jobs and the `changes` path-gate job) plus `pr-phase-claim-gate.yml`. Each command below is
+what the matching CI job runs. Requirements: **Node 22** with npm 10.9 for the mandatory path (console, Functions, gates; pinned in both manifests, audit F39; another npm
 warns with `EBADDEVENGINES` and still installs the same tree, `gate:lockfiles` fails on it; `corepack npm …` runs the
-pinned npm), Java 21+ (Firebase emulators), Python 3.12, and both installs (`npm ci` and `npm ci --prefix functions`).
+pinned npm). **Node 24** is used only by the optional `eve-toolchain` job (audit F48; `scripts/eve-toolchain-check.sh`). Also Java 21+ (Firebase emulators), Python 3.12, and both installs (`npm ci` and `npm ci --prefix functions`).
 
 | CI job | Command (repo root) | Notes |
 |---|---|---|
@@ -91,7 +91,8 @@ pinned npm), Java 21+ (Firebase emulators), Python 3.12, and both installs (`npm
 | rules | `npm run test:rules` | Firestore emulator on the repo ports (18088). |
 | functions | `npm --prefix functions run typecheck`, `npm --prefix functions run build`, `npm --prefix functions run test:emu` | Auth (19099) and Firestore emulators. Without emulators the suites skip locally; with `CI` set they fail instead (`functions/test/emu.ts`). |
 | gates | `npm run gate:g0`, `npm run gate:lockfiles`, `npm run gate:g1`, `npm run gate:g2` | See below. `gate:lockfiles` is the frozen-install guard with `--npm-ci` (audit F39). |
-| next-build | `npm run build` | `next build`. |
+| next-build | `npm run build` | `next build`. Node 22. |
+| eve-toolchain | `bash scripts/eve-toolchain-check.sh` | Audit F48: Node 24 only; `npm ci` and `eve --version` (guarded). Production Functions/CI jobs stay on Node 22. |
 | authority-f05 | `SIKANDER_POSTGRES_URL=postgres://… npm run test:f05-authority` | Audit F05: the user-flow e2e (`functions/test/f05-authority-corpus.e2e.emu.test.ts`), the corpus adapter and the O-59 parity suites. Needs Postgres 16 with `vector` (a superuser URL; each file creates and drops its own database and roles), Java for the Auth and Firestore emulators, and Python with `corpus_service/requirements-test.txt` (`SIKANDER_CORPUS_PYTHON`, default `python3`): the corpus is seeded through the publication CLI. The script sets `F05_AUTHORITY_SUITE=1`; without it `functions/vitest.config.ts` excludes these suites, and with it a missing URL fails the run. |
 | authority-f05 (FA-D5-003 step) | `SIKANDER_POSTGRES_URL=postgres://… npm run test:fa-d5-003` | Audit FA-D5-003 (closes FA-D2WA-001) and FA-DATA-003: WhatsApp `/research` through `POST /api/d2/court-ops` on production persistence (Auth and Firestore emulators, F02 dispatch) against Postgres seeded by the publication CLI, and the research reader's grants, views, allowlist, row caps and timeout (`tests/fa-d5-003.*`). Same needs as authority-f05. The script sets `FA_D5_003_SUITE=1`; without it `vitest.config.ts` excludes these suites, and with it a missing URL fails the run. |
 | postgres-ddl | `SIKANDER_POSTGRES_URL=postgres://… npm run test:postgres-ddl` | Requires Postgres 16 with the `vector` extension (CI uses `pgvector/pgvector:pg16`). CI first applies every `postgres/ddl/*.sql` twice with `psql` (idempotency); the harness then applies them all in order (`001_corpus_contract.sql`, `002_platform.sql`, `003_corpus_publication.sql`, `004_authority_read_views.sql`, `005_research_reader.sql`) and runs the trigger, grant, publication, authority-view and research-reader tests (PG-DDL-1..33) and the FA-DATA-001 probe regression, one file at a time (`--no-file-parallelism`). Run it against a fresh database: PG-DDL-5 and PG-DDL-10 cannot re-run on one they already ran on. |
