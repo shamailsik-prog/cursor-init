@@ -9,7 +9,7 @@ Before F04 PR #110, `resolveOcrEngine` in `functions/src/p1/ocrEngine.ts` select
 
 ## Correction
 
-- `isProdLikeOcrRuntime` treats `NODE_ENV=production` (constant-folded in the deployed bundle via `functions/build.mjs`) and `SIKANDER_DEPLOY_PROFILE` of `staging` or `production` as prod-like.
+- `isProdLikeOcrRuntime` uses a **literal** `process.env.NODE_ENV === "production"` (esbuild-replaced in `lib/index.js` via `functions/build.mjs`) plus an explicit `env.NODE_ENV` argument for tests, and `SIKANDER_DEPLOY_PROFILE` of `staging` or `production` at runtime. Dynamic `process.env[key]` is not used for `NODE_ENV` (that broke constant-folding and let the stub run in a built bundle with an unset host `NODE_ENV`).
 - `resolveOcrEngine` returns `null` in prod-like runtimes unless the provider name is registered in `OCR_EGRESS_PROVIDERS` (empty in this build → fail closed).
 - Local/dev/test without a prod-like profile may still select the deterministic stub when `OCR_PROVIDER` is unset or `local`.
 - `callP1Ocr` maps a null engine to `blockReason: provider_unsupported` and does not publish `ocr_texts`.
@@ -19,6 +19,8 @@ Before F04 PR #110, `resolveOcrEngine` in `functions/src/p1/ocrEngine.ts` select
 | Step | Evidence | Expected |
 | --- | --- | --- |
 | RED | Main before #110: unset `OCR_PROVIDER` with production `NODE_ENV` | Stub engine selected; OCR text published |
+| RED | PR #153 head with `envValue()` / dynamic `process.env[key]` for `NODE_ENV`: built `ocrEngine` slice with host `NODE_ENV` and `SIKANDER_DEPLOY_PROFILE` unset | `resolveOcrEngine({})` returned stub (regression) |
+| GREEN | `functions/test/f04-ocr.unit.test.ts` — `FA-F04-006-001: the production-defined OCR engine bundle…` | Child process + `define` bundle: `resolveOcrEngine({})` is `null` with host env unset |
 | GREEN | `functions/test/f04-ocr.unit.test.ts` — `FA-F04-006: prod-like runtimes…` | `resolveOcrEngine` is `null` for production and staging profile; dev/test may use stub |
 | GREEN | `functions/test/f04-ocr.e2e.emu.test.ts` — `FA-F04-006: prod-like runtime blocks upload→OCR…` (worker runs with `SIKANDER_DEPLOY_PROFILE=staging`) | Legacy row `ocrFailureCode: provider_unsupported`; no `ocr_texts`; `p1_ocr_operations` blocked |
 
@@ -26,6 +28,7 @@ Before F04 PR #110, `resolveOcrEngine` in `functions/src/p1/ocrEngine.ts` select
 
 ```bash
 npx vitest run functions/test/f04-ocr.unit.test.ts -t "FA-F04-006"
+npx vitest run functions/test/f04-ocr.unit.test.ts -t "FA-F04-006-001"
 npx vitest run functions/test/f04-ocr.e2e.emu.test.ts -t "FA-F04-006"
 ```
 

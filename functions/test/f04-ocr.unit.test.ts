@@ -1,5 +1,9 @@
-import { readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { readFileSync, rmSync } from "node:fs"
 import path from "node:path"
+import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
+import { build } from "esbuild"
 import { describe, expect, it } from "vitest"
 import { handlerFor } from "../src/p2/registry"
 import { aggregateClassification, isCompleteLegacyOcrJob, OCR_JOB_TYPE } from "../src/p2/ocrJob"
@@ -100,6 +104,39 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     // A name this build has not registered through the egress gate stays closed in every environment.
     expect(resolveOcrEngine({ NODE_ENV: "test", OCR_PROVIDER: "vision" })).toBeNull()
   })
+
+  it("FA-F04-006-001: the production-defined OCR engine bundle fails closed with host NODE_ENV and deploy profile unset", async () => {
+    const functionsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+    const repoRoot = path.resolve(functionsDir, "..")
+    const outfile = path.join(functionsDir, "lib/.fa-f04-006-ocr-engine.cjs")
+    await build({
+      entryPoints: [path.join(functionsDir, "src/p1/ocrEngine.ts")],
+      outfile,
+      bundle: true,
+      platform: "node",
+      target: "node22",
+      format: "cjs",
+      define: { "process.env.NODE_ENV": '"production"' },
+      alias: { "@": repoRoot },
+      logLevel: "silent",
+    })
+    try {
+      const bundleSrc = readFileSync(outfile, "utf8")
+      expect(bundleSrc).not.toMatch(/process\.env\[["']NODE_ENV["']\]/)
+      const script = `const { resolveOcrEngine } = require(${JSON.stringify(outfile)});
+delete process.env.NODE_ENV;
+delete process.env.SIKANDER_DEPLOY_PROFILE;
+if (resolveOcrEngine({}) !== null) process.exit(2);`
+      execFileSync(process.execPath, ["-e", script], {
+        env: { ...process.env, NODE_ENV: undefined, SIKANDER_DEPLOY_PROFILE: undefined },
+        stdio: "pipe",
+      })
+      const req = createRequire(import.meta.url)
+      expect(req(outfile).resolveOcrEngine({})).toBeNull()
+    } finally {
+      rmSync(outfile, { force: true })
+    }
+  }, 60_000)
 
   it("FA-F04-008: text over the UTF-8 cap is marked truncated, and shorter text is not", async () => {
     const engine = new DeterministicLocalOcrEngine()

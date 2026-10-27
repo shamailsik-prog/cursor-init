@@ -125,28 +125,31 @@ export const OCR_EGRESS_PROVIDERS: Readonly<Record<string, () => OcrEngine>> = O
 
 const PROD_LIKE_DEPLOY_PROFILES = new Set(["staging", "production"])
 
-function envValue(env: NodeJS.ProcessEnv, key: string): string {
-  const fromArg = env[key]
-  if (fromArg !== undefined) return fromArg.trim()
-  return (process.env[key] ?? "").trim()
+function deployProfileFromEnv(env: NodeJS.ProcessEnv): string {
+  const fromArg = env.SIKANDER_DEPLOY_PROFILE
+  if (fromArg !== undefined) return fromArg.trim().toLowerCase()
+  const raw = process.env.SIKANDER_DEPLOY_PROFILE
+  return (raw ?? "").trim().toLowerCase()
 }
 
 /**
- * Deployed/staging runtimes must not silently use the local stub. `NODE_ENV=production` covers the
- * Functions bundle (`functions/build.mjs` constant-folds it). `SIKANDER_DEPLOY_PROFILE` covers
- * prod-like staging when `NODE_ENV` is unset or non-production on the host.
+ * Deployed/staging runtimes must not silently use the local stub.
+ *
+ * The literal `process.env.NODE_ENV === "production"` is constant-folded to true in `lib/index.js`
+ * (`functions/build.mjs`), so the deployed bundle fails closed even when the host leaves `NODE_ENV`
+ * unset. Tests may pass `NODE_ENV` on `env` when the runtime is not the production bundle.
+ * `SIKANDER_DEPLOY_PROFILE` covers prod-like staging when the host profile is set at runtime.
  */
 export function isProdLikeOcrRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (envValue(env, "NODE_ENV") === "production") return true
-  const profile = envValue(env, "SIKANDER_DEPLOY_PROFILE").toLowerCase()
-  return PROD_LIKE_DEPLOY_PROFILES.has(profile)
+  if (process.env.NODE_ENV === "production") return true
+  const nodeEnvArg = env.NODE_ENV?.trim().toLowerCase()
+  if (nodeEnvArg === "production") return true
+  return PROD_LIKE_DEPLOY_PROFILES.has(deployProfileFromEnv(env))
 }
 
 /**
  * Outside prod-like runtimes, `OCR_PROVIDER` unset or `local` selects the stub. Prod-like returns null
  * unless `name` is registered in `OCR_EGRESS_PROVIDERS`. Any other name is unsupported (null).
- * The deployed bundle constant-folds `process.env.NODE_ENV` to `"production"` (`functions/build.mjs`),
- * so a host that leaves `NODE_ENV` unset still fails closed. Tests pass `NODE_ENV` on `env`.
  */
 export function resolveOcrEngine(env: NodeJS.ProcessEnv = process.env): OcrEngine | null {
   const name = (env.OCR_PROVIDER ?? "").trim().toLowerCase()
