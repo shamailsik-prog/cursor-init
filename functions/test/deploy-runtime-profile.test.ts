@@ -15,6 +15,19 @@ describe("FA-F04-006-002: prod-like runtime profile buckets off-bundle", () => {
     expect(resolveOcrEngine({ NODE_ENV: "PRODUCTION" })).toBeNull()
   })
 
+  it("FA-F04-006-002-001: normalizes host process.env.NODE_ENV case when env arg omits NODE_ENV", () => {
+    const saved = process.env.NODE_ENV
+    try {
+      process.env.NODE_ENV = "Production"
+      const envWithoutNodeEnv: Record<string, string | undefined> = {}
+      expect(isProdLikeFunctionsRuntime(envWithoutNodeEnv)).toBe(true)
+      expect(resolveOcrEngine(envWithoutNodeEnv)).toBeNull()
+    } finally {
+      if (saved === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = saved
+    }
+  })
+
   it("treats an unrecognized deploy profile on a hosted runtime as prod-like (unknown bucket)", () => {
     const env = {
       NODE_ENV: "test",
