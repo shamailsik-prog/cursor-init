@@ -16,7 +16,7 @@ PY
 }
 
 # Every secret value the scripts hold; nothing they print may contain one.
-SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY F05_READER_PASSWORD"
+SECRET_VALUE_VARS="POSTGRES_PASSWORD MIGRATE_DB_PASSWORD APP_DB_PASSWORD REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY CORPUS_ADMIN_CREDENTIALS SECRET_KEY F05_READER_PASSWORD"
 
 # redact TEXT: TEXT with every secret value replaced by <redacted>.
 redact() {
@@ -122,9 +122,10 @@ new_store_secrets() {
   REDIS_APP_USER=corpus_redis REDIS_APP_PASSWORD="$(rand_secret)"
   REDIS_PASSWORD="$(rand_secret)"   # read only by the pre-F30 compose (requirepass)
   ENCRYPTION_KEY="$(fernet_key)" ADMIN_API_KEY="$(rand_secret)" SECRET_KEY="$(rand_secret)"
+  CORPUS_ADMIN_CREDENTIALS=$(python3 -c "import json,sys; print(json.dumps([{'id':'e2e-bootstrap','actor':'e2e','secret':sys.argv[1],'scopes':['read','trigger','review','export','promote']}]))" "$ADMIN_API_KEY")
   # If the caller exported any of these, un-export them: compose must get them from .env only.
   export -n POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD \
-    REDIS_APP_USER REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY 2>/dev/null || true
+    REDIS_APP_USER REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY CORPUS_ADMIN_CREDENTIALS SECRET_KEY 2>/dev/null || true
 }
 
 # write_dotenv: the operator's .env as README/.env.example describe it (mode 0600). An existing
@@ -138,7 +139,8 @@ write_dotenv() {
       "APP_DB_USER=$APP_DB_USER" "APP_DB_PASSWORD=$APP_DB_PASSWORD" \
       "MIGRATE_DB_USER=$MIGRATE_DB_USER" "MIGRATE_DB_PASSWORD=$MIGRATE_DB_PASSWORD" \
       "REDIS_APP_USER=$REDIS_APP_USER" "REDIS_APP_PASSWORD=$REDIS_APP_PASSWORD" \
-      "ENCRYPTION_KEY=$ENCRYPTION_KEY" "ADMIN_API_KEY=$ADMIN_API_KEY" "SECRET_KEY=$SECRET_KEY" \
+      "ENCRYPTION_KEY=$ENCRYPTION_KEY" "ADMIN_API_KEY=$ADMIN_API_KEY" \
+      "CORPUS_ADMIN_CREDENTIALS=$CORPUS_ADMIN_CREDENTIALS" "SECRET_KEY=$SECRET_KEY" \
       "P1_EMBEDDING_URL=" "TLS_CERTS_MODE=auto" \
       "REDIS_PASSWORD=$REDIS_PASSWORD" >.env )
 }

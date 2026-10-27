@@ -399,6 +399,7 @@
     {"id": "postgres:judgment_declassify_grant", "kind": "postgres", "name": "judgment_declassify_grant", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:judgment_version", "kind": "postgres", "name": "judgment_version", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:quarantine_decisions", "kind": "postgres", "name": "quarantine_decisions", "profile": "public_corpus", "key": {"kind": "none"}},
+    {"id": "postgres:corpus_admin_audit", "kind": "postgres", "name": "corpus_admin_audit", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:quarantine_queue", "kind": "postgres", "name": "quarantine_queue", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:scraper_jobs", "kind": "postgres", "name": "scraper_jobs", "profile": "public_corpus", "key": {"kind": "none"}},
     {"id": "postgres:scraper_sources", "kind": "postgres", "name": "scraper_sources", "profile": "public_corpus", "key": {"kind": "none"}},

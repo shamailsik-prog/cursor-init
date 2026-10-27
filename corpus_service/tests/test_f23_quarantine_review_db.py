@@ -409,7 +409,7 @@ def test_d_the_decision_record_carries_reviewer_reason_and_states(client, review
 
     assert {k: d[k] for k in ("decision", "reviewer", "reviewer_auth", "reason", "request_key", "source_trust_level",
                                "source_resolved_by", "publication_key", "published_table")} == {
-        "decision": "promoted", "reviewer": REVIEWER, "reviewer_auth": "shared_admin_key", "reason": REASON,
+        "decision": "promoted", "reviewer": REVIEWER, "reviewer_auth": "ca:dev-admin", "reason": REASON,
         "request_key": key, "source_trust_level": "review", "source_resolved_by": "source_id",
         "publication_key": f"quarantine/{alpha.qid}", "published_table": "case_law_master",
     }

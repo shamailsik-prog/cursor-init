@@ -59,9 +59,10 @@ jobs:
           # Variables referenced as ${VAR:?} fail `docker compose config`; POSTGRES_PASSWORD is used
           # only as a secret file (secrets: environment:), which compose refuses when the service
           # starts, so each case also tries to start the no-network secrets-preflight one-shot.
-          vars="POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD REDIS_APP_USER REDIS_APP_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY SECRET_KEY"
+          vars="POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD REDIS_APP_USER REDIS_APP_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY CORPUS_ADMIN_CREDENTIALS SECRET_KEY"
           for v in $vars; do export "$v=$(openssl rand -hex 24)"; done
           export POSTGRES_USER=boot_ci APP_DB_USER=corpus_app MIGRATE_DB_USER=corpus_migrate REDIS_APP_USER=corpus_redis
+          export CORPUS_ADMIN_CREDENTIALS="[{\"id\":\"ci\",\"actor\":\"ci\",\"secret\":\"${ADMIN_API_KEY}\",\"scopes\":[\"read\",\"trigger\",\"review\",\"export\",\"promote\"]}]"
           docker compose config >/dev/null
           docker compose run --rm -T --no-deps secrets-preflight
           for missing in $vars; do

@@ -72,7 +72,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from scraper.auth import require_admin_api_key
+from scraper.admin_credentials import CorpusAdminPrincipal
+from scraper.auth import record_corpus_admin_audit, require_corpus_promote, require_corpus_review
 from scraper.database import get_db
 from scraper.models import (
     CaseLawMaster,
@@ -91,7 +92,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/quarantine")
 
-REVIEWER_AUTH: Final = "shared_admin_key"  # until named identities exist (audit F47)
 PUBLISHED_TABLE: Final = "case_law_master"
 PUBLICATION_NAMESPACE: Final = uuid.NAMESPACE_URL
 PUBLICATION_NAME_PREFIX: Final = "corpus-service:case_law_master:"
@@ -419,8 +419,14 @@ async def _publish(db: AsyncSession, qq: QuarantineQueue, st: Optional[ScraperSt
             "embedding_outbox_id": outbox_id}
 
 
-async def _transition(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body: ReviewDecisionIn,
-                      request_key: Optional[str]) -> Dict[str, Any]:
+async def _transition(
+    db: AsyncSession,
+    quarantine_id: uuid.UUID,
+    action: str,
+    body: ReviewDecisionIn,
+    request_key: Optional[str],
+    principal: CorpusAdminPrincipal,
+) -> Dict[str, Any]:
     decision = _DECISION_FOR[action]
     fingerprint = request_fingerprint(decision, body.reviewer, body.reason)
     qq = await _locked(db, QuarantineQueue, quarantine_id)
@@ -459,7 +465,7 @@ async def _transition(db: AsyncSession, quarantine_id: uuid.UUID, action: str, b
         staging_id=st.id if st is not None else qq.staging_id,
         decision=decision,
         reviewer=body.reviewer,
-        reviewer_auth=REVIEWER_AUTH,
+        reviewer_auth=principal.reviewer_auth_token(),
         reason=body.reason,
         prior_state=prior,
         new_state=_snapshot(qq, st),
@@ -503,10 +509,24 @@ def _sqlstate(exc: DBAPIError) -> Optional[str]:
             or getattr(getattr(orig, "__cause__", None), "sqlstate", None))
 
 
-async def _decide(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body: ReviewDecisionIn,
-                  request_key: Optional[str]) -> Dict[str, Any]:
+async def _decide(
+    db: AsyncSession,
+    quarantine_id: uuid.UUID,
+    action: str,
+    body: ReviewDecisionIn,
+    request_key: Optional[str],
+    principal: CorpusAdminPrincipal,
+) -> Dict[str, Any]:
     try:
-        result = await _transition(db, quarantine_id, action, body, request_key)
+        result = await _transition(db, quarantine_id, action, body, request_key, principal)
+        scope = "promote" if action == "promote" else "review"
+        await record_corpus_admin_audit(
+            db,
+            principal,
+            f"quarantine.{action}",
+            scopes_used=[scope],
+            resource={"quarantine_id": str(quarantine_id), "decision": result.get("decision")},
+        )
         await db.commit()
     except _Refused as refused:
         await db.rollback()
@@ -540,7 +560,7 @@ async def _decide(db: AsyncSession, quarantine_id: uuid.UUID, action: str, body:
 async def list_q(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    _: CorpusAdminPrincipal = Depends(require_corpus_review),
 ):
     r = await db.execute(select(QuarantineQueue).order_by(QuarantineQueue.created_at.desc()).limit(limit))
     return r.scalars().all()
@@ -564,21 +584,25 @@ def _review_route(path: str):
 async def promote(
     request: Request,
     quarantine_id: uuid.UUID,
-    _: None = Depends(require_admin_api_key),
+    principal: CorpusAdminPrincipal = Depends(require_corpus_promote),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     request_key = _request_key(idempotency_key)
-    return await _decide(db, quarantine_id, "promote", await read_review_body(request), request_key)
+    return await _decide(
+        db, quarantine_id, "promote", await read_review_body(request), request_key, principal
+    )
 
 
 @_review_route("/{quarantine_id}/reject")
 async def reject(
     request: Request,
     quarantine_id: uuid.UUID,
-    _: None = Depends(require_admin_api_key),
+    principal: CorpusAdminPrincipal = Depends(require_corpus_review),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     request_key = _request_key(idempotency_key)
-    return await _decide(db, quarantine_id, "reject", await read_review_body(request), request_key)
+    return await _decide(
+        db, quarantine_id, "reject", await read_review_body(request), request_key, principal
+    )

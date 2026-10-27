@@ -64,7 +64,7 @@ from pgvector.sqlalchemy import Vector
 
 # Share the single DeclarativeBase used by init_db.create_all
 from scraper.database import Base
-from scraper import quarantine_ledger
+from scraper import corpus_admin_ledger, quarantine_ledger
 from scraper.trust import DEFAULT_TRUST_LEVEL, trust_check_sql
 from scraper.tasks import lifecycle as _lifecycle
 
@@ -700,8 +700,8 @@ class QuarantineDecision(Base):
     Append-only: triggers refuse UPDATE, DELETE and TRUNCATE (scraper.quarantine_ledger: created
     with the table, repaired by migrations/002_quarantine_decisions.py). quarantine_id is unique (one resolving decision per record) and deliberately has no
     foreign key: quarantine_queue rows cascade away with their staging row, and the evidence must
-    outlive its subject. The reviewer is the name a holder of the shared admin key gave
-    (reviewer_auth says so) until named identities exist (audit F47).
+    outlive its subject.     The reviewer is the display name from the request body; reviewer_auth records the scoped
+    corpus admin credential that authorised the decision (audit F47).
     Spec: docs/superpowers/specs/2026-10-18-f23-auditable-quarantine-promotion-design.md.
     """
 
@@ -1009,6 +1009,39 @@ class RecordEmbeddingChunk(Base):
             f"<RecordEmbeddingChunk {self.table_name} {self.record_id} "
             f"chunk={self.chunk_index} spec={self.chunk_spec_version}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Corpus admin audit (audit F47): append-only privileged-action log
+# ---------------------------------------------------------------------------
+class CorpusAdminAudit(Base):
+    """Immutable log of corpus admin mutations (trigger, export, harvest control, publication)."""
+
+    __tablename__ = "corpus_admin_audit"
+    __table_args__ = (
+        Index("ix_corpus_admin_audit_actor", "actor"),
+        Index("ix_corpus_admin_audit_credential_id", "credential_id"),
+        Index("ix_corpus_admin_audit_created_at", "created_at"),
+        CheckConstraint("btrim(actor) <> ''", name="ck_corpus_admin_audit_actor"),
+        CheckConstraint("btrim(credential_id) <> ''", name="ck_corpus_admin_audit_credential_id"),
+        CheckConstraint("btrim(action) <> ''", name="ck_corpus_admin_audit_action"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    credential_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    scopes_used: Mapped[list] = mapped_column(JSONB, nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<CorpusAdminAudit id={self.id} action={self.action} actor={self.actor}>"
+
+
+event.listen(CorpusAdminAudit.__table__, "after_create", corpus_admin_ledger.make_append_only)
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,14 @@ import asyncio
 import logging
 import os
 import pathlib
-from scraper.auth import require_admin_api_key
+from scraper.admin_credentials import CorpusAdminPrincipal
+from scraper.auth import (
+    record_corpus_admin_audit,
+    require_corpus_read,
+    require_corpus_trigger,
+)
+from scraper.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from scraper.routers import sources, jobs, quarantine, search, export
 from scraper.database import init_db
 from scraper.config import settings
@@ -104,7 +111,7 @@ async def dashboard():
     html = p.read_text() if p.exists() else "<h1>Dashboard missing</h1>"
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 @app.get("/api/live-feed")
-async def live_feed(_: None = Depends(require_admin_api_key)):
+async def live_feed(_: CorpusAdminPrincipal = Depends(require_corpus_read)):
     import pathlib
     STATE_DIR = pathlib.Path("/app/state" if pathlib.Path("/app/state").exists() else "./blackletter_state")
     logs=[]
@@ -114,19 +121,33 @@ async def live_feed(_: None = Depends(require_admin_api_key)):
             logs.extend(lp.read_text().splitlines()[-20:])
     return {"feed": logs[-40:]}
 @app.post("/api/start")
-async def start_h(_: None = Depends(require_admin_api_key)):
+async def start_h(
+    principal: CorpusAdminPrincipal = Depends(require_corpus_trigger),
+    db: AsyncSession = Depends(get_db),
+):
+    await record_corpus_admin_audit(
+        db, principal, "harvest.start", scopes_used=["trigger"], resource={}
+    )
+    await db.commit()
     await harvest_control.resume_async()
     return {"status": "started"}
 @app.post("/api/stop")
-async def stop_h(_: None = Depends(require_admin_api_key)):
+async def stop_h(
+    principal: CorpusAdminPrincipal = Depends(require_corpus_trigger),
+    db: AsyncSession = Depends(get_db),
+):
+    await record_corpus_admin_audit(
+        db, principal, "harvest.stop", scopes_used=["trigger"], resource={}
+    )
+    await db.commit()
     await harvest_control.pause_async()
     return {"status": "stopped"}
 @app.get("/api/harvest-control")
-async def harvest_control_status(_: None = Depends(require_admin_api_key)):
+async def harvest_control_status(_: CorpusAdminPrincipal = Depends(require_corpus_read)):
     """Operator view: pause flag, in-flight harvest/embedding work, and scheduled gate state."""
     return await harvest_control.operator_status_async()
 @app.get("/api/vault")
-async def vault(_: None = Depends(require_admin_api_key)):
+async def vault(_: CorpusAdminPrincipal = Depends(require_corpus_read)):
     LIVE_DIR = _live_dir()
     files=[]
     for pdf, st in sorted(_vault_pdfs(LIVE_DIR), key=lambda item: item[1].st_mtime, reverse=True)[:100]:

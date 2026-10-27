@@ -24,6 +24,7 @@
 x-app-secrets: &app-secrets
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY_required}
   ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY_required}
+  CORPUS_ADMIN_CREDENTIALS: ${CORPUS_ADMIN_CREDENTIALS:?CORPUS_ADMIN_CREDENTIALS_required}
   SECRET_KEY: ${SECRET_KEY:?SECRET_KEY_required}
 
 # Runtime services: the DML-only database role and the Redis ACL user, nothing else.

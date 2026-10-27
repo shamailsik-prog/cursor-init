@@ -204,7 +204,11 @@ class Settings(BaseSettings):
     )
     ADMIN_API_KEY: str = Field(
         default="",
-        description="X-API-Key required for admin routes. Required in production.",
+        description="Legacy bootstrap secret; in development backs a synthetic all-scope credential when CORPUS_ADMIN_CREDENTIALS is unset.",
+    )
+    CORPUS_ADMIN_CREDENTIALS: str = Field(
+        default="",
+        description="JSON array of named scoped admin credentials ({id, actor, secret, scopes, not_before?, not_after?}). Required in production/staging.",
     )
     SECRET_KEY: str = Field(
         default="",
@@ -361,13 +365,19 @@ class Settings(BaseSettings):
             )
 
         if not self.ADMIN_API_KEY:
-            if is_prodish:
-                raise ValueError("ADMIN_API_KEY must be set via environment in production/staging")
-            object.__setattr__(self, "ADMIN_API_KEY", secrets.token_urlsafe(32))
-            logging.getLogger(__name__).warning(
-                "ADMIN_API_KEY unset — generated a random per-process key for development only"
-                " (not logged; set ADMIN_API_KEY to use admin routes)"
-            )
+            if is_prodish and not (self.CORPUS_ADMIN_CREDENTIALS or "").strip():
+                raise ValueError(
+                    "ADMIN_API_KEY or CORPUS_ADMIN_CREDENTIALS must be set via environment in production/staging"
+                )
+            if not is_prodish:
+                object.__setattr__(self, "ADMIN_API_KEY", secrets.token_urlsafe(32))
+                logging.getLogger(__name__).warning(
+                    "ADMIN_API_KEY unset — generated a random per-process key for development only"
+                    " (not logged; set ADMIN_API_KEY to use admin routes)"
+                )
+
+        if is_prodish and not (self.CORPUS_ADMIN_CREDENTIALS or "").strip():
+            raise ValueError("CORPUS_ADMIN_CREDENTIALS must be set in production/staging")
 
         if not self.SECRET_KEY:
             if is_prodish:

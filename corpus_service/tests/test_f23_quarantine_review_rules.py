@@ -368,7 +368,7 @@ def test_no_admin_route_reads_a_body_before_authenticating():
     after the key check."""
     from fastapi.routing import APIRoute, iter_route_contexts
 
-    from scraper.auth import require_admin_api_key
+    from scraper.auth import is_corpus_admin_auth_dependency
     from scraper.main import app
 
     def calls(dependant):
@@ -376,10 +376,13 @@ def test_no_admin_route_reads_a_body_before_authenticating():
             yield sub.call
             yield from calls(sub)
 
+    def route_uses_corpus_admin_auth(route: APIRoute) -> bool:
+        return any(is_corpus_admin_auth_dependency(fn) for fn in calls(route.dependant))
+
     admin, with_body = set(), set()
     for context in iter_route_contexts(app.routes):
         route = context.route
-        if not isinstance(route, APIRoute) or require_admin_api_key not in set(calls(route.dependant)):
+        if not isinstance(route, APIRoute) or not route_uses_corpus_admin_auth(route):
             continue
         names = {f"{method} {context.path}" for method in route.methods}
         admin |= names

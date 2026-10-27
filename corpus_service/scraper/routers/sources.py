@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from scraper.auth import require_admin_api_key
+from scraper.admin_credentials import CorpusAdminPrincipal
+from scraper.auth import record_corpus_admin_audit, require_corpus_read, require_corpus_trigger
 from scraper.database import get_db
 from scraper.models import ScraperSource
 
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/admin/sources")
 @router.get("")
 async def list_sources(
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    _: CorpusAdminPrincipal = Depends(require_corpus_read),
 ):
     r = await db.execute(select(ScraperSource))
     out=[]
@@ -23,14 +24,26 @@ async def list_sources(
 async def status(
     name: str,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    _: CorpusAdminPrincipal = Depends(require_corpus_read),
 ):
     r = await db.execute(select(ScraperSource).where(ScraperSource.source_name==name))
     s = r.scalars().first()
     if not s: raise HTTPException(404, "not found")
     return {"source_name": s.source_name, "is_active": s.is_active, "active_slot": s.active_credential_slot, "last_scraped": s.last_scraped_at}
 @router.post("/{name}/trigger")
-async def trigger(name: str, _: None = Depends(require_admin_api_key)):
+async def trigger(
+    name: str,
+    principal: CorpusAdminPrincipal = Depends(require_corpus_trigger),
+    db: AsyncSession = Depends(get_db),
+):
     from scraper.tasks.dispatcher import run_source_job
+    await record_corpus_admin_audit(
+        db,
+        principal,
+        "source.trigger",
+        scopes_used=["trigger"],
+        resource={"source_name": name},
+    )
+    await db.commit()
     run_source_job.delay(name)
     return {"message": f"triggered {name}"}
