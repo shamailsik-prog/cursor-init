@@ -29,9 +29,23 @@ STRONG_DB_URL = (
     "?sslmode=verify-full&sslrootcert=/run/tls-ca/ca.crt"
 )
 
+def sample_corpus_admin_credentials(secret: str = "a-real-admin-key-32-chars-min!!") -> str:
+    return json.dumps(
+        [
+            {
+                "id": "prod-bootstrap",
+                "actor": "platform",
+                "secret": secret,
+                "scopes": ["read", "trigger", "review", "export", "promote"],
+            }
+        ]
+    )
+
+
 PROD_SECRETS = {
     "ENCRYPTION_KEY": Fernet.generate_key().decode(),
-    "ADMIN_API_KEY": "a-real-admin-key",
+    "ADMIN_API_KEY": "a-real-admin-key-32-chars-min!!",
+    "CORPUS_ADMIN_CREDENTIALS": sample_corpus_admin_credentials(),
     "SECRET_KEY": "a-real-secret-key",
     "REDIS_URL": "rediss://corpus_redis:Rk3-long-random-Pw-2026@redis:6379/0",
 }
@@ -112,7 +126,20 @@ class DatabasePasswordInProductionTests(unittest.TestCase):
 class AdminKeyFallbackTests(unittest.TestCase):
     def test_missing_admin_key_refused_in_production(self):
         with self.assertRaises(ValidationError):
-            make_settings(ENVIRONMENT="production", DATABASE_URL=STRONG_DB_URL, ADMIN_API_KEY="")
+            make_settings(
+                ENVIRONMENT="production",
+                DATABASE_URL=STRONG_DB_URL,
+                ADMIN_API_KEY="",
+                CORPUS_ADMIN_CREDENTIALS="",
+            )
+
+    def test_scoped_credentials_required_in_production(self):
+        with self.assertRaises(ValidationError):
+            make_settings(
+                ENVIRONMENT="production",
+                DATABASE_URL=STRONG_DB_URL,
+                CORPUS_ADMIN_CREDENTIALS="",
+            )
 
     def test_dev_admin_key_is_random_per_process_and_never_logged(self):
         with self.assertLogs("scraper.config", "WARNING") as logs:

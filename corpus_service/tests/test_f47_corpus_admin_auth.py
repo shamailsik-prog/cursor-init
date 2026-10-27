@@ -1,0 +1,116 @@
+"""Audit F47: named scoped corpus admin credentials."""
+
+from __future__ import annotations
+
+import uuid
+from unittest import mock
+
+import pytest
+from fastapi.testclient import TestClient
+from scraper.admin_credentials import get_corpus_admin_registry, reset_corpus_admin_registry_for_tests
+from scraper.config import settings
+from scraper.main import app
+
+ALICE_TRIGGER = "alice-trigger-secret-32chars-long"
+BOB_EXPORT = "bob-export-secret-32chars-long!!"
+CHARLIE_PROMOTE = "charlie-promote-secret-32chars!!"
+
+
+def _credentials(include_revoked: str | None = None):
+    creds = [
+        {
+            "id": "alice-trigger",
+            "actor": "alice@firm",
+            "secret": ALICE_TRIGGER,
+            "scopes": ["read", "trigger"],
+        },
+        {
+            "id": "bob-export",
+            "actor": "bob@firm",
+            "secret": BOB_EXPORT,
+            "scopes": ["export"],
+        },
+        {
+            "id": "charlie-promote",
+            "actor": "charlie@firm",
+            "secret": CHARLIE_PROMOTE,
+            "scopes": ["promote", "review"],
+        },
+    ]
+    if include_revoked == "bob-export":
+        creds = [c for c in creds if c["id"] != "bob-export"]
+    return creds
+
+
+@pytest.fixture
+def scoped_registry():
+    reset_corpus_admin_registry_for_tests(_credentials())
+    yield
+    reset_corpus_admin_registry_for_tests(None)
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+def test_wrong_scope_denied(client, scoped_registry):
+    """Export credential cannot start harvest (trigger scope)."""
+    res = client.post("/api/start", headers={"X-API-Key": BOB_EXPORT})
+    assert res.status_code == 403
+    assert res.json()["detail"]["error"] == "insufficient_scope"
+
+
+def test_missing_key_denied(client, scoped_registry):
+    assert client.get("/jobs").status_code == 401
+
+
+def test_named_actor_recorded_on_privileged_action(client, scoped_registry, corpus_db):
+    """Trigger records immutable audit row with operator identity."""
+    with mock.patch("scraper.tasks.dispatcher.run_source_job") as job:
+        job.delay.return_value = None
+        res = client.post(
+            "/admin/sources/example/trigger",
+            headers={"X-API-Key": ALICE_TRIGGER},
+        )
+    assert res.status_code == 200
+
+    row = corpus_db.one(
+        "SELECT actor, credential_id, scopes_used::text FROM corpus_admin_audit "
+        "WHERE action = 'source.trigger' ORDER BY created_at DESC LIMIT 1"
+    )
+    assert row[0] == "alice@firm"
+    assert row[1] == "alice-trigger"
+    assert "trigger" in row[2]
+
+
+def test_revoking_one_credential_leaves_others_active(client, scoped_registry):
+    """After bob-export is removed from the registry, alice still authenticates and bob gets 401."""
+    assert get_corpus_admin_registry().authenticate(BOB_EXPORT) is not None
+    assert client.post("/api/start", headers={"X-API-Key": BOB_EXPORT}).status_code == 403
+
+    reset_corpus_admin_registry_for_tests(_credentials(include_revoked="bob-export"))
+    assert get_corpus_admin_registry().authenticate(BOB_EXPORT) is None
+    assert get_corpus_admin_registry().authenticate(ALICE_TRIGGER) is not None
+    assert client.post("/api/start", headers={"X-API-Key": BOB_EXPORT}).status_code == 401
+    assert get_corpus_admin_registry().authenticate(ALICE_TRIGGER) is not None
+
+
+def test_promote_requires_promote_scope_not_review_only(client, scoped_registry):
+    """Review-only routes reject promote scope mismatch on export key."""
+    qid = uuid.uuid4()
+    res = client.post(
+        f"/quarantine/{qid}/promote",
+        headers={"X-API-Key": BOB_EXPORT, "Idempotency-Key": "k1"},
+        json={"decision": "promote", "reviewer": "Bob", "reason": "test reason ok"},
+    )
+    assert res.status_code == 403
+
+
+def test_development_fallback_still_uses_admin_api_key():
+    """Without explicit CORPUS_ADMIN_CREDENTIALS, dev mode keeps ADMIN_API_KEY as all-scope cred."""
+    reset_corpus_admin_registry_for_tests(None)
+    principal = get_corpus_admin_registry().authenticate(settings.ADMIN_API_KEY)
+    assert principal is not None
+    assert principal.credential_id == "dev-admin"
+    assert principal.scopes == frozenset({"read", "trigger", "review", "export", "promote"})

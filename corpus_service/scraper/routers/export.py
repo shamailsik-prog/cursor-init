@@ -35,11 +35,11 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from scraper import public_corpus as pc
-from scraper.auth import require_admin_api_key
+from scraper.auth import require_corpus_export
 from scraper.config import settings
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/export", dependencies=[Depends(require_admin_api_key)])
+router = APIRouter(prefix="/export", dependencies=[Depends(require_corpus_export)])
 
 CSV_HEADER = ("citation", "title", "court", "year")
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")

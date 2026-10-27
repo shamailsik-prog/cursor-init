@@ -41,7 +41,11 @@ TLS_REDIS_URL = "rediss://corpus_redis:Rk3-long-random-Pw-2026@redis:6379/0"
 PROD = {
     "ENVIRONMENT": "production",
     "ENCRYPTION_KEY": Fernet.generate_key().decode(),
-    "ADMIN_API_KEY": "a-real-admin-key",
+    "ADMIN_API_KEY": "a-real-admin-key-32-chars-min!!",
+    "CORPUS_ADMIN_CREDENTIALS": (
+        '[{"id":"prod-bootstrap","actor":"platform","secret":"a-real-admin-key-32-chars-min!!",'
+        '"scopes":["read","trigger","review","export","promote"]}]'
+    ),
     "SECRET_KEY": "a-real-secret-key",
     "DATABASE_URL": TLS_DB_URL,
     "REDIS_URL": TLS_REDIS_URL,
