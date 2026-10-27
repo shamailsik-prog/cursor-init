@@ -36,15 +36,44 @@ Production: enable PITR, scheduled backups, weekly export to a retention-locked 
 
 Emulator drills: export → encrypted bundle → import into a clean emulator.
 
-**Matter deletions survive a restore (audit F42, FA-F42-R1-014).** A restore brings back rows that an approved
-deletion removed, and a backup taken before an approval has no tombstone for the matter at all. Before any restore that
-will be put into service, follow "Restoring a backup" in `docs/runbooks/retention-deletion.md`: export the deletion
-trail first, restore, re-apply every tombstone and revoke the restored memberships before the database serves a request,
-then re-run the deletions. Not drilled (NOT DEMONSTRATED).
+After any Firestore restore that will serve traffic, complete **Post-restore: tombstones and completed deletions (F42)**
+below before routing clients to the database.
 
 ## Document vault
 
 S3-compatible: Object Lock GOVERNANCE + versioning (`ops/backup/objects/protection.ts`). Cloudflare R2: bucket lock API (no S3 versioning). Verify with `verifyDocumentObjects`; restore with `restoreObjects` from versioned secondary copy.
+
+## Post-restore: tombstones and completed deletions (F42, FA-F42-R1-014)
+
+A restore can resurrect every row an approved matter deletion removed. A backup taken **before** approval may have no
+`tombstone` at all, so APIs and `firestore.rules` would serve the matter again until the deletion trail is reconciled.
+Nothing in the runtime re-applies tombstones on boot: both stacks only **read** `matter_tombstones/{matterId}` when
+handling traffic (`platform/retention/tombstone.ts`; approval writes the row in `functions/src/retention/ops.ts`).
+
+Complete these steps before the restored environment serves a request. The canonical procedure (with API context) is
+**Restoring a backup** in `docs/runbooks/retention-deletion.md` (spec R34). Summary for the backup operator:
+
+1. **Before the restore**, export the **deletion trail** from the **live** database (never rely on the backup copy):
+   `matter_tombstones`, `deletion_requests`, `deletion_acks`, `deletion_external_requests`, `vault_object_tombstones`,
+   `legal_holds`. Example:
+   `gcloud firestore export gs://<bucket>/pre-restore-<date> --collection-ids=matter_tombstones,deletion_requests,deletion_acks,deletion_external_requests,vault_object_tombstones,legal_holds`
+   (**[REQUIRES VERIFICATION]** against the installed `gcloud` CLI).
+2. Restore Firestore into a **new** database id (above), never `(default)`.
+3. **Before traffic:** import the exported trail over the restored copies. For every tombstoned matter, delete every
+   `matter_members` row the restore brought back (approval had revoked them; membership-gated rules and routes read
+   those rows). Tombstones then refuse the matter on every path (`403 matter_deleted` on APIs; rules per R23).
+4. **Completed and in-flight deletions:** for each `deletion_requests` row in the trail with `status` `in_progress` or
+   `completed`, re-run the purge so Postgres, the document vault and every inventoried Firestore store match the trail
+   again. Saga jobs deduplicate by request id, so this is an **engineer-run re-purge of the request's plan** (FU-9, not
+   built): follow `GET /api/platform/retention/getDeletionRequest?requestId=` and retry or manually execute the
+   remaining `retention.store.purge` work documented in the retention runbook. Until step 4 finishes, step 3 keeps
+   restored matter content unreadable; record the restore on the requests' audit trail.
+5. **Legal holds:** a hold present in the trail must remain; do not purge held matter content in step 4.
+
+After Postgres or vault restore, run step 4 for every affected completed/in-progress matter deletion so corpus rows and
+objects do not outlive the Firestore trail.
+
+**NOT DEMONSTRATED:** no restore drill in CI or production has executed this reconciliation end to end.
 
 ## Drills
 
