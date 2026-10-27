@@ -1,3 +1,5 @@
+import { isProdLikeFunctionsRuntime } from "../deployRuntimeProfile"
+
 /**
  * OCR engine boundary (audit F04, erratum E-20).
  *
@@ -123,28 +125,14 @@ export class DeterministicLocalOcrEngine implements OcrEngine {
  */
 export const OCR_EGRESS_PROVIDERS: Readonly<Record<string, () => OcrEngine>> = Object.freeze({})
 
-const PROD_LIKE_DEPLOY_PROFILES = new Set(["staging", "production"])
-
-function deployProfileFromEnv(env: NodeJS.ProcessEnv): string {
-  const fromArg = env.SIKANDER_DEPLOY_PROFILE
-  if (fromArg !== undefined) return fromArg.trim().toLowerCase()
-  const raw = process.env.SIKANDER_DEPLOY_PROFILE
-  return (raw ?? "").trim().toLowerCase()
-}
-
 /**
  * Deployed/staging runtimes must not silently use the local stub.
  *
- * The literal `process.env.NODE_ENV === "production"` is constant-folded to true in `lib/index.js`
- * (`functions/build.mjs`), so the deployed bundle fails closed even when the host leaves `NODE_ENV`
- * unset. Tests may pass `NODE_ENV` on `env` when the runtime is not the production bundle.
- * `SIKANDER_DEPLOY_PROFILE` covers prod-like staging when the host profile is set at runtime.
+ * Delegates to `isProdLikeFunctionsRuntime` (FA-F04-006-002: prod/stage/unknown profiles and
+ * case-normalized NODE_ENV off-bundle; deployed bundle always prod-like via build.mjs define).
  */
 export function isProdLikeOcrRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (process.env.NODE_ENV === "production") return true
-  const nodeEnvArg = env.NODE_ENV?.trim().toLowerCase()
-  if (nodeEnvArg === "production") return true
-  return PROD_LIKE_DEPLOY_PROFILES.has(deployProfileFromEnv(env))
+  return isProdLikeFunctionsRuntime(env)
 }
 
 /**
