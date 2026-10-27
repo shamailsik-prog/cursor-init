@@ -227,6 +227,32 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(() => validatePolicy(ok, inv)).not.toThrow()
   })
 
+  it("FA-F42-R1-006-001: transitive createdBy / partnerGrantedBy refuses when either partner ancestors the other", async () => {
+    const { partnerLineageAncestors, refusePartnerLineage } = await import("../src/retention/partnerLineage")
+    type Row = { createdBy?: string; partnerGrantedBy?: string }
+    const users: Record<string, Row> = {
+      P: {},
+      Q: { createdBy: "P" },
+      R: { createdBy: "Q" },
+      side: { createdBy: "other" },
+      grant: { partnerGrantedBy: "P" },
+      deep: { createdBy: "d1" },
+      d1: { createdBy: "d2" },
+      d2: { partnerGrantedBy: "P" },
+    }
+    const load = async (uid: string) => users[uid]
+    expect(await partnerLineageAncestors("R", load)).toEqual(new Set(["Q", "P"]))
+    expect(await partnerLineageAncestors("Q", load)).toEqual(new Set(["P"]))
+    expect(await partnerLineageAncestors("deep", load)).toEqual(new Set(["d1", "d2", "P"]))
+    await expect(refusePartnerLineage({ approver: "R", requester: "P" }, load)).rejects.toMatchObject({ status: 403, code: "approver_lineage_of_requester" })
+    await expect(refusePartnerLineage({ approver: "P", requester: "R" }, load)).rejects.toMatchObject({ status: 403, code: "requester_lineage_of_approver" })
+    await expect(refusePartnerLineage({ approver: "side", requester: "P" }, load)).resolves.toBeUndefined()
+    await expect(refusePartnerLineage({ approver: "grant", requester: "P" }, load)).rejects.toMatchObject({ code: "approver_lineage_of_requester" })
+    users.cycle = { createdBy: "cycleB" }
+    users.cycleB = { createdBy: "cycle" }
+    expect(await partnerLineageAncestors("cycle", load)).toBeNull()
+  })
+
   it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
     const inv = inventory()
     expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)

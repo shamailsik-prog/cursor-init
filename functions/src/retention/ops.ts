@@ -12,6 +12,7 @@ import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
 import { RetentionConfigError, activePolicy, holdRefusal, inventory, planDeletion, type PlannedStore, type RetentionPolicy } from "./config"
 import { instructionsIn, moveInstructions } from "./instructions"
+import { refusePartnerLineage } from "./partnerLineage"
 import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
 
 /**
@@ -58,8 +59,9 @@ function partnerStartMs(user: DocumentData | undefined): number | null {
 
 /**
  * Audit F42 (FA-F42-R1-006, spec R26): the requester and the approver must be two people the store can tell apart.
- * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`): checked
- * both ways, since a sole partner's puppet could otherwise file the request for its creator to approve. The approver's
+ * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`), nor stand
+ * in either relation transitively (depth-capped walk, FA-F42-R1-006-001): checked both ways, since a sole partner's
+ * puppet could otherwise file the request for its creator to approve. The approver's
  * account and partner role must predate the request and be `approverMinTenureDays` old at the approval; the
  * requester's must be that old at the request. A start the store cannot tell refuses (fail closed). Each refusal is a
  * 403 with its own code, audited as a deny by the router.
@@ -251,13 +253,15 @@ export const approveMatterDeletionOp: FirmOperation<RequestResult> = {
       const matter = readMatterDocument(matterSnap.data())
       requireCleared(caller, req.classification)
       if (matter) requireCleared(caller, matter.classification)
+      const partnerIds = { approver: caller.uid, requester: requester ?? "" }
       requireIndependentPartners(
         approverSnap.data(),
         requesterSnap?.data(),
-        { approver: caller.uid, requester: requester ?? "" },
+        partnerIds,
         { requestedAtMs: millisOf(req.requestedAt), nowMs },
         policy
       )
+      await refusePartnerLineage(partnerIds, (uid) => tx.get(userRef(uid)).then((s) => s.data()))
       if (lapsed(req, nowMs, policy)) {
         // Recorded like a refusal: the request ends, so it no longer holds the matter's one open request.
         tx.update(reqRef, expiryOf(at, caller.uid, null))

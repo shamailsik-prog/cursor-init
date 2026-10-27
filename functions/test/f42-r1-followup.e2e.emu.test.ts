@@ -639,6 +639,32 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
   })
 
+  it("FA-F42-R1-006-001: a two-step create chain cannot approve the founder's deletion request", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const firmId = uniq("f42r1chain")
+    firms.push(firmId)
+    await adminDb().collection("firms").doc(firmId).set({ name: "CHAIN", plan: "internal", rateLimits: { general: 5000 } })
+    const P = await member(firmId, "partner")
+    const f: Firm = { firmId, P, Q: P, A: P, matterId: uniq("f42r1chainm") }
+    await seedMatter(firmId, f.matterId, TITLE, [P.uid])
+    const qEmail = `${uniq("mid")}@example.test`
+    const { uid: qUid } = await send(createFirmUserApi, f, P, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(qUid)
+    const Q = await signIn(qUid, qEmail)
+    await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+    const rEmail = `${uniq("leaf")}@example.test`
+    const { uid: rUid } = await send(createFirmUserApi, f, Q, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(rUid)
+    const R = await signIn(rUid, rEmail)
+    await ageUser(rUid, { createdAt: 40, partnerSince: 40 })
+    expect((await adminDb().collection("users").doc(rUid).get()).get("createdBy")).toBe(Q.uid)
+    expect((await adminDb().collection("users").doc(qUid).get()).get("createdBy")).toBe(P.uid)
+    const req = await send(requestApi, f, P, { matterId: f.matterId, reasonCode: "client_instruction" })
+    const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
+    expect(`${err.status} ${err.code}`).toBe("403 approver_lineage_of_requester")
+    expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+  })
+
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
