@@ -4,7 +4,7 @@ import path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { handlerFor } from "../src/p2/registry"
 import { adminDb } from "../src/admin"
 import { aggregateClassification, isCompleteLegacyOcrJob, labelAtPublish, OCR_JOB_TYPE } from "../src/p2/ocrJob"
@@ -20,6 +20,7 @@ import {
   resolveOcrEngine,
   withOcrTimeout,
 } from "../src/p1/ocrEngine"
+import { callP1Ocr, ocrTestSeam, ocrTextId } from "../src/p1/ocrCall"
 import { summarizeOcrJobs } from "../../services/d1-6/ocrStatus"
 
 const TEXT = "IN THE HIGH COURT OF SINDH\nSynthetic plaint 2099."
@@ -218,6 +219,70 @@ if (resolveOcrEngine({}) !== null) process.exit(2);`
     expect(src).not.toMatch(/\bfetch\s*\(/)
     expect(src).not.toMatch(/from ["']https?/)
     expect(src).not.toMatch(/tesseract|vision|child_process/i)
+  })
+})
+
+describe.skipIf(!EMULATORS)("FA-F04-008-001: ocr.admit reason text_truncated (emulator)", () => {
+  const contentHash = "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff01"
+
+  afterEach(() => {
+    delete ocrTestSeam.engine
+    delete ocrTestSeam.timeoutMs
+  })
+
+  async function waitForAdmitAudit(
+    target: string,
+    reason: "text_truncated" | "ok"
+  ): Promise<FirebaseFirestore.QuerySnapshot> {
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const snap = await adminDb().collection("audit_log").where("target", "==", target).get()
+      if (
+        snap.docs.some(
+          (entry) => entry.get("action") === "ocr.admit" && entry.get("reason") === reason && entry.get("decision") === "allow"
+        )
+      ) {
+        return snap
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    return adminDb().collection("audit_log").where("target", "==", target).get()
+  }
+
+  it("FA-F04-008-001: admission audit uses reason text_truncated when UTF-8 cap applies", async () => {
+    const firmId = uniq("f04008001-firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "FA-F04-008-001", plan: "internal" })
+    const documentId = uniq("f04008001-doc")
+    const operationId = uniq("f04008001-op")
+    const ch = "\u{FBAB}"
+    const bytes = Buffer.from(ch.repeat(400_000), "utf8")
+
+    const result = await callP1Ocr({
+      firmId,
+      actorId: "system",
+      matterId: null,
+      jobId: operationId,
+      operationId,
+      legacyJobId: uniq("f04008001-legacy"),
+      documentId,
+      contentHash,
+      classification: "internal",
+      sources: ["internal"],
+      bytes,
+      mimeType: "text/plain",
+    })
+
+    expect(result.outcome).toBe("ok")
+    expect(result.truncated).toBe(true)
+
+    const target = `ocr_texts/${ocrTextId(firmId, documentId, contentHash)}`
+    const audits = await waitForAdmitAudit(target, "text_truncated")
+    expect(
+      audits.docs.some(
+        (entry) =>
+          entry.get("action") === "ocr.admit" && entry.get("reason") === "text_truncated" && entry.get("decision") === "allow"
+      )
+    ).toBe(true)
   })
 })
 
