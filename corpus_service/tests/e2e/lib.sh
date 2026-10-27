@@ -122,7 +122,7 @@ new_store_secrets() {
   REDIS_APP_USER=corpus_redis REDIS_APP_PASSWORD="$(rand_secret)"
   REDIS_PASSWORD="$(rand_secret)"   # read only by the pre-F30 compose (requirepass)
   ENCRYPTION_KEY="$(fernet_key)" ADMIN_API_KEY="$(rand_secret)" SECRET_KEY="$(rand_secret)"
-  CORPUS_ADMIN_CREDENTIALS=$(python3 -c "import json,os; print(json.dumps([{'id':'e2e-bootstrap','actor':'e2e','secret':os.environ['ADMIN_API_KEY'],'scopes':['read','trigger','review','export','promote']}]))")
+  CORPUS_ADMIN_CREDENTIALS=$(python3 -c "import json,sys; print(json.dumps([{'id':'e2e-bootstrap','actor':'e2e','secret':sys.argv[1],'scopes':['read','trigger','review','export','promote']}]))" "$ADMIN_API_KEY")
   # If the caller exported any of these, un-export them: compose must get them from .env only.
   export -n POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATE_DB_USER MIGRATE_DB_PASSWORD \
     REDIS_APP_USER REDIS_APP_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY ADMIN_API_KEY CORPUS_ADMIN_CREDENTIALS SECRET_KEY 2>/dev/null || true
