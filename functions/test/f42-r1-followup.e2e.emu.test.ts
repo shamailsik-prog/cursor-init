@@ -622,7 +622,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // A partner role granted (by another partner) after the request was made: younger than the request.
     const late = await member(f.firmId, "partner")
     await adminDb().collection("users").doc(late.uid).set({ partnerSince: Timestamp.fromMillis(Date.now() + 1_000), partnerGrantedBy: "another-partner" }, { merge: true })
-    expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
+    expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_not_independent")
     // A partner whose claims were changed (updatedAt) with no partnerSince is judged by the change: here, yesterday.
     const changed = await member(f.firmId, "partner")
     await ageUser(changed.uid, { updatedAt: 1 })
@@ -635,7 +635,9 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // Each refusal is a deny row in the audit log, naming its code; nothing was tombstoned.
     const audit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.approve_deletion").get()
     const reasons = audit.docs.map((d) => `${d.get("decision")} ${d.get("reason")}`)
-    for (const code of ["approver_promoted_by_requester", "approver_tenure_too_short", "approver_tenure_unknown"]) expect(reasons).toContain(`deny ${code}`)
+    for (const code of ["approver_promoted_by_requester", "approver_tenure_too_short", "approver_tenure_unknown", "approver_not_independent"]) {
+      expect(reasons).toContain(`deny ${code}`)
+    }
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
     // Control: Q, established and independent, approves.
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
@@ -663,7 +665,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await adminDb().collection("users").doc(qUid).get()).get("createdBy")).toBe(P.uid)
     const req = await send(requestApi, f, P, { matterId: f.matterId, reasonCode: "client_instruction" })
     const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
-    expect(`${err.status} ${err.code}`).toBe("403 approver_lineage_of_requester")
+    expect(`${err.status} ${err.code}`).toBe("403 approver_not_independent")
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
   })
 
@@ -744,6 +746,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // A, an established associate, is made partner by Q, then requests; Q may not approve it, P (independent of A) may.
     await send(setUserClaimsApi, f, f.Q, { uid: f.A.uid, role: "partner" })
     await ageUser(f.A.uid, { partnerSince: 400 })
+    await send(attestIndependentPartnerApi, f, f.Q, { uid: f.A.uid })
     const promoted = await signIn(f.A.uid, f.A.email!)
     const req = await send(requestApi, f, promoted, { matterId: f.matterId, reasonCode: "client_instruction" })
     expect((await apiErrorOf(send(approveApi, f, f.Q, { requestId: req.requestId }))).code).toBe("requester_promoted_by_approver")

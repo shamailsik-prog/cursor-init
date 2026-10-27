@@ -5,6 +5,7 @@ import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import { g2Passed } from "./gates"
+import { isIndependentPartner } from "../retention/partnerIndependence"
 import {
   errorCode,
   isSafeDocId,
@@ -572,7 +573,7 @@ export const attestIndependentPartnerOp: FirmOperation<{ uid: string }> = {
       if (!callerDoc || callerDoc.firmId !== caller.firmId) throw new HttpError(403, "cross_firm")
       const targetDoc = await readTargetDoc(tx, caller, uid)
       if (callerDoc.active === false) throw new HttpError(403, "caller_inactive")
-      if (callerDoc.role !== "partner" || callerDoc.independentPartner !== true) {
+      if (callerDoc.role !== "partner" || !isIndependentPartner(callerDoc)) {
         throw new HttpError(403, "attester_not_independent")
       }
       if (targetDoc.active === false) throw new HttpError(409, "target_inactive")
