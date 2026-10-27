@@ -1,5 +1,9 @@
-import { readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { readFileSync, rmSync } from "node:fs"
 import path from "node:path"
+import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
+import { build } from "esbuild"
 import { describe, expect, it } from "vitest"
 import { handlerFor } from "../src/p2/registry"
 import { aggregateClassification, isCompleteLegacyOcrJob, OCR_JOB_TYPE } from "../src/p2/ocrJob"
@@ -9,6 +13,7 @@ import {
   LOCAL_OCR_PROVIDER,
   MAX_OCR_TEXT_BYTES,
   OcrTimeoutError,
+  isProdLikeOcrRuntime,
   resolveOcrEngine,
   withOcrTimeout,
 } from "../src/p1/ocrEngine"
@@ -79,15 +84,59 @@ describe("F04 OCR engine and admission (no emulator)", () => {
     expect(resolveOcrEngine({ OCR_PROVIDER: "tesseract" })).toBeNull()
   })
 
-  it("FA-F04-006: production does not fall back to the stub when OCR_PROVIDER is unset or local", () => {
+  it("FA-F04-006: prod-like runtimes do not fall back to the stub when OCR_PROVIDER is unset or local", () => {
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "production" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ SIKANDER_DEPLOY_PROFILE: "staging" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ SIKANDER_DEPLOY_PROFILE: "production" })).toBe(true)
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "test" })).toBe(false)
+    expect(isProdLikeOcrRuntime({ NODE_ENV: "development" })).toBe(false)
+
     expect(resolveOcrEngine({ NODE_ENV: "production" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "local-ocr-stub" })).toBeNull()
     expect(resolveOcrEngine({ NODE_ENV: "production", OCR_PROVIDER: "  Local  " })).toBeNull()
+    expect(resolveOcrEngine({ SIKANDER_DEPLOY_PROFILE: "staging" })).toBeNull()
+    expect(resolveOcrEngine({ SIKANDER_DEPLOY_PROFILE: "staging", OCR_PROVIDER: "local" })).toBeNull()
+    expect(resolveOcrEngine({ NODE_ENV: "test", SIKANDER_DEPLOY_PROFILE: "staging" })).toBeNull()
+    // Dev/test without a deploy profile may still use the stub.
+    expect(resolveOcrEngine({ NODE_ENV: "test" })).toBeInstanceOf(DeterministicLocalOcrEngine)
     // A name this build has not registered through the egress gate stays closed in every environment.
     expect(resolveOcrEngine({ NODE_ENV: "test", OCR_PROVIDER: "vision" })).toBeNull()
   })
+
+  it("FA-F04-006-001: the production-defined OCR engine bundle fails closed with host NODE_ENV and deploy profile unset", async () => {
+    const functionsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+    const repoRoot = path.resolve(functionsDir, "..")
+    const outfile = path.join(functionsDir, "lib/.fa-f04-006-ocr-engine.cjs")
+    await build({
+      entryPoints: [path.join(functionsDir, "src/p1/ocrEngine.ts")],
+      outfile,
+      bundle: true,
+      platform: "node",
+      target: "node22",
+      format: "cjs",
+      define: { "process.env.NODE_ENV": '"production"' },
+      alias: { "@": repoRoot },
+      logLevel: "silent",
+    })
+    try {
+      const bundleSrc = readFileSync(outfile, "utf8")
+      expect(bundleSrc).not.toMatch(/process\.env\[["']NODE_ENV["']\]/)
+      const script = `const { resolveOcrEngine } = require(${JSON.stringify(outfile)});
+delete process.env.NODE_ENV;
+delete process.env.SIKANDER_DEPLOY_PROFILE;
+if (resolveOcrEngine({}) !== null) process.exit(2);`
+      execFileSync(process.execPath, ["-e", script], {
+        env: { ...process.env, NODE_ENV: undefined, SIKANDER_DEPLOY_PROFILE: undefined },
+        stdio: "pipe",
+      })
+      const req = createRequire(import.meta.url)
+      expect(req(outfile).resolveOcrEngine({})).toBeNull()
+    } finally {
+      rmSync(outfile, { force: true })
+    }
+  }, 60_000)
 
   it("FA-F04-008: text over the UTF-8 cap is marked truncated, and shorter text is not", async () => {
     const engine = new DeterministicLocalOcrEngine()

@@ -2,9 +2,9 @@
  * OCR engine boundary (audit F04, erratum E-20).
  *
  * The worker does not call a provider. `callP1Ocr` is the only caller, and it asks
- * `resolveOcrEngine` which implementation to use. Outside production, `OCR_PROVIDER` unset
+ * `resolveOcrEngine` which implementation to use. Outside prod-like runtimes, `OCR_PROVIDER` unset
  * or `local` selects the deterministic in-process stub below: same bytes, same text, no network.
- * Production fails closed unless the name is registered in `OCR_EGRESS_PROVIDERS`, which is
+ * Prod-like runtimes fail closed unless the name is registered in `OCR_EGRESS_PROVIDERS`, which is
  * where a real provider implemented inside the Functions control plane (the F18 egress gate
  * leaves that plane in place) would be wired. The map is empty in this build.
  * No remote image API and no local OCR binary are wired.
@@ -123,18 +123,39 @@ export class DeterministicLocalOcrEngine implements OcrEngine {
  */
 export const OCR_EGRESS_PROVIDERS: Readonly<Record<string, () => OcrEngine>> = Object.freeze({})
 
+const PROD_LIKE_DEPLOY_PROFILES = new Set(["staging", "production"])
+
+function deployProfileFromEnv(env: NodeJS.ProcessEnv): string {
+  const fromArg = env.SIKANDER_DEPLOY_PROFILE
+  if (fromArg !== undefined) return fromArg.trim().toLowerCase()
+  const raw = process.env.SIKANDER_DEPLOY_PROFILE
+  return (raw ?? "").trim().toLowerCase()
+}
+
 /**
- * Outside production, `OCR_PROVIDER` unset or `local` selects the stub. Production returns null
+ * Deployed/staging runtimes must not silently use the local stub.
+ *
+ * The literal `process.env.NODE_ENV === "production"` is constant-folded to true in `lib/index.js`
+ * (`functions/build.mjs`), so the deployed bundle fails closed even when the host leaves `NODE_ENV`
+ * unset. Tests may pass `NODE_ENV` on `env` when the runtime is not the production bundle.
+ * `SIKANDER_DEPLOY_PROFILE` covers prod-like staging when the host profile is set at runtime.
+ */
+export function isProdLikeOcrRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (process.env.NODE_ENV === "production") return true
+  const nodeEnvArg = env.NODE_ENV?.trim().toLowerCase()
+  if (nodeEnvArg === "production") return true
+  return PROD_LIKE_DEPLOY_PROFILES.has(deployProfileFromEnv(env))
+}
+
+/**
+ * Outside prod-like runtimes, `OCR_PROVIDER` unset or `local` selects the stub. Prod-like returns null
  * unless `name` is registered in `OCR_EGRESS_PROVIDERS`. Any other name is unsupported (null).
- * The deployed bundle constant-folds `process.env.NODE_ENV` to `"production"` (`functions/build.mjs`),
- * so a host that leaves `NODE_ENV` unset still fails closed. Tests pass `NODE_ENV` on `env`.
  */
 export function resolveOcrEngine(env: NodeJS.ProcessEnv = process.env): OcrEngine | null {
   const name = (env.OCR_PROVIDER ?? "").trim().toLowerCase()
   const gated = OCR_EGRESS_PROVIDERS[name]
   if (gated) return gated()
-  const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV
-  if (nodeEnv === "production") return null
+  if (isProdLikeOcrRuntime(env)) return null
   if (name === "" || name === "local" || name === "local-ocr-stub") return new DeterministicLocalOcrEngine()
   return null
 }
