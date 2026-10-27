@@ -67,6 +67,8 @@ def test_missing_key_denied(client, scoped_registry):
 
 def test_named_actor_recorded_on_privileged_action(client, scoped_registry, corpus_db):
     """Trigger records immutable audit row with operator identity."""
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
     with mock.patch("scraper.tasks.dispatcher.run_source_job") as job:
         job.delay.return_value = None
         res = client.post(
