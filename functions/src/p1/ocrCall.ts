@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { Timestamp } from "firebase-admin/firestore"
+import { logger } from "firebase-functions"
 import type { Classification } from "@/platform/p1/types"
 import { adminDb } from "../admin"
 import { logFailure } from "../log"
@@ -217,6 +218,15 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
     const measured = measureOcrText(extraction.text)
     const text = measured.text
     const truncated = extraction.truncated === true || measured.truncated
+    const admitReason = truncated ? "text_truncated" : "ok"
+    if (truncated) {
+      logger.info("ocr.text_truncated", {
+        firmId: req.firmId,
+        operationId: req.operationId,
+        documentId: req.documentId,
+        legacyJobId: req.legacyJobId,
+      })
+    }
     const calls = priorCalls + 1
     await write({
       ...base,
@@ -231,7 +241,7 @@ export async function callP1Ocr(req: OcrCallRequest): Promise<OcrCallResult> {
       calls,
       reused: false,
     })
-    audit("ocr.admit", "allow", "ok")
+    audit("ocr.admit", "allow", admitReason)
     return {
       outcome: "ok",
       blockReason: null,

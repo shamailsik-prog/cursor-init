@@ -315,7 +315,7 @@ async function run(ctx: JobContext<OcrPayload>): Promise<JobResult> {
         target: `ocr_texts/${resultId}`,
         classification: published,
         decision: "allow",
-        reason: "ok",
+        reason: truncated ? "text_truncated" : "ok",
       },
       tx
     )

@@ -802,6 +802,11 @@ describe.skipIf(!EMULATORS)("F04: a queued OCR job is picked up and completed (e
     expect(longOp.get("truncated")).toBe(true)
     expect(Buffer.byteLength(longText.get("text"), "utf8")).toBeLessThanOrEqual(900 * 1024)
     expect((longText.get("text") as string).length).toBeLessThan(over.length)
+    const longResultId = longLegacy.get("ocrResultId") as string
+    const longAudits = await adminDb().collection("audit_log").where("target", "==", `ocr_texts/${longResultId}`).get()
+    expect(longAudits.docs.some((entry) => entry.get("action") === "ocr.complete" && entry.get("reason") === "text_truncated")).toBe(
+      true
+    )
 
     const shortDoc = await seedDoc({ firmId, matterId, classification: "internal" })
     const shortId = uniq("f04-whole")
