@@ -23,8 +23,6 @@ def _shipped_tree_root() -> Path:
 def _write_min_tree(root: Path, *, root_node: str = "22", eve_nvm: str = "24") -> None:
     (root / ".nvmrc").write_text("22\n", encoding="utf-8")
     (root / ".nvmrc.eve").write_text(f"{eve_nvm}\n", encoding="utf-8")
-    (root / "agent").mkdir(parents=True, exist_ok=True)
-    (root / "agent" / ".nvmrc").write_text(f"{eve_nvm}\n", encoding="utf-8")
     (root / "functions").mkdir(parents=True, exist_ok=True)
     (root / "functions" / "package.json").write_text(
         json.dumps({"engines": {"node": root_node}}),

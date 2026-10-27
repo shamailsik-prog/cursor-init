@@ -29,7 +29,7 @@ npm run dev -- --port 43127
 
 Open http://127.0.0.1:43127
 
-Toolchain (audit F39, F48): **Node 22** for the foundation console, Cloud Functions and every mandatory CI job (`.nvmrc`, root `engines.node`, `functions/package.json` `engines.node`). **Node 24** is only for the optional eve agent CLI (`eve` declares `engines.node >=24`); it is not the Functions deploy target. Use `.nvmrc.eve` or `agent/.nvmrc` when activating eve locally (`fnm use` / `nvm install` 24 in a separate shell). Production setup stays on Node 22:
+Toolchain (audit F39, F48): **Node 22** for the foundation console, Cloud Functions and every mandatory CI job (`.nvmrc`, root `engines.node`, `functions/package.json` `engines.node`). **Node 24** is only for the optional eve agent CLI (`eve` declares `engines.node >=24`); it is not the Functions deploy target. Use `.nvmrc.eve` when activating eve locally (`fnm use` / `nvm install` per that file, in a separate shell from Node 22 work). Production setup stays on Node 22:
 
 ```bash
 npm ci && npm ci --prefix functions   # Node 22

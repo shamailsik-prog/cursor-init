@@ -40,13 +40,12 @@ def run(root: Path) -> list[str]:
 
     nvm = root / ".nvmrc"
     nvm_eve = root / ".nvmrc.eve"
-    agent_nvm = root / "agent" / ".nvmrc"
     root_pkg = root / "package.json"
     functions_pkg = root / "functions" / "package.json"
     workflow = root / WORKFLOW
     eve_script = root / EVE_SCRIPT
 
-    for path in (nvm, nvm_eve, agent_nvm, root_pkg, functions_pkg, workflow, eve_script):
+    for path in (nvm, nvm_eve, root_pkg, functions_pkg, workflow, eve_script):
         if not path.is_file():
             problems.append(f"missing required file: {path}")
 
@@ -57,8 +56,6 @@ def run(root: Path) -> list[str]:
         problems.append(f".nvmrc must be {PRODUCTION_NODE} (console/Functions/CI); got {_read_trimmed(nvm)!r}")
     if _read_trimmed(nvm_eve) != EVE_NODE:
         problems.append(f".nvmrc.eve must be {EVE_NODE} (optional eve); got {_read_trimmed(nvm_eve)!r}")
-    if _read_trimmed(agent_nvm) != EVE_NODE:
-        problems.append(f"agent/.nvmrc must be {EVE_NODE}; got {_read_trimmed(agent_nvm)!r}")
 
     root_node = _engines_node(root_pkg)
     if root_node != PRODUCTION_NODE:

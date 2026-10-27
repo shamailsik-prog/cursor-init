@@ -6,7 +6,7 @@ need_major="${EVE_NODE_MAJOR:-24}"
 actual_major="$(node -p "process.versions.node.split('.')[0]")"
 if [[ "$actual_major" != "$need_major" ]]; then
   echo "eve-toolchain-check: need Node ${need_major}.x (eve engines); got $(node -v)" >&2
-  echo "Use .nvmrc.eve / agent/.nvmrc (24) — production .nvmrc stays 22 for Functions and CI." >&2
+  echo "Use .nvmrc.eve (24) — production .nvmrc stays 22 for Functions and CI." >&2
   exit 1
 fi
 

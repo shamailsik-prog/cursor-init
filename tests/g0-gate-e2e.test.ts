@@ -152,6 +152,12 @@ function buildBaseTree(): string {
     "corpus_service/tests/e2e/lib.sh",
     "corpus_service/tests/e2e/store_security_e2e.sh",
     "corpus_service/tests/e2e/upgrade_e2e.sh",
+    // Check [25] (audit F48): production Node 22 vs optional eve Node 24 pins, workflow job and README.
+    ".nvmrc",
+    ".nvmrc.eve",
+    ".github/workflows/gate-g0.yml",
+    "scripts/eve-toolchain-check.sh",
+    "README.md",
     // Check [20] next.corpusResearch (audit FA-D5-003): the files the manifest names for the research reader.
     "corpus_service/docker/postgres/provision-roles.sh",
     "services/d5-1/researchCorpus.ts",
