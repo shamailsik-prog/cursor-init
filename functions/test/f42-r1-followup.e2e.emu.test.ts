@@ -551,6 +551,8 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-009: a deleted matter's job rows are hidd
 })
 
 const createFirmUserApi = viaApi<{ uid: string }>("createFirmUser")
+const attestIndependentPartnerApi = viaApi<{ uid: string }>("attestIndependentPartner")
+const onboardFirmApi = viaApi<{ firmId: string }>("onboardFirm")
 const setUserClaimsApi = viaApi<Record<string, unknown>>("setUserClaims")
 const PASSWORD = "f42r1-pass-123"
 
@@ -620,7 +622,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // A partner role granted (by another partner) after the request was made: younger than the request.
     const late = await member(f.firmId, "partner")
     await adminDb().collection("users").doc(late.uid).set({ partnerSince: Timestamp.fromMillis(Date.now() + 1_000), partnerGrantedBy: "another-partner" }, { merge: true })
-    expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
+    expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_not_independent")
     // A partner whose claims were changed (updatedAt) with no partnerSince is judged by the change: here, yesterday.
     const changed = await member(f.firmId, "partner")
     await ageUser(changed.uid, { updatedAt: 1 })
@@ -633,7 +635,9 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // Each refusal is a deny row in the audit log, naming its code; nothing was tombstoned.
     const audit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.approve_deletion").get()
     const reasons = audit.docs.map((d) => `${d.get("decision")} ${d.get("reason")}`)
-    for (const code of ["approver_promoted_by_requester", "approver_tenure_too_short", "approver_tenure_unknown"]) expect(reasons).toContain(`deny ${code}`)
+    for (const code of ["approver_promoted_by_requester", "approver_tenure_too_short", "approver_tenure_unknown", "approver_not_independent"]) {
+      expect(reasons).toContain(`deny ${code}`)
+    }
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
     // Control: Q, established and independent, approves.
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
@@ -661,8 +665,79 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await adminDb().collection("users").doc(qUid).get()).get("createdBy")).toBe(P.uid)
     const req = await send(requestApi, f, P, { matterId: f.matterId, reasonCode: "client_instruction" })
     const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
-    expect(`${err.status} ${err.code}`).toBe("403 approver_lineage_of_requester")
+    expect(`${err.status} ${err.code}`).toBe("403 approver_not_independent")
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+  })
+
+  it("FA-F42-R1-006-003-001 RED: a sole founder who attests one hire cannot have that hire approve the founder's deletion request", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003red-founder")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest RED firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003red") }
+      await seedMatter(firmId, f.matterId, TITLE, [F.uid])
+      const qEmail = `${uniq("attest-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      const Q = await signIn(qUid, qEmail)
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+      const req = await send(requestApi, f, F, { matterId: f.matterId, reasonCode: "client_instruction" })
+      const err = await apiErrorOf(send(approveApi, f, Q, { requestId: req.requestId }))
+      expect(["approver_created_by_requester", "approver_attested_by_requester"]).toContain(err.code)
+      expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
+  it("FA-F42-R1-006-003-001 GREEN: onboarded founder with two attested createFirmUser partners — second approves first's deletion", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003grn-founder")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest GREEN firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const matterId = uniq("f42r1003grn")
+      await seedMatter(firmId, matterId, TITLE, [F.uid])
+      const qEmail = `${uniq("green-q")}@example.test`
+      const rEmail = `${uniq("green-r")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, { firmId }, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      const { uid: rUid } = await send(createFirmUserApi, { firmId }, F, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid, rUid)
+      await send(attestIndependentPartnerApi, { firmId }, F, { uid: qUid })
+      await send(attestIndependentPartnerApi, { firmId }, F, { uid: rUid })
+      const Q = await signIn(qUid, qEmail)
+      const R = await signIn(rUid, rEmail)
+      await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+      await ageUser(rUid, { createdAt: 400, partnerSince: 400 })
+      const f: Firm = { firmId, P: F, Q, A: F, matterId }
+      const req = await send(requestApi, f, Q, { matterId, reasonCode: "client_instruction" })
+      expect(req.status).toBe("pending_approval")
+      const approved = await send(approveApi, f, R, { requestId: req.requestId })
+      expect(approved.status).toBe("in_progress")
+      expect((await adminDb().collection("matter_tombstones").doc(matterId).get()).exists).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
   })
 
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {
@@ -671,6 +746,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     // A, an established associate, is made partner by Q, then requests; Q may not approve it, P (independent of A) may.
     await send(setUserClaimsApi, f, f.Q, { uid: f.A.uid, role: "partner" })
     await ageUser(f.A.uid, { partnerSince: 400 })
+    await send(attestIndependentPartnerApi, f, f.Q, { uid: f.A.uid })
     const promoted = await signIn(f.A.uid, f.A.email!)
     const req = await send(requestApi, f, promoted, { matterId: f.matterId, reasonCode: "client_instruction" })
     expect((await apiErrorOf(send(approveApi, f, f.Q, { requestId: req.requestId }))).code).toBe("requester_promoted_by_approver")

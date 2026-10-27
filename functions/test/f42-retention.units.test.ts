@@ -227,6 +227,22 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(() => validatePolicy(ok, inv)).not.toThrow()
   })
 
+  it("FA-F42-R1-006-003-001: attestation links and the independent-partner register refuse puppet approval paths", async () => {
+    const { isIndependentPartner, refusePartnerAttestationLinks, requireIndependentPartnerRegistration } = await import(
+      "../src/retention/partnerIndependence"
+    )
+    expect(isIndependentPartner({ role: "partner", active: true, independentPartner: true })).toBe(true)
+    expect(isIndependentPartner({ role: "partner", active: true, independentPartner: false, createdBy: "F" })).toBe(false)
+    expect(isIndependentPartner({ role: "partner", active: true, createdBy: "F" })).toBe(false)
+    expect(isIndependentPartner({ role: "partner", active: true })).toBe(true)
+    expect(() => refusePartnerAttestationLinks({ approver: "Q", requester: "F" }, { partnerAttestedBy: "F" }, {})).toThrow(
+      expect.objectContaining({ code: "approver_attested_by_requester" })
+    )
+    expect(() => requireIndependentPartnerRegistration({ role: "partner", independentPartner: false }, "approver")).toThrow(
+      expect.objectContaining({ code: "approver_not_independent" })
+    )
+  })
+
   it("FA-F42-R1-006-001: transitive createdBy / partnerGrantedBy refuses when either partner ancestors the other", async () => {
     const { partnerLineageAncestors, refusePartnerLineage } = await import("../src/retention/partnerLineage")
     type Row = { createdBy?: string; partnerGrantedBy?: string }

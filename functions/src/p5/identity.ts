@@ -5,6 +5,7 @@ import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import { g2Passed } from "./gates"
+import { isIndependentPartner } from "../retention/partnerIndependence"
 import {
   errorCode,
   isSafeDocId,
@@ -227,7 +228,13 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
     // FN-1: per-caller pending marker, written with the firm, so a retry after a post-commit
     // failure (setCustomUserClaims) resumes the same firm instead of creating another.
     const pendingRef = db.collection("platform_onboarding").doc(uid)
-    const founderDoc = (founderFirmId: string) => ({ firmId: founderFirmId, ...FOUNDER, mfaEnabled: false, active: true })
+    const founderDoc = (founderFirmId: string) => ({
+  firmId: founderFirmId,
+  ...FOUNDER,
+  mfaEnabled: false,
+  active: true,
+  independentPartner: true,
+})
 
     const outcome = await db.runTransaction(async (tx) => {
       const bootstrap = await tx.get(bootstrapRef)
@@ -242,7 +249,7 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
           audit.firmId = firstFirmId
           audit.target = `firms/${firstFirmId}`
           await audit.stage(tx, "allow", "bootstrap_resume")
-          if (userDoc.exists) tx.set(userRef, { firmId: firstFirmId, ...FOUNDER, active: true }, { merge: true })
+          if (userDoc.exists) tx.set(userRef, { firmId: firstFirmId, ...FOUNDER, active: true, independentPartner: true }, { merge: true })
           else tx.set(userRef, { ...founderDoc(firstFirmId), createdAt: FieldValue.serverTimestamp() })
           return { kind: "resumed" as const, firmId: firstFirmId }
         }
@@ -257,7 +264,7 @@ export const onboardFirmOp: FirmlessOperation<{ firmId: string }> = {
           audit.firmId = pendingFirmId
           audit.target = `firms/${pendingFirmId}`
           await audit.stage(tx, "allow", "onboarding_resume")
-          if (userDoc.exists) tx.set(userRef, { firmId: pendingFirmId, ...FOUNDER, active: true }, { merge: true })
+          if (userDoc.exists) tx.set(userRef, { firmId: pendingFirmId, ...FOUNDER, active: true, independentPartner: true }, { merge: true })
           else tx.set(userRef, { ...founderDoc(pendingFirmId), createdAt: FieldValue.serverTimestamp() })
           return { kind: "resumed" as const, firmId: pendingFirmId }
         }
@@ -335,7 +342,13 @@ export const createFirmUserOp: FirmOperation<{ uid: string }> = {
         active: true,
         // Audit F42 (FA-F42-R1-006, spec R26): who made the account, so a deletion's two partners can be told apart.
         createdBy: caller.uid,
-        ...(role === "partner" ? { partnerSince: FieldValue.serverTimestamp(), partnerGrantedBy: caller.uid } : {}),
+        ...(role === "partner"
+          ? {
+              partnerSince: FieldValue.serverTimestamp(),
+              partnerGrantedBy: caller.uid,
+              independentPartner: false,
+            }
+          : {}),
         createdAt: FieldValue.serverTimestamp(),
       })
     } catch (err) {
@@ -426,8 +439,24 @@ export const setUserClaimsOp: FirmOperation<{ uid: string; role: Role; clearance
  * dated afresh. Any other change leaves them as they are.
  */
 function partnerFields(before: unknown, after: unknown, by: string): Record<string, unknown> {
-  if (before !== "partner" && after === "partner") return { partnerSince: FieldValue.serverTimestamp(), partnerGrantedBy: by }
-  if (before === "partner" && after !== "partner") return { partnerSince: FieldValue.delete(), partnerGrantedBy: FieldValue.delete() }
+  if (before !== "partner" && after === "partner") {
+    return {
+      partnerSince: FieldValue.serverTimestamp(),
+      partnerGrantedBy: by,
+      independentPartner: false,
+      partnerAttestedBy: FieldValue.delete(),
+      partnerAttestedAt: FieldValue.delete(),
+    }
+  }
+  if (before === "partner" && after !== "partner") {
+    return {
+      partnerSince: FieldValue.delete(),
+      partnerGrantedBy: FieldValue.delete(),
+      independentPartner: FieldValue.delete(),
+      partnerAttestedBy: FieldValue.delete(),
+      partnerAttestedAt: FieldValue.delete(),
+    }
+  }
   return {}
 }
 
@@ -518,6 +547,48 @@ async function revertIfStillOurs(
     writeClaimsState(tx, uid, result, partnerFields(doc.role, result.role, by))
     return { result, blocked }
   })
+}
+
+/**
+ * attestIndependentPartner({ uid }) → { uid }. An already-independent partner attests that another
+ * firm partner is a genuine independent partner (FA-F42-R1-006-003-001). Server-only fields;
+ * clients cannot forge attestation.
+ */
+export const attestIndependentPartnerOp: FirmOperation<{ uid: string }> = {
+  auth: "firm",
+  kind: "general",
+  action: "identity.attest_independent_partner",
+  target: "users",
+  run: async ({ caller }, data, audit) => {
+    audit.firmId = caller.firmId
+    await requirePartner(caller, "identity.attest_independent_partner")
+    const uid = parseUid(data.uid)
+    audit.target = `users/${uid}`
+    if (uid === caller.uid) throw new HttpError(403, "self_change_forbidden")
+    await requireUserInFirm(uid, caller.firmId)
+
+    await adminDb().runTransaction(async (tx) => {
+      const callerSnap = await tx.get(usersRef().doc(caller.uid))
+      const callerDoc = callerSnap.data()
+      if (!callerDoc || callerDoc.firmId !== caller.firmId) throw new HttpError(403, "cross_firm")
+      const targetDoc = await readTargetDoc(tx, caller, uid)
+      if (callerDoc.active === false) throw new HttpError(403, "caller_inactive")
+      if (callerDoc.role !== "partner" || !isIndependentPartner(callerDoc)) {
+        throw new HttpError(403, "attester_not_independent")
+      }
+      if (targetDoc.active === false) throw new HttpError(409, "target_inactive")
+      if (targetDoc.role !== "partner") throw new HttpError(409, "target_not_partner")
+      if (targetDoc.independentPartner === true) throw new HttpError(409, "already_independent")
+      await audit.stage(tx, "allow", "ok")
+      tx.update(usersRef().doc(uid), {
+        independentPartner: true,
+        partnerAttestedBy: caller.uid,
+        partnerAttestedAt: FieldValue.serverTimestamp(),
+      })
+    })
+    audit.committed()
+    return { uid }
+  },
 }
 
 /**
