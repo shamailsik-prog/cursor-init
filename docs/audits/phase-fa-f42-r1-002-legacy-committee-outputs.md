@@ -56,7 +56,7 @@ npm --prefix functions test -- --run f42-retention.units.test.ts -t 'committee o
 | Label | Value |
 | --- | --- |
 | backend_real | true |
-| frontend_real | true |
+| frontend_real | false |
 | transport_stub | true |
 | classification | PARTIAL (legacy committee output purge and read refusal; broader F42 retention/deletion remains gated elsewhere) |
 
