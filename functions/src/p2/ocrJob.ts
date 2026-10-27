@@ -168,7 +168,7 @@ export async function recordLegacyOcr(jobId: string, firmId: string, patch: Lega
  * A document or matter label raised after the bytes were loaded is included. A label lowered
  * mid-job does not replace the admitted aggregate: the text is not published under the lower label.
  */
-async function labelAtPublish(
+export async function labelAtPublish(
   tx: Transaction,
   firmId: string,
   matterId: string | null,
