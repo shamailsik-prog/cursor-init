@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from unittest import mock
 
 import pytest
+from sqlalchemy import select
 from fastapi.testclient import TestClient
 from scraper.admin_credentials import get_corpus_admin_registry, reset_corpus_admin_registry_for_tests
 from scraper.config import settings
 from scraper.main import app
+from scraper.models import CorpusAdminAudit
 
 ALICE_TRIGGER = "alice-trigger-secret-32chars-long"
 BOB_EXPORT = "bob-export-secret-32chars-long!!"
@@ -77,13 +80,21 @@ def test_named_actor_recorded_on_privileged_action(client, scoped_registry, corp
         )
     assert res.status_code == 200
 
-    row = corpus_db.one(
-        "SELECT actor, credential_id, scopes_used::text FROM corpus_admin_audit "
-        "WHERE action = 'source.trigger' ORDER BY created_at DESC LIMIT 1"
-    )
-    assert row[0] == "alice@firm"
-    assert row[1] == "alice-trigger"
-    assert "trigger" in row[2]
+    async def _fetch():
+        from scraper.database import SessionLocal
+
+        async with SessionLocal() as db:
+            return (
+                await db.execute(
+                    select(CorpusAdminAudit).where(CorpusAdminAudit.action == "source.trigger")
+                )
+            ).scalars().first()
+
+    row = asyncio.run(_fetch())
+    assert row is not None
+    assert row.actor == "alice@firm"
+    assert row.credential_id == "alice-trigger"
+    assert row.scopes_used == ["trigger"]
 
 
 def test_revoking_one_credential_leaves_others_active(client, scoped_registry):
