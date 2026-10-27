@@ -12,6 +12,7 @@ import { requirePermission } from "../p5/permission"
 import { enqueueJob } from "../p2/enqueue"
 import { RetentionConfigError, activePolicy, holdRefusal, inventory, planDeletion, type PlannedStore, type RetentionPolicy } from "./config"
 import { instructionsIn, moveInstructions } from "./instructions"
+import { refusePartnerAttestationLinks, requireIndependentPartnerRegistration } from "./partnerIndependence"
 import { refusePartnerLineage } from "./partnerLineage"
 import { PREPARE_JOB_TYPE, acksRef, holdsRef, requestsRef, type HoldRefusal } from "./model"
 
@@ -59,9 +60,10 @@ function partnerStartMs(user: DocumentData | undefined): number | null {
 
 /**
  * Audit F42 (FA-F42-R1-006, spec R26): the requester and the approver must be two people the store can tell apart.
- * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`), nor stand
- * in either relation transitively (depth-capped walk, FA-F42-R1-006-001): checked both ways, since a sole partner's
- * puppet could otherwise file the request for its creator to approve. The approver's
+ * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`), nor have
+ * attested the other (`partnerAttestedBy`, FA-F42-R1-006-003-001), nor stand in either provisioning relation
+ * transitively (depth-capped walk, FA-F42-R1-006-001). Both must be on the independent-partner register
+ * (`independentPartner` / attestation). The approver's
  * account and partner role must predate the request and be `approverMinTenureDays` old at the approval; the
  * requester's must be that old at the request. A start the store cannot tell refuses (fail closed). Each refusal is a
  * 403 with its own code, audited as a deny by the router.
@@ -79,6 +81,9 @@ function requireIndependentPartners(
   if (approver?.partnerGrantedBy === ids.requester) throw new HttpError(403, "approver_promoted_by_requester")
   if (requester?.createdBy === ids.approver) throw new HttpError(403, "requester_created_by_approver")
   if (requester?.partnerGrantedBy === ids.approver) throw new HttpError(403, "requester_promoted_by_approver")
+  refusePartnerAttestationLinks(ids, approver, requester)
+  requireIndependentPartnerRegistration(approver, "approver")
+  requireIndependentPartnerRegistration(requester, "requester")
   const tenure = policy.deletion.approverMinTenureDays * DAY_MS
   const approverStart = partnerStartMs(approver)
   if (approverStart === null) throw new HttpError(403, "approver_tenure_unknown")

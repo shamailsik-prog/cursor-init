@@ -10,7 +10,13 @@ import {
   generateRecoveryCodesOp,
   syncMfaStatusOp,
 } from "../p5/mfa"
-import { createFirmUserOp, deactivateUserOp, onboardFirmOp, setUserClaimsOp } from "../p5/identity"
+import {
+  attestIndependentPartnerOp,
+  createFirmUserOp,
+  deactivateUserOp,
+  onboardFirmOp,
+  setUserClaimsOp,
+} from "../p5/identity"
 import { recordGatePassOp } from "../p5/gates"
 import { setFirmNumberingOp } from "../d1/client/numberingOp"
 import { getClientOp, listClientsOp, registerClientOp } from "../d1/client/ops"
@@ -103,6 +109,7 @@ const RERUN = { idempotency: "rerun" } as const
 export const ROUTES: readonly Route[] = [
   post(`${IDENTITY}/onboardFirm`, onboardFirmOp, RERUN),
   post(`${IDENTITY}/createFirmUser`, createFirmUserOp, RERUN),
+  post(`${IDENTITY}/attestIndependentPartner`, attestIndependentPartnerOp),
   post(`${IDENTITY}/setUserClaims`, setUserClaimsOp, RERUN),
   post(`${IDENTITY}/deactivateUser`, deactivateUserOp, RERUN),
   post(`${IDENTITY}/enforceMfaForRole`, enforceMfaForRoleOp),

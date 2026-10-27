@@ -61,6 +61,7 @@ export const FIRM_ADMIN_ACTIONS = [
   "identity.manage_users",
   "identity.set_claims",
   "identity.deactivate",
+  "identity.attest_independent_partner",
   "mfa.enforce",
   "mfa.approve_disable",
 ] as const

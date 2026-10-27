@@ -551,6 +551,8 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-009: a deleted matter's job rows are hidd
 })
 
 const createFirmUserApi = viaApi<{ uid: string }>("createFirmUser")
+const attestIndependentPartnerApi = viaApi<{ uid: string }>("attestIndependentPartner")
+const onboardFirmApi = viaApi<{ firmId: string }>("onboardFirm")
 const setUserClaimsApi = viaApi<Record<string, unknown>>("setUserClaims")
 const PASSWORD = "f42r1-pass-123"
 
@@ -663,6 +665,77 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
     expect(`${err.status} ${err.code}`).toBe("403 approver_lineage_of_requester")
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+  })
+
+  it("FA-F42-R1-006-003-001 RED: a sole founder who attests one hire cannot have that hire approve the founder's deletion request", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003red-founder")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest RED firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003red") }
+      await seedMatter(firmId, f.matterId, TITLE, [F.uid])
+      const qEmail = `${uniq("attest-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      const Q = await signIn(qUid, qEmail)
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+      const req = await send(requestApi, f, F, { matterId: f.matterId, reasonCode: "client_instruction" })
+      const err = await apiErrorOf(send(approveApi, f, Q, { requestId: req.requestId }))
+      expect(["approver_created_by_requester", "approver_attested_by_requester"]).toContain(err.code)
+      expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
+  it("FA-F42-R1-006-003-001 GREEN: onboarded founder with two attested createFirmUser partners — second approves first's deletion", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003grn-founder")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest GREEN firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const matterId = uniq("f42r1003grn")
+      await seedMatter(firmId, matterId, TITLE, [F.uid])
+      const qEmail = `${uniq("green-q")}@example.test`
+      const rEmail = `${uniq("green-r")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, { firmId }, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      const { uid: rUid } = await send(createFirmUserApi, { firmId }, F, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid, rUid)
+      await send(attestIndependentPartnerApi, { firmId }, F, { uid: qUid })
+      await send(attestIndependentPartnerApi, { firmId }, F, { uid: rUid })
+      const Q = await signIn(qUid, qEmail)
+      const R = await signIn(rUid, rEmail)
+      await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+      await ageUser(rUid, { createdAt: 400, partnerSince: 400 })
+      const f: Firm = { firmId, P: F, Q, A: F, matterId }
+      const req = await send(requestApi, f, Q, { matterId, reasonCode: "client_instruction" })
+      expect(req.status).toBe("pending_approval")
+      const approved = await send(approveApi, f, R, { requestId: req.requestId })
+      expect(approved.status).toBe("in_progress")
+      expect((await adminDb().collection("matter_tombstones").doc(matterId).get()).exists).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
   })
 
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {

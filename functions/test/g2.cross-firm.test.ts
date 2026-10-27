@@ -101,6 +101,7 @@ const PROBES: Record<string, Probe> = {
   onboardFirm: { data: () => ({ name: "G2 probe firm" }), target: false, firmless: true },
   recordGatePass: { data: () => ({ gate: "G-2", evidence: { summary: "forged by a firm user", commitSha: "6e66bf1", runUrl: "https://example.test/run/1", counts: { tested: 1, notBuilt: 0, outOfScope: 0, global: 0, allowed: 0 } } }), target: false, firmless: true },
   createFirmUser: { data: () => ({ email: `${uniq("g2probe")}@example.test`, role: "clerk", clearanceLevel: "internal" }), target: false },
+  attestIndependentPartner: { data: (a) => ({ uid: a.victim }), target: true },
   setUserClaims: { data: (a) => ({ uid: a.victim, role: "clerk" }), target: true },
   deactivateUser: { data: (a) => ({ uid: a.victim }), target: true },
   enforceMfaForRole: { data: () => ({ role: "associate", enforced: true }), target: false },
