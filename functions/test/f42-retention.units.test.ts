@@ -253,6 +253,34 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(await partnerLineageAncestors("cycle", load)).toBeNull()
   })
 
+  it("FA-F42-R1-006-003: shared provisioning ancestors refuse sibling partners; independent roots still pass", async () => {
+    const { partnerLineageSharesProvisioningAncestor, refusePartnerLineage } = await import("../src/retention/partnerLineage")
+    type Row = { createdBy?: string; partnerGrantedBy?: string }
+    const users: Record<string, Row> = {
+      P: {},
+      Q: { createdBy: "P" },
+      R: { createdBy: "P" },
+      rootA: {},
+      rootB: {},
+      chainQ: { createdBy: "P" },
+      chainR: { createdBy: "chainQ" },
+    }
+    const load = async (uid: string) => users[uid]
+    await expect(refusePartnerLineage({ approver: "R", requester: "Q" }, load)).rejects.toMatchObject({
+      status: 403,
+      code: "partners_shared_provisioning_ancestor",
+    })
+    await expect(refusePartnerLineage({ approver: "Q", requester: "R" }, load)).rejects.toMatchObject({
+      code: "partners_shared_provisioning_ancestor",
+    })
+    await expect(refusePartnerLineage({ approver: "rootB", requester: "rootA" }, load)).resolves.toBeUndefined()
+    await expect(refusePartnerLineage({ approver: "chainR", requester: "P" }, load)).rejects.toMatchObject({
+      code: "approver_lineage_of_requester",
+    })
+    expect(partnerLineageSharesProvisioningAncestor(new Set(["P"]), new Set(["P"]))).toBe(true)
+    expect(partnerLineageSharesProvisioningAncestor(new Set(["P"]), new Set())).toBe(false)
+  })
+
   it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
     const inv = inventory()
     expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)

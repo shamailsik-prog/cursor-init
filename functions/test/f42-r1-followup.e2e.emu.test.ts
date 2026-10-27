@@ -665,6 +665,36 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
   })
 
+  it("FA-F42-R1-006-003: sibling partners from the same founder cannot approve each other's deletion requests", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const firmId = uniq("f42r1sib")
+    firms.push(firmId)
+    await adminDb().collection("firms").doc(firmId).set({ name: "SIB", plan: "internal", rateLimits: { general: 5000 } })
+    const P = await member(firmId, "partner")
+    const f: Firm = { firmId, P, Q: P, A: P, matterId: uniq("f42r1sibm") }
+    await seedMatter(firmId, f.matterId, TITLE, [P.uid])
+    const qEmail = `${uniq("sibq")}@example.test`
+    const { uid: qUid } = await send(createFirmUserApi, f, P, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(qUid)
+    const Q = await signIn(qUid, qEmail)
+    await ageUser(qUid, { createdAt: 40, partnerSince: 40 })
+    const rEmail = `${uniq("sibr")}@example.test`
+    const { uid: rUid } = await send(createFirmUserApi, f, P, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(rUid)
+    const R = await signIn(rUid, rEmail)
+    await ageUser(rUid, { createdAt: 40, partnerSince: 40 })
+    expect((await adminDb().collection("users").doc(qUid).get()).get("createdBy")).toBe(P.uid)
+    expect((await adminDb().collection("users").doc(rUid).get()).get("createdBy")).toBe(P.uid)
+    const req = await send(requestApi, f, Q, { matterId: f.matterId, reasonCode: "client_instruction" })
+    const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
+    expect(`${err.status} ${err.code}`).toBe("403 partners_shared_provisioning_ancestor")
+    expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+    // Independent roots (no shared provisioning ancestor) still approve.
+    const independent = await newFirm()
+    const indepReq = await send(requestApi, independent, independent.P, { matterId: independent.matterId, reasonCode: "client_instruction" })
+    expect((await send(approveApi, independent, independent.Q, { requestId: indepReq.requestId })).status).toBe("in_progress")
+  })
+
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()

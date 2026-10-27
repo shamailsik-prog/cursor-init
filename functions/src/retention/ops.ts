@@ -60,8 +60,9 @@ function partnerStartMs(user: DocumentData | undefined): number | null {
 /**
  * Audit F42 (FA-F42-R1-006, spec R26): the requester and the approver must be two people the store can tell apart.
  * Neither may have created the other's account (`createdBy`) or made the other partner (`partnerGrantedBy`), nor stand
- * in either relation transitively (depth-capped walk, FA-F42-R1-006-001): checked both ways, since a sole partner's
- * puppet could otherwise file the request for its creator to approve. The approver's
+ * in either relation transitively (depth-capped walk, FA-F42-R1-006-001), nor share a common provisioning ancestor
+ * (FA-F42-R1-006-003): checked both ways, since a sole partner's puppet could otherwise file the request for its
+ * creator to approve, or two sibling puppets could approve each other. The approver's
  * account and partner role must predate the request and be `approverMinTenureDays` old at the approval; the
  * requester's must be that old at the request. A start the store cannot tell refuses (fail closed). Each refusal is a
  * 403 with its own code, audited as a deny by the router.
