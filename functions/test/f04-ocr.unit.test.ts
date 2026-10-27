@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
 import { describe, expect, it } from "vitest"
 import { handlerFor } from "../src/p2/registry"
-import { aggregateClassification, isCompleteLegacyOcrJob, OCR_JOB_TYPE } from "../src/p2/ocrJob"
+import { adminDb } from "../src/admin"
+import { aggregateClassification, isCompleteLegacyOcrJob, labelAtPublish, OCR_JOB_TYPE } from "../src/p2/ocrJob"
+import { EMULATORS, uniq } from "./emu"
 import {
   capOcrText,
   DeterministicLocalOcrEngine,
@@ -201,11 +203,72 @@ if (resolveOcrEngine({}) !== null) process.exit(2);`
     expect(src).not.toContain("resolveOcrEngine")
   })
 
+  it("FA-F04-009 O11: publish stamps audit and legacy rows with the label re-checked at publish, not the pre-OCR aggregate", () => {
+    const src = readFileSync(path.resolve(__dirname, "../src/p2/ocrJob.ts"), "utf8")
+    const publishBlock = src.slice(src.indexOf('await ctx.runFenced("publish"'), src.indexOf("const storedText = await textRef.get()"))
+    expect(publishBlock).toContain("published = await labelAtPublish(")
+    expect(publishBlock).toMatch(/classification:\s*published/)
+    expect(publishBlock).toMatch(/ocrClassification:\s*published/)
+    expect(publishBlock).not.toMatch(/classification:\s*aggregate/)
+    expect(publishBlock).not.toMatch(/ocrClassification:\s*aggregate/)
+  })
+
   it("the stub module does not call a network or a real OCR binary", () => {
     const src = readFileSync(path.resolve(__dirname, "../src/p1/ocrEngine.ts"), "utf8")
     expect(src).not.toMatch(/\bfetch\s*\(/)
     expect(src).not.toMatch(/from ["']https?/)
     expect(src).not.toMatch(/tesseract|vision|child_process/i)
+  })
+})
+
+describe.skipIf(!EMULATORS)("FA-F04-009: labelAtPublish (emulator)", () => {
+  async function seedLabelFixtures(documentClassification: string, matterClassification: string) {
+    const firmId = uniq("f04-009-firm")
+    const matterId = uniq("f04-009-matter")
+    const documentId = uniq("f04-009-doc")
+    await adminDb().collection("firms").doc(firmId).set({ name: "F04-009 Firm", plan: "internal" })
+    await adminDb()
+      .collection("matters")
+      .doc(matterId)
+      .set({ id: matterId, firmId, classification: matterClassification, title: "Matter", clientId: "c", courtId: "SHC" })
+    await adminDb()
+      .collection("documents")
+      .doc(documentId)
+      .set({
+        firmId,
+        matterId,
+        classification: documentClassification,
+        contentHash: "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff01",
+        objectBytesStatus: "available",
+        storagePath: "path",
+        mimeType: "text/plain",
+      })
+    return { firmId, matterId, documentId }
+  }
+
+  it("O4: a stricter document label applied after load is included at publish", async () => {
+    const { firmId, matterId, documentId } = await seedLabelFixtures("internal", "internal")
+    await adminDb().collection("documents").doc(documentId).update({ classification: "confidential" })
+    const admitted = aggregateClassification(["internal"])
+    expect(
+      await adminDb().runTransaction((tx) => labelAtPublish(tx, firmId, matterId, documentId, admitted))
+    ).toBe("confidential")
+  })
+
+  it("O6: a stricter matter label applied after load is included at publish", async () => {
+    const { firmId, matterId, documentId } = await seedLabelFixtures("internal", "privileged")
+    const admitted = aggregateClassification(["internal"])
+    expect(
+      await adminDb().runTransaction((tx) => labelAtPublish(tx, firmId, matterId, documentId, admitted))
+    ).toBe("privileged")
+  })
+
+  it("a label lowered mid-job does not publish under the lower label", async () => {
+    const { firmId, matterId, documentId } = await seedLabelFixtures("internal", "internal")
+    const admitted = aggregateClassification(["confidential"])
+    expect(
+      await adminDb().runTransaction((tx) => labelAtPublish(tx, firmId, matterId, documentId, admitted))
+    ).toBe("confidential")
   })
 })
 
