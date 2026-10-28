@@ -284,6 +284,45 @@ describe.skipIf(!EMULATORS)("FA-F04-008-001: ocr.admit reason text_truncated (em
       )
     ).toBe(true)
   })
+
+  it("FA-F04-008-001-001: admission audit uses reason ok when UTF-8 cap does not apply", async () => {
+    const firmId = uniq("f04008001001-firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "FA-F04-008-001-001", plan: "internal" })
+    const documentId = uniq("f04008001001-doc")
+    const operationId = uniq("f04008001001-op")
+    const bytes = Buffer.from(TEXT, "utf8")
+
+    const result = await callP1Ocr({
+      firmId,
+      actorId: "system",
+      matterId: null,
+      jobId: operationId,
+      operationId,
+      legacyJobId: uniq("f04008001001-legacy"),
+      documentId,
+      contentHash: "b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff02",
+      classification: "internal",
+      sources: ["internal"],
+      bytes,
+      mimeType: "text/plain",
+    })
+
+    expect(result.outcome).toBe("ok")
+    expect(result.truncated).toBe(false)
+
+    const target = `ocr_texts/${ocrTextId(firmId, documentId, "b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff02")}`
+    const audits = await waitForAdmitAudit(target, "ok")
+    expect(
+      audits.docs.some(
+        (entry) => entry.get("action") === "ocr.admit" && entry.get("reason") === "ok" && entry.get("decision") === "allow"
+      )
+    ).toBe(true)
+    expect(
+      audits.docs.some(
+        (entry) => entry.get("action") === "ocr.admit" && entry.get("reason") === "text_truncated"
+      )
+    ).toBe(false)
+  })
 })
 
 describe.skipIf(!EMULATORS)("FA-F04-009: labelAtPublish (emulator)", () => {
