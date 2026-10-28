@@ -218,7 +218,7 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   return true
 }
 
-/** Wiring helper first parameter: `src` or sloppy `arguments[0]` alias (FA-F42-R1-015-001-001-002-002-003-001-001-004). */
+/** Literal `arguments[0]` / `arguments["0"]` only (for forbidden regex-on-src detection). */
 function elementAccessIsArgumentsZero(node: ts.Node): boolean {
   if (!ts.isElementAccessExpression(node)) return false
   if (!ts.isIdentifier(node.expression) || node.expression.text !== "arguments") return false
@@ -695,9 +695,9 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004: production helper may reference `src` (not
- * `arguments[0]`) only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array
- * `not.toMatch`; nested fn/arrow bodies are scanned (closure capture cannot hide `src`).
+ * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004 / 004-001: production helper may reference `src`
+ * only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array `not.toMatch`; the
+ * `arguments` identifier is forbidden in any shape; nested fn/arrow bodies are scanned (closure capture cannot hide `src`).
  */
 function isExpectSrcNotToMatchCall(expectCall: ts.CallExpression): boolean {
   if (!isExpectSrcCall(expectCall)) return false
@@ -735,6 +735,10 @@ function helperBodyUsesSrcOnlyOnAllowedSites(body: ts.Block, liveToMatchCall: ts
   let ok = true
   const walk = (n: ts.Node) => {
     if (!ok) return
+    if (ts.isIdentifier(n) && n.text === "arguments") {
+      ok = false
+      return
+    }
     if (elementAccessIsArgumentsZero(n)) {
       ok = false
       return
@@ -1313,6 +1317,41 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       {
         name: "nested-arrow-capture-arguments-zero",
         body: `${header}  const getS = () => arguments[0]\n  expect(LOOSE.test(getS())).toBe(true)\n${footer}`,
+      },
+    ]
+    for (const { name, body } of mutants) {
+      expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
+    }
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001-004-001: non-literal arguments access banned in wiring helper", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  const LOOSE = /afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+`
+    const footer = `
+}
+`
+    const mutants: { name: string; body: string }[] = [
+      {
+        name: "arguments-alias-then-index",
+        body: `${header}  const aa = arguments\n  expect(LOOSE.test(aa[0])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "arguments-spread-then-index",
+        body: `${header}  expect(LOOSE.test([...arguments][0])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "arguments-array-destructure",
+        body: `${header}  const [s0] = arguments\n  expect(LOOSE.test(s0)).toBe(true)\n${footer}`,
+      },
+      {
+        name: "arguments-non-literal-index",
+        body: `${header}  expect(LOOSE.test(arguments[1 - 1])).toBe(true)\n${footer}`,
       },
     ]
     for (const { name, body } of mutants) {
