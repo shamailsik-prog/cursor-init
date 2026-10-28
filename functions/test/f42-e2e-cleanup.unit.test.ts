@@ -47,28 +47,31 @@ function asyncHookBodyContainsDeleteFirmScopedData(body: ts.ConciseBody): boolea
   return found
 }
 
-/** True when some `afterAll(async () => { … })` hook body contains `deleteFirmScopedData(firms, uids)`. */
+function isTopLevelAfterAllAsyncCall(stmt: ts.Statement): ts.ArrowFunction | undefined {
+  if (!ts.isExpressionStatement(stmt)) return undefined
+  const expr = stmt.expression
+  if (!ts.isCallExpression(expr)) return undefined
+  if (!ts.isIdentifier(expr.expression) || expr.expression.text !== "afterAll") return undefined
+  const fn = expr.arguments[0]
+  if (!fn || !ts.isArrowFunction(fn)) return undefined
+  if (!fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return undefined
+  return fn
+}
+
+/**
+ * True when exactly one **file-top-level** `afterAll(async () => { … })` contains
+ * `deleteFirmScopedData(firms, uids)`. Nested hooks (e.g. under `describe.skip`) never run and are rejected (**MdescribeSkip**).
+ */
 export function deleteFirmScopedDataInAfterAllAsyncHook(source: string, fileName = "fixture.ts"): boolean {
   const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true)
-  let ok = false
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "afterAll" &&
-      node.arguments[0]
-    ) {
-      const fn = node.arguments[0]
-      if (ts.isArrowFunction(fn) && fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) {
-        if (asyncHookBodyContainsDeleteFirmScopedData(fn.body)) {
-          ok = true
-        }
-      }
+  let matchCount = 0
+  for (const stmt of sf.statements) {
+    const fn = isTopLevelAfterAllAsyncCall(stmt)
+    if (fn && asyncHookBodyContainsDeleteFirmScopedData(fn.body)) {
+      matchCount++
     }
-    ts.forEachChild(node, visit)
   }
-  visit(sf)
-  return ok
+  return matchCount === 1
 }
 
 describe("FA-F42-R1-015: F42 deletion e2e registers every extra firm and auth user for afterAll cleanup", () => {
@@ -136,6 +139,19 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
 `
     expect(deleteFirmScopedDataInAfterAllAsyncHook(mmoveOtherTOSrc)).toBe(false)
     expect(mmoveOtherTOSrc).not.toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  })
+
+  it("FA-F42-R1-015-001-001-001-001-001: MdescribeSkip (cleanup only in afterAll under describe.skip) fails the AST guard", () => {
+    const mdescribeSkipSrc = `
+import { afterAll, describe } from "vitest"
+import { deleteFirmScopedData } from "./firmCleanup"
+const firms: string[] = []
+const uids: string[] = []
+describe.skip("skipped suite", () => {
+  afterAll(async () => { await deleteFirmScopedData(firms, uids) }, 120_000)
+})
+`
+    expect(deleteFirmScopedDataInAfterAllAsyncHook(mdescribeSkipSrc)).toBe(false)
   })
 
   it("AFTER_ALL_ASYNC_HOOK_CLOSE matches any numeric afterAll timeout suffix (not only 120_000)", () => {
