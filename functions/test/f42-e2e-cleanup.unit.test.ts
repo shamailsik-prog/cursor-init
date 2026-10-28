@@ -104,39 +104,35 @@ function expressionIsStaticallyTrue(expr: ts.Expression): boolean {
   return false
 }
 
-/** True when this block/statement ends control flow (return/throw) on all paths we can prove. */
-function nodeUnconditionallyExits(node: ts.Statement | ts.Block): boolean {
-  if (ts.isBlock(node)) {
-    for (const inner of node.statements) {
-      if (statementPreventsFollowingStatements(inner)) return true
-    }
-    return false
-  }
-  return statementPreventsFollowingStatements(node)
+function isNestedFunctionBoundary(node: ts.Node): boolean {
+  return ts.isFunctionExpression(node) || ts.isArrowFunction(node)
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-002-003: prior helper-body statements must not make the required
- * `expect(src).toMatch` unreachable (MreturnBefore / MthrowBefore and static-if variants).
+ * FA-F42-R1-015-001-001-002-002-002-003 / 003-001: any `return`/`throw` in helper-body statements
+ * before the live `toMatch` (including block, label, try/finally, switch, if/else, do-while shapes)
+ * must fail the pin; nested function/arrow bodies are ignored.
  */
-function statementPreventsFollowingStatements(stmt: ts.Statement): boolean {
-  if (ts.isReturnStatement(stmt) || ts.isThrowStatement(stmt)) return true
-  if (ts.isIfStatement(stmt)) {
-    if (expressionIsStaticallyTrue(stmt.expression)) {
-      return nodeUnconditionallyExits(stmt.thenStatement)
+function subtreeContainsReturnOrThrow(node: ts.Node): boolean {
+  let found = false
+  const walk = (n: ts.Node) => {
+    if (found) return
+    if (isNestedFunctionBoundary(n)) return
+    if (ts.isReturnStatement(n) || ts.isThrowStatement(n)) {
+      found = true
+      return
     }
-    if (expressionIsStaticallyFalse(stmt.expression) && stmt.elseStatement !== undefined) {
-      return nodeUnconditionallyExits(stmt.elseStatement)
-    }
+    ts.forEachChild(n, walk)
   }
-  return false
+  walk(node)
+  return found
 }
 
-function helperBodyHasExitBeforeStatement(body: ts.Block, target: ts.Statement): boolean {
+function helperBodyHasReturnOrThrowBeforeStatement(body: ts.Block, target: ts.Statement): boolean {
   const idx = body.statements.indexOf(target)
   if (idx <= 0) return false
   for (let i = 0; i < idx; i++) {
-    if (statementPreventsFollowingStatements(body.statements[i]!)) return true
+    if (subtreeContainsReturnOrThrow(body.statements[i]!)) return true
   }
   return false
 }
@@ -151,7 +147,7 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   const stmt = containingStatement(toMatchCall)
   if (!stmt || !statementDirectChildOfBlock(stmt, helperBody)) return false
   if (!ts.isExpressionStatement(stmt) || stmt.expression !== toMatchCall) return false
-  if (helperBodyHasExitBeforeStatement(helperBody, stmt)) return false
+  if (helperBodyHasReturnOrThrowBeforeStatement(helperBody, stmt)) return false
 
   let current: ts.Node | undefined = toMatchCall.parent
   while (current && current !== helperBody) {
@@ -800,6 +796,31 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
 }
 `
     expect(metaPinHelperUsesModuleGuard(staticIfReturnBeforeMutant, "static-if-return-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-002-003-001: structural early exits before toMatch (block, label, try/finally, switch, if/else, do-while)", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+`
+    const footer = `
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    const structuralMutants: { name: string; middle: string }[] = [
+      { name: "block-return", middle: "  { return }\n" },
+      { name: "labeled-return", middle: "  exit: return\n" },
+      { name: "try-finally-return", middle: "  try { return } finally {}\n" },
+      { name: "switch-default-return", middle: "  switch (0) { default: return }\n" },
+      { name: "if-else-both-return", middle: "  if (Math.random()) return; else return\n" },
+      { name: "do-while-false-return", middle: "  do { return } while (false)\n" },
+    ]
+    for (const { name, middle } of structuralMutants) {
+      const src = header + middle + footer
+      expect(metaPinHelperUsesModuleGuard(src, `${name}-mutant.ts`)).toBe(false)
+    }
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
