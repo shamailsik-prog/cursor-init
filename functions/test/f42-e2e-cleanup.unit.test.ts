@@ -56,11 +56,90 @@ function expectSrcToMatchGuardArg(node: ts.Node): ts.Identifier | undefined {
   return found
 }
 
+function collectBindingName(binding: ts.BindingName, name: string, out: ts.Identifier[]): void {
+  if (ts.isIdentifier(binding)) {
+    if (binding.text === name) out.push(binding)
+    return
+  }
+  if (ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding)) {
+    for (const element of binding.elements) {
+      if (!ts.isBindingElement(element)) continue
+      const localName = element.name
+      if (ts.isIdentifier(localName) && localName.text === name) {
+        out.push(localName)
+      } else if (localName) {
+        collectBindingName(localName, name, out)
+      }
+    }
+  }
+}
+
 function localBindingsNamed(node: ts.Node, name: string, out: ts.Identifier[]): void {
-  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) {
-    out.push(node.name)
+  if (ts.isVariableDeclaration(node) && node.name) {
+    collectBindingName(node.name, name, out)
   }
   ts.forEachChild(node, (child) => localBindingsNamed(child, name, out))
+}
+
+function helperBindingsNamed(helper: ts.FunctionDeclaration, name: string, out: ts.Identifier[]): void {
+  for (const param of helper.parameters) {
+    if (param.name) collectBindingName(param.name, name, out)
+  }
+  if (helper.body) localBindingsNamed(helper.body, name, out)
+}
+
+function findModuleGuardExport(sf: ts.SourceFile): ts.VariableDeclaration | undefined {
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue
+    if (!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue
+    for (const decl of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === WIRING_GUARD_CONST) return decl
+    }
+  }
+  return undefined
+}
+
+function createSingleFileProgram(unitSrc: string, fileName: string): { program: ts.Program; sf: ts.SourceFile } {
+  const sf = ts.createSourceFile(fileName, unitSrc, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const host = ts.createCompilerHost({})
+  const defaultRead = host.readFile.bind(host)
+  const defaultExists = host.fileExists.bind(host)
+  const defaultGet = host.getSourceFile.bind(host)
+  host.readFile = (f) => (f === fileName ? unitSrc : defaultRead(f))
+  host.fileExists = (f) => f === fileName || defaultExists(f)
+  host.getSourceFile = (f, languageVersion, ...rest) =>
+    f === fileName ? sf : defaultGet(f, languageVersion, ...rest)
+  const program = ts.createProgram(
+    [fileName],
+    { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    host,
+  )
+  return { program, sf }
+}
+
+function toMatchIdentifierResolvesToModuleExport(
+  program: ts.Program,
+  moduleExport: ts.VariableDeclaration,
+  toMatchId: ts.Identifier,
+): boolean {
+  const checker = program.getTypeChecker()
+  const sym = checker.getSymbolAtLocation(toMatchId)
+  if (!sym) return false
+  const exportSym = checker.getSymbolAtLocation(moduleExport.name)
+  if (!exportSym) return false
+
+  const resolve = (s: ts.Symbol): ts.Symbol =>
+    s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s
+
+  const usage = resolve(sym)
+  const exported = resolve(exportSym)
+  if (usage === exported) return true
+
+  const exportDecls = new Set(exported.getDeclarations() ?? [])
+  for (const decl of usage.getDeclarations() ?? []) {
+    if (decl === moduleExport || exportDecls.has(decl)) return true
+  }
+  return false
 }
 
 function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefined {
@@ -78,19 +157,25 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 
 /**
  * FA-F42-R1-015-001-001-002-001-001 meta pin: `expect(src).toMatch` must reference the module export
- * `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, not a shadowed local (MshadowAltSyntax) or inline vacuous regex.
+ * `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, not a shadowed binding (MshadowAltSyntax, MshadowParam,
+ * MshadowDestructure) or inline vacuous regex.
  */
 export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SELF): boolean {
-  const sf = ts.createSourceFile(fileName, unitSrc, ts.ScriptTarget.Latest, true)
+  const { program, sf } = createSingleFileProgram(unitSrc, fileName)
   const helper = findExportedHelper(sf)
   if (!helper?.body) return false
 
-  const locals: ts.Identifier[] = []
-  localBindingsNamed(helper.body, WIRING_GUARD_CONST, locals)
-  if (locals.length > 0) return false
+  const moduleExport = findModuleGuardExport(sf)
+  if (!moduleExport) return false
+
+  const bindings: ts.Identifier[] = []
+  helperBindingsNamed(helper, WIRING_GUARD_CONST, bindings)
+  if (bindings.length > 0) return false
 
   const toMatchId = expectSrcToMatchGuardArg(helper.body)
   if (!toMatchId || toMatchId.text !== WIRING_GUARD_CONST) return false
+
+  if (!toMatchIdentifierResolvesToModuleExport(program, moduleExport, toMatchId)) return false
 
   const helperText = unitSrc.slice(helper.getStart(sf), helper.getEnd())
   if (/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperText)) return false
@@ -224,6 +309,32 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
     expect(helperBlock!).not.toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
     expect(helperBlock!).toMatch(/\[\^]/)
     expect(metaPinHelperUsesModuleGuard(shadowMutant, "shadow-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-001-001-001: MshadowParam / MshadowDestructure (param or destructure shadow evades VariableDeclaration-only pin)", () => {
+    const paramShadowMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(
+  src: string,
+  fileName: string,
+  AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /afterAll[^]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(paramShadowMutant, "param-shadow-mutant.ts")).toBe(false)
+
+    const destructureShadowMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  const { AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /afterAll[^]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/ } = {}
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(destructureShadowMutant, "destructure-shadow-mutant.ts")).toBe(false)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
