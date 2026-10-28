@@ -20,9 +20,12 @@ Step 5 was pinned only with positive keywords (`legal_holds`, `hold`, `purge|pur
 npx vitest run -c ops/backup/vitest.config.ts ops/backup/test/runbook-f42-restore.unit.test.ts
 ```
 
-## Release labels
+## Release labels (honest)
 
 | Label | Value |
 | --- | --- |
+| backend_real | true (runbook guard test only) |
+| frontend_real | false |
+| transport_stub | true |
 | classification | PARTIAL (guard only; live restore drill NOT DEMONSTRATED) |
 | scope | FA-F42-R1-014-001-001-001 only |
