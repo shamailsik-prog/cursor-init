@@ -9,6 +9,7 @@ on:
       - "postgres/**"
       - "corpus_service/**"
       - "platform/documents/**"
+      - "docs/runbooks/**"
       - "firestore.rules"
       - "firebase.json"
       - ".github/workflows/backup-drill.yml"
@@ -18,6 +19,7 @@ on:
       - "ops/backup/**"
       - "infra/backup/**"
       - "postgres/**"
+      - "docs/runbooks/**"
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
