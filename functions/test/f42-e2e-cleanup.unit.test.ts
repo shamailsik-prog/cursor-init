@@ -23,6 +23,19 @@ export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = new RegExp(
   ].join(""),
 )
 
+/** Pre-#188 vacuous span; **MmoveT** still matches this while failing `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`. */
+export const VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD =
+  /afterAll[\s\S]*?deleteFirmScopedData\s*\(\s*firms\s*,\s*uids\s*\)/
+
+const UNIT_SELF = path.join(__dirname, "f42-e2e-cleanup.unit.test.ts")
+
+/** Single production wiring check for `f42-retention-deletion.e2e.emu.test.ts` afterAll cleanup (M4 + tempered regex). */
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  expect(src).not.toMatch(/deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/)
+}
+
 function isDeleteFirmScopedDataFirmsUids(node: ts.CallExpression): boolean {
   if (!ts.isIdentifier(node.expression) || node.expression.text !== "deleteFirmScopedData") {
     return false
@@ -85,9 +98,35 @@ describe("FA-F42-R1-015: F42 deletion e2e registers every extra firm and auth us
 
   it("afterAll wires deleteFirmScopedData to the file-level firms and uids arrays (kills M4 empty-array mutant)", () => {
     const src = readFileSync(DELETION_E2E, "utf8")
-    expect(deleteFirmScopedDataInAfterAllAsyncHook(src, DELETION_E2E)).toBe(true)
-    expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
-    expect(src).not.toMatch(/deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/)
+    assertF42DeletionE2EAfterAllWiring(src, DELETION_E2E)
+  })
+
+  it("FA-F42-R1-015-001-001-002: vacuous afterAll regex is not wired for production e2e checks (MmoveT control + meta pin)", () => {
+    const mmoveTSrc = `
+import { afterAll, it } from "vitest"
+import { deleteFirmScopedData } from "./firmCleanup"
+const firms: string[] = []
+const uids: string[] = []
+afterAll(async () => {}, 120_000)
+it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }, 120_000)
+`
+    expect(mmoveTSrc).toMatch(VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+    expect(mmoveTSrc).not.toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+
+    const unitSrc = readFileSync(UNIT_SELF, "utf8")
+    const m4Block = unitSrc.match(
+      /it\("afterAll wires deleteFirmScopedData[\s\S]*?\n  \}\)/,
+    )?.[0]
+    expect(m4Block, "M4 test must delegate to shared wiring helper").toBeTruthy()
+    expect(m4Block!).toContain("assertF42DeletionE2EAfterAllWiring")
+    expect(m4Block!).not.toMatch(/expect\s*\(\s*src\s*\)\s*\.\s*toMatch\s*\(/)
+
+    const helperBlock = unitSrc.match(
+      /export function assertF42DeletionE2EAfterAllWiring[\s\S]*?\n\}/,
+    )?.[0]
+    expect(helperBlock, "shared wiring helper must use tempered guard constant").toBeTruthy()
+    expect(helperBlock!).toContain("AFTER_ALL_DELETE_FIRMS_UIDS_GUARD")
+    expect(helperBlock!).not.toMatch(/afterAll\[\\s\\S\]\*\?deleteFirmScopedData/)
   })
 
   it("FA-F42-R1-015-001-001: Mmove (cleanup only in it.skip) fails the afterAll hook guard", () => {
