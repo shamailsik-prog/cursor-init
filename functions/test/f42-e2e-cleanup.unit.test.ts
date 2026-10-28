@@ -223,6 +223,42 @@ function callArg0IsSrcIdentifier(call: ts.CallExpression): boolean {
   return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
 }
 
+function elementAccessStaticKeyText(key: ts.Expression | undefined): string | undefined {
+  if (!key) return undefined
+  if (ts.isStringLiteral(key)) return key.text
+  if (ts.isNoSubstitutionTemplateLiteral(key)) return key.text
+  return undefined
+}
+
+function expressionIsRegexTestOrExecCallee(expr: ts.Expression | undefined): boolean {
+  if (!expr) return false
+  if (ts.isPropertyAccessExpression(expr)) {
+    return expr.name.text === "test" || expr.name.text === "exec"
+  }
+  if (ts.isElementAccessExpression(expr)) {
+    const key = elementAccessStaticKeyText(expr.argumentExpression)
+    return key === "test" || key === "exec"
+  }
+  return false
+}
+
+function isRegExpPrototypeMethodAccess(node: ts.PropertyAccessExpression): boolean {
+  if (node.name.text !== "test" && node.name.text !== "exec") return false
+  const proto = node.expression
+  if (!ts.isPropertyAccessExpression(proto) || proto.name.text !== "prototype") return false
+  return ts.isIdentifier(proto.expression) && proto.expression.text === "RegExp"
+}
+
+function arrayLiteralFirstArgIsSrc(node: ts.Expression | undefined): boolean {
+  if (!node) return false
+  if (ts.isIdentifier(node) && node.text === "src") return true
+  if (ts.isArrayLiteralExpression(node)) {
+    const first = node.elements[0]
+    return first !== undefined && ts.isIdentifier(first) && first.text === "src"
+  }
+  return false
+}
+
 /** FA-F42-R1-015-001-001-002-002-003: any `<expr>.test(src)` guard bypass, not only fixed receivers. */
 function callExpressionIsRegexTestOnSrc(call: ts.CallExpression): boolean {
   if (!ts.isPropertyAccessExpression(call.expression)) return false
@@ -230,35 +266,43 @@ function callExpressionIsRegexTestOnSrc(call: ts.CallExpression): boolean {
   return callArg0IsSrcIdentifier(call)
 }
 
-/** FA-F42-R1-015-001-001-002-002-003-001: `LOOSE["test"](src)` computed-property test bypass. */
+/** FA-F42-R1-015-001-001-002-002-003-001: `LOOSE["test"](src)` / `` LOOSE[`test`](src) `` computed-property test bypass. */
 function callExpressionIsComputedRegexTestOnSrc(call: ts.CallExpression): boolean {
   if (!ts.isElementAccessExpression(call.expression)) return false
-  const key = call.expression.argumentExpression
-  if (!key || !ts.isStringLiteral(key) || key.text !== "test") return false
+  if (elementAccessStaticKeyText(call.expression.argumentExpression) !== "test") return false
   return callArg0IsSrcIdentifier(call)
 }
 
-/** FA-F42-R1-015-001-001-002-002-003-001: `RegExp.prototype.test.call(LOOSE, src)` / `.apply(LOOSE, [src])`. */
-function callExpressionIsRegexTestCallOrApplyOnSrc(call: ts.CallExpression): boolean {
+/** FA-F42-R1-015-001-001-002-002-003-001-001: `LOOSE["exec"](src)` computed-property exec bypass. */
+function callExpressionIsComputedRegexExecOnSrc(call: ts.CallExpression): boolean {
+  if (!ts.isElementAccessExpression(call.expression)) return false
+  if (elementAccessStaticKeyText(call.expression.argumentExpression) !== "exec") return false
+  return callArg0IsSrcIdentifier(call)
+}
+
+/** FA-F42-R1-015-001-001-002-002-003-001: `RegExp.prototype.(test|exec).call(LOOSE, src)` / `.apply(LOOSE, [src])`. */
+function callExpressionIsRegexPrototypeCallOrApplyOnSrc(call: ts.CallExpression): boolean {
   if (!ts.isPropertyAccessExpression(call.expression)) return false
   const method = call.expression.name.text
   if (method !== "call" && method !== "apply") return false
   const inner = call.expression.expression
-  if (!ts.isPropertyAccessExpression(inner) || inner.name.text !== "test") return false
+  if (!ts.isPropertyAccessExpression(inner) || !isRegExpPrototypeMethodAccess(inner)) return false
 
   if (method === "call") {
     const arg1 = call.arguments[1]
     return arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src"
   }
 
-  const applyArgs = call.arguments[1]
-  if (!applyArgs) return false
-  if (ts.isIdentifier(applyArgs) && applyArgs.text === "src") return true
-  if (ts.isArrayLiteralExpression(applyArgs)) {
-    const first = applyArgs.elements[0]
-    return first !== undefined && ts.isIdentifier(first) && first.text === "src"
-  }
-  return false
+  return arrayLiteralFirstArgIsSrc(call.arguments[1])
+}
+
+/** FA-F42-R1-015-001-001-002-002-003-001-001: `Reflect.apply(LOOSE.test, LOOSE, [src])` (test or exec callee). */
+function callExpressionIsReflectApplyRegexOnSrc(call: ts.CallExpression): boolean {
+  if (!ts.isPropertyAccessExpression(call.expression)) return false
+  if (!ts.isIdentifier(call.expression.expression) || call.expression.expression.text !== "Reflect") return false
+  if (call.expression.name.text !== "apply") return false
+  if (!expressionIsRegexTestOrExecCallee(call.arguments[0])) return false
+  return arrayLiteralFirstArgIsSrc(call.arguments[2])
 }
 
 /** FA-F42-R1-015-001-001-002-002-003-001: `<expr>.exec(src)` instead of `.test(src)`. */
@@ -276,10 +320,40 @@ function expressionIsRegexTestBindCall(node: ts.Node): boolean {
   const receiver = node.expression.expression
   if (ts.isPropertyAccessExpression(receiver) && receiver.name.text === "test") return true
   if (ts.isElementAccessExpression(receiver)) {
-    const key = receiver.argumentExpression
-    if (key && ts.isStringLiteral(key) && key.text === "test") return true
+    if (elementAccessStaticKeyText(receiver.argumentExpression) === "test") return true
   }
   return false
+}
+
+function expressionIsUnboundRegExpPrototypeMethodCall(node: ts.Node): boolean {
+  if (!ts.isPropertyAccessExpression(node)) return false
+  if (node.name.text !== "call") return false
+  const inner = node.expression
+  return ts.isPropertyAccessExpression(inner) && isRegExpPrototypeMethodAccess(inner)
+}
+
+function expressionIsFunctionPrototypeCall(node: ts.Node): boolean {
+  if (!ts.isPropertyAccessExpression(node)) return false
+  if (node.name.text !== "call") return false
+  const inner = node.expression
+  return (
+    ts.isPropertyAccessExpression(inner) &&
+    inner.name.text === "prototype" &&
+    ts.isIdentifier(inner.expression) &&
+    inner.expression.text === "Function"
+  )
+}
+
+function expressionIsFunctionPrototypeApply(node: ts.Node): boolean {
+  if (!ts.isPropertyAccessExpression(node)) return false
+  if (node.name.text !== "apply") return false
+  const inner = node.expression
+  return (
+    ts.isPropertyAccessExpression(inner) &&
+    inner.name.text === "prototype" &&
+    ts.isIdentifier(inner.expression) &&
+    inner.expression.text === "Function"
+  )
 }
 
 function collectBoundRegexTestLocalNames(body: ts.Block, out: Set<string>): void {
@@ -294,6 +368,22 @@ function collectBoundRegexTestLocalNames(body: ts.Block, out: Set<string>): void
   for (const stmt of body.statements) walk(stmt)
 }
 
+function collectUnboundRegexCallLocalNames(body: ts.Block, callOut: Set<string>, applyOut: Set<string>): void {
+  const walk = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const init = n.initializer
+      if (expressionIsUnboundRegExpPrototypeMethodCall(init) || expressionIsFunctionPrototypeCall(init)) {
+        callOut.add(n.name.text)
+      }
+      if (expressionIsFunctionPrototypeApply(init)) {
+        applyOut.add(n.name.text)
+      }
+    }
+    ts.forEachChild(n, walk)
+  }
+  for (const stmt of body.statements) walk(stmt)
+}
+
 function callExpressionIsBoundRegexTestOnSrc(call: ts.CallExpression, boundNames: Set<string>): boolean {
   if (!ts.isIdentifier(call.expression)) return false
   if (!boundNames.has(call.expression.text)) return false
@@ -301,20 +391,67 @@ function callExpressionIsBoundRegexTestOnSrc(call: ts.CallExpression, boundNames
 }
 
 /**
+ * FA-F42-R1-015-001-001-002-002-003-001-001: unbound `.call` / `.apply` aliases that still match `src`.
+ * e.g. `const callTest = RegExp.prototype.test.call; callTest(LOOSE, src)` or
+ * `Function.prototype.call(LOOSE.test, LOOSE, src)`.
+ */
+function callExpressionIsUnboundAliasRegexOnSrc(
+  call: ts.CallExpression,
+  unboundCallNames: Set<string>,
+): boolean {
+  if (!ts.isIdentifier(call.expression) || !unboundCallNames.has(call.expression.text)) return false
+
+  if (call.arguments.length >= 2) {
+    const arg1 = call.arguments[1]
+    if (arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src") return true
+  }
+
+  if (call.arguments.length >= 3) {
+    if (!expressionIsRegexTestOrExecCallee(call.arguments[0])) return false
+    const arg2 = call.arguments[2]
+    return arg2 !== undefined && ts.isIdentifier(arg2) && arg2.text === "src"
+  }
+
+  return false
+}
+
+function callExpressionIsUnboundApplyAliasRegexOnSrc(
+  call: ts.CallExpression,
+  unboundApplyNames: Set<string>,
+): boolean {
+  if (!ts.isIdentifier(call.expression) || !unboundApplyNames.has(call.expression.text)) return false
+  if (call.arguments.length < 3) return false
+  if (!expressionIsRegexTestOrExecCallee(call.arguments[0])) return false
+  return arrayLiteralFirstArgIsSrc(call.arguments[2])
+}
+
+/**
  * FA-F42-R1-015-001-001-002-002-003-001: structural regex-on-`src` bypasses beyond receiver-agnostic `.test(src)`.
  */
-function callExpressionIsForbiddenRegexMatchOnSrc(call: ts.CallExpression, boundTestNames: Set<string>): boolean {
+function callExpressionIsForbiddenRegexMatchOnSrc(
+  call: ts.CallExpression,
+  boundTestNames: Set<string>,
+  unboundCallNames: Set<string>,
+  unboundApplyNames: Set<string>,
+): boolean {
   if (callExpressionIsRegexTestOnSrc(call)) return true
   if (callExpressionIsComputedRegexTestOnSrc(call)) return true
-  if (callExpressionIsRegexTestCallOrApplyOnSrc(call)) return true
+  if (callExpressionIsComputedRegexExecOnSrc(call)) return true
+  if (callExpressionIsRegexPrototypeCallOrApplyOnSrc(call)) return true
+  if (callExpressionIsReflectApplyRegexOnSrc(call)) return true
   if (callExpressionIsRegexExecOnSrc(call)) return true
   if (callExpressionIsBoundRegexTestOnSrc(call, boundTestNames)) return true
+  if (callExpressionIsUnboundAliasRegexOnSrc(call, unboundCallNames)) return true
+  if (callExpressionIsUnboundApplyAliasRegexOnSrc(call, unboundApplyNames)) return true
   return false
 }
 
 function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
   const boundTestNames = new Set<string>()
+  const unboundCallNames = new Set<string>()
+  const unboundApplyNames = new Set<string>()
   collectBoundRegexTestLocalNames(body, boundTestNames)
+  collectUnboundRegexCallLocalNames(body, unboundCallNames, unboundApplyNames)
 
   let forbidden = false
   const walk = (n: ts.Node) => {
@@ -322,7 +459,14 @@ function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
       forbidden = true
     }
     if (ts.isCallExpression(n)) {
-      if (callExpressionIsForbiddenRegexMatchOnSrc(n, boundTestNames)) {
+      if (
+        callExpressionIsForbiddenRegexMatchOnSrc(
+          n,
+          boundTestNames,
+          unboundCallNames,
+          unboundApplyNames,
+        )
+      ) {
         forbidden = true
       }
       if (
@@ -913,6 +1057,61 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       {
         name: "exec-instead-of-test",
         body: `${header}  expect(LOOSE.exec(src)).toBeTruthy()\n${footer}`,
+      },
+    ]
+    for (const { name, body } of mutants) {
+      expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
+    }
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001: residual alternate regex-on-src shapes after #201 (template key, computed exec, prototype exec, Reflect.apply, unbound call aliases)", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  const LOOSE = /afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+`
+    const footer = `
+}
+`
+    const mutants: { name: string; body: string }[] = [
+      {
+        name: "template-literal-test",
+        body: `${header}  expect(LOOSE[\`test\`](src)).toBe(true)\n${footer}`,
+      },
+      {
+        name: "computed-exec",
+        body: `${header}  expect(LOOSE["exec"](src)).toBeTruthy()\n${footer}`,
+      },
+      {
+        name: "prototype-exec-call",
+        body: `${header}  expect(RegExp.prototype.exec.call(LOOSE, src)).toBeTruthy()\n${footer}`,
+      },
+      {
+        name: "prototype-exec-apply",
+        body: `${header}  expect(RegExp.prototype.exec.apply(LOOSE, [src])).toBeTruthy()\n${footer}`,
+      },
+      {
+        name: "reflect-apply-test",
+        body: `${header}  expect(Reflect.apply(LOOSE.test, LOOSE, [src])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "reflect-apply-computed-test",
+        body: `${header}  expect(Reflect.apply(LOOSE["test"], LOOSE, [src])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "unbound-regexp-test-call",
+        body: `${header}  const callTest = RegExp.prototype.test.call\n  expect(callTest(LOOSE, src)).toBe(true)\n${footer}`,
+      },
+      {
+        name: "unbound-fn-prototype-call",
+        body: `${header}  const unboundCall = Function.prototype.call\n  expect(unboundCall(LOOSE.test, LOOSE, src)).toBe(true)\n${footer}`,
+      },
+      {
+        name: "unbound-fn-prototype-apply",
+        body: `${header}  const unboundApply = Function.prototype.apply\n  expect(unboundApply(LOOSE.test, LOOSE, [src])).toBe(true)\n${footer}`,
       },
     ]
     for (const { name, body } of mutants) {
