@@ -47,6 +47,12 @@ function sliceStep(section: string, offsets: number[], step: number): string {
   return section.slice(start, end)
 }
 
+/** Step-1 export enumeration (excludes trailing gcloud example) for FA-F42-R1-014-001-001. */
+function step1ExportListText(step1: string): string {
+  const cut = step1.split(/\b(?:\(for example|Example:)/i)[0]!
+  return cut
+}
+
 describe("FA-F42-R1-014: backup/restore runbooks document post-restore tombstone reconciliation", () => {
   it("backup-restore runbook has an explicit post-restore section and points at retention-deletion", () => {
     const backup = readFileSync(BACKUP_RUNBOOK, "utf8")
@@ -96,9 +102,17 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     const step2 = sliceStep(section, steps, 2)
     const step3 = sliceStep(section, steps, 3)
     const step4 = sliceStep(section, steps, 4)
+    const step5 = sliceStep(section, steps, 5)
 
     expect(step1).toMatch(/Before the restore/i)
     expect(step1).toMatch(/export/i)
+    const step1ExportList = step1ExportListText(step1)
+    for (const col of DELETION_TRAIL_COLLECTIONS) {
+      expect(step1ExportList, `step 1 export list must name ${col}`).toContain(col)
+    }
+    expect(step5).toMatch(/legal_holds|Legal holds/i)
+    expect(step5).toMatch(/hold/i)
+    expect(step5).toMatch(/purge|purged/i)
     expect(step2).toMatch(/Restore Firestore/i)
     expect(step3).toMatch(/\*\*Before traffic:\*\*/i)
     expect(step3).toMatch(/matter_members/)
@@ -121,8 +135,16 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     const step1 = sliceStep(section, steps, 1)
     const step3 = sliceStep(section, steps, 3)
     const step4 = sliceStep(section, steps, 4)
+    const step5 = sliceStep(section, steps, 5)
 
     expect(step1).toMatch(/Before the restore/i)
+    const step1ExportList = step1ExportListText(step1)
+    for (const col of DELETION_TRAIL_COLLECTIONS) {
+      expect(step1ExportList, `step 1 export list must name ${col}`).toContain(col)
+    }
+    expect(step5).toMatch(/legal_holds|Legal holds/i)
+    expect(step5).toMatch(/hold/i)
+    expect(step5).toMatch(/purge|purged/i)
     expect(step3).toMatch(/Before the restored database serves any request/i)
     expect(step4).toMatch(/in_progress|completed/i)
 
