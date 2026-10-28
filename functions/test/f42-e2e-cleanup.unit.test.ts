@@ -695,9 +695,10 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004 / 004-001: production helper may reference `src`
+ * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004 / 004-001 / 004-002: production helper may reference `src`
  * only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array `not.toMatch`; the
- * `arguments` identifier is forbidden in any shape; nested fn/arrow bodies are scanned (closure capture cannot hide `src`).
+ * `arguments` and `eval` identifiers (and `.eval` / `["eval"]` callees) are forbidden in any shape; nested fn/arrow
+ * bodies are scanned (closure capture cannot hide `src`).
  */
 function isExpectSrcNotToMatchCall(expectCall: ts.CallExpression): boolean {
   if (!isExpectSrcCall(expectCall)) return false
@@ -735,9 +736,24 @@ function helperBodyUsesSrcOnlyOnAllowedSites(body: ts.Block, liveToMatchCall: ts
   let ok = true
   const walk = (n: ts.Node) => {
     if (!ok) return
-    if (ts.isIdentifier(n) && n.text === "arguments") {
+    if (ts.isIdentifier(n) && (n.text === "arguments" || n.text === "eval")) {
       ok = false
       return
+    }
+    if (ts.isPropertyAccessExpression(n) && n.name.text === "eval") {
+      ok = false
+      return
+    }
+    if (ts.isElementAccessExpression(n)) {
+      const arg = n.argumentExpression
+      if (ts.isStringLiteral(arg) && arg.text === "eval") {
+        ok = false
+        return
+      }
+      if (ts.isNoSubstitutionTemplateLiteral(arg) && arg.text === "eval") {
+        ok = false
+        return
+      }
     }
     if (elementAccessIsArgumentsZero(n)) {
       ok = false
@@ -1352,6 +1368,45 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       {
         name: "arguments-non-literal-index",
         body: `${header}  expect(LOOSE.test(arguments[1 - 1])).toBe(true)\n${footer}`,
+      },
+    ]
+    for (const { name, body } of mutants) {
+      expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
+    }
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001-004-002: eval-based src/arguments evasion banned in wiring helper", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  const LOOSE = /afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+`
+    const footer = `
+}
+`
+    const mutants: { name: string; body: string }[] = [
+      {
+        name: "eval-string-src",
+        body: `${header}  expect(LOOSE.test(eval("src"))).toBe(true)\n${footer}`,
+      },
+      {
+        name: "eval-concat-arguments",
+        body: `${header}  expect(LOOSE.test(eval("argu"+"ments")[0])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "eval-indirect-call",
+        body: `${header}  expect(LOOSE.test((0, eval)("src"))).toBe(true)\n${footer}`,
+      },
+      {
+        name: "globalThis-bracket-eval",
+        body: `${header}  expect(LOOSE.test((globalThis as any)["eval"]("src"))).toBe(true)\n${footer}`,
+      },
+      {
+        name: "eval-template-src",
+        body: `${header}  expect(LOOSE.test(eval(\`src\`))).toBe(true)\n${footer}`,
       },
     ]
     for (const { name, body } of mutants) {
