@@ -27,9 +27,14 @@ export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = new RegExp(
 export const VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD =
   /afterAll[\s\S]*?deleteFirmScopedData\s*\(\s*firms\s*,\s*uids\s*\)/
 
+/** M4: reject `deleteFirmScopedData([], [])` in production e2e source (empty-array mutant). */
+export const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH =
+  /deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/
+
 const UNIT_SELF = path.join(__dirname, "f42-e2e-cleanup.unit.test.ts")
 
 const WIRING_GUARD_CONST = "AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
+const M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST = "M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH"
 
 function isExpectSrcCall(call: ts.CallExpression): boolean {
   if (!ts.isIdentifier(call.expression) || call.expression.text !== "expect") return false
@@ -54,6 +59,33 @@ function isExpectSrcToMatchOnIdentifier(node: ts.CallExpression, guardName: stri
 function collectExpectSrcToMatchGuardCalls(node: ts.Node, guardName: string, out: ts.CallExpression[]): void {
   const walk = (n: ts.Node) => {
     if (ts.isCallExpression(n) && isExpectSrcToMatchOnIdentifier(n, guardName)) {
+      out.push(n)
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(node)
+}
+
+function isExpectSrcNotToMatchOnIdentifier(node: ts.CallExpression, guardName: string): ts.Identifier | undefined {
+  if (
+    !ts.isPropertyAccessExpression(node.expression) ||
+    node.expression.name.text !== "toMatch"
+  ) {
+    return undefined
+  }
+  const toMatchAccess = node.expression
+  const notAccess = toMatchAccess.expression
+  if (!ts.isPropertyAccessExpression(notAccess) || notAccess.name.text !== "not") return undefined
+  const expectCall = notAccess.expression
+  if (!ts.isCallExpression(expectCall) || !isExpectSrcCall(expectCall)) return undefined
+  const arg = node.arguments[0]
+  if (arg && ts.isIdentifier(arg) && arg.text === guardName) return arg
+  return undefined
+}
+
+function collectExpectSrcNotToMatchGuardCalls(node: ts.Node, guardName: string, out: ts.CallExpression[]): void {
+  const walk = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && isExpectSrcNotToMatchOnIdentifier(n, guardName)) {
       out.push(n)
     }
     ts.forEachChild(n, walk)
@@ -628,11 +660,19 @@ function helperBindingsNamed(helper: ts.FunctionDeclaration, name: string, out: 
 }
 
 function findModuleGuardExport(sf: ts.SourceFile): ts.VariableDeclaration | undefined {
+  return findModuleExportedConst(sf, WIRING_GUARD_CONST)
+}
+
+function findModuleM4EmptyArrayNotToMatchExport(sf: ts.SourceFile): ts.VariableDeclaration | undefined {
+  return findModuleExportedConst(sf, M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST)
+}
+
+function findModuleExportedConst(sf: ts.SourceFile, constName: string): ts.VariableDeclaration | undefined {
   for (const stmt of sf.statements) {
     if (!ts.isVariableStatement(stmt)) continue
     if (!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue
     for (const decl of stmt.declarationList.declarations) {
-      if (ts.isIdentifier(decl.name) && decl.name.text === WIRING_GUARD_CONST) return decl
+      if (ts.isIdentifier(decl.name) && decl.name.text === constName) return decl
     }
   }
   return undefined
@@ -695,19 +735,32 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004 / 004-001 / 004-002: production helper may reference `src`
- * only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array `not.toMatch`; the
- * `arguments` and `eval` identifiers (and `.eval` / `["eval"]` callees) are forbidden in any shape; nested fn/arrow
+ * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004 / 004-001 / 004-002 / 004-005: production helper may reference `src`
+ * only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array `not.toMatch` on module export
+ * `M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH`; the `arguments` and `eval` identifiers (and `.eval` / `["eval"]` callees) are forbidden in any shape; nested fn/arrow
  * bodies are scanned (closure capture cannot hide `src`).
  */
-function isExpectSrcNotToMatchCall(expectCall: ts.CallExpression): boolean {
-  if (!isExpectSrcCall(expectCall)) return false
+function getExpectSrcNotToMatchOuterFromExpectCall(expectCall: ts.CallExpression): ts.CallExpression | undefined {
+  if (!isExpectSrcCall(expectCall)) return undefined
   const notAccess = expectCall.parent
-  if (!ts.isPropertyAccessExpression(notAccess) || notAccess.name.text !== "not") return false
+  if (!ts.isPropertyAccessExpression(notAccess) || notAccess.name.text !== "not") return undefined
   const toMatchAccess = notAccess.parent
-  if (!ts.isPropertyAccessExpression(toMatchAccess) || toMatchAccess.name.text !== "toMatch") return false
+  if (!ts.isPropertyAccessExpression(toMatchAccess) || toMatchAccess.name.text !== "toMatch") return undefined
   const outer = toMatchAccess.parent
-  return ts.isCallExpression(outer) && outer.expression === toMatchAccess
+  if (!ts.isCallExpression(outer) || outer.expression !== toMatchAccess) return undefined
+  return outer
+}
+
+function isExpectSrcNotToMatchCall(
+  expectCall: ts.CallExpression,
+  program: ts.Program,
+  m4Export: ts.VariableDeclaration,
+): boolean {
+  const outer = getExpectSrcNotToMatchOuterFromExpectCall(expectCall)
+  if (!outer) return false
+  const arg = outer.arguments[0]
+  if (!arg || !ts.isIdentifier(arg) || arg.text !== M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST) return false
+  return toMatchIdentifierResolvesToModuleExport(program, m4Export, arg)
 }
 
 function srcIsExpectSrcToMatchGuardUse(id: ts.Identifier, liveToMatchCall: ts.CallExpression): boolean {
@@ -719,7 +772,12 @@ function srcIsExpectSrcToMatchGuardUse(id: ts.Identifier, liveToMatchCall: ts.Ca
   return ts.isCallExpression(outer) && outer === liveToMatchCall
 }
 
-function srcIdentifierUseIsAllowed(id: ts.Identifier, liveToMatchCall: ts.CallExpression): boolean {
+function srcIdentifierUseIsAllowed(
+  id: ts.Identifier,
+  liveToMatchCall: ts.CallExpression,
+  program: ts.Program,
+  m4Export: ts.VariableDeclaration,
+): boolean {
   const parent = id.parent
   if (!parent) return false
   if (ts.isCallExpression(parent)) {
@@ -727,12 +785,17 @@ function srcIdentifierUseIsAllowed(id: ts.Identifier, liveToMatchCall: ts.CallEx
       return parent.arguments[0] === id
     }
     if (srcIsExpectSrcToMatchGuardUse(id, liveToMatchCall)) return true
-    if (isExpectSrcNotToMatchCall(parent)) return true
+    if (isExpectSrcNotToMatchCall(parent, program, m4Export)) return true
   }
   return false
 }
 
-function helperBodyUsesSrcOnlyOnAllowedSites(body: ts.Block, liveToMatchCall: ts.CallExpression): boolean {
+function helperBodyUsesSrcOnlyOnAllowedSites(
+  body: ts.Block,
+  liveToMatchCall: ts.CallExpression,
+  program: ts.Program,
+  m4Export: ts.VariableDeclaration,
+): boolean {
   let ok = true
   const walk = (n: ts.Node) => {
     if (!ok) return
@@ -759,7 +822,11 @@ function helperBodyUsesSrcOnlyOnAllowedSites(body: ts.Block, liveToMatchCall: ts
       ok = false
       return
     }
-    if (ts.isIdentifier(n) && n.text === "src" && !srcIdentifierUseIsAllowed(n, liveToMatchCall)) {
+    if (
+      ts.isIdentifier(n) &&
+      n.text === "src" &&
+      !srcIdentifierUseIsAllowed(n, liveToMatchCall, program, m4Export)
+    ) {
       ok = false
       return
     }
@@ -783,9 +850,16 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   const moduleExport = findModuleGuardExport(sf)
   if (!moduleExport) return false
 
+  const m4Export = findModuleM4EmptyArrayNotToMatchExport(sf)
+  if (!m4Export) return false
+
   const bindings: ts.Identifier[] = []
   helperBindingsNamed(helper, WIRING_GUARD_CONST, bindings)
   if (bindings.length > 0) return false
+
+  const m4Bindings: ts.Identifier[] = []
+  helperBindingsNamed(helper, M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST, m4Bindings)
+  if (m4Bindings.length > 0) return false
 
   const toMatchCalls: ts.CallExpression[] = []
   collectExpectSrcToMatchGuardCalls(helper.body, WIRING_GUARD_CONST, toMatchCalls)
@@ -797,7 +871,16 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   if (!toMatchIdentifierResolvesToModuleExport(program, moduleExport, toMatchId)) return false
   if (!expectSrcToMatchGuardIsLiveTopLevelStatement(helper.body, toMatchCall)) return false
 
-  if (!helperBodyUsesSrcOnlyOnAllowedSites(helper.body, toMatchCall)) return false
+  const notToMatchCalls: ts.CallExpression[] = []
+  collectExpectSrcNotToMatchGuardCalls(helper.body, M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST, notToMatchCalls)
+  if (notToMatchCalls.length !== 1) return false
+  const notToMatchCall = notToMatchCalls[0]!
+  const notToMatchId = isExpectSrcNotToMatchOnIdentifier(notToMatchCall, M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST)
+  if (!notToMatchId) return false
+  if (!toMatchIdentifierResolvesToModuleExport(program, m4Export, notToMatchId)) return false
+  if (!expectSrcToMatchGuardIsLiveTopLevelStatement(helper.body, notToMatchCall)) return false
+
+  if (!helperBodyUsesSrcOnlyOnAllowedSites(helper.body, toMatchCall, program, m4Export)) return false
 
   if (helperHasCommentOrToSatisfyGuardBypass(helper.body)) return false
   if (helperTextForbiddenPatterns(helper.body)) return false
@@ -806,6 +889,7 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   const helperSliceEnd = helper.getEnd()
   const helperCodeOnly = stripCommentsFromSlice(unitSrc, helperSliceStart, helperSliceEnd)
   if (!/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperCodeOnly)) return false
+  if (!/\bM4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH\b/.test(helperCodeOnly)) return false
 
   return true
 }
@@ -879,7 +963,7 @@ export function metaPinM4TestUsesSharedHelper(unitSrc: string, fileName = UNIT_S
 export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
   expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
   expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
-  expect(src).not.toMatch(/deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/)
+  expect(src).not.toMatch(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH)
 }
 
 function isDeleteFirmScopedDataFirmsUids(node: ts.CallExpression): boolean {
@@ -1410,6 +1494,49 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       },
     ]
     for (const { name, body } of mutants) {
+      expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
+    }
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001-005: loose or inline not.toMatch args fail tightened meta pin", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH = /deleteFirmScopedData\\s*\\(\\s*\\[\\s*\\]\\s*,\\s*\\[\\s*\\]\\s*\\)/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+`
+    const footer = `
+}
+`
+    const mutants: { name: string; notToMatchLine: string }[] = [
+      {
+        name: "inline-empty-array-regex",
+        notToMatchLine:
+          "  expect(src).not.toMatch(/deleteFirmScopedData\\s*\\(\\s*\\[\\s*\\]\\s*,\\s*\\[\\s*\\]\\s*\\)/)\n",
+      },
+      {
+        name: "loose-positive-lookahead",
+        notToMatchLine: "  expect(src).not.toMatch(/^(?![\\s\\S]*afterAll)/)\n",
+      },
+      {
+        name: "vacuous-guard-not-to-match",
+        notToMatchLine: "  expect(src).not.toMatch(VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)\n",
+      },
+      {
+        name: "module-guard-not-to-match",
+        notToMatchLine: "  expect(src).not.toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)\n",
+      },
+      {
+        name: "local-shadow-m4-regex",
+        notToMatchLine: `  const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH = /.+/
+  expect(src).not.toMatch(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH)
+`,
+      },
+    ]
+    for (const { name, notToMatchLine } of mutants) {
+      const body = header + notToMatchLine + footer
       expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
     }
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
