@@ -37,23 +37,112 @@ function isExpectSrcCall(call: ts.CallExpression): boolean {
   return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
 }
 
-function expectSrcToMatchGuardArg(node: ts.Node): ts.Identifier | undefined {
-  let found: ts.Identifier | undefined
+function isExpectSrcToMatchOnIdentifier(node: ts.CallExpression, guardName: string): ts.Identifier | undefined {
+  if (
+    !ts.isPropertyAccessExpression(node.expression) ||
+    node.expression.name.text !== "toMatch" ||
+    !ts.isCallExpression(node.expression.expression) ||
+    !isExpectSrcCall(node.expression.expression)
+  ) {
+    return undefined
+  }
+  const arg = node.arguments[0]
+  if (arg && ts.isIdentifier(arg) && arg.text === guardName) return arg
+  return undefined
+}
+
+function collectExpectSrcToMatchGuardIds(node: ts.Node, guardName: string, out: ts.Identifier[]): void {
   const walk = (n: ts.Node) => {
-    if (
-      ts.isCallExpression(n) &&
-      ts.isPropertyAccessExpression(n.expression) &&
-      n.expression.name.text === "toMatch" &&
-      ts.isCallExpression(n.expression.expression) &&
-      isExpectSrcCall(n.expression.expression)
-    ) {
-      const arg = n.arguments[0]
-      if (arg && ts.isIdentifier(arg)) found = arg
+    if (ts.isCallExpression(n)) {
+      const id = isExpectSrcToMatchOnIdentifier(n, guardName)
+      if (id) out.push(id)
     }
     ts.forEachChild(n, walk)
   }
   walk(node)
-  return found
+}
+
+function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
+  let forbidden = false
+  const walk = (n: ts.Node) => {
+    if (ts.isCallExpression(n)) {
+      if (
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "toSatisfy" &&
+        ts.isCallExpression(n.expression.expression) &&
+        isExpectSrcCall(n.expression.expression)
+      ) {
+        forbidden = true
+      }
+      if (
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "toBe" &&
+        ts.isCallExpression(n.expression.expression) &&
+        ts.isIdentifier(n.expression.expression.expression) &&
+        n.expression.expression.expression.text === "expect"
+      ) {
+        const arg0 = n.expression.expression.arguments[0]
+        if (
+          arg0 &&
+          ts.isCallExpression(arg0) &&
+          ts.isPropertyAccessExpression(arg0.expression) &&
+          arg0.expression.name.text === "test"
+        ) {
+          const testReceiver = arg0.expression.expression
+          if (testReceiver && ts.isIdentifier(testReceiver) && testReceiver.text === "src") {
+            forbidden = true
+          }
+          if (
+            testReceiver &&
+            ts.isRegularExpressionLiteral(testReceiver) &&
+            /afterAll/.test(testReceiver.text)
+          ) {
+            forbidden = true
+          }
+          if (
+            testReceiver &&
+            ts.isIdentifier(testReceiver) &&
+            testReceiver.text === "VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
+          ) {
+            forbidden = true
+          }
+        }
+      }
+    }
+    ts.forEachChild(n, walk)
+  }
+  for (const stmt of body.statements) walk(stmt)
+  return forbidden
+}
+
+function helperTextForbiddenPatterns(body: ts.Block): boolean {
+  let bad = false
+  const walk = (n: ts.Node) => {
+    if (ts.isIdentifier(n) && n.text === "VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD") bad = true
+    if (ts.isRegularExpressionLiteral(n)) {
+      const t = n.text
+      if (/\[\^]/.test(t)) bad = true
+      if (/afterAll/.test(t) && /deleteFirmScopedData/.test(t) && /\[[\s\\]*S\\?\]\*\?/.test(t)) bad = true
+    }
+    ts.forEachChild(n, walk)
+  }
+  for (const stmt of body.statements) walk(stmt)
+  return bad
+}
+
+function stripCommentsFromSlice(fullText: string, start: number, end: number): string {
+  const text = fullText.slice(start, end)
+  const parts: string[] = []
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text)
+  while (true) {
+    const kind = scanner.scan()
+    if (kind === ts.SyntaxKind.EndOfFileToken) break
+    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+      continue
+    }
+    parts.push(scanner.getTokenText())
+  }
+  return parts.join("")
 }
 
 function collectBindingName(binding: ts.BindingName, name: string, out: ts.Identifier[]): void {
@@ -172,17 +261,87 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   helperBindingsNamed(helper, WIRING_GUARD_CONST, bindings)
   if (bindings.length > 0) return false
 
-  const toMatchId = expectSrcToMatchGuardArg(helper.body)
-  if (!toMatchId || toMatchId.text !== WIRING_GUARD_CONST) return false
+  const toMatchIds: ts.Identifier[] = []
+  collectExpectSrcToMatchGuardIds(helper.body, WIRING_GUARD_CONST, toMatchIds)
+  if (toMatchIds.length !== 1) return false
 
+  const toMatchId = toMatchIds[0]!
   if (!toMatchIdentifierResolvesToModuleExport(program, moduleExport, toMatchId)) return false
 
-  const helperText = unitSrc.slice(helper.getStart(sf), helper.getEnd())
-  if (/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperText)) return false
-  if (/afterAll\[\\s\\S\]\*\?deleteFirmScopedData/.test(helperText)) return false
-  if (/\[\^]/.test(helperText)) return false
+  if (helperHasCommentOrToSatisfyGuardBypass(helper.body)) return false
+  if (helperTextForbiddenPatterns(helper.body)) return false
 
-  return /\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperText)
+  const helperSliceStart = helper.getStart(sf)
+  const helperSliceEnd = helper.getEnd()
+  const helperCodeOnly = stripCommentsFromSlice(unitSrc, helperSliceStart, helperSliceEnd)
+  if (!/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperCodeOnly)) return false
+
+  return true
+}
+
+/**
+ * FA-F42-R1-015-001-001-002-002: M4 `it` body must be a single call to the shared wiring helper (no inline
+ * `expect(src).toMatch`, no comment-only delegation).
+ */
+export function metaPinM4TestUsesSharedHelper(unitSrc: string, fileName = UNIT_SELF): boolean {
+  const sf = ts.createSourceFile(fileName, unitSrc, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  let m4It: ts.ArrowFunction | undefined
+
+  const walkStatements = (statements: ts.NodeArray<ts.Statement>) => {
+    for (const stmt of statements) {
+      if (!ts.isExpressionStatement(stmt)) continue
+      const expr = stmt.expression
+      if (!ts.isCallExpression(expr)) continue
+      if (!ts.isIdentifier(expr.expression)) continue
+      const name = expr.expression.text
+      if (name === "describe") {
+        const descBody = expr.arguments[1]
+        if (descBody && (ts.isArrowFunction(descBody) || ts.isFunctionExpression(descBody))) {
+          const inner = descBody.body
+          if (ts.isBlock(inner)) walkStatements(inner.statements)
+        }
+        continue
+      }
+      if (name !== "it") continue
+      const title = expr.arguments[0]
+      if (!title || !ts.isStringLiteral(title)) continue
+      if (!title.text.startsWith("afterAll wires deleteFirmScopedData")) continue
+      const fn = expr.arguments[1]
+      if (fn && ts.isArrowFunction(fn)) m4It = fn
+    }
+  }
+
+  walkStatements(sf.statements)
+  if (!m4It?.body || !ts.isBlock(m4It.body)) return false
+
+  let wiringCalls = 0
+  let inlineSrcToMatch = false
+  const walk = (n: ts.Node) => {
+    if (ts.isCallExpression(n)) {
+      if (ts.isIdentifier(n.expression) && n.expression.text === "assertF42DeletionE2EAfterAllWiring") {
+        wiringCalls++
+      }
+      if (isExpectSrcToMatchOnIdentifier(n, WIRING_GUARD_CONST)) inlineSrcToMatch = true
+    }
+    ts.forEachChild(n, walk)
+  }
+  for (const stmt of m4It.body.statements) walk(stmt)
+
+  if (wiringCalls !== 1 || inlineSrcToMatch) return false
+
+  for (const stmt of m4It.body.statements) {
+    if (ts.isExpressionStatement(stmt)) continue
+    if (ts.isVariableStatement(stmt)) {
+      const decl = stmt.declarationList.declarations[0]
+      if (!decl?.initializer || !ts.isCallExpression(decl.initializer)) return false
+      const init = decl.initializer
+      if (!ts.isIdentifier(init.expression) || init.expression.text !== "readFileSync") return false
+      continue
+    }
+    return false
+  }
+
+  return true
 }
 
 /** Single production wiring check for `f42-retention-deletion.e2e.emu.test.ts` afterAll cleanup (M4 + tempered regex). */
@@ -270,17 +429,51 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
     expect(mmoveTSrc).not.toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
 
     const unitSrc = readFileSync(UNIT_SELF, "utf8")
-    const m4Block = unitSrc.match(
-      /it\("afterAll wires deleteFirmScopedData[\s\S]*?\n  \}\)/,
-    )?.[0]
-    expect(m4Block, "M4 test must delegate to shared wiring helper").toBeTruthy()
-    expect(m4Block!).toContain("assertF42DeletionE2EAfterAllWiring")
-    expect(m4Block!).not.toMatch(/expect\s*\(\s*src\s*\)\s*\.\s*toMatch\s*\(/)
+    expect(
+      metaPinM4TestUsesSharedHelper(unitSrc),
+      "M4 test must be a single assertF42DeletionE2EAfterAllWiring call (AST; kills comment-only delegation)",
+    ).toBe(true)
 
     expect(
       metaPinHelperUsesModuleGuard(unitSrc),
-      "shared wiring helper must use module export AFTER_ALL_DELETE_FIRMS_UIDS_GUARD (AST + token pin; kills MshadowAltSyntax)",
+      "shared wiring helper must use module export AFTER_ALL_DELETE_FIRMS_UIDS_GUARD (AST + comment-stripped pin; kills MshadowAltSyntax)",
     ).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002: MtoSatisfy / MaliasOutside (comment or toBe/.test bypass evades text-presence meta pin)", () => {
+    const toSatisfyMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  // Production uses AFTER_ALL_DELETE_FIRMS_UIDS_GUARD via assertF42DeletionE2EAfterAllWiring
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(/afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/.test(src)).toBe(true)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(toSatisfyMutant, "to-satisfy-mutant.ts")).toBe(false)
+
+    const aliasOutsideMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export const VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /afterAll[\\s\\S]*?deleteFirmScopedData/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  // expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(aliasOutsideMutant, "alias-outside-mutant.ts")).toBe(false)
+
+    const m4CommentOnlyMutant = `
+describe("FA-F42-R1-015: x", () => {
+  it("afterAll wires deleteFirmScopedData to the file-level firms and uids arrays (kills M4 empty-array mutant)", () => {
+    // assertF42DeletionE2EAfterAllWiring(src, DELETION_E2E)
+    const src = readFileSync(DELETION_E2E, "utf8")
+    expect(src).toMatch(VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  })
+})
+`
+    expect(metaPinM4TestUsesSharedHelper(m4CommentOnlyMutant, "m4-comment-mutant.ts")).toBe(false)
+    expect(metaPinM4TestUsesSharedHelper(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
   it("FA-F42-R1-015-001-001-002-001: MvacuousConstInHelper (vacuous guard const in helper fails tightened meta pin)", () => {
