@@ -15,7 +15,25 @@ describe("FA-F42-R1-015: F42 deletion e2e registers every extra firm and auth us
 
   it("afterAll wires deleteFirmScopedData to the file-level firms and uids arrays (kills M4 empty-array mutant)", () => {
     const src = readFileSync(DELETION_E2E, "utf8")
-    expect(src).toMatch(/afterAll[\s\S]*?deleteFirmScopedData\s*\(\s*firms\s*,\s*uids\s*\)/)
+    // FA-F42-R1-015-001-001: require the call inside the afterAll(async () => { … }, 120_000) hook body,
+    // not merely somewhere after the substring "afterAll" (e.g. import line + Mmove it.skip at EOF).
+    expect(src).toMatch(
+      /afterAll\s*\(\s*async\s*\(\s*\)\s*=>\s*\{[\s\S]*?deleteFirmScopedData\s*\(\s*firms\s*,\s*uids\s*\)[\s\S]*?\},\s*120_000\s*\)/,
+    )
     expect(src).not.toMatch(/deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/)
+  })
+
+  it("FA-F42-R1-015-001-001: Mmove (cleanup only in it.skip) fails the afterAll hook guard", () => {
+    const mmoveSrc = `
+import { afterAll, it } from "vitest"
+import { deleteFirmScopedData } from "./firmCleanup"
+const firms: string[] = []
+const uids: string[] = []
+afterAll(async () => {}, 120_000)
+it.skip("moved cleanup", () => { deleteFirmScopedData(firms, uids) })
+`
+    expect(mmoveSrc).not.toMatch(
+      /afterAll\s*\(\s*async\s*\(\s*\)\s*=>\s*\{[\s\S]*?deleteFirmScopedData\s*\(\s*firms\s*,\s*uids\s*\)[\s\S]*?\},\s*120_000\s*\)/,
+    )
   })
 })
