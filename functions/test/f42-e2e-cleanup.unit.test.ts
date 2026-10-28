@@ -29,6 +29,77 @@ export const VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD =
 
 const UNIT_SELF = path.join(__dirname, "f42-e2e-cleanup.unit.test.ts")
 
+const WIRING_GUARD_CONST = "AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
+
+function isExpectSrcCall(call: ts.CallExpression): boolean {
+  if (!ts.isIdentifier(call.expression) || call.expression.text !== "expect") return false
+  const arg0 = call.arguments[0]
+  return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
+}
+
+function expectSrcToMatchGuardArg(node: ts.Node): ts.Identifier | undefined {
+  let found: ts.Identifier | undefined
+  const walk = (n: ts.Node) => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === "toMatch" &&
+      ts.isCallExpression(n.expression.expression) &&
+      isExpectSrcCall(n.expression.expression)
+    ) {
+      const arg = n.arguments[0]
+      if (arg && ts.isIdentifier(arg)) found = arg
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(node)
+  return found
+}
+
+function localBindingsNamed(node: ts.Node, name: string, out: ts.Identifier[]): void {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) {
+    out.push(node.name)
+  }
+  ts.forEachChild(node, (child) => localBindingsNamed(child, name, out))
+}
+
+function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefined {
+  for (const stmt of sf.statements) {
+    if (
+      ts.isFunctionDeclaration(stmt) &&
+      stmt.name?.text === "assertF42DeletionE2EAfterAllWiring" &&
+      stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+    ) {
+      return stmt
+    }
+  }
+  return undefined
+}
+
+/**
+ * FA-F42-R1-015-001-001-002-001-001 meta pin: `expect(src).toMatch` must reference the module export
+ * `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, not a shadowed local (MshadowAltSyntax) or inline vacuous regex.
+ */
+export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SELF): boolean {
+  const sf = ts.createSourceFile(fileName, unitSrc, ts.ScriptTarget.Latest, true)
+  const helper = findExportedHelper(sf)
+  if (!helper?.body) return false
+
+  const locals: ts.Identifier[] = []
+  localBindingsNamed(helper.body, WIRING_GUARD_CONST, locals)
+  if (locals.length > 0) return false
+
+  const toMatchId = expectSrcToMatchGuardArg(helper.body)
+  if (!toMatchId || toMatchId.text !== WIRING_GUARD_CONST) return false
+
+  const helperText = unitSrc.slice(helper.getStart(sf), helper.getEnd())
+  if (/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperText)) return false
+  if (/afterAll\[\\s\\S\]\*\?deleteFirmScopedData/.test(helperText)) return false
+  if (/\[\^]/.test(helperText)) return false
+
+  return /\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/.test(helperText)
+}
+
 /** Single production wiring check for `f42-retention-deletion.e2e.emu.test.ts` afterAll cleanup (M4 + tempered regex). */
 export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
   expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
@@ -121,13 +192,10 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
     expect(m4Block!).toContain("assertF42DeletionE2EAfterAllWiring")
     expect(m4Block!).not.toMatch(/expect\s*\(\s*src\s*\)\s*\.\s*toMatch\s*\(/)
 
-    const helperBlock = unitSrc.match(
-      /export function assertF42DeletionE2EAfterAllWiring[\s\S]*?\n\}/,
-    )?.[0]
-    expect(helperBlock, "shared wiring helper must use tempered guard constant").toBeTruthy()
-    expect(helperBlock!).toMatch(/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
-    expect(helperBlock!).not.toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
-    expect(helperBlock!).not.toMatch(/afterAll\[\\s\\S\]\*\?deleteFirmScopedData/)
+    expect(
+      metaPinHelperUsesModuleGuard(unitSrc),
+      "shared wiring helper must use module export AFTER_ALL_DELETE_FIRMS_UIDS_GUARD (AST + token pin; kills MshadowAltSyntax)",
+    ).toBe(true)
   })
 
   it("FA-F42-R1-015-001-001-002-001: MvacuousConstInHelper (vacuous guard const in helper fails tightened meta pin)", () => {
@@ -137,6 +205,26 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
     expect(mutantHelper).toContain("AFTER_ALL_DELETE_FIRMS_UIDS_GUARD")
     expect(mutantHelper).not.toMatch(/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
     expect(mutantHelper).toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
+  })
+
+  it("FA-F42-R1-015-001-001-002-001-001: MshadowAltSyntax (local shadow + [^] regex evades token-only meta pin)", () => {
+    const shadowMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /afterAll[^]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    const helperBlock = shadowMutant.match(
+      /export function assertF42DeletionE2EAfterAllWiring[\s\S]*?\n\}/,
+    )?.[0]
+    expect(helperBlock).toBeTruthy()
+    expect(helperBlock!).toMatch(/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
+    expect(helperBlock!).not.toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
+    expect(helperBlock!).toMatch(/\[\^]/)
+    expect(metaPinHelperUsesModuleGuard(shadowMutant, "shadow-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
   it("FA-F42-R1-015-001-001: Mmove (cleanup only in it.skip) fails the afterAll hook guard", () => {
