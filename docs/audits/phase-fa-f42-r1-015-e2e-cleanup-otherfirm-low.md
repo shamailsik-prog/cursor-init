@@ -27,7 +27,7 @@ No change to production retention code; only test harness bookkeeping.
 
 **Scope (investigated on tip `83f0f805`):** `uniq("f42x")` appears only in `f42-retention-deletion.e2e.emu.test.ts`. Other F42 emulator suites (`f42-r1-followup`, `f42-r2-followup`, `f42-retention-apply`) route firms through `newFirm()` / `firmFor()` or explicit `firms.push` and route auth users through `member()` / `uids.push`. The Next-side follow-up (`tests/f42-r1-followup-next.e2e.firestore.test.ts`) tracks `created` + `authUsers` in `afterAll`.
 
-**Guard:** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source, if `afterAll` does not call `deleteFirmScopedData(firms, uids)` inside the `afterAll(async () => { … }, 120_000)` hook body before that hook’s `}, 120_000)` (mutants **M4** empty arrays, **Mmove** / **MmoveT** call relocated to `it.skip` at EOF — PR **#187** killed **Mmove** but not **MmoveT**, where an empty `afterAll` plus `it.skip(…, async () => { … deleteFirmScopedData … }, 120_000)` let a naive `[\s\S]*?` span cross the real hook close; fixed with a tempered prefix `(?:(?!\},\s*120_000\s*\))[\s\S])*` before the required call), or if a vacuous `afterAll[\s\S]*?deleteFirmScopedData` pattern is reintroduced (PR **#186** residual **FA-F42-R1-015-001-001**).
+**Guard:** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source, if `afterAll` does not call `deleteFirmScopedData(firms, uids)` inside the `afterAll(async () => { … })` hook body (mutants **M4** empty arrays, **Mmove** / **MmoveT** call relocated to `it.skip` at EOF — PR **#187** killed **Mmove** but not **MmoveT**, where an empty `afterAll` plus `it.skip(…, async () => { … deleteFirmScopedData … }, 120_000)` let a naive `[\s\S]*?` span cross the real hook close; PR **#188** tempered on `}, 120_000)` only, so **MmoveNoTO** / **MmoveOtherTO** could change or drop the hook timeout and still match the trailing `}, 120_000)` on a moved `it.skip`; residual **FA-F42-R1-015-001-001-001-001** adds TypeScript AST proof that the call lives under an `afterAll(async () => { … })` body plus regex tempering on **any** `}\s*,\s*<digits>` hook close, not only `120_000`), or if a vacuous `afterAll[\s\S]*?deleteFirmScopedData` pattern is reintroduced (PR **#186** residual **FA-F42-R1-015-001-001**).
 
 ## RED / GREEN acceptance
 
@@ -44,9 +44,11 @@ No change to production retention code; only test harness bookkeeping.
 | Mutant | Guard |
 | --- | --- |
 | Drop `firms.push(otherFirm)` or `uids.push(low.uid)` | Push-order regex assertions |
-| **M4** — `afterAll` calls `deleteFirmScopedData([], [])` (arrays never consumed) | `afterAll` hook body must call `deleteFirmScopedData(firms, uids)` before `}, 120_000)`; literal empty-array call forbidden |
-| **Mmove** — move `deleteFirmScopedData(firms, uids)` out of `afterAll` into bare `it.skip` at EOF (FA-F42-R1-015-001-001) | `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` in `f42-e2e-cleanup.unit.test.ts`; dedicated fixture test |
-| **MmoveT** — empty `afterAll(async () => {}, 120_000)`; cleanup in `it.skip(…, async () => { … }, 120_000)` at EOF so the old `[\s\S]*?` body span matched the skip’s timeout close | Same guard with hook-close tempered prefix; dedicated **MmoveT** fixture test |
+| **M4** — `afterAll` calls `deleteFirmScopedData([], [])` (arrays never consumed) | AST + `afterAll` hook body must call `deleteFirmScopedData(firms, uids)` before any `}\s*,\s*<timeout>)`; literal empty-array call forbidden |
+| **Mmove** — move `deleteFirmScopedData(firms, uids)` out of `afterAll` into bare `it.skip` at EOF (FA-F42-R1-015-001-001) | `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` + `deleteFirmScopedDataInAfterAllAsyncHook`; dedicated fixture test |
+| **MmoveT** — empty `afterAll(async () => {}, 120_000)`; cleanup in `it.skip(…, async () => { … }, 120_000)` at EOF so the old `[\s\S]*?` body span matched the skip’s timeout close | Same guards with hook-close tempered prefix on any numeric timeout; dedicated **MmoveT** fixture test |
+| **MmoveNoTO** — empty `afterAll(async () => {})` (no timeout); cleanup in `it.skip(…, 120_000)` | `deleteFirmScopedDataInAfterAllAsyncHook` (AST); regex cannot temper a comma-less `})` hook close without false negatives — dedicated fixture test (**FA-F42-R1-015-001-001-001-001**) |
+| **MmoveOtherTO** — empty `afterAll(async () => {}, 60_000)`; cleanup in `it.skip(…, 120_000)` | Tempered prefix `(?!\}\s*,\s*[\d_]+\s*\))` + AST; dedicated fixture test (**FA-F42-R1-015-001-001-001-001**) |
 
 ## Focused verification
 
