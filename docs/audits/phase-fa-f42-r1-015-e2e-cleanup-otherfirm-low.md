@@ -27,7 +27,7 @@ No change to production retention code; only test harness bookkeeping.
 
 **Scope (investigated on tip `83f0f805`):** `uniq("f42x")` appears only in `f42-retention-deletion.e2e.emu.test.ts`. Other F42 emulator suites (`f42-r1-followup`, `f42-r2-followup`, `f42-retention-apply`) route firms through `newFirm()` / `firmFor()` or explicit `firms.push` and route auth users through `member()` / `uids.push`. The Next-side follow-up (`tests/f42-r1-followup-next.e2e.firestore.test.ts`) tracks `created` + `authUsers` in `afterAll`.
 
-**Guard:** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source, if `afterAll` does not call `deleteFirmScopedData(firms, uids)` inside the `afterAll(async () => { … }, 120_000)` hook (mutants **M4** empty arrays, **Mmove** call relocated to `it.skip`), or if a vacuous `afterAll[\s\S]*?deleteFirmScopedData` pattern is reintroduced (PR **#186** residual **FA-F42-R1-015-001-001**).
+**Guard:** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source, if `afterAll` does not call `deleteFirmScopedData(firms, uids)` inside the `afterAll(async () => { … }, 120_000)` hook body before that hook’s `}, 120_000)` (mutants **M4** empty arrays, **Mmove** / **MmoveT** call relocated to `it.skip` at EOF — PR **#187** killed **Mmove** but not **MmoveT**, where an empty `afterAll` plus `it.skip(…, async () => { … deleteFirmScopedData … }, 120_000)` let a naive `[\s\S]*?` span cross the real hook close; fixed with a tempered prefix `(?:(?!\},\s*120_000\s*\))[\s\S])*` before the required call), or if a vacuous `afterAll[\s\S]*?deleteFirmScopedData` pattern is reintroduced (PR **#186** residual **FA-F42-R1-015-001-001**).
 
 ## RED / GREEN acceptance
 
@@ -45,7 +45,8 @@ No change to production retention code; only test harness bookkeeping.
 | --- | --- |
 | Drop `firms.push(otherFirm)` or `uids.push(low.uid)` | Push-order regex assertions |
 | **M4** — `afterAll` calls `deleteFirmScopedData([], [])` (arrays never consumed) | `afterAll` hook body must call `deleteFirmScopedData(firms, uids)` before `}, 120_000)`; literal empty-array call forbidden |
-| **Mmove** — move `deleteFirmScopedData(firms, uids)` out of `afterAll` into `it.skip` at EOF (FA-F42-R1-015-001-001) | Same tightened `afterAll(async () => { … deleteFirmScopedData(firms, uids) … }, 120_000)` regex; dedicated fixture test in `f42-e2e-cleanup.unit.test.ts` |
+| **Mmove** — move `deleteFirmScopedData(firms, uids)` out of `afterAll` into bare `it.skip` at EOF (FA-F42-R1-015-001-001) | `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` in `f42-e2e-cleanup.unit.test.ts`; dedicated fixture test |
+| **MmoveT** — empty `afterAll(async () => {}, 120_000)`; cleanup in `it.skip(…, async () => { … }, 120_000)` at EOF so the old `[\s\S]*?` body span matched the skip’s timeout close | Same guard with hook-close tempered prefix; dedicated **MmoveT** fixture test |
 
 ## Focused verification
 
