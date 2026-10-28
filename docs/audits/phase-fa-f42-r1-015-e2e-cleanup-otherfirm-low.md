@@ -51,10 +51,15 @@ No change to production retention code; only test harness bookkeeping.
 | **MmoveOtherTO** — empty `afterAll(async () => {}, 60_000)`; cleanup in `it.skip(…, 120_000)` | Tempered prefix `(?!\}\s*,\s*[\d_]+\s*\))` + AST; dedicated fixture test (**FA-F42-R1-015-001-001-001-001**) |
 | **MdescribeSkip** — `deleteFirmScopedData(firms, uids)` only inside `afterAll` nested under `describe.skip` (hook never runs) | `deleteFirmScopedDataInAfterAllAsyncHook` requires exactly one **file-top-level** `afterAll(async () => { … })` with the call (rejects nested hooks); dedicated fixture test (**FA-F42-R1-015-001-001-001-001-001**, PR after #189 / `86777c5f`) |
 | **MvacuousReintro** — replace tempered production check with vacuous `afterAll[\s\S]*?deleteFirmScopedData(firms, uids)` on the real e2e file (still passes **MmoveT**) | `assertF42DeletionE2EAfterAllWiring` + meta pin **FA-F42-R1-015-001-001-002** (helper must call `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`; M4 test must delegate to helper; **MmoveT** control proves vacuous regex alone is insufficient) |
+| **MvacuousConstInHelper** — swap `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` for `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` in the shared helper while leaving meta pin / fixtures unchanged | Meta pin **FA-F42-R1-015-001-001-002-001**: word-boundary token `\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b` (not substring `toContain`); helper must not reference `\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b`; dedicated mutant fixture test |
 
 **Residual closed (ME REAUDIT_PR189):** **FA-F42-R1-015-001-001-001-001-001** — pre-#189 AST walked any nested `afterAll`, so **MdescribeSkip** survived. Guard now scans only top-level `ExpressionStatement` `afterAll` calls and requires a single matching hook body.
 
 **Residual closed (ME REAUDIT_PR187):** **FA-F42-R1-015-001-001-002** — ledger overclaimed that reverting the production assertion to the vacuous regex would fail CI; only fixture copies of the tempered guard were exercised. Shared `assertF42DeletionE2EAfterAllWiring` wires production checks to `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, and a self-source meta test fails if the helper or M4 block reintroduces the vacuous pattern.
+
+**Residual closed (ME REAUDIT_PR191):** **FA-F42-R1-015-001-001-002-001** — meta pin `toContain("AFTER_ALL_DELETE_FIRMS_UIDS_GUARD")` also matched the exported name `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, so **MvacuousConstInHelper** survived. Pin now requires the tempered identifier as a whole token and forbids `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` in the helper body; fixture test documents the old vs new pin behaviour.
+
+**Open (sibling, not this PR):** **FA-F42-R1-015-001-001-002-002** — comment / `toSatisfy` evade on the meta pin (follow-up slice).
 
 ## Focused verification
 
