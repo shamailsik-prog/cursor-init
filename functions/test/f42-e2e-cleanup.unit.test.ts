@@ -74,6 +74,15 @@ function containingStatement(node: ts.Node): ts.Statement | undefined {
   return undefined
 }
 
+function nodeIsDescendantOf(node: ts.Node, ancestor: ts.Node): boolean {
+  let current: ts.Node | undefined = node
+  while (current) {
+    if (current === ancestor) return true
+    current = current.parent
+  }
+  return false
+}
+
 /** `false`, `0`, `null`, `undefined`, or `!true`-style unary on a static-false operand. */
 function expressionIsStaticallyFalse(expr: ts.Expression): boolean {
   if (expr.kind === ts.SyntaxKind.FalseKeyword) return true
@@ -107,45 +116,49 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   while (current && current !== helperBody) {
     if (ts.isTryStatement(current)) {
       if (
-        ts.isNodeDescendantOf(toMatchCall, current.tryBlock) ||
-        (current.catchClause !== undefined && ts.isNodeDescendantOf(toMatchCall, current.catchClause))
+        nodeIsDescendantOf(toMatchCall, current.tryBlock) ||
+        (current.catchClause !== undefined && nodeIsDescendantOf(toMatchCall, current.catchClause))
       ) {
         return false
       }
     }
 
     if (ts.isIfStatement(current)) {
-      if (expressionIsStaticallyFalse(current.expression) && ts.isNodeDescendantOf(toMatchCall, current.thenStatement)) {
+      if (expressionIsStaticallyFalse(current.expression) && nodeIsDescendantOf(toMatchCall, current.thenStatement)) {
         return false
       }
       if (
         current.elseStatement !== undefined &&
         expressionIsStaticallyTrue(current.expression) &&
-        ts.isNodeDescendantOf(toMatchCall, current.elseStatement)
+        nodeIsDescendantOf(toMatchCall, current.elseStatement)
       ) {
         return false
       }
     }
 
     if (ts.isConditionalExpression(current)) {
-      if (expressionIsStaticallyFalse(current.condition) && ts.isNodeDescendantOf(toMatchCall, current.whenTrue)) {
+      if (expressionIsStaticallyFalse(current.condition) && nodeIsDescendantOf(toMatchCall, current.whenTrue)) {
         return false
       }
-      if (expressionIsStaticallyTrue(current.condition) && ts.isNodeDescendantOf(toMatchCall, current.whenFalse)) {
+      if (expressionIsStaticallyTrue(current.condition) && nodeIsDescendantOf(toMatchCall, current.whenFalse)) {
         return false
       }
     }
 
     if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
-      if (expressionIsStaticallyFalse(current.left) && ts.isNodeDescendantOf(toMatchCall, current.right)) {
+      if (expressionIsStaticallyFalse(current.left) && nodeIsDescendantOf(toMatchCall, current.right)) {
         return false
       }
     }
 
     if (ts.isCaseClause(current) || ts.isDefaultClause(current)) {
-      const switchStmt = current.parent
-      if (switchStmt && ts.isSwitchStatement(switchStmt) && expressionIsStaticallyFalse(switchStmt.expression)) {
-        return false
+      let walk: ts.Node | undefined = current.parent
+      while (walk) {
+        if (ts.isSwitchStatement(walk)) {
+          if (expressionIsStaticallyFalse(walk.expression)) return false
+          break
+        }
+        walk = walk.parent
       }
     }
 

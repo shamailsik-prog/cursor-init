@@ -77,6 +77,8 @@ No change to production retention code; only test harness bookkeeping.
 
 **Residual closed (ME REAUDIT_PR195 / PASS 9.7):** **FA-F42-R1-015-001-001-002-002-002** — CallExpression-only meta pin still accepted **MtrySwallow** (try/catch around `expect(src).toMatch`) and **MdeadIf** (`if (false)` / dead-branch placement) while TypeChecker and token pins passed. `metaPinHelperUsesModuleGuard` now requires exactly one resolved `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` whose containing statement is a direct child of the helper body and is not under try/catch, static-false branches, `&&` short-circuit, or ternary dead arms; fixtures **MtrySwallow** / **MdeadIf** document the evasions.
 
+**Follow-up on PR #196 (ME REAUDIT / CI):** **FA-F42-R1-015-001-001-002-002-002-001** — live-guard pin used runtime-only `ts.isNodeDescendantOf` (not in TypeScript 5.9 public `.d.ts`) and a switch-parent narrowing that failed `tsc -p functions`. Replaced with local parent-walk descendant check; no meta-pin semantic change.
+
 ## Focused verification
 
 Unit guard (no emulators):
