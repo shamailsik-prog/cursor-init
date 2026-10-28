@@ -26,6 +26,28 @@ function sectionAfterHeading(markdown: string, heading: RegExp): string {
   return next === -1 ? tail : tail.slice(0, next)
 }
 
+/** Remove HTML comments so step pins cannot be satisfied by comment-hidden tokens (FA-F42-R1-014-001-002 / M3c). */
+function stripHtmlComments(markdown: string): string {
+  const open = "<!--"
+  const close = "-->"
+  let out = ""
+  let cursor = 0
+  while (cursor < markdown.length) {
+    const openAt = markdown.indexOf(open, cursor)
+    if (openAt === -1) {
+      out += markdown.slice(cursor)
+      break
+    }
+    out += markdown.slice(cursor, openAt)
+    const closeAt = markdown.indexOf(close, openAt + open.length)
+    if (closeAt === -1) {
+      break
+    }
+    cursor = closeAt + close.length
+  }
+  return out
+}
+
 /** Numbered steps 1..5 in document order (kills step-order mutants). */
 function numberedStepOffsets(section: string, count = 5): number[] {
   const offsets: number[] = []
@@ -90,9 +112,11 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     const postRestoreHeading = "## Post-restore: tombstones and completed deletions"
     expect(backup.indexOf("before routing clients")).toBeLessThan(backup.indexOf(postRestoreHeading))
 
-    const section = sectionAfterHeading(
-      backup,
-      /^## Post-restore: tombstones and completed deletions/m,
+    const section = stripHtmlComments(
+      sectionAfterHeading(
+        backup,
+        /^## Post-restore: tombstones and completed deletions/m,
+      ),
     )
     expect(section).toMatch(/before the restored environment serves a request/i)
     expect(section).toMatch(/\*\*NOT DEMONSTRATED:\*\*/)
@@ -124,9 +148,11 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
 
   it("retention-deletion Restoring a backup: ordered steps, serve gate before re-purge, NOT DEMONSTRATED", () => {
     const retention = readFileSync(RETENTION_RUNBOOK, "utf8")
-    const section = sectionAfterHeading(
-      retention,
-      /^## Restoring a backup \(FA-F42-R1-014/m,
+    const section = stripHtmlComments(
+      sectionAfterHeading(
+        retention,
+        /^## Restoring a backup \(FA-F42-R1-014/m,
+      ),
     )
     expect(section).toMatch(/NOT DEMONSTRATED/)
     expect(section).toMatch(/only after these steps/i)
@@ -149,5 +175,51 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     expect(step4).toMatch(/in_progress|completed/i)
 
     expect(section.indexOf("serves any request")).toBeLessThan(section.indexOf("in_progress"))
+  })
+})
+
+describe("FA-F42-R1-014-001-002: step pins ignore HTML comment hiding (M3c)", () => {
+  it("stripHtmlComments removes multiline comments before step-body matching", () => {
+    const withComment =
+      "3. Route traffic now.\n   <!-- **Before traffic:** matter_members\n   hidden gate -->\n4. Re-purge in_progress"
+    const stripped = stripHtmlComments(withComment)
+    expect(stripped).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(stripped).not.toContain("matter_members")
+    expect(stripped).toContain("in_progress")
+  })
+
+  it("M3c-style step 3 cannot satisfy before-traffic pins after comment strip", () => {
+    const mutantSection = stripHtmlComments(`1. Export trail
+2. Restore Firestore
+3. Route traffic to the restored database now. <!-- **Before traffic:** matter_members -->
+4. Reconcile in_progress and completed deletions (FU-9)
+5. legal_holds hold purge`)
+    const steps = numberedStepOffsets(mutantSection)
+    const step3 = sliceStep(mutantSection, steps, 3)
+    const step4 = sliceStep(mutantSection, steps, 4)
+    expect(step3).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(step3).not.toContain("matter_members")
+    expect(step4).toMatch(/in_progress|completed/i)
+    expect(mutantSection.indexOf("**Before traffic:**")).toBe(-1)
+  })
+
+  it("stripHtmlComments removes unclosed comment through EOF (M3c-unclosed)", () => {
+    const withUnclosed = "3. Route traffic now.\n<!-- **Before traffic:** matter_members"
+    const stripped = stripHtmlComments(withUnclosed)
+    expect(stripped).toBe("3. Route traffic now.\n")
+    expect(stripped).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(stripped).not.toContain("matter_members")
+  })
+
+  it("M3c-unclosed step 3 cannot satisfy before-traffic pins after comment strip", () => {
+    const mutantSection = stripHtmlComments(`1. Export trail
+2. Restore Firestore
+3. Route traffic to the restored database now. <!-- **Before traffic:** matter_members`)
+    const steps = numberedStepOffsets(mutantSection, 3)
+    const step3 = sliceStep(mutantSection, steps, 3)
+    expect(step3).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(step3).not.toContain("matter_members")
+    expect(mutantSection.indexOf("**Before traffic:**")).toBe(-1)
+    expect(mutantSection).not.toContain("in_progress")
   })
 })
