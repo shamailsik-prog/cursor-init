@@ -51,15 +51,121 @@ function isExpectSrcToMatchOnIdentifier(node: ts.CallExpression, guardName: stri
   return undefined
 }
 
-function collectExpectSrcToMatchGuardIds(node: ts.Node, guardName: string, out: ts.Identifier[]): void {
+function collectExpectSrcToMatchGuardCalls(node: ts.Node, guardName: string, out: ts.CallExpression[]): void {
   const walk = (n: ts.Node) => {
-    if (ts.isCallExpression(n)) {
-      const id = isExpectSrcToMatchOnIdentifier(n, guardName)
-      if (id) out.push(id)
+    if (ts.isCallExpression(n) && isExpectSrcToMatchOnIdentifier(n, guardName)) {
+      out.push(n)
     }
     ts.forEachChild(n, walk)
   }
   walk(node)
+}
+
+function statementDirectChildOfBlock(stmt: ts.Statement, block: ts.Block): boolean {
+  return block.statements.some((s) => s === stmt)
+}
+
+function containingStatement(node: ts.Node): ts.Statement | undefined {
+  let current: ts.Node | undefined = node
+  while (current) {
+    if (ts.isStatement(current)) return current
+    current = current.parent
+  }
+  return undefined
+}
+
+function nodeIsDescendantOf(node: ts.Node, ancestor: ts.Node): boolean {
+  let current: ts.Node | undefined = node
+  while (current) {
+    if (current === ancestor) return true
+    current = current.parent
+  }
+  return false
+}
+
+/** `false`, `0`, `null`, `undefined`, or `!true`-style unary on a static-false operand. */
+function expressionIsStaticallyFalse(expr: ts.Expression): boolean {
+  if (expr.kind === ts.SyntaxKind.FalseKeyword) return true
+  if (ts.isNumericLiteral(expr) && expr.text === "0") return true
+  if (expr.kind === ts.SyntaxKind.NullKeyword) return true
+  if (expr.kind === ts.SyntaxKind.UndefinedKeyword) return true
+  if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
+    return expressionIsStaticallyTrue(expr.operand)
+  }
+  return false
+}
+
+function expressionIsStaticallyTrue(expr: ts.Expression): boolean {
+  if (expr.kind === ts.SyntaxKind.TrueKeyword) return true
+  if (ts.isNumericLiteral(expr) && expr.text !== "0") return true
+  if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.ExclamationToken) {
+    return expressionIsStaticallyFalse(expr.operand)
+  }
+  return false
+}
+
+/**
+ * FA-F42-R1-015-001-001-002-002-002: `expect(src).toMatch(module guard)` must sit in a helper-body
+ * top-level statement that always runs (reject try/catch swallow, `if (false)`, and similar dead branches).
+ */
+function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMatchCall: ts.CallExpression): boolean {
+  const stmt = containingStatement(toMatchCall)
+  if (!stmt || !statementDirectChildOfBlock(stmt, helperBody)) return false
+
+  let current: ts.Node | undefined = toMatchCall
+  while (current && current !== helperBody) {
+    if (ts.isTryStatement(current)) {
+      if (
+        nodeIsDescendantOf(toMatchCall, current.tryBlock) ||
+        (current.catchClause !== undefined && nodeIsDescendantOf(toMatchCall, current.catchClause))
+      ) {
+        return false
+      }
+    }
+
+    if (ts.isIfStatement(current)) {
+      if (expressionIsStaticallyFalse(current.expression) && nodeIsDescendantOf(toMatchCall, current.thenStatement)) {
+        return false
+      }
+      if (
+        current.elseStatement !== undefined &&
+        expressionIsStaticallyTrue(current.expression) &&
+        nodeIsDescendantOf(toMatchCall, current.elseStatement)
+      ) {
+        return false
+      }
+    }
+
+    if (ts.isConditionalExpression(current)) {
+      if (expressionIsStaticallyFalse(current.condition) && nodeIsDescendantOf(toMatchCall, current.whenTrue)) {
+        return false
+      }
+      if (expressionIsStaticallyTrue(current.condition) && nodeIsDescendantOf(toMatchCall, current.whenFalse)) {
+        return false
+      }
+    }
+
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+      if (expressionIsStaticallyFalse(current.left) && nodeIsDescendantOf(toMatchCall, current.right)) {
+        return false
+      }
+    }
+
+    if (ts.isCaseClause(current) || ts.isDefaultClause(current)) {
+      let walk: ts.Node | undefined = current.parent
+      while (walk) {
+        if (ts.isSwitchStatement(walk)) {
+          if (expressionIsStaticallyFalse(walk.expression)) return false
+          break
+        }
+        walk = walk.parent
+      }
+    }
+
+    current = current.parent
+  }
+
+  return true
 }
 
 function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
@@ -247,7 +353,8 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 /**
  * FA-F42-R1-015-001-001-002-001-001 meta pin: `expect(src).toMatch` must reference the module export
  * `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD`, not a shadowed binding (MshadowAltSyntax, MshadowParam,
- * MshadowDestructure) or inline vacuous regex.
+ * MshadowDestructure) or inline vacuous regex. The call must be a live top-level helper-body statement
+ * (FA-F42-R1-015-001-001-002-002-002; kills MtrySwallow / MdeadIf).
  */
 export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SELF): boolean {
   const { program, sf } = createSingleFileProgram(unitSrc, fileName)
@@ -261,12 +368,15 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   helperBindingsNamed(helper, WIRING_GUARD_CONST, bindings)
   if (bindings.length > 0) return false
 
-  const toMatchIds: ts.Identifier[] = []
-  collectExpectSrcToMatchGuardIds(helper.body, WIRING_GUARD_CONST, toMatchIds)
-  if (toMatchIds.length !== 1) return false
+  const toMatchCalls: ts.CallExpression[] = []
+  collectExpectSrcToMatchGuardCalls(helper.body, WIRING_GUARD_CONST, toMatchCalls)
+  if (toMatchCalls.length !== 1) return false
 
-  const toMatchId = toMatchIds[0]!
+  const toMatchCall = toMatchCalls[0]!
+  const toMatchId = isExpectSrcToMatchOnIdentifier(toMatchCall, WIRING_GUARD_CONST)
+  if (!toMatchId) return false
   if (!toMatchIdentifierResolvesToModuleExport(program, moduleExport, toMatchId)) return false
+  if (!expectSrcToMatchGuardIsLiveTopLevelStatement(helper.body, toMatchCall)) return false
 
   if (helperHasCommentOrToSatisfyGuardBypass(helper.body)) return false
   if (helperTextForbiddenPatterns(helper.body)) return false
@@ -528,6 +638,33 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
 }
 `
     expect(metaPinHelperUsesModuleGuard(destructureShadowMutant, "destructure-shadow-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-002: MtrySwallow / MdeadIf (non-executing toMatch evades CallExpression-only meta pin)", () => {
+    const trySwallowMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  try {
+    expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  } catch {
+    /* swallow assertion failure */
+  }
+}
+`
+    expect(metaPinHelperUsesModuleGuard(trySwallowMutant, "try-swallow-mutant.ts")).toBe(false)
+
+    const deadIfMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  if (false) {
+    expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  }
+}
+`
+    expect(metaPinHelperUsesModuleGuard(deadIfMutant, "dead-if-mutant.ts")).toBe(false)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
