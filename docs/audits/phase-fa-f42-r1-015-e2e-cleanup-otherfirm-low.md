@@ -65,6 +65,10 @@ No change to production retention code; only test harness bookkeeping.
 | **MarrowWrap** — IIFE / arrow wrapper around the module-guard `toMatch` | Same pin as **MshortCircuitDyn**; fixture **MarrowWrap** |
 | **MdeferredCall** — schedule `expect(src).toMatch` inside a callback (`queueMicrotask`, etc.) | Same pin as **MshortCircuitDyn**; fixture **MdeferredCall** |
 | **MlooseConst** — keep live `expect(src).toMatch(module export)` but add vacuous check via `const LOOSE = /afterAll…/` and `expect(LOOSE.test(src)).toBe(true)` | Meta pin **FA-F42-R1-015-001-001-002-002-003**: AST forbids any helper-body CallExpression `<expr>.test(src)` (receiver-agnostic); fixture **MlooseConst** |
+| **McomputedTest** — `expect(LOOSE["test"](src)).toBe(true)` with local vacuous regex alongside live module-guard `toMatch` | Meta pin **FA-F42-R1-015-001-001-002-002-003-001**: AST forbids computed `["test"](src)` and other structural regex-on-`src` bypasses; fixture **computed-test** |
+| **MprototypeCall** / **MprototypeApply** — `RegExp.prototype.test.call(LOOSE, src)` or `.apply(LOOSE, [src])` | Same pin as **McomputedTest**; fixtures **prototype-call** / **prototype-apply** |
+| **MbindTestAlias** — `const boundTest = LOOSE.test.bind(LOOSE); expect(boundTest(src))` | Same pin as **McomputedTest**; forbids `.test.bind` / `["test"].bind` and bound-name `(src)` calls; fixture **bind-alias** |
+| **MexecInsteadOfTest** — `expect(LOOSE.exec(src))` vacuous match on `src` | Same pin as **McomputedTest**; AST forbids `<expr>.exec(src)`; fixture **exec-instead-of-test** |
 
 **Residual closed (ME REAUDIT_PR189):** **FA-F42-R1-015-001-001-001-001-001** — pre-#189 AST walked any nested `afterAll`, so **MdescribeSkip** survived. Guard now scans only top-level `ExpressionStatement` `afterAll` calls and requires a single matching hook body.
 
@@ -89,6 +93,8 @@ No change to production retention code; only test harness bookkeeping.
 **Residual closed (ME REAUDIT_PR197 / PASS 10.0):** **FA-F42-R1-015-001-001-002-002-002-003** — exact ExpressionStatement pin still accepted **MreturnBefore** (and bare **MthrowBefore**) placing unreachable `expect(src).toMatch` after an earlier helper-body exit. `helperBodyHasExitBeforeStatement` rejects prior statements that unconditionally return/throw (including provably taken `if (true) return` arms); fixtures **MreturnBefore**, **MthrowBefore**, **MstaticIfReturnBefore** document the evasions.
 
 **Residual closed (ME REAUDIT_PR195 / #199 follow-up):** **FA-F42-R1-015-001-001-002-002-003** — `.test`/`toBe` bypass pin listed only `src`, inline `afterAll` regex literals, and `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` as forbidden `.test` receivers, so **MlooseConst** (`expect(LOOSE.test(src)).toBe(true)` with a local vacuous binding) survived alongside a live module-guard `toMatch`. `callExpressionIsRegexTestOnSrc` rejects any helper-body `<expr>.test(src)` CallExpression; fixture **MlooseConst** documents the evasion.
+
+**Residual closed (ME REAUDIT / #200 follow-up):** **FA-F42-R1-015-001-001-002-002-003-001** — receiver-agnostic `.test(src)` pin still accepted **McomputedTest** (`LOOSE["test"](src)`), **MprototypeCall** / **MprototypeApply** (`RegExp.prototype.test.call` / `.apply` with `src`), **MbindTestAlias** (`.test.bind` then `boundTest(src)`), and **MexecInsteadOfTest** (`LOOSE.exec(src)`). `callExpressionIsForbiddenRegexMatchOnSrc` extends the helper-body walk; fixtures in **FA-F42-R1-015-001-001-002-002-003-001** document the evasions. Runtime-only `if (src.length >= 0) return` before live `toMatch` remains **FA-F42-R1-015-001-001-002-002-002-003-002** (not claimed closed here).
 
 ## Focused verification
 
