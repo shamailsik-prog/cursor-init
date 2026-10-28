@@ -34,7 +34,7 @@ const WIRING_GUARD_CONST = "AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
 function isExpectSrcCall(call: ts.CallExpression): boolean {
   if (!ts.isIdentifier(call.expression) || call.expression.text !== "expect") return false
   const arg0 = call.arguments[0]
-  return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
+  return arg0 !== undefined && expressionIsWiringHelperSrcRef(arg0)
 }
 
 function isExpectSrcToMatchOnIdentifier(node: ts.CallExpression, guardName: string): ts.Identifier | undefined {
@@ -218,9 +218,24 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   return true
 }
 
+/** Wiring helper first parameter: `src` or sloppy `arguments[0]` alias (FA-F42-R1-015-001-001-002-002-003-001-001-004). */
+function elementAccessIsArgumentsZero(node: ts.Node): boolean {
+  if (!ts.isElementAccessExpression(node)) return false
+  if (!ts.isIdentifier(node.expression) || node.expression.text !== "arguments") return false
+  const key = node.argumentExpression
+  if (ts.isNumericLiteral(key) && key.text === "0") return true
+  if (ts.isStringLiteral(key) && key.text === "0") return true
+  return false
+}
+
+function expressionIsWiringHelperSrcRef(expr: ts.Expression): boolean {
+  if (ts.isIdentifier(expr) && expr.text === "src") return true
+  return elementAccessIsArgumentsZero(expr)
+}
+
 function callArg0IsSrcIdentifier(call: ts.CallExpression): boolean {
   const arg0 = call.arguments[0]
-  return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
+  return arg0 !== undefined && expressionIsWiringHelperSrcRef(arg0)
 }
 
 function elementAccessStaticKeyText(key: ts.Expression | undefined): string | undefined {
@@ -251,10 +266,10 @@ function isRegExpPrototypeMethodAccess(node: ts.PropertyAccessExpression): boole
 
 function arrayLiteralFirstArgIsSrc(node: ts.Expression | undefined): boolean {
   if (!node) return false
-  if (ts.isIdentifier(node) && node.text === "src") return true
+  if (expressionIsWiringHelperSrcRef(node)) return true
   if (ts.isArrayLiteralExpression(node)) {
     const first = node.elements[0]
-    return first !== undefined && ts.isIdentifier(first) && first.text === "src"
+    return first !== undefined && expressionIsWiringHelperSrcRef(first)
   }
   return false
 }
@@ -291,7 +306,7 @@ function callExpressionIsRegexMethodCallOrApplyOnSrc(call: ts.CallExpression): b
 
   if (method === "call") {
     const arg1 = call.arguments[1]
-    return arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src"
+    return arg1 !== undefined && expressionIsWiringHelperSrcRef(arg1)
   }
 
   return arrayLiteralFirstArgIsSrc(call.arguments[1])
@@ -312,7 +327,7 @@ function callExpressionIsRegexPrototypeBracketCallOrApplyOnSrc(call: ts.CallExpr
 
   if (method === "call") {
     const arg1 = call.arguments[1]
-    return arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src"
+    return arg1 !== undefined && expressionIsWiringHelperSrcRef(arg1)
   }
   return arrayLiteralFirstArgIsSrc(call.arguments[1])
 }
@@ -448,12 +463,12 @@ function callExpressionIsUnboundAliasRegexOnSrc(
   if (ts.isIdentifier(call.expression) && unboundCallNames.has(call.expression.text)) {
     if (call.arguments.length >= 2) {
       const arg1 = call.arguments[1]
-      if (arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src") return true
+      if (arg1 !== undefined && expressionIsWiringHelperSrcRef(arg1)) return true
     }
     if (call.arguments.length >= 3) {
       if (!expressionIsRegexTestOrExecCallee(call.arguments[0])) return false
       const arg2 = call.arguments[2]
-      return arg2 !== undefined && ts.isIdentifier(arg2) && arg2.text === "src"
+      return arg2 !== undefined && expressionIsWiringHelperSrcRef(arg2)
     }
   }
 
@@ -461,7 +476,7 @@ function callExpressionIsUnboundAliasRegexOnSrc(
     const recv = call.expression.expression
     if (ts.isIdentifier(recv) && unboundCallNames.has(recv.text)) {
       const arg1 = call.arguments[1]
-      if (arg1 !== undefined && ts.isIdentifier(arg1) && arg1.text === "src") return true
+      if (arg1 !== undefined && expressionIsWiringHelperSrcRef(arg1)) return true
     }
   }
 
@@ -680,8 +695,9 @@ function findExportedHelper(sf: ts.SourceFile): ts.FunctionDeclaration | undefin
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-003-001-001: production helper may reference `src` only in the shared
- * hook check, the live module-guard `toMatch`, and the M4 empty-array `not.toMatch` (same as real helper body).
+ * FA-F42-R1-015-001-001-002-002-003-001-001 / 001-001-004: production helper may reference `src` (not
+ * `arguments[0]`) only in the shared hook check, the live module-guard `toMatch`, and the M4 empty-array
+ * `not.toMatch`; nested fn/arrow bodies are scanned (closure capture cannot hide `src`).
  */
 function isExpectSrcNotToMatchCall(expectCall: ts.CallExpression): boolean {
   if (!isExpectSrcCall(expectCall)) return false
@@ -719,7 +735,10 @@ function helperBodyUsesSrcOnlyOnAllowedSites(body: ts.Block, liveToMatchCall: ts
   let ok = true
   const walk = (n: ts.Node) => {
     if (!ok) return
-    if (isNestedFunctionBoundary(n)) return
+    if (elementAccessIsArgumentsZero(n)) {
+      ok = false
+      return
+    }
     if (ts.isIdentifier(n) && n.text === "src" && !srcIdentifierUseIsAllowed(n, liveToMatchCall)) {
       ok = false
       return
@@ -1255,6 +1274,45 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       {
         name: "destructure-test-then-call",
         body: `${header}  const { test } = RegExp.prototype\n  expect(test.call(LOOSE, src)).toBe(true)\n${footer}`,
+      },
+    ]
+    for (const { name, body } of mutants) {
+      expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
+    }
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001-004: nested src capture and arguments[0] bypass hardening", () => {
+    const header = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  const LOOSE = /afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+`
+    const footer = `
+}
+`
+    const mutants: { name: string; body: string }[] = [
+      {
+        name: "nested-arrow-capture-src",
+        body: `${header}  const getS = () => src\n  expect(LOOSE.test(getS())).toBe(true)\n${footer}`,
+      },
+      {
+        name: "nested-function-capture-src",
+        body: `${header}  function getS() { return src }\n  expect(LOOSE.test(getS())).toBe(true)\n${footer}`,
+      },
+      {
+        name: "arguments-zero-regex-test",
+        body: `${header}  expect(LOOSE.test(arguments[0])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "arguments-zero-computed-test",
+        body: `${header}  expect(LOOSE["test"](arguments[0])).toBe(true)\n${footer}`,
+      },
+      {
+        name: "nested-arrow-capture-arguments-zero",
+        body: `${header}  const getS = () => arguments[0]\n  expect(LOOSE.test(getS())).toBe(true)\n${footer}`,
       },
     ]
     for (const { name, body } of mutants) {
