@@ -27,7 +27,7 @@ No change to production retention code; only test harness bookkeeping.
 
 **Scope (investigated on tip `83f0f805`):** `uniq("f42x")` appears only in `f42-retention-deletion.e2e.emu.test.ts`. Other F42 emulator suites (`f42-r1-followup`, `f42-r2-followup`, `f42-retention-apply`) route firms through `newFirm()` / `firmFor()` or explicit `firms.push` and route auth users through `member()` / `uids.push`. The Next-side follow-up (`tests/f42-r1-followup-next.e2e.firestore.test.ts`) tracks `created` + `authUsers` in `afterAll`.
 
-**Guard (this PR):** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source.
+**Guard:** `functions/test/f42-e2e-cleanup.unit.test.ts` fails if either `firms.push(otherFirm)` or `uids.push(low.uid)` is removed from the deletion e2e source, or if `afterAll` does not call `deleteFirmScopedData(firms, uids)` (mutant **M4**: `deleteFirmScopedData([], [])` with pushes still present).
 
 ## RED / GREEN acceptance
 
@@ -41,7 +41,10 @@ No change to production retention code; only test harness bookkeeping.
 
 ### Mutants that must stay killed
 
-Removing either `firms.push(otherFirm)` or `uids.push(low.uid)` breaks the unit guard.
+| Mutant | Guard |
+| --- | --- |
+| Drop `firms.push(otherFirm)` or `uids.push(low.uid)` | Push-order regex assertions |
+| **M4** — `afterAll` calls `deleteFirmScopedData([], [])` (arrays never consumed) | `afterAll` must match `deleteFirmScopedData(firms, uids)`; literal empty-array call forbidden |
 
 ## Focused verification
 
