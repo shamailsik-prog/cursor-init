@@ -62,12 +62,6 @@ function collectExpectSrcToMatchGuardIds(node: ts.Node, guardName: string, out: 
   walk(node)
 }
 
-function expectSrcToMatchGuardArg(node: ts.Node): ts.Identifier | undefined {
-  const ids: ts.Identifier[] = []
-  collectExpectSrcToMatchGuardIds(node, WIRING_GUARD_CONST, ids)
-  return ids[0]
-}
-
 function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
   let forbidden = false
   const walk = (n: ts.Node) => {

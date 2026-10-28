@@ -71,6 +71,8 @@ No change to production retention code; only test harness bookkeeping.
 
 **Residual closed (ME REAUDIT_PR191 follow-up / PASS 9.9):** **FA-F42-R1-015-001-001-002-002** — comment / `toSatisfy` / `.test`+`toBe` evades on the meta pin and comment-only M4 delegation. Pin now requires exactly one TypeChecker-resolved `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)`, forbids bypass expectations and vacuous identifiers in the helper AST, strips comments before the tempered-identifier code pin, and AST-checks the M4 test via `metaPinM4TestUsesSharedHelper`; fixtures **MtoSatisfy**, **MaliasOutside**, and **M4CommentOnly** document the evasions.
 
+**Follow-up on PR #195 (ME REAUDIT_PR195):** **FA-F42-R1-015-001-001-002-002-001** — removed dead `expectSrcToMatchGuardArg` after refactor to `collectExpectSrcToMatchGuardIds` so Gates `eslint --max-warnings 0 functions` passes (no meta-pin weakening).
+
 ## Focused verification
 
 Unit guard (no emulators):
