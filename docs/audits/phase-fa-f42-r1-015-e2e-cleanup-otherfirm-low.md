@@ -84,6 +84,8 @@ No change to production retention code; only test harness bookkeeping.
 
 **Residual closed (ME REAUDIT_PR196 / PASS 9.8):** **FA-F42-R1-015-001-001-002-002-002-002** — live-guard pin still accepted runtime `&&`/`||`/`?:`, arrow/IIFE wrappers, and deferred callback placement while static-false try/`if`/`?:`/`&&` arms were rejected. `expectSrcToMatchGuardIsLiveTopLevelStatement` now requires the helper-body statement to be exactly `expect(src).toMatch(module AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` (expression statement whose expression is that call, with no intervening call/arrow/logical/ternary ancestors); fixtures **MshortCircuitDyn**, **MlogicalOrDyn**, **MternaryDyn**, **MarrowWrap**, **MdeferredCall** document the evasions.
 
+**Residual closed (ME REAUDIT_PR197 / PASS 10.0):** **FA-F42-R1-015-001-001-002-002-002-003** — exact ExpressionStatement pin still accepted **MreturnBefore** (and bare **MthrowBefore**) placing unreachable `expect(src).toMatch` after an earlier helper-body exit. `helperBodyHasExitBeforeStatement` rejects prior statements that unconditionally return/throw (including provably taken `if (true) return` arms); fixtures **MreturnBefore**, **MthrowBefore**, **MstaticIfReturnBefore** document the evasions.
+
 ## Focused verification
 
 Unit guard (no emulators):

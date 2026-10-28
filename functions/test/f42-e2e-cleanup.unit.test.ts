@@ -104,6 +104,43 @@ function expressionIsStaticallyTrue(expr: ts.Expression): boolean {
   return false
 }
 
+/** True when this block/statement ends control flow (return/throw) on all paths we can prove. */
+function nodeUnconditionallyExits(node: ts.Statement | ts.Block): boolean {
+  if (ts.isBlock(node)) {
+    for (const inner of node.statements) {
+      if (statementPreventsFollowingStatements(inner)) return true
+    }
+    return false
+  }
+  return statementPreventsFollowingStatements(node)
+}
+
+/**
+ * FA-F42-R1-015-001-001-002-002-002-003: prior helper-body statements must not make the required
+ * `expect(src).toMatch` unreachable (MreturnBefore / MthrowBefore and static-if variants).
+ */
+function statementPreventsFollowingStatements(stmt: ts.Statement): boolean {
+  if (ts.isReturnStatement(stmt) || ts.isThrowStatement(stmt)) return true
+  if (ts.isIfStatement(stmt)) {
+    if (expressionIsStaticallyTrue(stmt.expression)) {
+      return nodeUnconditionallyExits(stmt.thenStatement)
+    }
+    if (expressionIsStaticallyFalse(stmt.expression) && stmt.elseStatement !== undefined) {
+      return nodeUnconditionallyExits(stmt.elseStatement)
+    }
+  }
+  return false
+}
+
+function helperBodyHasExitBeforeStatement(body: ts.Block, target: ts.Statement): boolean {
+  const idx = body.statements.indexOf(target)
+  if (idx <= 0) return false
+  for (let i = 0; i < idx; i++) {
+    if (statementPreventsFollowingStatements(body.statements[i]!)) return true
+  }
+  return false
+}
+
 /**
  * FA-F42-R1-015-001-001-002-002-002 / FA-F42-R1-015-001-001-002-002-002-002: the helper must contain
  * exactly one live statement of the form `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` — not a
@@ -114,6 +151,7 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   const stmt = containingStatement(toMatchCall)
   if (!stmt || !statementDirectChildOfBlock(stmt, helperBody)) return false
   if (!ts.isExpressionStatement(stmt) || stmt.expression !== toMatchCall) return false
+  if (helperBodyHasExitBeforeStatement(helperBody, stmt)) return false
 
   let current: ts.Node | undefined = toMatchCall.parent
   while (current && current !== helperBody) {
@@ -729,6 +767,39 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
 }
 `
     expect(metaPinHelperUsesModuleGuard(deferredCallMutant, "deferred-call-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-002-003: MreturnBefore / MthrowBefore (early exit before toMatch evades statement-order pin)", () => {
+    const returnBeforeMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  return
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(returnBeforeMutant, "return-before-mutant.ts")).toBe(false)
+
+    const throwBeforeMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  throw new Error("skip guard")
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(throwBeforeMutant, "throw-before-mutant.ts")).toBe(false)
+
+    const staticIfReturnBeforeMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  if (true) return
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(staticIfReturnBeforeMutant, "static-if-return-mutant.ts")).toBe(false)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
