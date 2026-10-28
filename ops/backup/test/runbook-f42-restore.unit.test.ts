@@ -137,6 +137,7 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     expect(step5).toMatch(/legal_holds|Legal holds/i)
     expect(step5).toMatch(/hold/i)
     expect(step5).toMatch(/purge|purged/i)
+    expect(step5).toMatch(/do not purge|nothing .* is purged/i)
     expect(step2).toMatch(/Restore Firestore/i)
     expect(step3).toMatch(/\*\*Before traffic:\*\*/i)
     expect(step3).toMatch(/matter_members/)
@@ -171,10 +172,44 @@ describe("FA-F42-R1-014-001: restore runbook guard binds step order, before-traf
     expect(step5).toMatch(/legal_holds|Legal holds/i)
     expect(step5).toMatch(/hold/i)
     expect(step5).toMatch(/purge|purged/i)
+    expect(step5).toMatch(/do not purge|nothing .* is purged/i)
     expect(step3).toMatch(/Before the restored database serves any request/i)
     expect(step4).toMatch(/in_progress|completed/i)
 
     expect(section.indexOf("serves any request")).toBeLessThan(section.indexOf("in_progress"))
+  })
+})
+
+describe("FA-F42-R1-014-001-001-001: step-5 legal-hold polarity kills L5-invert", () => {
+  const step5Polarity = /do not purge|nothing .* is purged/i
+
+  it("L5-invert allow-purge prose still mentions hold/purge but fails polarity pin", () => {
+    const inverted =
+      "5. **Legal holds:** holds may be dropped; purge held matter content in step 4."
+    expect(inverted).toMatch(/legal_holds|Legal holds/i)
+    expect(inverted).toMatch(/hold/i)
+    expect(inverted).toMatch(/purge|purged/i)
+    expect(inverted).not.toMatch(step5Polarity)
+  })
+
+  it("backup and retention step 5 prose satisfy the polarity pin", () => {
+    const backup = stripHtmlComments(
+      sectionAfterHeading(
+        readFileSync(BACKUP_RUNBOOK, "utf8"),
+        /^## Post-restore: tombstones and completed deletions/m,
+      ),
+    )
+    const retention = stripHtmlComments(
+      sectionAfterHeading(
+        readFileSync(RETENTION_RUNBOOK, "utf8"),
+        /^## Restoring a backup \(FA-F42-R1-014/m,
+      ),
+    )
+    for (const section of [backup, retention]) {
+      const steps = numberedStepOffsets(section)
+      const step5 = sliceStep(section, steps, 5)
+      expect(step5).toMatch(step5Polarity)
+    }
   })
 })
 
