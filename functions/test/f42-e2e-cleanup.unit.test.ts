@@ -125,8 +125,18 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
       /export function assertF42DeletionE2EAfterAllWiring[\s\S]*?\n\}/,
     )?.[0]
     expect(helperBlock, "shared wiring helper must use tempered guard constant").toBeTruthy()
-    expect(helperBlock!).toContain("AFTER_ALL_DELETE_FIRMS_UIDS_GUARD")
+    expect(helperBlock!).toMatch(/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
+    expect(helperBlock!).not.toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
     expect(helperBlock!).not.toMatch(/afterAll\[\\s\\S\]\*\?deleteFirmScopedData/)
+  })
+
+  it("FA-F42-R1-015-001-001-002-001: MvacuousConstInHelper (vacuous guard const in helper fails tightened meta pin)", () => {
+    const mutantHelper = `export function assertF42DeletionE2EAfterAllWiring(src: string): void {
+  expect(src).toMatch(VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}`
+    expect(mutantHelper).toContain("AFTER_ALL_DELETE_FIRMS_UIDS_GUARD")
+    expect(mutantHelper).not.toMatch(/\bAFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
+    expect(mutantHelper).toMatch(/\bVACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD\b/)
   })
 
   it("FA-F42-R1-015-001-001: Mmove (cleanup only in it.skip) fails the afterAll hook guard", () => {
