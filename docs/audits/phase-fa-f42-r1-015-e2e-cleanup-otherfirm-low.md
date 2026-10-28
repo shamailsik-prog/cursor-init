@@ -58,6 +58,8 @@ No change to production retention code; only test harness bookkeeping.
 | **MtoSatisfy** — helper keeps `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` only in a comment and uses `expect(/vacuous/.test(src)).toBe(true)` (or `expect(src).toSatisfy`) instead of `expect(src).toMatch(module export)` | Meta pin **FA-F42-R1-015-001-001-002-002**: exactly one `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` with TypeChecker resolve; forbids `toSatisfy` and `.test`/`toBe` guard bypasses; comment-stripped code must still contain the tempered identifier; dedicated fixture test |
 | **MaliasOutside** — vacuous `toMatch(VACUOUS_…)` (or alias) with comment naming `AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` | Same pin as **MtoSatisfy**; AST forbids `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` in helper; dedicated fixture test |
 | **M4CommentOnly** — M4 `it` delegates only in a comment while inlining vacuous `expect(src).toMatch` | `metaPinM4TestUsesSharedHelper`: AST requires one `assertF42DeletionE2EAfterAllWiring` call and no inline `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)`; fixture in **FA-F42-R1-015-001-001-002-002** |
+| **MtrySwallow** — wrap the module-guard `expect(src).toMatch` in try/catch so failures are swallowed while the CallExpression pin still matches | Meta pin **FA-F42-R1-015-001-001-002-002-002**: live top-level helper-body statement + no try/catch ancestor; fixture **MtrySwallow** |
+| **MdeadIf** — place the module-guard `toMatch` under `if (false)` or other static dead branch while keeping a matching CallExpression | Same pin as **MtrySwallow**; fixture **MdeadIf** |
 
 **Residual closed (ME REAUDIT_PR189):** **FA-F42-R1-015-001-001-001-001-001** — pre-#189 AST walked any nested `afterAll`, so **MdescribeSkip** survived. Guard now scans only top-level `ExpressionStatement` `afterAll` calls and requires a single matching hook body.
 
@@ -72,6 +74,8 @@ No change to production retention code; only test harness bookkeeping.
 **Residual closed (ME REAUDIT_PR191 follow-up / PASS 9.9):** **FA-F42-R1-015-001-001-002-002** — comment / `toSatisfy` / `.test`+`toBe` evades on the meta pin and comment-only M4 delegation. Pin now requires exactly one TypeChecker-resolved `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)`, forbids bypass expectations and vacuous identifiers in the helper AST, strips comments before the tempered-identifier code pin, and AST-checks the M4 test via `metaPinM4TestUsesSharedHelper`; fixtures **MtoSatisfy**, **MaliasOutside**, and **M4CommentOnly** document the evasions.
 
 **Follow-up on PR #195 (ME REAUDIT_PR195):** **FA-F42-R1-015-001-001-002-002-001** — removed dead `expectSrcToMatchGuardArg` after refactor to `collectExpectSrcToMatchGuardIds` so Gates `eslint --max-warnings 0 functions` passes (no meta-pin weakening).
+
+**Residual closed (ME REAUDIT_PR195 / PASS 9.7):** **FA-F42-R1-015-001-001-002-002-002** — CallExpression-only meta pin still accepted **MtrySwallow** (try/catch around `expect(src).toMatch`) and **MdeadIf** (`if (false)` / dead-branch placement) while TypeChecker and token pins passed. `metaPinHelperUsesModuleGuard` now requires exactly one resolved `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` whose containing statement is a direct child of the helper body and is not under try/catch, static-false branches, `&&` short-circuit, or ternary dead arms; fixtures **MtrySwallow** / **MdeadIf** document the evasions.
 
 ## Focused verification
 
