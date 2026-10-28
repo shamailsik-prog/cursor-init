@@ -105,14 +105,30 @@ function expressionIsStaticallyTrue(expr: ts.Expression): boolean {
 }
 
 /**
- * FA-F42-R1-015-001-001-002-002-002: `expect(src).toMatch(module guard)` must sit in a helper-body
- * top-level statement that always runs (reject try/catch swallow, `if (false)`, and similar dead branches).
+ * FA-F42-R1-015-001-001-002-002-002 / FA-F42-R1-015-001-001-002-002-002-002: the helper must contain
+ * exactly one live statement of the form `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` — not a
+ * weaker shape that still embeds that call (runtime `&&`/`||`/`?:`, arrow/IIFE wrappers, deferred callbacks,
+ * try/catch swallow, or static-false dead branches).
  */
 function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMatchCall: ts.CallExpression): boolean {
   const stmt = containingStatement(toMatchCall)
   if (!stmt || !statementDirectChildOfBlock(stmt, helperBody)) return false
+  if (!ts.isExpressionStatement(stmt) || stmt.expression !== toMatchCall) return false
 
-  let current: ts.Node | undefined = toMatchCall
+  let current: ts.Node | undefined = toMatchCall.parent
+  while (current && current !== helperBody) {
+    if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) return false
+    if (ts.isCallExpression(current)) return false
+    if (ts.isBinaryExpression(current)) {
+      const op = current.operatorToken.kind
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken) return false
+    }
+    if (ts.isConditionalExpression(current)) return false
+
+    current = current.parent
+  }
+
+  current = toMatchCall
   while (current && current !== helperBody) {
     if (ts.isTryStatement(current)) {
       if (
@@ -665,6 +681,54 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
 }
 `
     expect(metaPinHelperUsesModuleGuard(deadIfMutant, "dead-if-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-002-002: MshortCircuitDyn / MarrowWrap / MdeferredCall (non-exact live statement evades static-only reachability pin)", () => {
+    const shortCircuitDynMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  process.env.F42_GUARD && expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(shortCircuitDynMutant, "short-circuit-dyn-mutant.ts")).toBe(false)
+
+    const logicalOrDynMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  process.env.F42_GUARD || expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(logicalOrDynMutant, "logical-or-dyn-mutant.ts")).toBe(false)
+
+    const ternaryDynMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  process.env.F42_GUARD ? expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD) : null
+}
+`
+    expect(metaPinHelperUsesModuleGuard(ternaryDynMutant, "ternary-dyn-mutant.ts")).toBe(false)
+
+    const arrowWrapMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  ;(() => expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD))()
+}
+`
+    expect(metaPinHelperUsesModuleGuard(arrowWrapMutant, "arrow-wrap-mutant.ts")).toBe(false)
+
+    const deferredCallMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  queueMicrotask(() => expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD))
+}
+`
+    expect(metaPinHelperUsesModuleGuard(deferredCallMutant, "deferred-call-mutant.ts")).toBe(false)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
