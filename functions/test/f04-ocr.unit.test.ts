@@ -4,7 +4,8 @@ import path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { logger } from "firebase-functions"
 import { handlerFor } from "../src/p2/registry"
 import { adminDb } from "../src/admin"
 import { aggregateClassification, isCompleteLegacyOcrJob, labelAtPublish, OCR_JOB_TYPE } from "../src/p2/ocrJob"
@@ -322,6 +323,83 @@ describe.skipIf(!EMULATORS)("FA-F04-008-001: ocr.admit reason text_truncated (em
         (entry) => entry.get("action") === "ocr.admit" && entry.get("reason") === "text_truncated"
       )
     ).toBe(false)
+  })
+})
+
+describe.skipIf(!EMULATORS)("FA-F04-008-002: ocr.text_truncated structured log (emulator)", () => {
+  const contentHash = "c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff03"
+
+  afterEach(() => {
+    delete ocrTestSeam.engine
+    delete ocrTestSeam.timeoutMs
+    vi.restoreAllMocks()
+  })
+
+  const loggedInfo = (spy: { mock: { calls: unknown[][] } }, message: string) =>
+    spy.mock.calls.filter(([m]) => m === message).map(([, data]) => data)
+
+  it("FA-F04-008-002: admission logs ocr.text_truncated with ids only when UTF-8 cap applies", async () => {
+    const firmId = uniq("f04008002-firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "FA-F04-008-002", plan: "internal" })
+    const documentId = uniq("f04008002-doc")
+    const operationId = uniq("f04008002-op")
+    const legacyJobId = uniq("f04008002-legacy")
+    const ch = "\u{FBAB}"
+    const bytes = Buffer.from(ch.repeat(400_000), "utf8")
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined)
+
+    const result = await callP1Ocr({
+      firmId,
+      actorId: "system",
+      matterId: null,
+      jobId: operationId,
+      operationId,
+      legacyJobId,
+      documentId,
+      contentHash,
+      classification: "internal",
+      sources: ["internal"],
+      bytes,
+      mimeType: "text/plain",
+    })
+
+    expect(result.outcome).toBe("ok")
+    expect(result.truncated).toBe(true)
+    expect(loggedInfo(info, "ocr.text_truncated")).toEqual([
+      { firmId, operationId, documentId, legacyJobId },
+    ])
+    for (const payload of loggedInfo(info, "ocr.text_truncated")) {
+      expect(payload).not.toHaveProperty("text")
+      expect(Object.keys(payload as object).sort()).toEqual(["documentId", "firmId", "legacyJobId", "operationId"])
+    }
+  })
+
+  it("FA-F04-008-002: admission does not log ocr.text_truncated when UTF-8 cap does not apply", async () => {
+    const firmId = uniq("f04008002001-firm")
+    await adminDb().collection("firms").doc(firmId).set({ name: "FA-F04-008-002-under", plan: "internal" })
+    const documentId = uniq("f04008002001-doc")
+    const operationId = uniq("f04008002001-op")
+    const bytes = Buffer.from(TEXT, "utf8")
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined)
+
+    const result = await callP1Ocr({
+      firmId,
+      actorId: "system",
+      matterId: null,
+      jobId: operationId,
+      operationId,
+      legacyJobId: uniq("f04008002001-legacy"),
+      documentId,
+      contentHash: "d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff04",
+      classification: "internal",
+      sources: ["internal"],
+      bytes,
+      mimeType: "text/plain",
+    })
+
+    expect(result.outcome).toBe("ok")
+    expect(result.truncated).toBe(false)
+    expect(loggedInfo(info, "ocr.text_truncated")).toEqual([])
   })
 })
 
