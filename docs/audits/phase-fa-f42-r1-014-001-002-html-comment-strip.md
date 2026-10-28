@@ -9,11 +9,18 @@ Finding: issue #30 **FA-F42-R1-014-001-002** [LOW] (ME REAUDIT_PR181 residual **
 
 ## Correction
 
-- **Test guard:** `stripHtmlComments()` removes `<!-- ... -->` (including multiline) from each F42 restore section body before `numberedStepOffsets`, step slices, and before-traffic / NOT DEMONSTRATED index pins on:
+- **Test guard:** `stripHtmlComments()` index-scans for `<!--`, drops through `-->` when closed, or through end-of-string when unclosed (CommonMark comment-to-EOF), with no regex multi-character replace (avoids CodeQL `js/incomplete-multi-character-sanitization` on head `1e42e4eb`). Applied to each F42 restore section body before `numberedStepOffsets`, step slices, and before-traffic / NOT DEMONSTRATED index pins on:
   - `docs/runbooks/backup-restore.md` — Post-restore section
   - `docs/runbooks/retention-deletion.md` — Restoring a backup section
 - **Runbook prose:** unchanged; existing #181/#182 pins (step order, before-traffic, NOT DEMONSTRATED, DELETION_TRAIL_COLLECTIONS step-1 export list, step-5 legal_holds/hold/purge) remain on stripped text.
-- **Synthetic M3c pin:** `describe("FA-F42-R1-014-001-002")` asserts comment-hidden gates do not satisfy step-body matching after strip.
+- **Synthetic pins:** `describe("FA-F42-R1-014-001-002")` covers closed **M3c** and unclosed **M3c-unclosed** (FA-F42-R1-014-001-002-002).
+
+## Follow-up (ME REAUDIT_PR183)
+
+| Child | Issue | Fix |
+| --- | --- | --- |
+| **FA-F42-R1-014-001-002-001** | CodeQL high on regex stripper | Index-scan `stripHtmlComments` (no `replace(/<!--…-->/g)`) |
+| **FA-F42-R1-014-001-002-002** | Unclosed `<!--` not stripped | Drop from open through EOF when `-->` absent |
 
 ## RED / GREEN acceptance
 
@@ -28,6 +35,7 @@ Finding: issue #30 **FA-F42-R1-014-001-002** [LOW] (ME REAUDIT_PR181 residual **
 | Id | If the mutant survives |
 | --- | --- |
 | **M3c** | Step 3 prose routes traffic while **Before traffic:** / `matter_members` live only in a comment; step-3 `toMatch` or stripped `indexOf("**Before traffic:**")` vs `in_progress` fails |
+| **M3c-unclosed** | Gate only after unclosed `<!--` through EOF; strip removes tail; same before-traffic pins fail |
 
 ## Focused verification
 

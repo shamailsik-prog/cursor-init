@@ -28,7 +28,24 @@ function sectionAfterHeading(markdown: string, heading: RegExp): string {
 
 /** Remove HTML comments so step pins cannot be satisfied by comment-hidden tokens (FA-F42-R1-014-001-002 / M3c). */
 function stripHtmlComments(markdown: string): string {
-  return markdown.replace(/<!--[\s\S]*?-->/g, "")
+  const open = "<!--"
+  const close = "-->"
+  let out = ""
+  let cursor = 0
+  while (cursor < markdown.length) {
+    const openAt = markdown.indexOf(open, cursor)
+    if (openAt === -1) {
+      out += markdown.slice(cursor)
+      break
+    }
+    out += markdown.slice(cursor, openAt)
+    const closeAt = markdown.indexOf(close, openAt + open.length)
+    if (closeAt === -1) {
+      break
+    }
+    cursor = closeAt + close.length
+  }
+  return out
 }
 
 /** Numbered steps 1..5 in document order (kills step-order mutants). */
@@ -184,5 +201,25 @@ describe("FA-F42-R1-014-001-002: step pins ignore HTML comment hiding (M3c)", ()
     expect(step3).not.toContain("matter_members")
     expect(step4).toMatch(/in_progress|completed/i)
     expect(mutantSection.indexOf("**Before traffic:**")).toBe(-1)
+  })
+
+  it("stripHtmlComments removes unclosed comment through EOF (M3c-unclosed)", () => {
+    const withUnclosed = "3. Route traffic now.\n<!-- **Before traffic:** matter_members"
+    const stripped = stripHtmlComments(withUnclosed)
+    expect(stripped).toBe("3. Route traffic now.\n")
+    expect(stripped).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(stripped).not.toContain("matter_members")
+  })
+
+  it("M3c-unclosed step 3 cannot satisfy before-traffic pins after comment strip", () => {
+    const mutantSection = stripHtmlComments(`1. Export trail
+2. Restore Firestore
+3. Route traffic to the restored database now. <!-- **Before traffic:** matter_members`)
+    const steps = numberedStepOffsets(mutantSection, 3)
+    const step3 = sliceStep(mutantSection, steps, 3)
+    expect(step3).not.toMatch(/\*\*Before traffic:\*\*/i)
+    expect(step3).not.toContain("matter_members")
+    expect(mutantSection.indexOf("**Before traffic:**")).toBe(-1)
+    expect(mutantSection).not.toContain("in_progress")
   })
 })
