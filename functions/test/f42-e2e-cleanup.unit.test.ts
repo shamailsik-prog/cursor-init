@@ -218,10 +218,21 @@ function expectSrcToMatchGuardIsLiveTopLevelStatement(helperBody: ts.Block, toMa
   return true
 }
 
+/** FA-F42-R1-015-001-001-002-002-003: any `<expr>.test(src)` guard bypass, not only fixed receivers. */
+function callExpressionIsRegexTestOnSrc(call: ts.CallExpression): boolean {
+  if (!ts.isPropertyAccessExpression(call.expression)) return false
+  if (call.expression.name.text !== "test") return false
+  const arg0 = call.arguments[0]
+  return arg0 !== undefined && ts.isIdentifier(arg0) && arg0.text === "src"
+}
+
 function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
   let forbidden = false
   const walk = (n: ts.Node) => {
     if (ts.isCallExpression(n)) {
+      if (callExpressionIsRegexTestOnSrc(n)) {
+        forbidden = true
+      }
       if (
         ts.isPropertyAccessExpression(n.expression) &&
         n.expression.name.text === "toSatisfy" &&
@@ -229,40 +240,6 @@ function helperHasCommentOrToSatisfyGuardBypass(body: ts.Block): boolean {
         isExpectSrcCall(n.expression.expression)
       ) {
         forbidden = true
-      }
-      if (
-        ts.isPropertyAccessExpression(n.expression) &&
-        n.expression.name.text === "toBe" &&
-        ts.isCallExpression(n.expression.expression) &&
-        ts.isIdentifier(n.expression.expression.expression) &&
-        n.expression.expression.expression.text === "expect"
-      ) {
-        const arg0 = n.expression.expression.arguments[0]
-        if (
-          arg0 &&
-          ts.isCallExpression(arg0) &&
-          ts.isPropertyAccessExpression(arg0.expression) &&
-          arg0.expression.name.text === "test"
-        ) {
-          const testReceiver = arg0.expression.expression
-          if (testReceiver && ts.isIdentifier(testReceiver) && testReceiver.text === "src") {
-            forbidden = true
-          }
-          if (
-            testReceiver &&
-            ts.isRegularExpressionLiteral(testReceiver) &&
-            /afterAll/.test(testReceiver.text)
-          ) {
-            forbidden = true
-          }
-          if (
-            testReceiver &&
-            ts.isIdentifier(testReceiver) &&
-            testReceiver.text === "VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
-          ) {
-            forbidden = true
-          }
-        }
       }
     }
     ts.forEachChild(n, walk)
@@ -796,6 +773,20 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
 }
 `
     expect(metaPinHelperUsesModuleGuard(staticIfReturnBeforeMutant, "static-if-return-mutant.ts")).toBe(false)
+    expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003: MlooseConst (local regex + LOOSE.test(src) evades receiver-specific .test meta pin)", () => {
+    const looseConstMutant = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  const LOOSE = /afterAll[\\s\\S]*?deleteFirmScopedData\\s*\\(\\s*firms\\s*,\\s*uids\\s*\\)/
+  expect(LOOSE.test(src)).toBe(true)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(looseConstMutant, "loose-const-mutant.ts")).toBe(false)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 

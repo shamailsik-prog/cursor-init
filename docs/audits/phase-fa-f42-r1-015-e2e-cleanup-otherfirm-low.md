@@ -64,6 +64,7 @@ No change to production retention code; only test harness bookkeeping.
 | **MshortCircuitDyn** / **MlogicalOrDyn** / **MternaryDyn** — runtime `&&` / `\|\|` / `?:` wraps `expect(src).toMatch(module export)` in a helper-body statement that still contains the call | Meta pin **FA-F42-R1-015-001-001-002-002-002-002**: statement must be exactly `expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)`; fixtures in **FA-F42-R1-015-001-001-002-002-002-002** |
 | **MarrowWrap** — IIFE / arrow wrapper around the module-guard `toMatch` | Same pin as **MshortCircuitDyn**; fixture **MarrowWrap** |
 | **MdeferredCall** — schedule `expect(src).toMatch` inside a callback (`queueMicrotask`, etc.) | Same pin as **MshortCircuitDyn**; fixture **MdeferredCall** |
+| **MlooseConst** — keep live `expect(src).toMatch(module export)` but add vacuous check via `const LOOSE = /afterAll…/` and `expect(LOOSE.test(src)).toBe(true)` | Meta pin **FA-F42-R1-015-001-001-002-002-003**: AST forbids any helper-body CallExpression `<expr>.test(src)` (receiver-agnostic); fixture **MlooseConst** |
 
 **Residual closed (ME REAUDIT_PR189):** **FA-F42-R1-015-001-001-001-001-001** — pre-#189 AST walked any nested `afterAll`, so **MdescribeSkip** survived. Guard now scans only top-level `ExpressionStatement` `afterAll` calls and requires a single matching hook body.
 
@@ -86,6 +87,8 @@ No change to production retention code; only test harness bookkeeping.
 **Residual closed (ME REAUDIT_PR196 / PASS 9.8):** **FA-F42-R1-015-001-001-002-002-002-002** — live-guard pin still accepted runtime `&&`/`||`/`?:`, arrow/IIFE wrappers, and deferred callback placement while static-false try/`if`/`?:`/`&&` arms were rejected. `expectSrcToMatchGuardIsLiveTopLevelStatement` now requires the helper-body statement to be exactly `expect(src).toMatch(module AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)` (expression statement whose expression is that call, with no intervening call/arrow/logical/ternary ancestors); fixtures **MshortCircuitDyn**, **MlogicalOrDyn**, **MternaryDyn**, **MarrowWrap**, **MdeferredCall** document the evasions.
 
 **Residual closed (ME REAUDIT_PR197 / PASS 10.0):** **FA-F42-R1-015-001-001-002-002-002-003** — exact ExpressionStatement pin still accepted **MreturnBefore** (and bare **MthrowBefore**) placing unreachable `expect(src).toMatch` after an earlier helper-body exit. `helperBodyHasExitBeforeStatement` rejects prior statements that unconditionally return/throw (including provably taken `if (true) return` arms); fixtures **MreturnBefore**, **MthrowBefore**, **MstaticIfReturnBefore** document the evasions.
+
+**Residual closed (ME REAUDIT_PR195 / #199 follow-up):** **FA-F42-R1-015-001-001-002-002-003** — `.test`/`toBe` bypass pin listed only `src`, inline `afterAll` regex literals, and `VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD` as forbidden `.test` receivers, so **MlooseConst** (`expect(LOOSE.test(src)).toBe(true)` with a local vacuous binding) survived alongside a live module-guard `toMatch`. `callExpressionIsRegexTestOnSrc` rejects any helper-body `<expr>.test(src)` CallExpression; fixture **MlooseConst** documents the evasion.
 
 ## Focused verification
 
