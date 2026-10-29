@@ -92,6 +92,8 @@ type Request = {
   expected: string[]
   acked: Record<string, string>
   groupSize?: number
+  /** FA-F42-R1-002-001-003: trail document ids recorded in prepare before parallel purge jobs run. */
+  legacyTrailDocumentIds?: string[]
 }
 
 /** The request this job serves: of the job's firm and approved. A finished request returns null (nothing to do). */
@@ -297,6 +299,13 @@ async function prepareSteps(ctx: JobContext<PreparePayload>, req: Request): Prom
   }
 
   const groups = purgeGroups(req.plan, req.expected, typeof req.groupSize === "number" ? req.groupSize : DEFAULT_GROUP_SIZE)
+  if (req.plan[OUTPUTS_KEY] === "purge") {
+    const legacyTrailDocumentIds = await collectLegacyTrailDocumentIds(firmId, req.matterId)
+    await step(ctx as JobContext<unknown>, "legacy-trail-ids", async (tx) => {
+      await assertNoHold(tx, firmId, req.matterId)
+      tx.update(requestRefOf(requestId), { legacyTrailDocumentIds })
+    })
+  }
   if (groups.length > 0) {
     await step(ctx as JobContext<unknown>, "enqueue", async (tx) => {
       await assertNoHold(tx, firmId, req.matterId)
@@ -577,6 +586,63 @@ async function purgeLegacyOutputsForDocIdBatch(
  * early (FA-F42-R1-002-001-003). Each is keyed by `matterId`; no firm-wide null-matter sweep.
  */
 
+/** Max distinct trail ids recorded on the request in prepare (parallel purge groups may delete trail rows before g0 reads them). */
+const LEGACY_TRAIL_MAX = 10_000
+
+const JOB_DOCUMENT_REF = /^documents\/([A-Za-z0-9_-]{1,128})$/
+
+/** A P2 job row's document id: top-level, payload, or a sole `documents/{id}` input ref. */
+function documentIdFromJobRow(data: DocumentData): string | null {
+  const top: unknown = data.documentId
+  if (typeof top === "string" && top !== "" && SAFE_ID.test(top)) return top
+  const payload: unknown = data.payload
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    const id: unknown = (payload as Record<string, unknown>).documentId
+    if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) return id
+  }
+  const refs: unknown = data.inputRefs
+  if (Array.isArray(refs)) {
+    for (const ref of refs) {
+      if (typeof ref !== "string") continue
+      const m = JOB_DOCUMENT_REF.exec(ref)
+      if (m !== null) return m[1]
+    }
+  }
+  return null
+}
+
+/** Matter-scoped trail ids for legacy output discovery, read once in prepare before purge jobs are enqueued. */
+async function collectLegacyTrailDocumentIds(firmId: string, matterId: string): Promise<string[]> {
+  const seen = new Set<string>()
+  const note = (id: string): void => {
+    seen.add(id)
+  }
+  const noopFlush = (): string[] | null => null
+  for await (const _batch of versionTrailDocumentIdBatches(firmId, matterId, note, noopFlush, () => false)) {
+    /* drain generator; ids accumulate in seen via note */
+  }
+  for (const collection of ["ocr_texts", "p1_ocr_operations"] as const) {
+    const snap = await adminDb()
+      .collection(collection)
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .limit(DOCUMENT_ID_PAGE)
+      .select("documentId")
+      .get()
+    for (const row of snap.docs) {
+      const id: unknown = row.data().documentId
+      if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) note(id)
+    }
+  }
+  const jobs = await adminDb().collection("jobs").where("firmId", "==", firmId).where("matterId", "==", matterId).limit(DOCUMENT_ID_PAGE).get()
+  for (const row of jobs.docs) {
+    const id = documentIdFromJobRow(row.data())
+    if (id !== null) note(id)
+  }
+  if (seen.size > LEGACY_TRAIL_MAX) throw overLimit()
+  return [...seen].sort()
+}
+
 /** Pages `document_versions` with stable pagination (same as FA-F42-R1-002-001). */
 async function* versionTrailDocumentIdBatches(
   firmId: string,
@@ -630,7 +696,7 @@ async function* matterTrailDocumentIdBatches(
   for await (const batch of versionTrailDocumentIdBatches(firmId, matterId, note, flush, () => pending.length >= LEGACY_DOCUMENT_BATCH)) {
     yield batch
   }
-  for (const collection of ["ocr_texts", "p1_ocr_operations", "jobs"] as const) {
+  for (const collection of ["ocr_texts", "p1_ocr_operations"] as const) {
     const snap = await adminDb()
       .collection(collection)
       .where("firmId", "==", firmId)
@@ -646,6 +712,21 @@ async function* matterTrailDocumentIdBatches(
         const batch = flush()
         if (batch !== null) yield { batch, stepPrefix: `legacy-trail-${collection}` }
       }
+    }
+  }
+  const jobsSnap = await adminDb()
+    .collection("jobs")
+    .where("firmId", "==", firmId)
+    .where("matterId", "==", matterId)
+    .limit(DOCUMENT_ID_PAGE)
+    .get()
+  for (const row of jobsSnap.docs) {
+    const id = documentIdFromJobRow(row.data())
+    if (id === null) continue
+    note(id)
+    if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+      const batch = flush()
+      if (batch !== null) yield { batch, stepPrefix: "legacy-trail-jobs" }
     }
   }
   const tail = flush()
@@ -689,6 +770,15 @@ async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, c
     const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, stepPrefix)
     if (next === null) return null
     used = next
+  }
+  const snapshot = req.legacyTrailDocumentIds
+  if (snapshot !== undefined && snapshot.length > 0) {
+    for (let b = 0; b < snapshot.length; b += LEGACY_DOCUMENT_BATCH) {
+      const batch = snapshot.slice(b, b + LEGACY_DOCUMENT_BATCH)
+      const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, "legacy-trail-prepare")
+      if (next === null) return null
+      used = next
+    }
   }
   return used
 }

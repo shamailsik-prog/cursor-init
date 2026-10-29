@@ -18,12 +18,14 @@ In `functions/src/retention/saga.ts`, `purgeLegacyOutputs` after the matter's li
 
 Each query is `firmId` + `matterId` (no loose-vault or orphan sweep). Batches feed the same `purgeLegacyOutputsForDocIdBatch` + `legacyOf` filter as before.
 
+**FA-F42-R1-002-001-003-002 (HIGH, Monitor YES 2026-10-29):** Parallel purge groups enqueue concurrently; a non-g0 group can purge `firestore:jobs` before g0 runs `purgeLegacyOutputs`, so a live jobs trail read at document purge time can be empty. **Fix:** in `prepareSteps`, before enqueue, `collectLegacyTrailDocumentIds` snapshots matter-scoped trail ids onto `deletion_requests/{requestId}.legacyTrailDocumentIds`; g0 also purges from that snapshot after live trail paging. Jobs rows use `documentIdFromJobRow` (top-level, payload, or `documents/{id}` input ref).
+
 ## RED / GREEN acceptance
 
 | Step | Evidence | Expected |
 | --- | --- | --- |
 | RED | Open **002-001-003**; saga at #209 head | Absent-`matterId` legacy row survives when docs + versions gone and no trail |
-| GREEN | `functions/test/f42-r1-followup.e2e.emu.test.ts` — `FA-F42-R1-002-001-003` | Legacy row purged via `ocr_texts` trail |
+| GREEN | `functions/test/f42-r1-followup.e2e.emu.test.ts` — `FA-F42-R1-002-001-003` | Absent-`matterId` legacy row purged via matter `jobs` trail |
 | GREEN | Same file — `FA-F42-R1-002`, `002-001`, P3, P4 | Unchanged |
 
 ## Focused verification
