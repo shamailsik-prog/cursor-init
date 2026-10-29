@@ -47,7 +47,7 @@ npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 
 
 | ID | Note |
 | --- | --- |
-| **FA-F42-R1-002-001-003** | LOW — absent-field `matterId` query parity (open) |
+| **FA-F42-R1-002-001-003** | LOW — absent-field `matterId` with pre-gone docs/versions (closed at PARTIAL via matter trails) |
 | **FA-F42-R1-002-001-004** | LOW — mutant-proof tests (open) |
 | **FA-F42-R1-002-001-005** | INFO (open) |
 | — | Legacy rows whose documents and `document_versions` for the matter are both gone before g0 are not purged by this slice; intentional after **001-001** |

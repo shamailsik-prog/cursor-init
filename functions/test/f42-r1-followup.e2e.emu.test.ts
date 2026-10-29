@@ -365,6 +365,35 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("committee_outputs").doc(`${f.matterId}-keep-other`).get()).exists).toBe(true)
   })
 
+  it("FA-F42-R1-002-001-003: absent-matterId legacy output is purged when documents and versions are gone but a matter job still names the document", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-trail-only`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-absent-trail`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} legacy absent field no matterId key`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    await db.collection("jobs").doc(`${docId}-job-trail`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: docId,
+      jobType: "ocr",
+      classification: "internal",
+      engine: "p2",
+      status: "done",
+    })
+    await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-absent-trail`).get()).exists).toBe(false)
+  })
+
   it("FA-F42-R1-002-001-001 P3: a firm orphan legacy output is not purged or counted on another matter's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
