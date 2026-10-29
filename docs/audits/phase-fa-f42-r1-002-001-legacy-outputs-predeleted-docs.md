@@ -13,16 +13,18 @@ In `functions/src/retention/saga.ts`, `purgeLegacyOutputs` now:
 
 1. Keeps the existing **`documents`** id paging and batched `array-contains-any` purge.
 2. **FA-F42-R1-002-001:** Pages the matter's **`document_versions`** rows, batches distinct `documentId` values (≤30), and runs the same legacy purge (covers document rows removed early while versions still name the matter).
-3. **Firm sweep:** Pages firm `committee_outputs` with `matterId == null`, and purges legacy rows whose linked documents are not live and are not claimed by another matter's live `documents` or `document_versions` row (closes the fully-gone id case without touching firm-level rows with empty `documentIds`).
 
-Composite index added: `committee_outputs` — `firmId` + `matterId` (sweep query).
+**FA-F42-R1-002-001-001 (ME fix-forward):** Removed the interim firm-wide sweep of null-`matterId` rows. Matter deletion must not delete or attribute firm orphans that are only unreadable/unclaimed; purge stays limited to ids proven on the matter via `documents` or `document_versions`.
+
+Firm-wide orphan cleanup, if needed, belongs in a separate firm-level job with its own acknowledgement (out of scope here).
 
 ## RED / GREEN acceptance
 
 | Step | Evidence | Expected |
 | --- | --- | --- |
-| RED | Issue #30 FA-F42-R1-002-001; saga before this change | Legacy output with pre-deleted `documents` rows survives g0; `committee_outputs` ack may still complete |
-| GREEN | `functions/test/f42-r1-followup.e2e.emu.test.ts` — `FA-F42-R1-002-001` (2 cases) | Legacy row purged via versions and via firm sweep; other-matter legacy row kept |
+| RED | Issue #30 FA-F42-R1-002-001; saga before this change | Legacy output with pre-deleted `documents` rows survives g0 |
+| GREEN | `functions/test/f42-r1-followup.e2e.emu.test.ts` — `FA-F42-R1-002-001` (document_versions) | Matter-tied legacy row purged; other-matter legacy row kept |
+| GREEN | Same file — `FA-F42-R1-002-001-001` P3 / P4 | Unrelated orphan and >3 loose-vault legacy row not purged on matter deletion |
 | GREEN | Existing `FA-F42-R1-002` emulator and rules/Next pins | Unchanged behaviour for live-document legacy paths |
 
 ## Focused verification
@@ -30,9 +32,6 @@ Composite index added: `committee_outputs` — `firmId` + `matterId` (sweep quer
 ```bash
 npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 \
   "npm --prefix functions test -- --run f42-r1-followup.e2e.emu.test.ts -t 'FA-F42-R1-002'"
-
-npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 \
-  "npm --prefix functions test -- --run f42-r1-followup.e2e.emu.test.ts -t 'FA-F42-R1-002-001'"
 ```
 
 ## Release labels (honest)
@@ -42,10 +41,13 @@ npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 
 | backend_real | true |
 | frontend_real | false |
 | transport_stub | true |
-| classification | COMPLETE (saga purge path for this residual; read refusal unchanged from parent finding) |
+| classification | PARTIAL (legacy purge via matter `documents` + `document_versions` ids only; read refusal unchanged; fully-gone ids with no version trail remain a separate firm-level concern) |
 
 ## Residuals
 
 | ID | Note |
 | --- | --- |
-| — | None identified for this slice. Firm sweep may remove firm-wide orphaned legacy rows with no live document/version anywhere when any matter deletion runs; acceptable garbage collection per re-audit LOW residual. |
+| **FA-F42-R1-002-001-003** | LOW — absent-field `matterId` query parity (open) |
+| **FA-F42-R1-002-001-004** | LOW — mutant-proof tests (open) |
+| **FA-F42-R1-002-001-005** | INFO (open) |
+| — | Legacy rows whose documents and `document_versions` for the matter are both gone before g0 are not purged by this slice; intentional after **001-001** |

@@ -13,7 +13,6 @@ import { instructionsIn, moveInstructions } from "./instructions"
 import { capturesFor, exportedIds, readLateIds, stageLateIds } from "./lateTraces"
 import {
   DELETION_EXTERNAL_REQUESTS_COLLECTION,
-  MATTER_TOMBSTONES_COLLECTION,
   PREPARE_JOB_TYPE,
   PURGE_JOB_TYPE,
   VAULT_OBJECT_TOMBSTONES_COLLECTION,
@@ -538,44 +537,6 @@ function legacyOf(data: DocumentData, matterId: string): boolean {
   return m === null || m === undefined || m === matterId
 }
 
-/** Whether a legacy row's linked documents are still live (same test as `legacyOutputLive` in firestore.rules). */
-async function legacyOutputDocumentsLive(firmId: string, documentIds: unknown): Promise<boolean> {
-  if (!Array.isArray(documentIds)) return false
-  if (documentIds.length > 3) return false
-  if (documentIds.length < 1) return true
-  for (const id of documentIds) {
-    if (typeof id !== "string" || id === "") return false
-    const snap = await adminDb().collection("documents").doc(id).get()
-    if (!snap.exists) return false
-    const data = snap.data()!
-    if (data.firmId !== firmId) return false
-    const matterId: unknown = data.matterId
-    if (matterId !== null && matterId !== undefined && typeof matterId === "string") {
-      if ((await adminDb().collection(MATTER_TOMBSTONES_COLLECTION).doc(matterId).get()).exists) return false
-    }
-  }
-  return true
-}
-
-/** True when a live document or version row ties one of the ids to a matter other than the one being deleted. */
-async function legacyOutputClaimedByOtherMatter(firmId: string, matterId: string, documentIds: unknown): Promise<boolean> {
-  if (!Array.isArray(documentIds)) return true
-  for (const id of documentIds) {
-    if (typeof id !== "string" || id === "") return true
-    const doc = await adminDb().collection("documents").doc(id).get()
-    if (doc.exists) {
-      const m: unknown = doc.data()?.matterId
-      if (m !== null && m !== undefined && m !== matterId) return true
-    }
-    const vers = await adminDb().collection("document_versions").where("firmId", "==", firmId).where("documentId", "==", id).limit(10).get()
-    for (const v of vers.docs) {
-      const m: unknown = v.data().matterId
-      if (m !== null && m !== undefined && m !== matterId) return true
-    }
-  }
-  return false
-}
-
 /** Deletes legacy committee outputs that `array-contains-any` one batch of document ids (≤30). */
 async function purgeLegacyOutputsForDocIdBatch(
   ctx: JobContext<PurgePayload>,
@@ -651,45 +612,6 @@ async function* matterVersionDocumentIdBatches(firmId: string, matterId: string)
 }
 
 /**
- * FA-F42-R1-002-001: legacy rows whose documents were already purged (no `documents` row) but still name the matter
- * through `document_versions`, or are unreadable and not claimed by another matter's live rows.
- */
-async function purgeLegacyOutputsFirmSweep(ctx: JobContext<PurgePayload>, req: Request, outputs: InventoryStore, used: number): Promise<number | null> {
-  const { firmId } = ctx.job
-  let cursor: string | null = null
-  for (let round = 0; ; round += 1) {
-    let q = adminDb()
-      .collection(outputs.name)
-      .where("firmId", "==", firmId)
-      .where("matterId", "==", null)
-      .orderBy(FieldPath.documentId())
-      .limit(limits().chunk)
-    if (cursor !== null) q = q.startAfter(cursor)
-    const snap = await q.get()
-    if (snap.empty) break
-    cursor = snap.docs[snap.docs.length - 1].id
-    const rows: QueryDocumentSnapshot[] = []
-    for (const doc of snap.docs) {
-      const data = doc.data()
-      if (!legacyOf(data, req.matterId)) continue
-      const ids: unknown = data.documentIds
-      if (!Array.isArray(ids) || ids.length < 1) continue
-      if (await legacyOutputDocumentsLive(firmId, ids)) continue
-      if (await legacyOutputClaimedByOtherMatter(firmId, req.matterId, ids)) continue
-      rows.push(doc)
-    }
-    if (rows.length > 0) {
-      if (used >= limits().chunkStepBudget) return null
-      const ids = rows.map((r) => r.id).sort()
-      await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `legacy-sweep-${sha256(ids).slice(0, 24)}-${round}`)
-      used += 1
-    }
-    if (snap.size < limits().chunk) break
-  }
-  return used
-}
-
-/**
  * FA-F42-R1-002 (spec R22): committee outputs written before `matterId` was required name the matter only through
  * `documentIds`. Before the first document row of the matter is deleted, this pages the matter's document ids and, for
  * each batch of 30 (array-contains-any), deletes in fenced chunks every output of the firm that names one of them and has
@@ -698,8 +620,8 @@ async function purgeLegacyOutputsFirmSweep(ctx: JobContext<PurgePayload>, req: R
  * chunk count after it, or null when the budget ran out (the caller hands over at the documents store, and the
  * continuation runs this again over the documents still there).
  *
- * FA-F42-R1-002-001: when `documents` rows were removed before the saga, the same purge still runs from
- * `document_versions` document ids, then a firm sweep removes unreadable legacy rows not claimed by another matter.
+ * FA-F42-R1-002-001: when `documents` rows were removed before the saga, the same purge still runs from this matter's
+ * `document_versions` document ids only (FA-F42-R1-002-001-001: no firm-wide sweep of null-`matterId` rows).
  */
 async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
   if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
@@ -725,7 +647,7 @@ async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, c
     if (next === null) return null
     used = next
   }
-  return purgeLegacyOutputsFirmSweep(ctx, req, outputs, used)
+  return used
 }
 
 /** The distinct step ids the job has recorded, every attempt's (the worker's `fencedSteps`). */
