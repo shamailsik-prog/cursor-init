@@ -1179,6 +1179,35 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     }
   })
 
+  it("FA-F42-R1-006-003-001-003 RED: attested-by refusal when the approver was provisioned by another independent partner (not the requester)", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const hEmail = `${uniq("attest-by-h")}@example.test`
+    const { uid: hUid } = await send(createFirmUserApi, f, f.Q, { email: hEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+    uids.push(hUid)
+    const H = await signIn(hUid, hEmail)
+    await send(attestIndependentPartnerApi, f, f.P, { uid: hUid })
+    await ageUser(hUid, { createdAt: 400, partnerSince: 400 })
+    const hDoc = (await adminDb().collection("users").doc(hUid).get()).data() ?? {}
+    expect(hDoc.createdBy).toBe(f.Q.uid)
+    expect(hDoc.partnerAttestedBy).toBe(f.P.uid)
+    expect(hDoc.createdBy).not.toBe(f.P.uid)
+    const req = await send(requestApi, f, f.P, { matterId: f.matterId, reasonCode: "client_instruction" })
+    const err = await apiErrorOf(send(approveApi, f, H, { requestId: req.requestId }))
+    expect(`${err.status} ${err.code}`).toBe("403 approver_attested_by_requester")
+    const deny = (
+      await adminDb()
+        .collection("audit_log")
+        .where("firmId", "==", f.firmId)
+        .where("action", "==", "retention.approve_deletion")
+        .where("actorId", "==", H.uid)
+        .where("reason", "==", "approver_attested_by_requester")
+        .get()
+    ).docs
+    expect(deny.length).toBeGreaterThan(0)
+    expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+  })
+
   it("FA-F42-R1-006-003-001-001: sole founder attesting a provisioned hire records declarative audit reason", async () => {
     retentionTestSeam.policy = testPolicy()
     const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
