@@ -5,7 +5,11 @@ import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import { g2Passed } from "./gates"
-import { isIndependentPartner, decideSoleIndependentProvisionedAttestation } from "../retention/partnerIndependence"
+import {
+  isIndependentPartner,
+  decideSoleIndependentProvisionedAttestation,
+  countOtherIndependentPartnersForSoleProvisionedAttestation,
+} from "../retention/partnerIndependence"
 import { activePolicy } from "../retention/config"
 import {
   errorCode,
@@ -585,17 +589,16 @@ export const attestIndependentPartnerOp: FirmOperation<{ uid: string }> = {
       const partners = await tx.get(
         usersRef().where("firmId", "==", caller.firmId).where("role", "==", "partner").where("active", "==", true)
       )
-      let otherIndependent = 0
-      for (const d of partners.docs) {
-        if (d.id === caller.uid) continue
-        if (isIndependentPartner(d.data())) otherIndependent++
-      }
+      const partnerRows = partners.docs.map((d) => ({ id: d.id, data: d.data()! }))
+      const loadPartner = (uid: string) => partnerRows.find((p) => p.id === uid)?.data
+      const otherIndependent = countOtherIndependentPartnersForSoleProvisionedAttestation(caller.uid, partnerRows)
       const policy = activePolicy()
       const soleDecision = decideSoleIndependentProvisionedAttestation(
         caller.uid,
         targetDoc,
         otherIndependent,
-        policy.deletion.allowSoleIndependentAttestationOfProvisionedPartners
+        policy.deletion.allowSoleIndependentAttestationOfProvisionedPartners,
+        loadPartner
       )
       if (soleDecision.kind === "refused") {
         await audit.stage(tx, "deny", soleDecision.code)

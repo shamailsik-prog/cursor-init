@@ -1241,6 +1241,83 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     }
   })
 
+  it("FA-F42-R1-006-003-001-001-001: F→Q→R second provisioned puppet still uses sole-provisioned path after Q attested", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003001001001")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest chain firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003001001001") }
+      const qEmail = `${uniq("chain-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      const Q = await signIn(qUid, qEmail)
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      const rEmail = `${uniq("chain-r")}@example.test`
+      const { uid: rUid } = await send(createFirmUserApi, f, Q, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(rUid)
+      expect((await adminDb().collection("users").doc(rUid).get()).get("createdBy")).toBe(Q.uid)
+      await send(attestIndependentPartnerApi, f, F, { uid: rUid })
+      const allowRows = (
+        await adminDb()
+          .collection("audit_log")
+          .where("firmId", "==", firmId)
+          .where("action", "==", "identity.attest_independent_partner")
+          .where("actorId", "==", F.uid)
+          .where("target", "==", `users/${rUid}`)
+          .get()
+      ).docs.map((d) => d.data())
+      expect(allowRows.some((r) => r.decision === "allow" && r.reason === "sole_independent_attested_provisioned_partner")).toBe(true)
+      expect(allowRows.some((r) => r.decision === "allow" && r.reason === "ok")).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
+  it("FA-F42-R1-006-003-001-001-001 RED: policy false after Q attested still refuses R on sole-provisioned path", async () => {
+    retentionTestSeam.policy = testPolicy()
+    retentionTestSeam.policy!.deletion.allowSoleIndependentAttestationOfProvisionedPartners = false
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003001001001red")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest chain refuse firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003001001001red") }
+      const qEmail = `${uniq("chain-refuse-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      const Q = await signIn(qUid, qEmail)
+      retentionTestSeam.policy!.deletion.allowSoleIndependentAttestationOfProvisionedPartners = true
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      retentionTestSeam.policy!.deletion.allowSoleIndependentAttestationOfProvisionedPartners = false
+      const rEmail = `${uniq("chain-refuse-r")}@example.test`
+      const { uid: rUid } = await send(createFirmUserApi, f, Q, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(rUid)
+      const err = await apiErrorOf(send(attestIndependentPartnerApi, f, F, { uid: rUid }))
+      expect(`${err.status} ${err.code}`).toBe("403 attestation_sole_independent_provisioned_refused")
+      expect((await adminDb().collection("users").doc(rUid).get()).get("independentPartner")).not.toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
   it("FA-F42-R1-006-003-001 GREEN: onboarded founder with two attested createFirmUser partners — second approves first's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const bootstrapRef = adminDb().collection("platform").doc("bootstrap")

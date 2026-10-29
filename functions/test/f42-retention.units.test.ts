@@ -259,6 +259,44 @@ describe("F42 units: treatments, plan and holds", () => {
     )
   })
 
+  it("FA-F42-R1-006-003-001-001-001: other-independent count excludes attester provisioned / attested / lineage peers", async () => {
+    const {
+      countOtherIndependentPartnersForSoleProvisionedAttestation,
+      excludeFromOtherIndependentCountForSoleAttestation,
+      decideSoleIndependentProvisionedAttestation,
+    } = await import("../src/retention/partnerIndependence")
+    const firm = [
+      { id: "F", data: { role: "partner", active: true, independentPartner: true } },
+      {
+        id: "Q",
+        data: {
+          role: "partner",
+          active: true,
+          independentPartner: true,
+          createdBy: "F",
+          partnerAttestedBy: "F",
+        },
+      },
+      { id: "R", data: { role: "partner", active: true, independentPartner: false, createdBy: "Q" } },
+      { id: "G", data: { role: "partner", active: true, independentPartner: true } },
+    ]
+    const load = (uid: string) => firm.find((p) => p.id === uid)?.data
+    expect(excludeFromOtherIndependentCountForSoleAttestation("F", firm[1].data, load)).toBe(true)
+    expect(excludeFromOtherIndependentCountForSoleAttestation("F", firm[2].data, load)).toBe(true)
+    expect(excludeFromOtherIndependentCountForSoleAttestation("F", firm[3].data, load)).toBe(false)
+    expect(countOtherIndependentPartnersForSoleProvisionedAttestation("F", firm)).toBe(1)
+    expect(countOtherIndependentPartnersForSoleProvisionedAttestation("F", firm.slice(0, 3))).toBe(0)
+    const chainLoad = (uid: string) => firm.find((p) => p.id === uid)?.data
+    expect(decideSoleIndependentProvisionedAttestation("F", { createdBy: "Q" }, 0, true, chainLoad)).toEqual({
+      kind: "allowed",
+      auditReason: "sole_independent_attested_provisioned_partner",
+    })
+    expect(decideSoleIndependentProvisionedAttestation("F", { createdBy: "Q" }, 0, false, chainLoad)).toEqual({
+      kind: "refused",
+      code: "attestation_sole_independent_provisioned_refused",
+    })
+  })
+
   it("FA-F42-R1-006-003-001-001: shipped policy declares sole-independent provisioned attestation", () => {
     const p = shipped()
     expect(p.deletion.allowSoleIndependentAttestationOfProvisionedPartners).toBe(true)

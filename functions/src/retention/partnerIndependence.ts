@@ -1,6 +1,7 @@
 import type { DocumentData } from "firebase-admin/firestore"
 import { HttpError } from "../http/errors"
 import { isSafeDocId } from "../p5/common"
+import { PARTNER_LINEAGE_MAX_DEPTH, partnerLineageParents } from "./partnerLineage"
 
 /**
  * Audit FA-F42-R1-006-003-001: whether a partner counts as an independent partner for deletion
@@ -60,23 +61,89 @@ export function isDirectlyProvisionedBy(provisionerUid: string, target: Document
   )
 }
 
-export type SoleProvisionedAttestationDecision =
-  | { kind: "not_applicable" }
-  | { kind: "refused"; code: "attestation_sole_independent_provisioned_refused" }
-  | { kind: "allowed"; auditReason: "sole_independent_attested_provisioned_partner" }
+/** Whether `user` sits under `ancestorUid` on the provisioning graph (`createdBy` / `partnerGrantedBy`). */
+export function isLineageDescendantOf(
+  ancestorUid: string,
+  user: DocumentData | undefined,
+  loadUser: (uid: string) => DocumentData | undefined,
+  maxDepth = PARTNER_LINEAGE_MAX_DEPTH
+): boolean {
+  if (!user || !isSafeDocId(ancestorUid)) return false
+  const seen = new Set<string>()
+  let frontier = partnerLineageParents(user)
+  for (let depth = 0; frontier.length > 0; depth++) {
+    if (depth >= maxDepth) return false
+    const next: string[] = []
+    for (const uid of frontier) {
+      if (seen.has(uid)) continue
+      seen.add(uid)
+      if (uid === ancestorUid) return true
+      for (const p of partnerLineageParents(loadUser(uid))) {
+        if (!seen.has(p)) next.push(p)
+      }
+    }
+    frontier = next
+  }
+  return false
+}
+
+/**
+ * FA-F42-R1-006-003-001-001-001: partners the attester provisioned, attested, or holds in their provisioning subtree
+ * must not inflate `otherIndependentPartnerCount` for the sole-provisioned attestation decision.
+ */
+export function excludeFromOtherIndependentCountForSoleAttestation(
+  attesterUid: string,
+  peer: DocumentData | undefined,
+  loadPeer: (uid: string) => DocumentData | undefined
+): boolean {
+  if (!peer) return true
+  if (isDirectlyProvisionedBy(attesterUid, peer)) return true
+  const attestedBy = peer.partnerAttestedBy
+  if (typeof attestedBy === "string" && isSafeDocId(attestedBy) && attestedBy === attesterUid) return true
+  return isLineageDescendantOf(attesterUid, peer, loadPeer)
+}
+
+export function countOtherIndependentPartnersForSoleProvisionedAttestation(
+  attesterUid: string,
+  activePartners: ReadonlyArray<{ id: string; data: DocumentData }>
+): number {
+  const loadPeer = (uid: string) => activePartners.find((p) => p.id === uid)?.data
+  let count = 0
+  for (const partner of activePartners) {
+    if (partner.id === attesterUid) continue
+    if (!isIndependentPartner(partner.data)) continue
+    if (excludeFromOtherIndependentCountForSoleAttestation(attesterUid, partner.data, loadPeer)) continue
+    count++
+  }
+  return count
+}
+
+export type PartnerUserDocLoader = (uid: string) => DocumentData | undefined
+
+/** Target is directly or transitively provisioned under `attesterUid` (006-003-001-001 / 006-003-001-001-001). */
+export function isAttesterProvisionedAttestationTarget(
+  attesterUid: string,
+  target: DocumentData | undefined,
+  loadUser: PartnerUserDocLoader
+): boolean {
+  return (
+    isDirectlyProvisionedBy(attesterUid, target) || isLineageDescendantOf(attesterUid, target, loadUser)
+  )
+}
 
 /**
  * FA-F42-R1-006-003-001-001: the sole independent partner attesting a partner they provisioned is either refused
  * (policy false) or explicitly allowed with a durable audit reason (policy true). Other independent partners in the
- * firm make this not the sole-independent case.
+ * firm make this not the sole-independent case (006-003-001-001-001: count excludes attester puppets).
  */
 export function decideSoleIndependentProvisionedAttestation(
   attesterUid: string,
   target: DocumentData | undefined,
   otherIndependentPartnerCount: number,
-  allowByPolicy: boolean
+  allowByPolicy: boolean,
+  loadUser: PartnerUserDocLoader = () => undefined
 ): SoleProvisionedAttestationDecision {
-  if (!isDirectlyProvisionedBy(attesterUid, target)) return { kind: "not_applicable" }
+  if (!isAttesterProvisionedAttestationTarget(attesterUid, target, loadUser)) return { kind: "not_applicable" }
   if (otherIndependentPartnerCount > 0) return { kind: "not_applicable" }
   if (!allowByPolicy) return { kind: "refused", code: "attestation_sole_independent_provisioned_refused" }
   return { kind: "allowed", auditReason: "sole_independent_attested_provisioned_partner" }
