@@ -22,7 +22,7 @@ An alert carries codes, ids, integers and document references only (`detail`, `s
 
 ## Lifecycle
 
-- **Raise.** The first raise creates the alert `open` at level 0 (owner: the on-call operator) with an acknowledgment deadline (critical 15 minutes, high 30 minutes, warning 4 hours) and one page. Later raises count it (`count`, `lastSeenAt`) and page no one. A raise after `resolved` reopens it as a new episode at level 0 with a new page.
+- **Raise.** The first raise creates the alert `open` at level 0 (owner: the on-call operator) with an acknowledgment deadline (critical 15 minutes, high 30 minutes, warning 4 hours) and one page. While the alert is `open`, or `acknowledged` and still within `ACK_HOLD_MS` (four hours, FA-F43-R1-002) of acknowledgment, later raises only count it (`count`, `lastSeenAt`) and page no one. After `resolved`, or after `acknowledged` once `ACK_HOLD_MS` has lapsed, the next raise reopens a new episode at level 0 (acknowledgment and resolution cleared) with a fresh level-0 page.
 - **Escalation.** `alertEscalator` (every minute) moves an `open` alert past its deadline one level up: level 1, the firm's partners (a `notifications` row each), then level 2, the firm administrator (the founding partner recorded in `platform_onboarding`; the partners if that user is no longer an active partner). Each step raises the severity one step and pages the new owner and the on-call channel. Level 2 is the last.
 - **Acknowledge / resolve.** A partner, through `POST /api/platform/alerts/acknowledgeAlert` or `resolveAlert` (`{ alertId }`), once the alert has reached level 1; the operator at any level through `POST /api/platform/alerts/operatorAlertAction` (`{ alertId, action }`, `platformAdmin` claim). Acknowledging stops escalation; resolving closes the alert. Partners see the worklist through `GET /api/platform/alerts/listAlerts` (`?state=open|acknowledged|resolved&limit&cursor`).
 
@@ -41,7 +41,7 @@ All three are ERROR lines registered in `infra/deploy-manifest.json` and rendere
 - `job.commit_failed`: the worker could not commit an outcome (Firestore unavailable or contended). The row stays `running`; lease recovery re-runs it. Repeated: treat Firestore as the incident.
 - `saga.age`: an un-merge whose jobs are stuck. Look up the merge event (`ref`), then its two jobs (`d1.unmerge.links`, `d1.unmerge.checks`) in `listJobs`; a dead-lettered saga job needs a partner's retry.
 - `ai.budget_threshold`: the firm has spent 70 or 90 percent of its monthly AI budget. A partner raises the budget (`setBudgetAlerts`) or accepts the stop at 100 percent.
-- `ai.kill_switch_blocked`: AI calls are being refused by a kill switch. Confirm it is intended; acknowledge.
+- `ai.kill_switch_blocked`: AI calls are being refused by a kill switch. Confirm it is intended; acknowledge or resolve the alert. Acknowledgment suppresses paging only for `ACK_HOLD_MS` (four hours): if the switch keeps blocking after that, the next blocked call reopens a new episode and pages again (FA-F43-R1-002). Re-enable the switch when the incident is over.
 - `ai.reservation_failed`, `ai.reservation_unresolved`: AI spend could not be reserved, or reserved spend is not being settled. Check the reconciler (`p1.reconcile_*` lines) and the P1 README runbook for a quarantined reservation; the firm is refused `accounting_indeterminate` until it is settled.
 
 ## Not demonstrated here
