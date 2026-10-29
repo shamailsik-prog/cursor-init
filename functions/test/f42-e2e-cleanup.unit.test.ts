@@ -42,6 +42,8 @@ const UNIT_SELF = path.join(__dirname, "f42-e2e-cleanup.unit.test.ts")
 
 const WIRING_GUARD_CONST = "AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
 const M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST = "M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH"
+const DELETION_E2E_CONST = "DELETION_E2E"
+const WIRING_HELPER_FN = "assertF42DeletionE2EAfterAllWiring"
 
 function isExpectSrcCall(call: ts.CallExpression): boolean {
   if (!ts.isIdentifier(call.expression) || call.expression.text !== "expect") return false
@@ -918,9 +920,39 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
   return true
 }
 
+function readFileSyncLoadsDeletionE2E(init: ts.Expression): boolean {
+  if (!ts.isCallExpression(init)) return false
+  if (!ts.isIdentifier(init.expression) || init.expression.text !== "readFileSync") return false
+  const [a0, a1] = init.arguments
+  return (
+    a0 !== undefined &&
+    ts.isIdentifier(a0) &&
+    a0.text === DELETION_E2E_CONST &&
+    a1 !== undefined &&
+    ts.isStringLiteral(a1) &&
+    a1.text === "utf8"
+  )
+}
+
+/** FA-F42-R1-015-001-001-002-002-004: M4 must invoke the shared helper on live `src` + `DELETION_E2E`, not fixture strings. */
+function assertF42WiringHelperProductionCall(call: ts.CallExpression): boolean {
+  if (!ts.isIdentifier(call.expression) || call.expression.text !== WIRING_HELPER_FN) return false
+  if (call.arguments.length !== 2) return false
+  const [a0, a1] = call.arguments
+  return (
+    a0 !== undefined &&
+    ts.isIdentifier(a0) &&
+    a0.text === "src" &&
+    a1 !== undefined &&
+    ts.isIdentifier(a1) &&
+    a1.text === DELETION_E2E_CONST
+  )
+}
+
 /**
- * FA-F42-R1-015-001-001-002-002: M4 `it` body must be a single call to the shared wiring helper (no inline
- * `expect(src).toMatch`, no comment-only delegation).
+ * FA-F42-R1-015-001-001-002-002: M4 `it` body must load production e2e via `readFileSync(DELETION_E2E, "utf8")`
+ * then call the shared wiring helper as a live top-level statement with `(src, DELETION_E2E)` (no inline
+ * `expect(src).toMatch`, no comment-only delegation, no fixture-string args, no never-called arrow wrappers).
  */
 export function metaPinM4TestUsesSharedHelper(unitSrc: string, fileName = UNIT_SELF): boolean {
   const sf = ts.createSourceFile(fileName, unitSrc, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
@@ -953,32 +985,31 @@ export function metaPinM4TestUsesSharedHelper(unitSrc: string, fileName = UNIT_S
   walkStatements(sf.statements)
   if (!m4It?.body || !ts.isBlock(m4It.body)) return false
 
-  let wiringCalls = 0
   let inlineSrcToMatch = false
   const walk = (n: ts.Node) => {
-    if (ts.isCallExpression(n)) {
-      if (ts.isIdentifier(n.expression) && n.expression.text === "assertF42DeletionE2EAfterAllWiring") {
-        wiringCalls++
-      }
-      if (isExpectSrcToMatchOnIdentifier(n, WIRING_GUARD_CONST)) inlineSrcToMatch = true
+    if (ts.isCallExpression(n) && isExpectSrcToMatchOnIdentifier(n, WIRING_GUARD_CONST)) {
+      inlineSrcToMatch = true
     }
     ts.forEachChild(n, walk)
   }
   for (const stmt of m4It.body.statements) walk(stmt)
+  if (inlineSrcToMatch) return false
 
-  if (wiringCalls !== 1 || inlineSrcToMatch) return false
+  const stmts = m4It.body.statements
+  if (stmts.length !== 2) return false
 
-  for (const stmt of m4It.body.statements) {
-    if (ts.isExpressionStatement(stmt)) continue
-    if (ts.isVariableStatement(stmt)) {
-      const decl = stmt.declarationList.declarations[0]
-      if (!decl?.initializer || !ts.isCallExpression(decl.initializer)) return false
-      const init = decl.initializer
-      if (!ts.isIdentifier(init.expression) || init.expression.text !== "readFileSync") return false
-      continue
-    }
-    return false
-  }
+  const loadStmt = stmts[0]
+  const callStmt = stmts[1]
+  if (!ts.isVariableStatement(loadStmt) || !ts.isExpressionStatement(callStmt)) return false
+
+  const decl = loadStmt.declarationList.declarations[0]
+  if (!decl || !ts.isIdentifier(decl.name) || decl.name.text !== "src") return false
+  if (!decl.initializer || !readFileSyncLoadsDeletionE2E(decl.initializer)) return false
+
+  const wiringCall = callStmt.expression
+  if (!ts.isCallExpression(wiringCall)) return false
+  if (!assertF42WiringHelperProductionCall(wiringCall)) return false
+  if (!expectSrcToMatchGuardIsLiveTopLevelStatement(m4It.body, wiringCall)) return false
 
   return true
 }
@@ -1070,7 +1101,7 @@ it.skip("moved cleanup", async () => { await deleteFirmScopedData(firms, uids) }
     const unitSrc = readFileSync(UNIT_SELF, "utf8")
     expect(
       metaPinM4TestUsesSharedHelper(unitSrc),
-      "M4 test must be a single assertF42DeletionE2EAfterAllWiring call (AST; kills comment-only delegation)",
+      "M4 test must read DELETION_E2E then call assertF42DeletionE2EAfterAllWiring(src, DELETION_E2E) as a live top-level statement (AST; kills comment-only delegation and call-site mutants)",
     ).toBe(true)
 
     expect(
@@ -1113,6 +1144,48 @@ describe("FA-F42-R1-015: x", () => {
     expect(metaPinM4TestUsesSharedHelper(m4CommentOnlyMutant, "m4-comment-mutant.ts")).toBe(false)
     expect(metaPinM4TestUsesSharedHelper(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-004: M4 helper call args + live top-level invoke (not fixture strings / dead arrows)", () => {
+    const m4Title =
+      'it("afterAll wires deleteFirmScopedData to the file-level firms and uids arrays (kills M4 empty-array mutant)", () => {'
+    const loadLine = "const src = readFileSync(DELETION_E2E, \"utf8\")"
+
+    const wrapM4Body = (bodyLines: string[]) => `
+describe("FA-F42-R1-015: x", () => {
+  ${m4Title}
+    ${bodyLines.join("\n    ")}
+  })
+})
+`
+
+    const fixtureStringMutant = wrapM4Body([
+      loadLine,
+      'assertF42DeletionE2EAfterAllWiring("afterAll(async () => { deleteFirmScopedData(firms, uids) })", "fixture.ts")',
+    ])
+    expect(metaPinM4TestUsesSharedHelper(fixtureStringMutant, "m4-fixture-string-mutant.ts")).toBe(false)
+
+    const wrongFileMutant = wrapM4Body([
+      loadLine,
+      'assertF42DeletionE2EAfterAllWiring(src, "other.e2e.ts")',
+    ])
+    expect(metaPinM4TestUsesSharedHelper(wrongFileMutant, "m4-wrong-file-mutant.ts")).toBe(false)
+
+    const neverCalledArrowMutant = wrapM4Body([
+      loadLine,
+      "() => { assertF42DeletionE2EAfterAllWiring(src, DELETION_E2E) }",
+    ])
+    expect(metaPinM4TestUsesSharedHelper(neverCalledArrowMutant, "m4-never-called-arrow-mutant.ts")).toBe(
+      false,
+    )
+
+    const deadAssignMutant = wrapM4Body([
+      loadLine,
+      "const run = () => assertF42DeletionE2EAfterAllWiring(src, DELETION_E2E)",
+    ])
+    expect(metaPinM4TestUsesSharedHelper(deadAssignMutant, "m4-dead-assign-mutant.ts")).toBe(false)
+
+    expect(metaPinM4TestUsesSharedHelper(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
   })
 
   it("FA-F42-R1-015-001-001-002-001: MvacuousConstInHelper (vacuous guard const in helper fails tightened meta pin)", () => {
