@@ -269,6 +269,42 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(await partnerLineageAncestors("cycle", load)).toBeNull()
   })
 
+  it("FA-F42-R1-006-001-001: diamond (convergent acyclic) graphs resolve ancestors instead of lineage_unknown", async () => {
+    const { partnerLineageAncestors, refusePartnerLineage } = await import("../src/retention/partnerLineage")
+    type Row = { createdBy?: string; partnerGrantedBy?: string }
+    const users: Record<string, Row> = {
+      F: {},
+      Q: { createdBy: "F" },
+      // Hired by Q, later promoted by founder F — two paths to F (re-audit PROBE161_DIAMOND_X).
+      X: { createdBy: "Q", partnerGrantedBy: "F" },
+      A: { createdBy: "F" },
+      B: { createdBy: "F" },
+      // Two founders' branches converge on F (re-audit PROBE161_DIAMOND_Y).
+      Y: { createdBy: "A", partnerGrantedBy: "B" },
+      sideF: { createdBy: "other" },
+    }
+    const load = async (uid: string) => users[uid]
+    expect(await partnerLineageAncestors("X", load)).toEqual(new Set(["Q", "F"]))
+    expect(await partnerLineageAncestors("Y", load)).toEqual(new Set(["A", "B", "F"]))
+    // Regression: old BFS returned null here (403 *_lineage_unknown); unrelated partners must not trip that.
+    await expect(refusePartnerLineage({ approver: "X", requester: "sideF" }, load)).resolves.toBeUndefined()
+    await expect(refusePartnerLineage({ approver: "Y", requester: "sideF" }, load)).resolves.toBeUndefined()
+  })
+
+  it("FA-F42-R1-006-001-001 mutant guard: revisiting a counted ancestor must not fail closed", async () => {
+    const { partnerLineageAncestors } = await import("../src/retention/partnerLineage")
+    const users: Record<string, { createdBy?: string; partnerGrantedBy?: string }> = {
+      root: {},
+      left: { createdBy: "root" },
+      right: { createdBy: "root" },
+      join: { createdBy: "left", partnerGrantedBy: "right" },
+    }
+    const load = async (uid: string) => users[uid]
+    const ancestors = await partnerLineageAncestors("join", load)
+    expect(ancestors).not.toBeNull()
+    expect(ancestors).toEqual(new Set(["left", "right", "root"]))
+  })
+
   it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
     const inv = inventory()
     expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)
