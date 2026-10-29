@@ -537,6 +537,80 @@ function legacyOf(data: DocumentData, matterId: string): boolean {
   return m === null || m === undefined || m === matterId
 }
 
+/** Deletes legacy committee outputs that `array-contains-any` one batch of document ids (≤30). */
+async function purgeLegacyOutputsForDocIdBatch(
+  ctx: JobContext<PurgePayload>,
+  req: Request,
+  outputs: InventoryStore,
+  batch: string[],
+  used: number,
+  stepPrefix: string
+): Promise<number | null> {
+  const { firmId } = ctx.job
+  if (batch.length === 0) return used
+  let cursor: string | null = null
+  for (let round = 0; ; round += 1) {
+    let q = adminDb()
+      .collection(outputs.name)
+      .where("firmId", "==", firmId)
+      .where("documentIds", "array-contains-any", batch)
+      .orderBy(FieldPath.documentId())
+      .limit(limits().chunk)
+    if (cursor !== null) q = q.startAfter(cursor)
+    const snap = await q.get()
+    if (snap.empty) break
+    cursor = snap.docs[snap.docs.length - 1].id
+    const rows = snap.docs.filter((d) => legacyOf(d.data(), req.matterId))
+    if (rows.length > 0) {
+      if (used >= limits().chunkStepBudget) return null
+      const ids = rows.map((r) => r.id).sort()
+      await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `${stepPrefix}-${sha256(ids).slice(0, 24)}-${round}`)
+      used += 1
+    }
+    if (snap.size < limits().chunk) break
+  }
+  return used
+}
+
+/** Pages the matter's `document_versions` rows and yields distinct `documentId` values in batches of ≤30. */
+async function* matterVersionDocumentIdBatches(firmId: string, matterId: string): AsyncGenerator<string[]> {
+  const seen = new Set<string>()
+  let pending: string[] = []
+  const flush = (): string[] | null => {
+    if (pending.length === 0) return null
+    const out = pending
+    pending = []
+    return out
+  }
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb()
+      .collection("document_versions")
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .orderBy(FieldPath.documentId())
+      .limit(DOCUMENT_ID_PAGE)
+    if (after !== null) page = page.startAfter(after)
+    const snap = await page.select("documentId").get()
+    for (const row of snap.docs) {
+      const id: unknown = row.data().documentId
+      if (typeof id !== "string" || id === "" || seen.has(id)) continue
+      seen.add(id)
+      pending.push(id)
+      if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+        const batch = flush()
+        if (batch !== null) yield batch
+      }
+    }
+    if (snap.size < DOCUMENT_ID_PAGE) {
+      const tail = flush()
+      if (tail !== null) yield tail
+      return
+    }
+    after = snap.docs[snap.docs.length - 1].id
+  }
+}
+
 /**
  * FA-F42-R1-002 (spec R22): committee outputs written before `matterId` was required name the matter only through
  * `documentIds`. Before the first document row of the matter is deleted, this pages the matter's document ids and, for
@@ -545,6 +619,9 @@ function legacyOf(data: DocumentData, matterId: string): boolean {
  * so that store's acknowledgement counts and hashes them too. Only when the plan purges `committee_outputs`. Returns the
  * chunk count after it, or null when the budget ran out (the caller hands over at the documents store, and the
  * continuation runs this again over the documents still there).
+ *
+ * FA-F42-R1-002-001: when `documents` rows were removed before the saga, the same purge still runs from this matter's
+ * `document_versions` document ids only (FA-F42-R1-002-001-001: no firm-wide sweep of null-`matterId` rows).
  */
 async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
   if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
@@ -558,26 +635,19 @@ async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, c
     const docs = (await page.select().get()).docs.map((d) => d.id)
     for (let b = 0; b < docs.length; b += LEGACY_DOCUMENT_BATCH) {
       const batch = docs.slice(b, b + LEGACY_DOCUMENT_BATCH)
-      let cursor: string | null = null
-      for (let round = 0; ; round += 1) {
-        let q = adminDb().collection(outputs.name).where("firmId", "==", firmId).where("documentIds", "array-contains-any", batch).orderBy(FieldPath.documentId()).limit(limits().chunk)
-        if (cursor !== null) q = q.startAfter(cursor)
-        const snap = await q.get()
-        if (snap.empty) break
-        cursor = snap.docs[snap.docs.length - 1].id
-        const rows = snap.docs.filter((d) => legacyOf(d.data(), req.matterId))
-        if (rows.length > 0) {
-          if (used >= limits().chunkStepBudget) return null
-          const ids = rows.map((r) => r.id).sort()
-          await purgeChunk(ctx, req, outputs, OUTPUTS_KEY, rows, `legacy-${sha256(ids).slice(0, 24)}-${round}`)
-          used += 1
-        }
-        if (snap.size < limits().chunk) break
-      }
+      const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, "legacy")
+      if (next === null) return null
+      used = next
     }
-    if (docs.length < DOCUMENT_ID_PAGE) return used
+    if (docs.length < DOCUMENT_ID_PAGE) break
     after = docs[docs.length - 1]
   }
+  for await (const batch of matterVersionDocumentIdBatches(firmId, req.matterId)) {
+    const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, "legacy-ver")
+    if (next === null) return null
+    used = next
+  }
+  return used
 }
 
 /** The distinct step ids the job has recorded, every attempt's (the worker's `fencedSteps`). */
