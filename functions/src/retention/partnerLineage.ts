@@ -34,11 +34,16 @@ export async function partnerLineageAncestors(
     if (depth >= maxDepth) return null
     const next: string[] = []
     for (const uid of frontier) {
-      if (seen.has(uid)) return null
+      if (seen.has(uid)) continue
       seen.add(uid)
       ancestors.add(uid)
       for (const p of partnerLineageParents(await load(uid))) {
-        if (seen.has(p)) return null
+        if (seen.has(p)) {
+          // Convergent DAG (diamond): parent already counted. True cycle: back-edge to start or an
+          // in-flight node that is not yet in `ancestors` (e.g. cycle ↔ cycleB).
+          if (!ancestors.has(p)) return null
+          continue
+        }
         if (!ancestors.has(p)) next.push(p)
       }
     }
