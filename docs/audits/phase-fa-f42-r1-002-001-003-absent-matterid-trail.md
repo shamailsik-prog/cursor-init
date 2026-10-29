@@ -14,6 +14,7 @@ In `functions/src/retention/saga.ts`, `purgeLegacyOutputs` after the matter's li
 1. `document_versions` (unchanged from #209)
 2. `ocr_texts`
 3. `p1_ocr_operations`
+4. `jobs` (top-level `documentId`, matter-scoped)
 
 Each query is `firmId` + `matterId` (no loose-vault or orphan sweep). Batches feed the same `purgeLegacyOutputsForDocIdBatch` + `legacyOf` filter as before.
 
@@ -45,5 +46,5 @@ npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 
 
 | ID | Note |
 | --- | --- |
-| **FA-F42-R1-002-001-003-001** | Legacy rows whose documents, versions, and all matter-scoped trails (`ocr_texts`, `p1_ocr_operations`, etc.) are gone before g0 are still not purged; intentional (no firm-wide sweep). |
+| **FA-F42-R1-002-001-003-001** | Legacy rows with no matter-scoped trail row naming their `documentId` before g0 remain (intentional; no firm-wide sweep). |
 | **FA-F42-R1-002-001-004** | Mutant-proof tests (open elsewhere). |
