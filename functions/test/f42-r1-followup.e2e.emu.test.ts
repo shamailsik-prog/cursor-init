@@ -67,7 +67,13 @@ async function member(firmId: string, role: string): Promise<Member> {
   const m = await mintIdToken(claims(firmId, role))
   uids.push(m.uid)
   // An established account: created long before any request (spec R26 judges an approver's tenure).
-  await adminDb().collection("users").doc(m.uid).set({ createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS) }, { merge: true })
+  await adminDb().collection("users").doc(m.uid).set(
+    {
+      createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS),
+      ...(role === "partner" ? { independentPartner: true } : {}),
+    },
+    { merge: true }
+  )
   return m
 }
 
@@ -1355,6 +1361,26 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
       if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
       else await bootstrapRef.delete()
     }
+  })
+
+  it("FA-F42-R1-006-003-001-002: legacy ambiguous partner is not independent until backfill stamps false", async () => {
+    const f = await newFirm()
+    const legacyUid = uniq("legacy-ambiguous")
+    uids.push(legacyUid)
+    await adminDb().collection("users").doc(legacyUid).set({
+      firmId: f.firmId,
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+      active: true,
+      mfaEnabled: false,
+      createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS),
+    })
+    const { isIndependentPartner } = await import("../src/retention/partnerIndependence")
+    expect(isIndependentPartner((await adminDb().collection("users").doc(legacyUid).get()).data())).toBe(false)
+    const { backfillLegacyPartnerIndependencePage } = await import("../src/retention/legacyPartnerIndependenceBackfill")
+    await backfillLegacyPartnerIndependencePage(adminDb(), { limit: 500 })
+    expect((await adminDb().collection("users").doc(legacyUid).get()).get("independentPartner")).toBe(false)
+    expect((await adminDb().collection("users").doc(f.P.uid).get()).get("independentPartner")).toBe(true)
   })
 
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {

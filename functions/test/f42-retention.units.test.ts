@@ -238,7 +238,7 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(isIndependentPartner({ role: "partner", active: true, independentPartner: true })).toBe(true)
     expect(isIndependentPartner({ role: "partner", active: true, independentPartner: false, createdBy: "F" })).toBe(false)
     expect(isIndependentPartner({ role: "partner", active: true, createdBy: "F" })).toBe(false)
-    expect(isIndependentPartner({ role: "partner", active: true })).toBe(true)
+    expect(isIndependentPartner({ role: "partner", active: true })).toBe(false)
     expect(isDirectlyProvisionedBy("F", { createdBy: "F" })).toBe(true)
     expect(isDirectlyProvisionedBy("F", { partnerGrantedBy: "F" })).toBe(true)
     expect(isDirectlyProvisionedBy("F", { createdBy: "Q" })).toBe(false)
@@ -257,6 +257,13 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(() => requireIndependentPartnerRegistration({ role: "partner", independentPartner: false }, "approver")).toThrow(
       expect.objectContaining({ code: "approver_not_independent" })
     )
+  })
+
+  it("FA-F42-R1-006-003-001-002: missing register flag is not independent", async () => {
+    const { isIndependentPartner } = await import("../src/retention/partnerIndependence")
+    expect(isIndependentPartner({ role: "partner", active: true, independentPartner: false, createdBy: "F" })).toBe(false)
+    expect(isIndependentPartner({ role: "partner", active: true })).toBe(false)
+    expect(isIndependentPartner({ role: "partner", active: true, independentPartner: true })).toBe(true)
   })
 
   it("FA-F42-R1-006-003-001-001-001: other-independent count excludes attester provisioned / attested / lineage peers", async () => {
