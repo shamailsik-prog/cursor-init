@@ -584,6 +584,7 @@ async function purgeLegacyOutputsForDocIdBatch(
 /**
  * Matter-scoped stores that still name a document id after its `documents` / `document_versions` rows were removed
  * early (FA-F42-R1-002-001-003). Each is keyed by `matterId`; no firm-wide null-matter sweep.
+ * FA-F42-R1-002-001-003-001 adds matter-scoped `committee_outputs` (`documentIds`) and `document_workflow`.
  */
 
 /** Max distinct trail ids recorded on the request in prepare (parallel purge groups may delete trail rows before g0 reads them). */
@@ -611,6 +612,39 @@ function documentIdFromJobRow(data: DocumentData): string | null {
   return null
 }
 
+/** Matter-scoped Firestore rows with a top-level `documentId` (FA-F42-R1-002-001-003-001: `document_workflow`). */
+const MATTER_TRAIL_DOCUMENT_ID_FIELDS = ["ocr_texts", "p1_ocr_operations", "document_workflow"] as const
+
+/** Every id-shaped entry of a committee output's `documentIds` array. */
+function documentIdsFromCommitteeOutputRow(data: DocumentData): string[] {
+  const raw: unknown = data.documentIds
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const id of raw) {
+    if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) out.push(id)
+  }
+  return out
+}
+
+async function noteMatterTrailDocumentIdFieldRows(
+  firmId: string,
+  matterId: string,
+  collection: string,
+  note: (id: string) => void
+): Promise<void> {
+  const snap = await adminDb()
+    .collection(collection)
+    .where("firmId", "==", firmId)
+    .where("matterId", "==", matterId)
+    .limit(DOCUMENT_ID_PAGE)
+    .select("documentId")
+    .get()
+  for (const row of snap.docs) {
+    const id: unknown = row.data().documentId
+    if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) note(id)
+  }
+}
+
 /** Matter-scoped trail ids for legacy output discovery, read once in prepare before purge jobs are enqueued. */
 async function collectLegacyTrailDocumentIds(firmId: string, matterId: string): Promise<string[]> {
   const seen = new Set<string>()
@@ -621,18 +655,11 @@ async function collectLegacyTrailDocumentIds(firmId: string, matterId: string): 
   for await (const _batch of versionTrailDocumentIdBatches(firmId, matterId, note, noopFlush, () => false)) {
     /* drain generator; ids accumulate in seen via note */
   }
-  for (const collection of ["ocr_texts", "p1_ocr_operations"] as const) {
-    const snap = await adminDb()
-      .collection(collection)
-      .where("firmId", "==", firmId)
-      .where("matterId", "==", matterId)
-      .limit(DOCUMENT_ID_PAGE)
-      .select("documentId")
-      .get()
-    for (const row of snap.docs) {
-      const id: unknown = row.data().documentId
-      if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) note(id)
-    }
+  for await (const _batch of committeeOutputTrailDocumentIdBatches(firmId, matterId, note, noopFlush, () => false)) {
+    /* drain */
+  }
+  for (const collection of MATTER_TRAIL_DOCUMENT_ID_FIELDS) {
+    await noteMatterTrailDocumentIdFieldRows(firmId, matterId, collection, note)
   }
   const jobs = await adminDb().collection("jobs").where("firmId", "==", firmId).where("matterId", "==", matterId).limit(DOCUMENT_ID_PAGE).get()
   for (const row of jobs.docs) {
@@ -675,6 +702,38 @@ async function* versionTrailDocumentIdBatches(
   }
 }
 
+/** Pages matter-scoped `committee_outputs` and notes each row's `documentIds` (FA-F42-R1-002-001-003-001). */
+async function* committeeOutputTrailDocumentIdBatches(
+  firmId: string,
+  matterId: string,
+  note: (id: string) => void,
+  flush: () => string[] | null,
+  atBatchLimit: () => boolean
+): AsyncGenerator<{ batch: string[]; stepPrefix: string }> {
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb()
+      .collection("committee_outputs")
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .orderBy(FieldPath.documentId())
+      .limit(DOCUMENT_ID_PAGE)
+    if (after !== null) page = page.startAfter(after)
+    const snap = await page.select("documentIds").get()
+    for (const row of snap.docs) {
+      for (const id of documentIdsFromCommitteeOutputRow(row.data())) {
+        note(id)
+        if (atBatchLimit()) {
+          const batch = flush()
+          if (batch !== null) yield { batch, stepPrefix: "legacy-trail-committee_outputs" }
+        }
+      }
+    }
+    if (snap.size < DOCUMENT_ID_PAGE) return
+    after = snap.docs[snap.docs.length - 1].id
+  }
+}
+
 /** Pages the matter's trail collections and yields distinct `documentId` values in batches of ≤30. */
 async function* matterTrailDocumentIdBatches(
   firmId: string,
@@ -696,7 +755,10 @@ async function* matterTrailDocumentIdBatches(
   for await (const batch of versionTrailDocumentIdBatches(firmId, matterId, note, flush, () => pending.length >= LEGACY_DOCUMENT_BATCH)) {
     yield batch
   }
-  for (const collection of ["ocr_texts", "p1_ocr_operations"] as const) {
+  for await (const batch of committeeOutputTrailDocumentIdBatches(firmId, matterId, note, flush, () => pending.length >= LEGACY_DOCUMENT_BATCH)) {
+    yield batch
+  }
+  for (const collection of MATTER_TRAIL_DOCUMENT_ID_FIELDS) {
     const snap = await adminDb()
       .collection(collection)
       .where("firmId", "==", firmId)
@@ -743,9 +805,11 @@ async function* matterTrailDocumentIdBatches(
  * continuation runs this again over the documents still there).
  *
  * FA-F42-R1-002-001: when `documents` rows were removed before the saga, the same purge still runs from this matter's
- * trail collections' `documentId` values (`document_versions`, `ocr_texts`, `p1_ocr_operations`, `jobs`) only
- * (FA-F42-R1-002-001-001: no firm-wide sweep of null/absent-`matterId` rows). Legacy outputs with absent `matterId`
- * are included via `legacyOf` once a batch names them (FA-F42-R1-002-001-003).
+ * trail collections only (`document_versions`, matter-scoped `committee_outputs` `documentIds`, `ocr_texts`,
+ * `p1_ocr_operations`, `document_workflow`, `jobs`; FA-F42-R1-002-001-001: no firm-wide sweep of null/absent-`matterId`
+ * rows). Legacy outputs with absent `matterId` are included via `legacyOf` once a batch names them
+ * (FA-F42-R1-002-001-003). Rows with no matter-scoped trail naming their id before g0 still survive
+ * (FA-F42-R1-002-001-003-001).
  */
 async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
   if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
@@ -897,4 +961,4 @@ export const retentionPurgeHandler: JobHandler<PurgePayload> = {
 }
 
 /** Exposed for the unit tests. */
-export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf, limits }
+export const sagaInternals = { staticAck, parsePurge, parsePrepare, nextPart, traceIdParts, vaultPathOf, limits, documentIdsFromCommitteeOutputRow }

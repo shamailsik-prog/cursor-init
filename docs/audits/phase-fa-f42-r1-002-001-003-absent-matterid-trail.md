@@ -48,5 +48,5 @@ npx firebase emulators:exec --only auth,firestore --project demo-sikander-f42r2 
 
 | ID | Note |
 | --- | --- |
-| **FA-F42-R1-002-001-003-001** | Legacy rows with no matter-scoped trail row naming their `documentId` before g0 remain (intentional; no firm-wide sweep). |
+| **FA-F42-R1-002-001-003-001** | **PARTIAL (PR after #210):** widened matter-scoped discovery via `committee_outputs` + `document_workflow`; legacy rows with no matter-scoped trail at all still survive by design. See `phase-fa-f42-r1-002-001-003-001-legacy-trail-residual.md`. |
 | **FA-F42-R1-002-001-004** | Mutant-proof tests (open elsewhere). |

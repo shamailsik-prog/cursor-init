@@ -304,6 +304,12 @@ describe("F42 units: treatments, plan and holds", () => {
     }
   })
 
+  it("FA-F42-R1-002-001-003-001: committee output trail ids keep only id-shaped documentIds entries", () => {
+    const { documentIdsFromCommitteeOutputRow } = sagaInternals
+    expect(documentIdsFromCommitteeOutputRow({ documentIds: ["a", "", 1, "bad space", "doc-1"] })).toEqual(["a", "doc-1"])
+    expect(documentIdsFromCommitteeOutputRow({})).toEqual([])
+  })
+
   it("groups the documents stores, the committee outputs and the vault into the first purge job, the rest by the group size", () => {
     const p = purgePolicy()
     const plan = Object.fromEntries(planDeletion(p).map((x) => [x.key, x.treatment]))

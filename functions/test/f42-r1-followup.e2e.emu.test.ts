@@ -394,6 +394,83 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-absent-trail`).get()).exists).toBe(false)
   })
 
+  it("FA-F42-R1-002-001-003-001: absent-matterId legacy output is purged via matter document_workflow when version/ocr/job trails are gone", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-workflow-trail`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-workflow-trail`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} legacy absent field workflow trail`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    await db.collection("document_workflow").doc(docId).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: docId,
+      status: "review_required",
+      reviewerId: null,
+      updatedAt: Date.now(),
+    })
+    await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-workflow-trail`).get()).exists).toBe(false)
+  })
+
+  it("FA-F42-R1-002-001-003-001: absent-matterId legacy output is purged via a matter-scoped committee output naming the same documentIds", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-sibling-output-trail`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-sibling-trail`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} legacy absent field sibling output`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    await db.collection("committee_outputs").doc(`${f.matterId}-modern-sibling`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} modern matter scoped output`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-sibling-trail`).get()).exists).toBe(false)
+  })
+
+  it("FA-F42-R1-002-001-003-001 PARTIAL: absent-matterId legacy output with no matter-scoped trail naming its documentId is kept", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-no-trail-anywhere`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-no-trail`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} legacy no discovery path`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-no-trail`).get()).exists).toBe(true)
+  })
+
   it("FA-F42-R1-002-001-001 P3: a firm orphan legacy output is not purged or counted on another matter's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
