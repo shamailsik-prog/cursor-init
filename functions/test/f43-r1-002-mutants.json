@@ -25,5 +25,14 @@
     "new": "      acknowledgedAt: current?.acknowledgedAt ?? null,\n      acknowledgedBy: current?.acknowledgedBy ?? null,",
     "tests": ["test/f43-r1-002-ack-hold.unit.test.ts", "test/f43-alerts-escalation.e2e.emu.test.ts", "-t", "FA-F43-R1-002"],
     "why": "reopen must clear acknowledgment so escalation and paging treat the alert as fresh"
+  },
+  {
+    "id": "F43-R1-002-M04",
+    "area": "ack-hold",
+    "file": "functions/src/alerts/raise.ts",
+    "old": "      state: \"open\",\n      level: 0,\n      ownerRole: \"operator\",",
+    "new": "      state: \"open\",\n      level: current?.level ?? 0,\n      ownerRole: \"operator\",",
+    "tests": ["test/f43-r1-002-ack-hold.unit.test.ts", "-t", "FA-F43-R1-002-001"],
+    "why": "hold-expired reopen must reset level to 0 (new episode); keeping current.level survives FA-F43-R1-002 pins when ack was at level 0 (FA-F43-R1-002-001)"
   }
 ]

@@ -274,6 +274,35 @@ describe.skipIf(!EMULATORS)("audit F43: acknowledgment and escalation (e2e)", ()
     expect((await pagesOf(alert.id)).map((p) => p.id).sort()).toEqual([`${alert.id}_e1_l0`, `${alert.id}_e2_l0`].sort())
   })
 
+  it("FA-F43-R1-002-001: after partner acknowledgment at level 1, hold expiry reopens at level 0 with a fresh level-0 page", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const { ACK_HOLD_MS } = (await import(/* @vite-ignore */ ["..", "src", "alerts", "model"].join("/"))) as { ACK_HOLD_MS: number }
+    const { alert, jobId } = await deadLetter()
+    const { runAlertEscalator } = await escalatorModule()
+    await runAlertEscalator({ now: () => T0 + 30 * MIN, notifier })
+    expect(await alertDoc(alert.id)).toMatchObject({ level: 1, state: "open", ownerRole: "partner" })
+    clock.set(T0 + 31 * MIN)
+    const ackAt = T0 + 31 * MIN
+    await viaApi("acknowledgeAlert", route())({ token: partner2.token, data: { firmId, alertId: alert.id } } as never)
+    expect(await alertDoc(alert.id)).toMatchObject({ level: 1, state: "acknowledged", ownerRole: "partner" })
+
+    const d = testDeps(clock)
+    jobRuntime.deps = d
+    const afterHold = ackAt + ACK_HOLD_MS + MIN
+    clock.set(afterHold)
+    await viaApi("retryFailedJob", route())({ token: founder.token, data: { firmId, jobId, note: "Fails again after hold with prior partner ack." } } as never)
+    expect(await d.dispatcher.deliver({ jobId, seq: (await readJob(jobId)).dispatchSeq }, afterHold)).toBe("dead_lettered")
+    expect(await alertDoc(alert.id)).toMatchObject({
+      state: "open",
+      episode: 2,
+      level: 0,
+      ownerRole: "operator",
+      count: 1,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+    })
+    expect((await pagesOf(alert.id)).map((p) => p.id).sort()).toEqual([`${alert.id}_e1_l0`, `${alert.id}_e1_l1`, `${alert.id}_e2_l0`].sort())
+  })
+
   it("the owning role: a partner may not act at level 0, may once it reaches the partners; an associate, another firm and a non-operator are refused", { timeout: E2E_TIMEOUT_MS }, async () => {
     const { alert } = await deadLetter()
     const ack = viaApi("acknowledgeAlert", route())
