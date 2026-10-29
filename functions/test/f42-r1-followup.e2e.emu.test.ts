@@ -63,11 +63,21 @@ function testPolicy(): RetentionPolicy {
 const firms: string[] = []
 const uids: string[] = []
 
-async function member(firmId: string, role: string): Promise<Member> {
+type MemberOpts = { independentPartner?: boolean }
+
+async function member(firmId: string, role: string, opts?: MemberOpts): Promise<Member> {
   const m = await mintIdToken(claims(firmId, role))
   uids.push(m.uid)
   // An established account: created long before any request (spec R26 judges an approver's tenure).
-  await adminDb().collection("users").doc(m.uid).set({ createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS) }, { merge: true })
+  await adminDb().collection("users").doc(m.uid).set(
+    {
+      createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS),
+      ...(role === "partner" && opts?.independentPartner !== undefined
+        ? { independentPartner: opts.independentPartner }
+        : {}),
+    },
+    { merge: true }
+  )
   return m
 }
 
@@ -86,8 +96,8 @@ async function newFirm(): Promise<Firm> {
   const firmId = uniq("f42r1")
   firms.push(firmId)
   await adminDb().collection("firms").doc(firmId).set({ name: "F42R1", plan: "internal", rateLimits: { general: 5000 } })
-  const P = await member(firmId, "partner")
-  const Q = await member(firmId, "partner")
+  const P = await member(firmId, "partner", { independentPartner: true })
+  const Q = await member(firmId, "partner", { independentPartner: true })
   const A = await member(firmId, "associate")
   const matterId = uniq("f42r1m")
   await seedMatter(firmId, matterId, TITLE, [P.uid, Q.uid, A.uid])
@@ -1045,7 +1055,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     const firmId = uniq("f42r1solo")
     firms.push(firmId)
     await adminDb().collection("firms").doc(firmId).set({ name: "SOLO", plan: "internal", rateLimits: { general: 5000 } })
-    const P = await member(firmId, "partner")
+    const P = await member(firmId, "partner", { independentPartner: true })
     const f: Firm = { firmId, P, Q: P, A: P, matterId: uniq("f42r1solom") }
     await seedMatter(firmId, f.matterId, TITLE, [P.uid])
     const req = await send(requestApi, f, P, { matterId: f.matterId, reasonCode: "client_instruction" })
@@ -1083,21 +1093,22 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     const promoted = await signIn(f.A.uid, f.A.email!)
     expect((await apiErrorOf(send(approveApi, f, promoted, { requestId: req.requestId }))).code).toBe("approver_promoted_by_requester")
     // An account made by someone else, ten days ago: younger than the PROPOSED 30 days.
-    const young = await member(f.firmId, "partner")
+    const young = await member(f.firmId, "partner", { independentPartner: true })
     await ageUser(young.uid, { createdAt: 10 })
     expect((await apiErrorOf(send(approveApi, f, young, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
     // A partner role granted (by another partner) after the request was made: younger than the request.
-    const late = await member(f.firmId, "partner")
+    const late = await member(f.firmId, "partner", { independentPartner: false })
     await adminDb().collection("users").doc(late.uid).set({ partnerSince: Timestamp.fromMillis(Date.now() + 1_000), partnerGrantedBy: "another-partner" }, { merge: true })
     expect((await apiErrorOf(send(approveApi, f, late, { requestId: req.requestId }))).code).toBe("approver_not_independent")
     // A partner whose claims were changed (updatedAt) with no partnerSince is judged by the change: here, yesterday.
-    const changed = await member(f.firmId, "partner")
+    const changed = await member(f.firmId, "partner", { independentPartner: true })
     await ageUser(changed.uid, { updatedAt: 1 })
     await adminDb().collection("users").doc(changed.uid).set({ claimsVersion: 2 }, { merge: true })
     expect((await apiErrorOf(send(approveApi, f, changed, { requestId: req.requestId }))).code).toBe("approver_tenure_too_short")
     // An account whose start the store cannot tell is refused (fail closed).
     const unknown = await mintIdToken(claims(f.firmId, "partner"))
     uids.push(unknown.uid)
+    await adminDb().collection("users").doc(unknown.uid).set({ independentPartner: true }, { merge: true })
     expect((await apiErrorOf(send(approveApi, f, unknown, { requestId: req.requestId }))).code).toBe("approver_tenure_unknown")
     // Each refusal is a deny row in the audit log, naming its code; nothing was tombstoned.
     const audit = await adminDb().collection("audit_log").where("firmId", "==", f.firmId).where("action", "==", "retention.approve_deletion").get()
@@ -1115,7 +1126,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     const firmId = uniq("f42r1chain")
     firms.push(firmId)
     await adminDb().collection("firms").doc(firmId).set({ name: "CHAIN", plan: "internal", rateLimits: { general: 5000 } })
-    const P = await member(firmId, "partner")
+    const P = await member(firmId, "partner", { independentPartner: true })
     const f: Firm = { firmId, P, Q: P, A: P, matterId: uniq("f42r1chainm") }
     await seedMatter(firmId, f.matterId, TITLE, [P.uid])
     const qEmail = `${uniq("mid")}@example.test`
@@ -1357,6 +1368,26 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     }
   })
 
+  it("FA-F42-R1-006-003-001-002: legacy ambiguous partner is not independent until backfill stamps false", async () => {
+    const f = await newFirm()
+    const legacyUid = uniq("legacy-ambiguous")
+    uids.push(legacyUid)
+    await adminDb().collection("users").doc(legacyUid).set({
+      firmId: f.firmId,
+      role: "partner",
+      clearanceLevel: "privileged-restricted",
+      active: true,
+      mfaEnabled: false,
+      createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS),
+    })
+    const { isIndependentPartner } = await import("../src/retention/partnerIndependence")
+    expect(isIndependentPartner((await adminDb().collection("users").doc(legacyUid).get()).data())).toBe(false)
+    const { backfillLegacyPartnerIndependencePage } = await import("../src/retention/legacyPartnerIndependenceBackfill")
+    await backfillLegacyPartnerIndependencePage(adminDb(), { limit: 500 })
+    expect((await adminDb().collection("users").doc(legacyUid).get()).get("independentPartner")).toBe(false)
+    expect((await adminDb().collection("users").doc(f.P.uid).get()).get("independentPartner")).toBe(true)
+  })
+
   it("the requester side: a requester the approver made partner, or one too young at the request, cannot have the request approved", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
@@ -1369,7 +1400,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await apiErrorOf(send(approveApi, f, f.Q, { requestId: req.requestId }))).code).toBe("requester_promoted_by_approver")
     // A partner whose account is ten days old at the request: younger than the PROPOSED 30 days.
     const g = await newFirm()
-    const young = await member(g.firmId, "partner")
+    const young = await member(g.firmId, "partner", { independentPartner: true })
     await ageUser(young.uid, { createdAt: 10 })
     const byYoung = await send(requestApi, g, young, { matterId: g.matterId, reasonCode: "client_instruction" })
     expect((await apiErrorOf(send(approveApi, g, g.Q, { requestId: byYoung.requestId }))).code).toBe("requester_tenure_too_short")

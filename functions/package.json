@@ -17,6 +17,7 @@
   "scripts": {
     "build": "node build.mjs",
     "jobs:backfill": "node lib/cli/jobsBackfill.js",
+    "partner-independence:backfill": "node build.mjs && node lib/cli/partnerIndependenceBackfill.js",
     "eval:committee-live": "node build.mjs && cd .. && node functions/lib/cli/committeeEval.js",
     "p1:decision": "node build.mjs && node lib/cli/p1Decision.js",
     "test": "vitest run",

@@ -5,20 +5,14 @@ import { PARTNER_LINEAGE_MAX_DEPTH, partnerLineageParents } from "./partnerLinea
 
 /**
  * Audit FA-F42-R1-006-003-001: whether a partner counts as an independent partner for deletion
- * (outside lineage). Founders and legacy fixtures without provisioning parents are independent;
- * `createFirmUser` partners stay dependent until server attestation sets `independentPartner`.
+ * (outside lineage). Only an explicit `independentPartner: true` (onboard, attestation, or
+ * backfill) counts; `createFirmUser` partners stay dependent until attestation.
+ * FA-F42-R1-006-003-001-002: a missing register flag is never inferred from absent lineage.
  */
 export function isIndependentPartner(user: DocumentData | undefined): boolean {
   if (!user || user.role !== "partner" || user.active === false) return false
   if (user.independentPartner === true) return true
-  if (user.independentPartner === false) return false
-  // Pre-register docs: no explicit flag — independent only when not provisioned under another user.
-  const createdBy = user.createdBy
-  const grantedBy = user.partnerGrantedBy
-  const provisioned =
-    (typeof createdBy === "string" && isSafeDocId(createdBy)) ||
-    (typeof grantedBy === "string" && isSafeDocId(grantedBy))
-  return !provisioned
+  return false
 }
 
 /**

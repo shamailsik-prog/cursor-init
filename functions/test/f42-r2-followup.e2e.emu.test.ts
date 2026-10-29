@@ -50,7 +50,13 @@ const send = <T>(api: (c: never) => Promise<T>, f: Firm, m: Member, data: Record
 async function member(firmId: string, role: string): Promise<Member> {
   const m = await mintIdToken(claims(firmId, role))
   uids.push(m.uid)
-  await adminDb().collection("users").doc(m.uid).set({ createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS) }, { merge: true })
+  await adminDb().collection("users").doc(m.uid).set(
+    {
+      createdAt: Timestamp.fromMillis(Date.now() - 400 * DAY_MS),
+      ...(role === "partner" ? { independentPartner: true } : {}),
+    },
+    { merge: true }
+  )
   return m
 }
 
