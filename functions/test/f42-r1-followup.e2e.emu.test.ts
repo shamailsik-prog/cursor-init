@@ -471,6 +471,69 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-no-trail`).get()).exists).toBe(true)
   })
 
+  it.each([
+    [
+      "ocr_texts",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string, otherMatter: string) => {
+        await db.collection("ocr_texts").doc(`${otherMatter}-${docId}-ocr`).set({
+          firmId: f.firmId,
+          matterId: otherMatter,
+          documentId: docId,
+          classification: "internal",
+          text: `${TITLE} other matter ocr decoy`,
+        })
+      },
+    ],
+    [
+      "p1_ocr_operations",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string, otherMatter: string) => {
+        await db.collection("p1_ocr_operations").doc(`${otherMatter}-${docId}-op`).set({
+          firmId: f.firmId,
+          matterId: otherMatter,
+          documentId: docId,
+          classification: "internal",
+          text: `${TITLE} other matter op decoy`,
+        })
+      },
+    ],
+    [
+      "document_workflow",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string, otherMatter: string) => {
+        await db.collection("document_workflow").doc(`${otherMatter}-${docId}-wf`).set({
+          firmId: f.firmId,
+          matterId: otherMatter,
+          documentId: docId,
+          status: "review_required",
+          reviewerId: null,
+          updatedAt: Date.now(),
+        })
+      },
+    ],
+  ] as const)(
+    "FA-F42-R1-002-001-003-001-002: absent-matterId legacy output is kept when only other-matter %s names its documentId",
+    async (collection, seedOtherMatterTrail) => {
+      retentionTestSeam.policy = testPolicy()
+      const f = await newFirm()
+      const db = adminDb()
+      const otherMatter = "another-matter-trail-decoy"
+      const docId = `${f.matterId}-no-matter-trail-${collection}`
+      await db.collection("committee_outputs").doc(`${f.matterId}-legacy-other-trail-${collection}`).set({
+        firmId: f.firmId,
+        actorId: f.P.uid,
+        documentIds: [docId],
+        text: `${TITLE} legacy other matter ${collection} decoy`,
+        classification: "internal",
+        createdAt: Date.now(),
+      })
+      await seedOtherMatterTrail(db, f, docId, otherMatter)
+      await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+      const { requestId } = await requestAndApprove(f)
+      await drain(f.firmId, new FakeClock(Date.now()))
+      expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+      expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-other-trail-${collection}`).get()).exists).toBe(true)
+    }
+  )
+
   it("FA-F42-R1-002-001-001 P3: a firm orphan legacy output is not purged or counted on another matter's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
