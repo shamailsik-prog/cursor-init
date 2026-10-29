@@ -358,6 +358,10 @@ AUDITOR_PLANTS = (
     ("B3", {PLANT_SQL: "CREATE TABLE IF NOT EXISTS client_private.judgment (id TEXT PRIMARY KEY, matter_id TEXT, privileged_text TEXT);\n"}, None, "client_private.judgment"),
     ("B3b", {PLANT_SQL: 'CREATE OR REPLACE VIEW "firm_private"."v_judgment" AS SELECT 1;\n'}, None, "firm_private.v_judgment"),
     ("B3c", {PLANT_SQL: "CREATE TABLE app.audit_plant_q (id TEXT);\n"}, None, "app.audit_plant_q"),
+    ("P34", {PLANT_TS: 'export const x = (db: any) => db.doc("audit_plant_doclit/m1")\n'}, None, "audit_plant_doclit"),
+    ("P35", {PLANT_TS: 'export const x = (db: any, id: string) => db.doc(`audit_plant_doctpl/${id}`)\n'}, None, "audit_plant_doctpl"),
+    ("P36", {PLANT_PY: 'def f(db):\n    return db.document("audit_plant_pydoc/d1")\n'}, None, "audit_plant_pydoc"),
+    ("P37", {PLANT_SQL: "ALTER TABLE judgment RENAME TO audit_plant_pgrename;\n"}, None, "audit_plant_pgrename"),
 )
 
 
@@ -375,7 +379,7 @@ class AuditorPlants(PlantedTree):
         self.assertEqual(self.messages(), [])
 
     def test_every_planted_shape_fails_the_gate_and_names_the_store(self) -> None:
-        self.assertEqual(len(AUDITOR_PLANTS), 33)
+        self.assertEqual(len(AUDITOR_PLANTS), 37)
         rules = self.root / "firestore.rules"
         clean = rules.read_text(encoding="utf-8")
         for pid, files, rules_extra, needle in AUDITOR_PLANTS:
