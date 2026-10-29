@@ -21,6 +21,8 @@ Deletion approval is unchanged: direct provisioning and `partnerAttestedBy` link
 | `sole_independent_attested_provisioned_partner` | Sole independent + provisioned target + policy `true` (allow) |
 | `ok` | Attestation allow when the sole-provisioned rule does not apply |
 
+See also [006-003-001-001-001 sole count puppet](./phase-fa-f42-r1-006-003-001-001-001-sole-count-puppet.md) (peer count excludes attester puppets).
+
 Route unchanged: `POST /api/platform/identity/attestIndependentPartner`.
 
 ## Tests
