@@ -290,6 +290,31 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-004: a legal hold stops every remaining d
     await send(holdApi, f, f.Q, { matterId: f.matterId, reasonCode: "court_order" })
     expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
   })
+
+  it("FA-F42-R1-004-001: halt() moves pending_operator to held when the hold bypasses placeLegalHold's instruction move", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    await adminDb().collection("ai_usage_logs").doc(uniq("u")).set({ firmId: f.firmId, matterId: f.matterId, model: "m", costMicroUsd: 1, trace: { id: "trace-halt-move-1", status: "exported" }, createdAt: Timestamp.now() })
+    const { requestId, approved } = await requestAndApprove(f)
+    let seededHold = false
+    retentionTestSeam.afterStep = async (stepId) => {
+      if (seededHold || !stepId.startsWith("external-")) return
+      seededHold = true
+      // Same pattern as FA-F42-R1-012: an active hold without placeLegalHoldOp's moveInstructions (defence-in-depth is halt()'s job).
+      await adminDb().collection("legal_holds").doc(f.matterId).set({
+        firmId: f.firmId,
+        matterId: f.matterId,
+        active: true,
+        reasonCode: "litigation_anticipated",
+        placedBy: f.P.uid,
+        placedAt: Timestamp.now(),
+      })
+    }
+    expect(await runJobTask({ jobId: approved.jobId!, seq: 0 }, testDeps(new FakeClock(Date.now())))).toBe("dead_lettered")
+    expect(seededHold).toBe(true)
+    expect((await processorRequests(requestId)).map((r) => r.status)).toEqual(["held"])
+    expect((await send(statusApi, f, f.P, { requestId })).halted).toMatchObject({ code: "legal_hold_active" })
+  })
 })
 
 describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterId) are purged by their documents", () => {
