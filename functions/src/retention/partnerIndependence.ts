@@ -120,6 +120,11 @@ export function countOtherIndependentPartnersForSoleProvisionedAttestation(
 
 export type PartnerUserDocLoader = (uid: string) => DocumentData | undefined
 
+export type SoleProvisionedAttestationDecision =
+  | { kind: "not_applicable" }
+  | { kind: "refused"; code: "attestation_sole_independent_provisioned_refused" }
+  | { kind: "allowed"; auditReason: "sole_independent_attested_provisioned_partner" }
+
 /** Target is directly or transitively provisioned under `attesterUid` (006-003-001-001 / 006-003-001-001-001). */
 export function isAttesterProvisionedAttestationTarget(
   attesterUid: string,
