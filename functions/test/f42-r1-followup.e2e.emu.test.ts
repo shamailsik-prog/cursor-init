@@ -148,6 +148,7 @@ afterEach(() => {
   delete retentionTestSeam.policy
   delete retentionTestSeam.afterStep
   delete retentionTestSeam.beforeAck
+  delete retentionTestSeam.trailDocumentIdPageSize
   for (const k of Object.keys(p1TestSeam)) delete (p1TestSeam as Record<string, unknown>)[k]
   setP1TransportForTests(null)
   setOpikFetchForTests(null)
@@ -533,6 +534,51 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
       expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-other-trail-${collection}`).get()).exists).toBe(true)
     }
   )
+
+  it("FA-F42-R1-002-001-003-003: absent-matterId legacy output is purged when the matter ocr_texts trail names its documentId past the first page", async () => {
+    retentionTestSeam.policy = testPolicy()
+    retentionTestSeam.trailDocumentIdPageSize = 2
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-past-first-ocr-page`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-paged-ocr-trail`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      documentIds: [docId],
+      text: `${TITLE} legacy paged ocr trail`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    // Two filler rows on page one; the legacy id sits on page two (stable orderBy document id).
+    await db.collection("ocr_texts").doc(`${f.matterId}-ocr-page-a`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: `${f.matterId}-decoy-a`,
+      classification: "internal",
+      text: "decoy",
+    })
+    await db.collection("ocr_texts").doc(`${f.matterId}-ocr-page-b`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: `${f.matterId}-decoy-b`,
+      classification: "internal",
+      text: "decoy",
+    })
+    await db.collection("ocr_texts").doc(`${f.matterId}-ocr-page-target`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: docId,
+      classification: "internal",
+      text: "target trail",
+    })
+    await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    const prep = await db.collection("deletion_requests").doc(requestId).get()
+    expect((prep.get("legacyTrailDocumentIds") as string[] | undefined) ?? []).toContain(docId)
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-paged-ocr-trail`).get()).exists).toBe(false)
+  })
 
   it("FA-F42-R1-002-001-001 P3: a firm orphan legacy output is not purged or counted on another matter's deletion", async () => {
     retentionTestSeam.policy = testPolicy()

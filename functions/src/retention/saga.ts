@@ -540,6 +540,14 @@ export const LEGACY_DOCUMENT_BATCH = 30
 /** The matter's document ids read per page while the legacy outputs are found. */
 const DOCUMENT_ID_PAGE = 300
 
+function trailDocumentIdPageSize(): number {
+  if (process.env.NODE_ENV !== "production") {
+    const seam = retentionTestSeam.trailDocumentIdPageSize
+    if (typeof seam === "number" && Number.isFinite(seam) && seam > 0) return Math.floor(seam)
+  }
+  return DOCUMENT_ID_PAGE
+}
+
 /** A committee output the legacy purge takes: one with no matter (null or absent), or the matter's own. */
 function legacyOf(data: DocumentData, matterId: string): boolean {
   const m: unknown = data.matterId
@@ -612,8 +620,8 @@ function documentIdFromJobRow(data: DocumentData): string | null {
   return null
 }
 
-/** Matter-scoped Firestore rows with a top-level `documentId` (FA-F42-R1-002-001-003-001: `document_workflow`). */
-const MATTER_TRAIL_DOCUMENT_ID_FIELDS = ["ocr_texts", "p1_ocr_operations", "document_workflow"] as const
+/** FA-F42-R1-002-001-003-003: paged like `document_versions`; `document_workflow` stays single-page (INFO 003-001-003). */
+const MATTER_TRAIL_PAGED_DOCUMENT_ID_FIELDS = ["ocr_texts", "p1_ocr_operations"] as const
 
 /** Every id-shaped entry of a committee output's `documentIds` array. */
 function documentIdsFromCommitteeOutputRow(data: DocumentData): string[] {
@@ -626,7 +634,35 @@ function documentIdsFromCommitteeOutputRow(data: DocumentData): string[] {
   return out
 }
 
-async function noteMatterTrailDocumentIdFieldRows(
+/** Pages matter-scoped rows with a top-level `documentId` (FA-F42-R1-002-001-003-003). */
+async function forEachMatterTrailDocumentIdFieldRow(
+  firmId: string,
+  matterId: string,
+  collection: string,
+  note: (id: string) => void
+): Promise<void> {
+  const pageSize = trailDocumentIdPageSize()
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb()
+      .collection(collection)
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .orderBy(FieldPath.documentId())
+      .limit(pageSize)
+    if (after !== null) page = page.startAfter(after)
+    const snap = await page.select("documentId").get()
+    for (const row of snap.docs) {
+      const id: unknown = row.data().documentId
+      if (typeof id === "string" && id !== "" && SAFE_ID.test(id)) note(id)
+    }
+    if (snap.size < pageSize) return
+    after = snap.docs[snap.docs.length - 1].id
+  }
+}
+
+/** Single-page matter-scoped `documentId` trail read (unchanged cap until INFO 003-001-003). */
+async function noteMatterTrailDocumentIdFieldRowsSinglePage(
   firmId: string,
   matterId: string,
   collection: string,
@@ -645,6 +681,28 @@ async function noteMatterTrailDocumentIdFieldRows(
   }
 }
 
+/** Pages matter-scoped `jobs` and notes each row's document id (FA-F42-R1-002-001-003-003). */
+async function forEachMatterJobTrailRow(firmId: string, matterId: string, note: (id: string) => void): Promise<void> {
+  const pageSize = trailDocumentIdPageSize()
+  let after: string | null = null
+  for (;;) {
+    let page = adminDb()
+      .collection("jobs")
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .orderBy(FieldPath.documentId())
+      .limit(pageSize)
+    if (after !== null) page = page.startAfter(after)
+    const snap = await page.get()
+    for (const row of snap.docs) {
+      const id = documentIdFromJobRow(row.data())
+      if (id !== null) note(id)
+    }
+    if (snap.size < pageSize) return
+    after = snap.docs[snap.docs.length - 1].id
+  }
+}
+
 /** Matter-scoped trail ids for legacy output discovery, read once in prepare before purge jobs are enqueued. */
 async function collectLegacyTrailDocumentIds(firmId: string, matterId: string): Promise<string[]> {
   const seen = new Set<string>()
@@ -658,14 +716,11 @@ async function collectLegacyTrailDocumentIds(firmId: string, matterId: string): 
   for await (const _batch of committeeOutputTrailDocumentIdBatches(firmId, matterId, note, noopFlush, () => false)) {
     /* drain */
   }
-  for (const collection of MATTER_TRAIL_DOCUMENT_ID_FIELDS) {
-    await noteMatterTrailDocumentIdFieldRows(firmId, matterId, collection, note)
+  for (const collection of MATTER_TRAIL_PAGED_DOCUMENT_ID_FIELDS) {
+    await forEachMatterTrailDocumentIdFieldRow(firmId, matterId, collection, note)
   }
-  const jobs = await adminDb().collection("jobs").where("firmId", "==", firmId).where("matterId", "==", matterId).limit(DOCUMENT_ID_PAGE).get()
-  for (const row of jobs.docs) {
-    const id = documentIdFromJobRow(row.data())
-    if (id !== null) note(id)
-  }
+  await noteMatterTrailDocumentIdFieldRowsSinglePage(firmId, matterId, "document_workflow", note)
+  await forEachMatterJobTrailRow(firmId, matterId, note)
   if (seen.size > LEGACY_TRAIL_MAX) throw overLimit()
   return [...seen].sort()
 }
@@ -680,12 +735,13 @@ async function* versionTrailDocumentIdBatches(
 ): AsyncGenerator<{ batch: string[]; stepPrefix: string }> {
   let after: string | null = null
   for (;;) {
+    const pageSize = trailDocumentIdPageSize()
     let page = adminDb()
       .collection("document_versions")
       .where("firmId", "==", firmId)
       .where("matterId", "==", matterId)
       .orderBy(FieldPath.documentId())
-      .limit(DOCUMENT_ID_PAGE)
+      .limit(pageSize)
     if (after !== null) page = page.startAfter(after)
     const snap = await page.select("documentId").get()
     for (const row of snap.docs) {
@@ -697,7 +753,7 @@ async function* versionTrailDocumentIdBatches(
         if (batch !== null) yield { batch, stepPrefix: "legacy-trail-document_versions" }
       }
     }
-    if (snap.size < DOCUMENT_ID_PAGE) return
+    if (snap.size < pageSize) return
     after = snap.docs[snap.docs.length - 1].id
   }
 }
@@ -712,12 +768,13 @@ async function* committeeOutputTrailDocumentIdBatches(
 ): AsyncGenerator<{ batch: string[]; stepPrefix: string }> {
   let after: string | null = null
   for (;;) {
+    const pageSize = trailDocumentIdPageSize()
     let page = adminDb()
       .collection("committee_outputs")
       .where("firmId", "==", firmId)
       .where("matterId", "==", matterId)
       .orderBy(FieldPath.documentId())
-      .limit(DOCUMENT_ID_PAGE)
+      .limit(pageSize)
     if (after !== null) page = page.startAfter(after)
     const snap = await page.select("documentIds").get()
     for (const row of snap.docs) {
@@ -729,7 +786,7 @@ async function* committeeOutputTrailDocumentIdBatches(
         }
       }
     }
-    if (snap.size < DOCUMENT_ID_PAGE) return
+    if (snap.size < pageSize) return
     after = snap.docs[snap.docs.length - 1].id
   }
 }
@@ -758,9 +815,34 @@ async function* matterTrailDocumentIdBatches(
   for await (const batch of committeeOutputTrailDocumentIdBatches(firmId, matterId, note, flush, () => pending.length >= LEGACY_DOCUMENT_BATCH)) {
     yield batch
   }
-  for (const collection of MATTER_TRAIL_DOCUMENT_ID_FIELDS) {
+  for (const collection of MATTER_TRAIL_PAGED_DOCUMENT_ID_FIELDS) {
+    const pageSize = trailDocumentIdPageSize()
+    let after: string | null = null
+    for (;;) {
+      let page = adminDb()
+        .collection(collection)
+        .where("firmId", "==", firmId)
+        .where("matterId", "==", matterId)
+        .orderBy(FieldPath.documentId())
+        .limit(pageSize)
+      if (after !== null) page = page.startAfter(after)
+      const snap = await page.select("documentId").get()
+      for (const row of snap.docs) {
+        const id: unknown = row.data().documentId
+        if (typeof id !== "string" || id === "" || !SAFE_ID.test(id)) continue
+        note(id)
+        if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+          const batch = flush()
+          if (batch !== null) yield { batch, stepPrefix: `legacy-trail-${collection}` }
+        }
+      }
+      if (snap.size < pageSize) break
+      after = snap.docs[snap.docs.length - 1].id
+    }
+  }
+  {
     const snap = await adminDb()
-      .collection(collection)
+      .collection("document_workflow")
       .where("firmId", "==", firmId)
       .where("matterId", "==", matterId)
       .limit(DOCUMENT_ID_PAGE)
@@ -772,23 +854,33 @@ async function* matterTrailDocumentIdBatches(
       note(id)
       if (pending.length >= LEGACY_DOCUMENT_BATCH) {
         const batch = flush()
-        if (batch !== null) yield { batch, stepPrefix: `legacy-trail-${collection}` }
+        if (batch !== null) yield { batch, stepPrefix: "legacy-trail-document_workflow" }
       }
     }
   }
-  const jobsSnap = await adminDb()
-    .collection("jobs")
-    .where("firmId", "==", firmId)
-    .where("matterId", "==", matterId)
-    .limit(DOCUMENT_ID_PAGE)
-    .get()
-  for (const row of jobsSnap.docs) {
-    const id = documentIdFromJobRow(row.data())
-    if (id === null) continue
-    note(id)
-    if (pending.length >= LEGACY_DOCUMENT_BATCH) {
-      const batch = flush()
-      if (batch !== null) yield { batch, stepPrefix: "legacy-trail-jobs" }
+  {
+    const pageSize = trailDocumentIdPageSize()
+    let after: string | null = null
+    for (;;) {
+      let page = adminDb()
+        .collection("jobs")
+        .where("firmId", "==", firmId)
+        .where("matterId", "==", matterId)
+        .orderBy(FieldPath.documentId())
+        .limit(pageSize)
+      if (after !== null) page = page.startAfter(after)
+      const jobsSnap = await page.get()
+      for (const row of jobsSnap.docs) {
+        const id = documentIdFromJobRow(row.data())
+        if (id === null) continue
+        note(id)
+        if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+          const batch = flush()
+          if (batch !== null) yield { batch, stepPrefix: "legacy-trail-jobs" }
+        }
+      }
+      if (jobsSnap.size < pageSize) break
+      after = jobsSnap.docs[jobsSnap.docs.length - 1].id
     }
   }
   const tail = flush()
