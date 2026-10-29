@@ -395,6 +395,57 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-absent-trail`).get()).exists).toBe(false)
   })
 
+  it.each([
+    [
+      "ocr_texts",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string) => {
+        await db.collection("ocr_texts").doc(`${docId}-ocr-trail`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: docId,
+          classification: "internal",
+          text: `${TITLE} matter ocr trail`,
+        })
+      },
+    ],
+    [
+      "p1_ocr_operations",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string) => {
+        await db.collection("p1_ocr_operations").doc(`${docId}-op-trail`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: docId,
+          classification: "internal",
+          text: `${TITLE} matter op trail`,
+        })
+      },
+    ],
+  ] as const)(
+    "FA-F42-R1-002-001-003-004: absent-matterId legacy output is purged when the matter %s trail names its documentId on the first page",
+    async (collection, seedMatterTrail) => {
+      retentionTestSeam.policy = testPolicy()
+      const f = await newFirm()
+      const db = adminDb()
+      const docId = `${f.matterId}-first-page-${collection}-trail`
+      await db.collection("committee_outputs").doc(`${f.matterId}-legacy-${collection}-trail`).set({
+        firmId: f.firmId,
+        actorId: f.P.uid,
+        documentIds: [docId],
+        text: `${TITLE} legacy first-page ${collection} trail`,
+        classification: "internal",
+        createdAt: Date.now(),
+      })
+      await seedMatterTrail(db, f, docId)
+      await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+      const { requestId } = await requestAndApprove(f)
+      await drain(f.firmId, new FakeClock(Date.now()))
+      const prep = await db.collection("deletion_requests").doc(requestId).get()
+      expect((prep.get("legacyTrailDocumentIds") as string[] | undefined) ?? []).toContain(docId)
+      expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+      expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-${collection}-trail`).get()).exists).toBe(false)
+    }
+  )
+
   it("FA-F42-R1-002-001-003-001: absent-matterId legacy output is purged via matter document_workflow when version/ocr/job trails are gone", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
