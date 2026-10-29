@@ -323,6 +323,68 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect(view.acks.find((a) => a.storeId === "firestore:documents")).toMatchObject({ outcome: "purged", count: 31 })
   })
 
+  it("FA-F42-R1-002-001: legacy outputs are purged when document rows were removed before the saga (versions and firm sweep)", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const docId = `${f.matterId}-predeleted`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-pre`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      matterId: null,
+      documentIds: [docId],
+      text: `${TITLE} legacy before docs gone`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    // Document row gone before g0; version row still names the matter (typical between manual doc delete and saga).
+    await db.collection("document_versions").doc(`${docId}_v1`).set({
+      firmId: f.firmId,
+      matterId: f.matterId,
+      documentId: docId,
+      version: 1,
+      storagePath: "fs://x",
+      classification: "internal",
+      createdBy: f.P.uid,
+    })
+    const keepDoc = `${f.matterId}-other-matter-doc`
+    await db.collection("documents").doc(keepDoc).set({ firmId: f.firmId, matterId: "another-matter", classification: "internal" })
+    await db.collection("committee_outputs").doc(`${f.matterId}-keep-other`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      matterId: null,
+      documentIds: [keepDoc],
+      text: `${TITLE} other matter`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-pre`).get()).exists).toBe(false)
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-keep-other`).get()).exists).toBe(true)
+  })
+
+  it("FA-F42-R1-002-001: firm sweep purges a legacy output when every linked document is gone firm-wide", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const f = await newFirm()
+    const db = adminDb()
+    const goneId = `${f.matterId}-fully-gone`
+    await db.collection("committee_outputs").doc(`${f.matterId}-legacy-gone`).set({
+      firmId: f.firmId,
+      actorId: f.P.uid,
+      matterId: null,
+      documentIds: [goneId],
+      text: `${TITLE} legacy fully gone`,
+      classification: "internal",
+      createdAt: Date.now(),
+    })
+    const { requestId } = await requestAndApprove(f)
+    await drain(f.firmId, new FakeClock(Date.now()))
+    expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+    expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-gone`).get()).exists).toBe(false)
+  })
+
   it("a store's first acknowledgement stands: a row purged after it is counted apart and never un-acknowledges the store", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()

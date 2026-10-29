@@ -60,4 +60,8 @@ npm --prefix functions test -- --run f42-retention.units.test.ts -t 'committee o
 | transport_stub | true |
 | classification | PARTIAL (legacy committee output purge and read refusal; broader F42 retention/deletion remains gated elsewhere) |
 
-No COMPLETE / product-done claim.
+No COMPLETE / product-done claim for the parent slice.
+
+## Child finding
+
+**FA-F42-R1-002-001** (documents gone before saga): see `docs/audits/phase-fa-f42-r1-002-001-legacy-outputs-predeleted-docs.md`.
