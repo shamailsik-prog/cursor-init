@@ -84,10 +84,7 @@ function acknowledgedEscalatedRow(ackAtMs: number, level = 1, episode = 1): Aler
     lastSeenAt: Timestamp.fromMillis(ackAtMs - 30_000),
     escalateAt: null,
     escalations: [{ level, ownerRole: "partner", severity: "warning", at: escalatedAt }],
-    actions: [
-      { action: "escalate", by: "system", role: "operator", level, at: escalatedAt },
-      { action: "acknowledge", by: "p1", role: "partner", level, at: ackAt },
-    ],
+    actions: [{ action: "acknowledge", by: "p1", role: "partner", level, at: ackAt }],
     acknowledgedAt: ackAt,
     acknowledgedBy: { uid: "p1", role: "partner" },
     resolvedAt: null,
