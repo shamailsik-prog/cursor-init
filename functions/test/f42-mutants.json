@@ -217,6 +217,19 @@
     "why": "a class under legal hold ages nothing out"
   },
   {
+    "id": "H5-halt-skips-instruction-held",
+    "area": "legal hold",
+    "file": "functions/src/retention/saga.ts",
+    "old": "    moveInstructions(tx, pending, \"held\", at)\n",
+    "new": "",
+    "tests": [
+      "test/f42-r1-followup.e2e.emu.test.ts",
+      "-t",
+      "FA-F42-R1-004-001"
+    ],
+    "why": "halt() must move pending_operator instructions to held when placeLegalHold did not (FA-F42-R1-004-001 / ME REAUDIT mutant B)"
+  },
+  {
     "id": "Z1-retention-not-partner-only",
     "area": "authorisation",
     "file": "platform/p5/permissionDecision.ts",
