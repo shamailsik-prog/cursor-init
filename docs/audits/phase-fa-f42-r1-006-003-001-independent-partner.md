@@ -19,8 +19,9 @@
 | `approver_not_independent` | Approver not on register |
 | `requester_not_independent` | Requester not on register |
 | `attester_not_independent` | Attestation caller not `independentPartner: true` |
+| `attestation_sole_independent_provisioned_refused` | Sole independent attesting a partner they provisioned while policy disallows (006-003-001-001) |
 
-Route: `POST /api/platform/identity/attestIndependentPartner` (`identity.attest_independent_partner`).
+Route: `POST /api/platform/identity/attestIndependentPartner` (`identity.attest_independent_partner`). Sole-independent provisioned attestation audit reason when allowed: `sole_independent_attested_provisioned_partner` (see `docs/audits/phase-fa-f42-r1-006-003-001-001-sole-attest-puppet.md`).
 
 ## Tests
 

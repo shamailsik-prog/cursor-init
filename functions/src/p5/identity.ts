@@ -5,7 +5,8 @@ import { HttpError } from "../http/errors"
 import { isRole, type Caller, type Role } from "./auth"
 import { isKnownClassification, rankOf } from "./classification"
 import { g2Passed } from "./gates"
-import { isIndependentPartner } from "../retention/partnerIndependence"
+import { isIndependentPartner, decideSoleIndependentProvisionedAttestation } from "../retention/partnerIndependence"
+import { activePolicy } from "../retention/config"
 import {
   errorCode,
   isSafeDocId,
@@ -551,7 +552,8 @@ async function revertIfStillOurs(
 
 /**
  * attestIndependentPartner({ uid }) → { uid }. An already-independent partner attests that another
- * firm partner is a genuine independent partner (FA-F42-R1-006-003-001). Server-only fields;
+ * firm partner is a genuine independent partner (FA-F42-R1-006-003-001). Sole-independent attestation of a partner
+ * the attester provisioned is governed by retention policy and audited (FA-F42-R1-006-003-001-001). Server-only fields;
  * clients cannot forge attestation.
  */
 export const attestIndependentPartnerOp: FirmOperation<{ uid: string }> = {
@@ -579,7 +581,29 @@ export const attestIndependentPartnerOp: FirmOperation<{ uid: string }> = {
       if (targetDoc.active === false) throw new HttpError(409, "target_inactive")
       if (targetDoc.role !== "partner") throw new HttpError(409, "target_not_partner")
       if (targetDoc.independentPartner === true) throw new HttpError(409, "already_independent")
-      await audit.stage(tx, "allow", "ok")
+
+      const partners = await tx.get(
+        usersRef().where("firmId", "==", caller.firmId).where("role", "==", "partner").where("active", "==", true)
+      )
+      let otherIndependent = 0
+      for (const d of partners.docs) {
+        if (d.id === caller.uid) continue
+        if (isIndependentPartner(d.data())) otherIndependent++
+      }
+      const policy = activePolicy()
+      const soleDecision = decideSoleIndependentProvisionedAttestation(
+        caller.uid,
+        targetDoc,
+        otherIndependent,
+        policy.deletion.allowSoleIndependentAttestationOfProvisionedPartners
+      )
+      if (soleDecision.kind === "refused") {
+        await audit.stage(tx, "deny", soleDecision.code)
+        throw new HttpError(403, soleDecision.code)
+      }
+
+      const auditReason = soleDecision.kind === "allowed" ? soleDecision.auditReason : "ok"
+      await audit.stage(tx, "allow", auditReason)
       tx.update(usersRef().doc(uid), {
         independentPartner: true,
         partnerAttestedBy: caller.uid,

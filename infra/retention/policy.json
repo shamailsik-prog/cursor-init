@@ -10,6 +10,8 @@
     "maxMembersRevokedAtApproval": 400,
     "storesPerPurgeJob": 12,
     "approverMinTenureDays": 30,
+    "allowSoleIndependentAttestationOfProvisionedPartners": true,
+    "allowSoleIndependentAttestationNote": "Design-accept (FA-F42-R1-006-003-001-001): while the firm has only one independent partner, that partner may attest a partner they provisioned (createFirmUser / setUserClaims). Deletion approval still refuses direct provisioning and attestation edges (006-003-001); attestation is audited with reason sole_independent_attested_provisioned_partner. Set false to refuse attestation at the API.",
     "approverMinTenureNote": "PROPOSED, owner ratification required (spec R26): the requester's and the approver's account and partner role must each have run this many days (the approver's must also predate the request), and neither partner may have created the other's account or made the other partner.",
     "reasonCodes": ["client_instruction", "matter_opened_in_error", "duplicate_matter", "retention_period_elapsed", "court_order", "regulator_request"],
     "reasonCodesNote": "PROPOSED, owner ratification required. The closed list of codes a deletion request may give (spec R25): a code, never free text, so no name or fact of a matter enters the deletion trail. Adding a code is a policy change.",

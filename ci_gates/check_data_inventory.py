@@ -457,6 +457,9 @@ def check_policy(policy: dict) -> list[Finding]:
             value = deletion.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 out.append(_fail("policy", f"deletion.{field} must be a positive integer"))
+        allow_sole = deletion.get("allowSoleIndependentAttestationOfProvisionedPartners")
+        if not isinstance(allow_sole, bool):
+            out.append(_fail("policy", "deletion.allowSoleIndependentAttestationOfProvisionedPartners must be true or false"))
         if not _reason_codes(deletion.get("reasonCodes")):
             out.append(_fail("policy", "deletion.reasonCodes must be a closed, non-empty list of distinct codes"))
     hold = policy.get("legalHold")
