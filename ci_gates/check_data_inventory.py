@@ -14,7 +14,9 @@ This gate fails when:
      `collection(h, x)`, `collectionGroup(h, x)`, `doc(h, x, ...)` with any handle (`db`, `this.db`, `firestore`), a
      helper call `(db, x`, or a constant named `*COLLECTION*`. The argument `x` is resolved: a string or template
      literal, a constant of any name (the file's own or an exported one, through `export { A as B }`), a `+`
-     concatenation of those. Names may be camelCase (FA-F42-R1-008, spec R28);
+     concatenation of those. Names may be camelCase (FA-F42-R1-008, spec R28). A `.doc("coll/id")`, `` .doc(`coll/${id}`) ``,
+     Python `.document("coll/id")`, or modular `doc(h, "coll/id")` names the first path segment as the collection when the
+     argument is a slash-separated document path;
   1b. a name built at run time (a template with interpolation, an unresolved part) has a static prefix that begins no
      inventoried collection;
   1c. an inventoried collection whose rules block is server-only is found only through that block (a server-only store
@@ -22,7 +24,7 @@ This gate fails when:
   2. an object key segment after any expression naming a firm id (`${firmId}/<seg>/`, `${input.firmId}/<seg>/`,
      `firmId + "/<seg>/"`) is not an inventoried object prefix;
   3. a Postgres relation (`CREATE [GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] TABLE`, views, top-level `SELECT ... INTO`
-     in any `.sql` file; table and view DDL in a string of a `.py` or JS/TS file; `__tablename__` or
+     in any `.sql` file; table and view DDL in a string of a `.py` or JS/TS file; `ALTER TABLE … RENAME TO`; `__tablename__` or
      `create_table("x")` in Python) is not inventoried. A relation outside the `public` schema keeps its schema:
      `client_private.judgment` is not the public `judgment`;
   4. an inventory entry is malformed, duplicated, names an unknown profile, retention class or store, or is stale
@@ -128,6 +130,12 @@ CALL_PATTERNS = (
     # also be a document id (`letterRef(db, `outbox_${id}`)`), so only a resolved name counts from it, never a prefix.
     re.compile(r"\(\s*(?:this\.)?db\s*,\s*"),
 )
+MODULAR_DOC_PATTERN = CALL_PATTERNS[5]
+# Chained document-path calls: the argument is a slash-separated path (`db.doc("coll/id")`, Python `.document("coll/id")`).
+DOC_PATH_PATTERNS = (
+    re.compile(r"\.doc\(\s*"),
+    re.compile(r"\.document\(\s*"),
+)
 HELPER_PATTERN = CALL_PATTERNS[-1]
 # A constant named as a collection (`OPS_COLLECTION = "x"`, `COLLECTION_X = "x"`) is one even before it is used.
 NAMED_COLLECTION_RE = re.compile(r"\b[A-Z0-9_]*COLLECTION[A-Z0-9_]*\s*(?::\s*[\w$<>\[\]| ]+)?=\s*[\"'`]([A-Za-z_][A-Za-z0-9_-]*)[\"'`]")
@@ -155,6 +163,10 @@ DDL_VIEW_RE = re.compile(
 # `SELECT ... INTO [TEMP|UNLOGGED] [TABLE] x FROM` creates a table, at top level of a .sql file (outside $$ bodies,
 # where INTO names variables).
 SELECT_INTO_RE = re.compile(r"\bSELECT\b[^;]*?\bINTO\s+(?:(?:TEMP|TEMPORARY|UNLOGGED)\s+)?(?:TABLE\s+)?" + SQL_NAME + r"\s+FROM\b", re.I | re.S)
+DDL_RENAME_RE = re.compile(
+    r"ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?" + SQL_NAME + r"\s+RENAME\s+(?:AS\s+)?TO\s+" + SQL_NAME,
+    re.I,
+)
 DOLLAR_BODY_RE = re.compile(r"\$([A-Za-z_]*)\$.*?\$\1\$", re.S)
 PY_TABLENAME_RE = re.compile(r"__tablename__\s*=\s*[\"']([a-z_][a-z0-9_]*)[\"']")
 PY_CREATE_TABLE_RE = re.compile(r"create_table\(\s*[\"']([a-z_][a-z0-9_]*)[\"']")
@@ -308,6 +320,86 @@ def _evaluate(arg: str, rel: str, consts: Constants) -> tuple[set[str], set[str]
     return {v for v in values[0] if FS_NAME_RE.match(v)}, set()
 
 
+def _first_path_segment(path: str) -> str | None:
+    if "/" not in path:
+        return None
+    seg = path.split("/", 1)[0]
+    return seg if FS_NAME_RE.match(seg) else None
+
+
+def _collection_from_doc_path(arg: str, rel: str, consts: Constants) -> tuple[set[str], set[str]]:
+    """Collection names from a slash-separated document path (`db.doc("coll/id")`, `` .doc(`coll/${id}`) ``)."""
+    parts: list[str] = []
+    depth = 0
+    quote: str | None = None
+    cur = ""
+    for c in arg:
+        if quote:
+            cur += c
+            if c == quote:
+                quote = None
+            continue
+        if c in "\"'`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        if c == "+" and depth == 0:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += c
+    parts.append(cur.strip())
+    names: set[str] = set()
+    prefixes: set[str] = set()
+    path_parts: list[str] = []
+    for part in parts:
+        m = re.fullmatch(r"\"([^\"\\]*)\"|'([^'\\]*)'", part)
+        if m:
+            path_parts.append(m.group(1) if m.group(1) is not None else m.group(2))
+        elif part.startswith("`") and part.endswith("`") and len(part) >= 2:
+            body = part[1:-1]
+            if "${" in body:
+                static = body.split("${", 1)[0]
+                if static:
+                    path_parts.append(static)
+                else:
+                    return names, prefixes
+            else:
+                path_parts.append(body)
+        elif re.fullmatch(r"[A-Za-z_$][\w$.]*", part):
+            resolved = consts.resolve(rel, part)
+            if len(resolved) == 1:
+                path_parts.append(next(iter(resolved)))
+            elif resolved:
+                for value in resolved:
+                    seg = _first_path_segment(value)
+                    if seg:
+                        names.add(seg)
+                return names, prefixes
+            else:
+                return names, prefixes
+        else:
+            return names, prefixes
+    if not path_parts:
+        return names, prefixes
+    combined = "".join(path_parts)
+    if "${" in arg or any(
+        p.startswith("`") and "${" in p for p in parts
+    ):
+        seg = _first_path_segment(combined)
+        if seg:
+            names.add(seg)
+        elif combined and FS_NAME_RE.match(combined.rstrip("/")):
+            prefixes.add(combined.rstrip("/"))
+        return names, prefixes
+    seg = _first_path_segment(combined)
+    if seg:
+        names.add(seg)
+    return names, prefixes
+
+
 def _code_texts(root: Path) -> dict[str, str]:
     return {p.relative_to(root).as_posix(): _read(p) for p in _source_files(root) if p.suffix != ".sql"}
 
@@ -327,11 +419,25 @@ def discover_firestore_code(root: Path, texts: dict[str, str] | None = None) -> 
                 if not arg:
                     continue
                 names, prefixes = _evaluate(arg, rel, consts)
+                if pattern is MODULAR_DOC_PATTERN and not names and not prefixes:
+                    path_names, path_prefixes = _collection_from_doc_path(arg, rel, consts)
+                    names |= path_names
+                    prefixes |= path_prefixes
                 for name in names:
                     found.setdefault(name, rel)
                 if pattern is not HELPER_PATTERN:
                     for prefix in prefixes:
                         dynamic.setdefault(prefix, rel)
+        for pattern in DOC_PATH_PATTERNS:
+            for m in pattern.finditer(text):
+                arg = _argument(text, m.end())
+                if not arg:
+                    continue
+                names, prefixes = _collection_from_doc_path(arg, rel, consts)
+                for name in names:
+                    found.setdefault(name, rel)
+                for prefix in prefixes:
+                    dynamic.setdefault(prefix, rel)
     return found, dynamic
 
 
@@ -396,11 +502,17 @@ def discover_postgres(root: Path) -> dict[str, str]:
             for pattern in (DDL_TABLE_RE, DDL_VIEW_RE, SELECT_INTO_RE):
                 for schema, name in pattern.findall(top if pattern is SELECT_INTO_RE else text):
                     found.setdefault(_relation(schema or None, name), rel)
+            for _old_schema, _old_name, new_schema, new_name in DDL_RENAME_RE.findall(top):
+                found.setdefault(_relation(new_schema or None, new_name), rel)
         elif path.suffix in (".py", ".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"):
             # DDL in a string of code: a table or view it creates is a store like any other.
-            for pattern in (DDL_TABLE_RE, DDL_VIEW_RE):
-                for schema, name in pattern.findall(text):
-                    found.setdefault(_relation(schema or None, name), rel)
+            for pattern in (DDL_TABLE_RE, DDL_VIEW_RE, DDL_RENAME_RE):
+                if pattern is DDL_RENAME_RE:
+                    for _os, _on, ns, nn in pattern.findall(text):
+                        found.setdefault(_relation(ns or None, nn), rel)
+                else:
+                    for schema, name in pattern.findall(text):
+                        found.setdefault(_relation(schema or None, name), rel)
             if path.suffix == ".py":
                 for pattern in (PY_TABLENAME_RE, PY_CREATE_TABLE_RE):
                     for name in pattern.findall(text):
