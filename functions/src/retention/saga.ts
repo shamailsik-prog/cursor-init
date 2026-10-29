@@ -572,16 +572,19 @@ async function purgeLegacyOutputsForDocIdBatch(
   return used
 }
 
-/** Pages the matter's `document_versions` rows and yields distinct `documentId` values in batches of ≤30. */
-async function* matterVersionDocumentIdBatches(firmId: string, matterId: string): AsyncGenerator<string[]> {
-  const seen = new Set<string>()
-  let pending: string[] = []
-  const flush = (): string[] | null => {
-    if (pending.length === 0) return null
-    const out = pending
-    pending = []
-    return out
-  }
+/**
+ * Matter-scoped stores that still name a document id after its `documents` / `document_versions` rows were removed
+ * early (FA-F42-R1-002-001-003). Each is keyed by `matterId`; no firm-wide null-matter sweep.
+ */
+
+/** Pages `document_versions` with stable pagination (same as FA-F42-R1-002-001). */
+async function* versionTrailDocumentIdBatches(
+  firmId: string,
+  matterId: string,
+  note: (id: string) => void,
+  flush: () => string[] | null,
+  atBatchLimit: () => boolean
+): AsyncGenerator<{ batch: string[]; stepPrefix: string }> {
   let after: string | null = null
   for (;;) {
     let page = adminDb()
@@ -594,21 +597,59 @@ async function* matterVersionDocumentIdBatches(firmId: string, matterId: string)
     const snap = await page.select("documentId").get()
     for (const row of snap.docs) {
       const id: unknown = row.data().documentId
-      if (typeof id !== "string" || id === "" || seen.has(id)) continue
-      seen.add(id)
-      pending.push(id)
-      if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+      if (typeof id !== "string" || id === "" || !SAFE_ID.test(id)) continue
+      note(id)
+      if (atBatchLimit()) {
         const batch = flush()
-        if (batch !== null) yield batch
+        if (batch !== null) yield { batch, stepPrefix: "legacy-trail-document_versions" }
       }
     }
-    if (snap.size < DOCUMENT_ID_PAGE) {
-      const tail = flush()
-      if (tail !== null) yield tail
-      return
-    }
+    if (snap.size < DOCUMENT_ID_PAGE) return
     after = snap.docs[snap.docs.length - 1].id
   }
+}
+
+/** Pages the matter's trail collections and yields distinct `documentId` values in batches of ≤30. */
+async function* matterTrailDocumentIdBatches(
+  firmId: string,
+  matterId: string
+): AsyncGenerator<{ batch: string[]; stepPrefix: string }> {
+  const seen = new Set<string>()
+  let pending: string[] = []
+  const flush = (): string[] | null => {
+    if (pending.length === 0) return null
+    const out = pending
+    pending = []
+    return out
+  }
+  const note = (id: string): void => {
+    if (seen.has(id)) return
+    seen.add(id)
+    pending.push(id)
+  }
+  for await (const batch of versionTrailDocumentIdBatches(firmId, matterId, note, flush, () => pending.length >= LEGACY_DOCUMENT_BATCH)) {
+    yield batch
+  }
+  for (const collection of ["ocr_texts", "p1_ocr_operations", "jobs"] as const) {
+    const snap = await adminDb()
+      .collection(collection)
+      .where("firmId", "==", firmId)
+      .where("matterId", "==", matterId)
+      .limit(DOCUMENT_ID_PAGE)
+      .select("documentId")
+      .get()
+    for (const row of snap.docs) {
+      const id: unknown = row.data().documentId
+      if (typeof id !== "string" || id === "" || !SAFE_ID.test(id)) continue
+      note(id)
+      if (pending.length >= LEGACY_DOCUMENT_BATCH) {
+        const batch = flush()
+        if (batch !== null) yield { batch, stepPrefix: `legacy-trail-${collection}` }
+      }
+    }
+  }
+  const tail = flush()
+  if (tail !== null) yield { batch: tail, stepPrefix: "legacy-trail" }
 }
 
 /**
@@ -621,7 +662,9 @@ async function* matterVersionDocumentIdBatches(firmId: string, matterId: string)
  * continuation runs this again over the documents still there).
  *
  * FA-F42-R1-002-001: when `documents` rows were removed before the saga, the same purge still runs from this matter's
- * `document_versions` document ids only (FA-F42-R1-002-001-001: no firm-wide sweep of null-`matterId` rows).
+ * trail collections' `documentId` values (`document_versions`, `ocr_texts`, `p1_ocr_operations`, `jobs`) only
+ * (FA-F42-R1-002-001-001: no firm-wide sweep of null/absent-`matterId` rows). Legacy outputs with absent `matterId`
+ * are included via `legacyOf` once a batch names them (FA-F42-R1-002-001-003).
  */
 async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, chunks: number): Promise<number | null> {
   if (req.plan[OUTPUTS_KEY] !== "purge") return chunks
@@ -642,8 +685,8 @@ async function purgeLegacyOutputs(ctx: JobContext<PurgePayload>, req: Request, c
     if (docs.length < DOCUMENT_ID_PAGE) break
     after = docs[docs.length - 1]
   }
-  for await (const batch of matterVersionDocumentIdBatches(firmId, req.matterId)) {
-    const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, "legacy-ver")
+  for await (const { batch, stepPrefix } of matterTrailDocumentIdBatches(firmId, req.matterId)) {
+    const next = await purgeLegacyOutputsForDocIdBatch(ctx, req, outputs, batch, used, stepPrefix)
     if (next === null) return null
     used = next
   }
