@@ -61,6 +61,42 @@ function acknowledgedRow(ackAtMs: number, episode = 1): AlertRow {
   }
 }
 
+/** Partner-style acknowledgment after escalation (level ≥ 1); FA-F43-R1-002-001 pins level reset on hold-expired reopen. */
+function acknowledgedEscalatedRow(ackAtMs: number, level = 1, episode = 1): AlertRow {
+  const ackAt = Timestamp.fromMillis(ackAtMs)
+  const escalatedAt = Timestamp.fromMillis(ackAtMs - 15 * 60_000)
+  return {
+    schemaVersion: 1,
+    condition: "ai.kill_switch_blocked",
+    firmId: "firm-a",
+    subjectKey: "firm:firm-a",
+    ref: null,
+    detail: { reason: "kill_switch_firm" },
+    baseSeverity: "warning",
+    severity: "warning",
+    state: "acknowledged",
+    level,
+    ownerRole: "partner",
+    episode,
+    count: 4,
+    totalCount: 4,
+    firstSeenAt: Timestamp.fromMillis(ackAtMs - 60 * 60_000),
+    lastSeenAt: Timestamp.fromMillis(ackAtMs - 30_000),
+    escalateAt: null,
+    escalations: [{ level, ownerRole: "partner", severity: "warning", at: escalatedAt }],
+    actions: [
+      { action: "escalate", by: "system", role: "operator", level, at: escalatedAt },
+      { action: "acknowledge", by: "p1", role: "partner", level, at: ackAt },
+    ],
+    acknowledgedAt: ackAt,
+    acknowledgedBy: { uid: "p1", role: "partner" },
+    resolvedAt: null,
+    resolvedBy: null,
+    createdAt: Timestamp.fromMillis(ackAtMs - 120 * 60_000),
+    updatedAt: ackAt,
+  }
+}
+
 describe("FA-F43-R1-002: acknowledgment hold and reopen", () => {
   it("ACK_HOLD_MS matches the warning acknowledgment window and is not an infinite hold", () => {
     expect(ACK_HOLD_MS).toBe(ACK_WINDOW_MS.warning)
@@ -93,6 +129,33 @@ describe("FA-F43-R1-002: acknowledgment hold and reopen", () => {
       episode: 2,
       count: 1,
       totalCount: 7,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    })
+    const pageId = pageIdFor("a_test", 2, 0)
+    expect(writes.some((w) => w.path === `ops_alert_notifications/${pageId}` && w.kind === "set")).toBe(true)
+  })
+
+  it("FA-F43-R1-002-001: after ACK_HOLD_MS reopen resets to level 0 when the prior acknowledgment was at level ≥1", () => {
+    const ackAt = 1_700_000_000_000
+    const nowMs = ackAt + ACK_HOLD_MS
+    const { tx, writes, ref } = recordingTx()
+    const staged = stageAlert(
+      tx,
+      { spec: baseSpec, id: "a_test", ref, current: acknowledgedEscalatedRow(ackAt, 1, 1) },
+      nowMs
+    )
+    expect(staged).toBe("reopened")
+    const alertWrite = writes.find((w) => w.path === "ops_alerts/a_test" && w.kind === "set")
+    expect(alertWrite?.data).toMatchObject({
+      state: "open",
+      level: 0,
+      ownerRole: "operator",
+      episode: 2,
+      count: 1,
+      totalCount: 5,
       acknowledgedAt: null,
       acknowledgedBy: null,
       resolvedAt: null,
