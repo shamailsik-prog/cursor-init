@@ -31,6 +31,13 @@ export const VACUOUS_AFTER_ALL_DELETE_FIRMS_UIDS_GUARD =
 export const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH =
   /deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)/
 
+/** FA-F42-R1-015-001-001-002-002-003-001-001-005-001: pinned `.source` for the M4 export (kills never-match regex mutants). */
+export const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH_PINNED_SOURCE =
+  String.raw`deleteFirmScopedData\s*\(\s*\[\s*\]\s*,\s*\[\s*\]\s*\)`
+
+/** Positive control: production empty-array mutant string the M4 regex must match. */
+export const M4_EMPTY_ARRAY_DELETE_FIXTURE = "deleteFirmScopedData([], [])"
+
 const UNIT_SELF = path.join(__dirname, "f42-e2e-cleanup.unit.test.ts")
 
 const WIRING_GUARD_CONST = "AFTER_ALL_DELETE_FIRMS_UIDS_GUARD"
@@ -667,6 +674,22 @@ function findModuleM4EmptyArrayNotToMatchExport(sf: ts.SourceFile): ts.VariableD
   return findModuleExportedConst(sf, M4_EMPTY_ARRAY_NOT_TO_MATCH_CONST)
 }
 
+function regularExpressionLiteralPatternAndFlags(
+  node: ts.RegularExpressionLiteral,
+): { pattern: string; flags: string } {
+  const text = node.text
+  const lastSlash = text.lastIndexOf("/")
+  return { pattern: text.slice(1, lastSlash), flags: text.slice(lastSlash + 1) }
+}
+
+/** Module export must stay a flagless regex literal with the pinned empty-array pattern (not e.g. `/(?!)/`). */
+function moduleM4EmptyArrayNotToMatchExportMatchesPin(decl: ts.VariableDeclaration): boolean {
+  const init = decl.initializer
+  if (!init || !ts.isRegularExpressionLiteral(init)) return false
+  const { pattern, flags } = regularExpressionLiteralPatternAndFlags(init)
+  return pattern === M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH_PINNED_SOURCE && flags === ""
+}
+
 function findModuleExportedConst(sf: ts.SourceFile, constName: string): ts.VariableDeclaration | undefined {
   for (const stmt of sf.statements) {
     if (!ts.isVariableStatement(stmt)) continue
@@ -852,6 +875,7 @@ export function metaPinHelperUsesModuleGuard(unitSrc: string, fileName = UNIT_SE
 
   const m4Export = findModuleM4EmptyArrayNotToMatchExport(sf)
   if (!m4Export) return false
+  if (!moduleM4EmptyArrayNotToMatchExportMatchesPin(m4Export)) return false
 
   const bindings: ts.Identifier[] = []
   helperBindingsNamed(helper, WIRING_GUARD_CONST, bindings)
@@ -1540,6 +1564,26 @@ export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string
       expect(metaPinHelperUsesModuleGuard(body, `${name}-mutant.ts`)).toBe(false)
     }
     expect(metaPinHelperUsesModuleGuard(readFileSync(UNIT_SELF, "utf8"))).toBe(true)
+  })
+
+  it("FA-F42-R1-015-001-001-002-002-003-001-001-005-001: M4 not.toMatch regex `.source` is pinned and matches empty-array fixture", () => {
+    expect(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH.source).toBe(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH_PINNED_SOURCE)
+    expect(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH.flags).toBe("")
+    expect(M4_EMPTY_ARRAY_DELETE_FIXTURE).toMatch(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH)
+
+    const neverMatchHeader = `
+export const AFTER_ALL_DELETE_FIRMS_UIDS_GUARD = /tempered/
+export const M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH = /(?!)/
+export function assertF42DeletionE2EAfterAllWiring(src: string, fileName: string): void {
+  expect(deleteFirmScopedDataInAfterAllAsyncHook(src, fileName)).toBe(true)
+  expect(src).toMatch(AFTER_ALL_DELETE_FIRMS_UIDS_GUARD)
+  expect(src).not.toMatch(M4_EMPTY_ARRAY_DELETE_NOT_TO_MATCH)
+}
+`
+    expect(metaPinHelperUsesModuleGuard(neverMatchHeader, "never-match-m4-export-mutant.ts")).toBe(false)
+    expect(moduleM4EmptyArrayNotToMatchExportMatchesPin(findModuleM4EmptyArrayNotToMatchExport(
+      ts.createSourceFile("x.ts", neverMatchHeader, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
+    )!)).toBe(false)
   })
 
   it("FA-F42-R1-015-001-001-002-002-002-003-001: structural early exits before toMatch (block, label, try/finally, switch, if/else, do-while)", () => {
