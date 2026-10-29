@@ -228,19 +228,44 @@ describe("F42 units: treatments, plan and holds", () => {
   })
 
   it("FA-F42-R1-006-003-001: attestation links and the independent-partner register refuse puppet approval paths", async () => {
-    const { isIndependentPartner, refusePartnerAttestationLinks, requireIndependentPartnerRegistration } = await import(
-      "../src/retention/partnerIndependence"
-    )
+    const {
+      isIndependentPartner,
+      refusePartnerAttestationLinks,
+      requireIndependentPartnerRegistration,
+      decideSoleIndependentProvisionedAttestation,
+      isDirectlyProvisionedBy,
+    } = await import("../src/retention/partnerIndependence")
     expect(isIndependentPartner({ role: "partner", active: true, independentPartner: true })).toBe(true)
     expect(isIndependentPartner({ role: "partner", active: true, independentPartner: false, createdBy: "F" })).toBe(false)
     expect(isIndependentPartner({ role: "partner", active: true, createdBy: "F" })).toBe(false)
     expect(isIndependentPartner({ role: "partner", active: true })).toBe(true)
+    expect(isDirectlyProvisionedBy("F", { createdBy: "F" })).toBe(true)
+    expect(isDirectlyProvisionedBy("F", { partnerGrantedBy: "F" })).toBe(true)
+    expect(isDirectlyProvisionedBy("F", { createdBy: "Q" })).toBe(false)
+    expect(decideSoleIndependentProvisionedAttestation("F", { createdBy: "F" }, 0, false)).toEqual({
+      kind: "refused",
+      code: "attestation_sole_independent_provisioned_refused",
+    })
+    expect(decideSoleIndependentProvisionedAttestation("F", { createdBy: "F" }, 0, true)).toEqual({
+      kind: "allowed",
+      auditReason: "sole_independent_attested_provisioned_partner",
+    })
+    expect(decideSoleIndependentProvisionedAttestation("F", { createdBy: "F" }, 1, true)).toEqual({ kind: "not_applicable" })
     expect(() => refusePartnerAttestationLinks({ approver: "Q", requester: "F" }, { partnerAttestedBy: "F" }, {})).toThrow(
       expect.objectContaining({ code: "approver_attested_by_requester" })
     )
     expect(() => requireIndependentPartnerRegistration({ role: "partner", independentPartner: false }, "approver")).toThrow(
       expect.objectContaining({ code: "approver_not_independent" })
     )
+  })
+
+  it("FA-F42-R1-006-003-001-001: shipped policy declares sole-independent provisioned attestation", () => {
+    const p = shipped()
+    expect(p.deletion.allowSoleIndependentAttestationOfProvisionedPartners).toBe(true)
+    expect(() => validatePolicy(p, inventory())).not.toThrow()
+    const refused = structuredClone(p) as RetentionPolicy
+    delete (refused.deletion as { allowSoleIndependentAttestationOfProvisionedPartners?: unknown }).allowSoleIndependentAttestationOfProvisionedPartners
+    expect(() => validatePolicy(refused, inventory())).toThrow(new RetentionConfigError("deletion.allowSoleIndependentAttestationOfProvisionedPartners"))
   })
 
   it("FA-F42-R1-006-001: transitive createdBy / partnerGrantedBy refuses when either partner ancestors the other", async () => {

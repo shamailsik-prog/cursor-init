@@ -42,6 +42,12 @@ export type RetentionPolicy = {
     storesPerPurgeJob: number
     /** Days a partner's account and partner role must have run before they may request or approve (spec R26). */
     approverMinTenureDays: number
+    /**
+     * FA-F42-R1-006-003-001-001: when true, the sole independent partner may attest a partner they provisioned; when
+     * false, `attestIndependentPartner` refuses with `attestation_sole_independent_provisioned_refused`.
+     */
+    allowSoleIndependentAttestationOfProvisionedPartners: boolean
+    allowSoleIndependentAttestationNote?: string
     /** The closed list of codes a deletion request may give (spec R25). */
     reasonCodes: string[]
     reasonCodesNote?: string
@@ -164,6 +170,9 @@ export function validatePolicy(p: RetentionPolicy, inv: Inventory): void {
     throw new RetentionConfigError("deletion")
   }
   if (!positiveInt(d.approverMinTenureDays)) throw new RetentionConfigError("deletion.approverMinTenureDays")
+  if (typeof d.allowSoleIndependentAttestationOfProvisionedPartners !== "boolean") {
+    throw new RetentionConfigError("deletion.allowSoleIndependentAttestationOfProvisionedPartners")
+  }
   if (!reasonCodeList(d.reasonCodes)) throw new RetentionConfigError("deletion.reasonCodes")
   if (!p.legalHold || !reasonCodeList(p.legalHold.reasonCodes)) throw new RetentionConfigError("legalHold.reasonCodes")
   for (const [name, c] of Object.entries(p.classes ?? {})) {

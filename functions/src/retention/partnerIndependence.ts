@@ -48,3 +48,36 @@ export function requireIndependentPartnerRegistration(
     throw new HttpError(403, side === "approver" ? "approver_not_independent" : "requester_not_independent")
   }
 }
+
+/** Whether `target` was created or made partner directly by `provisionerUid`. */
+export function isDirectlyProvisionedBy(provisionerUid: string, target: DocumentData | undefined): boolean {
+  if (!target) return false
+  const createdBy = target.createdBy
+  const grantedBy = target.partnerGrantedBy
+  return (
+    (typeof createdBy === "string" && isSafeDocId(createdBy) && createdBy === provisionerUid) ||
+    (typeof grantedBy === "string" && isSafeDocId(grantedBy) && grantedBy === provisionerUid)
+  )
+}
+
+export type SoleProvisionedAttestationDecision =
+  | { kind: "not_applicable" }
+  | { kind: "refused"; code: "attestation_sole_independent_provisioned_refused" }
+  | { kind: "allowed"; auditReason: "sole_independent_attested_provisioned_partner" }
+
+/**
+ * FA-F42-R1-006-003-001-001: the sole independent partner attesting a partner they provisioned is either refused
+ * (policy false) or explicitly allowed with a durable audit reason (policy true). Other independent partners in the
+ * firm make this not the sole-independent case.
+ */
+export function decideSoleIndependentProvisionedAttestation(
+  attesterUid: string,
+  target: DocumentData | undefined,
+  otherIndependentPartnerCount: number,
+  allowByPolicy: boolean
+): SoleProvisionedAttestationDecision {
+  if (!isDirectlyProvisionedBy(attesterUid, target)) return { kind: "not_applicable" }
+  if (otherIndependentPartnerCount > 0) return { kind: "not_applicable" }
+  if (!allowByPolicy) return { kind: "refused", code: "attestation_sole_independent_provisioned_refused" }
+  return { kind: "allowed", auditReason: "sole_independent_attested_provisioned_partner" }
+}

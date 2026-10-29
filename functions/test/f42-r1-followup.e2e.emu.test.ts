@@ -1168,6 +1168,79 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     }
   })
 
+  it("FA-F42-R1-006-003-001-001: sole founder attesting a provisioned hire records declarative audit reason", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003001001")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest audit firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003001001") }
+      const qEmail = `${uniq("audit-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      const rows = (
+        await adminDb()
+          .collection("audit_log")
+          .where("firmId", "==", firmId)
+          .where("action", "==", "identity.attest_independent_partner")
+          .where("actorId", "==", F.uid)
+          .get()
+      ).docs.map((d) => d.data())
+      expect(rows.some((r) => r.decision === "allow" && r.reason === "sole_independent_attested_provisioned_partner")).toBe(true)
+      expect(shippedPolicy.deletion.allowSoleIndependentAttestationOfProvisionedPartners).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
+  it("FA-F42-R1-006-003-001-001 RED: policy false refuses sole-independent attestation of a provisioned partner", async () => {
+    retentionTestSeam.policy = testPolicy()
+    retentionTestSeam.policy!.deletion.allowSoleIndependentAttestationOfProvisionedPartners = false
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003001001red")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Attest refuse firm" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId: uniq("f42r1003001001red") }
+      const qEmail = `${uniq("refuse-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      const err = await apiErrorOf(send(attestIndependentPartnerApi, f, F, { uid: qUid }))
+      expect(`${err.status} ${err.code}`).toBe("403 attestation_sole_independent_provisioned_refused")
+      const deny = (
+        await adminDb()
+          .collection("audit_log")
+          .where("firmId", "==", firmId)
+          .where("action", "==", "identity.attest_independent_partner")
+          .where("actorId", "==", F.uid)
+          .where("reason", "==", "attestation_sole_independent_provisioned_refused")
+          .get()
+      ).docs
+      expect(deny.length).toBeGreaterThan(0)
+      expect((await adminDb().collection("users").doc(qUid).get()).get("independentPartner")).not.toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
+  })
+
   it("FA-F42-R1-006-003-001 GREEN: onboarded founder with two attested createFirmUser partners — second approves first's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
