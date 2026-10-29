@@ -106,6 +106,8 @@ export const retentionTestSeam: {
    * needs about 100 rows instead of 10,000. Each one left out keeps its production value.
    */
   limits?: Partial<RetentionLimits>
+  /** FA-F42-R1-002-001-003-003: smaller trail row page for emulator tests (production keeps 300). */
+  trailDocumentIdPageSize?: number
   beforeAck?: (part: string) => Promise<void>
   /** FA-F42-R2-001: runs inside halt()'s transaction after reads begin, before the hold is re-checked (race regression). */
   beforeHaltCommit?: (ctx: { firmId: string; matterId: string; requestId: string }) => Promise<void>
