@@ -404,6 +404,15 @@ class AuditorPlants(PlantedTree):
 class RuntimeCheck(unittest.TestCase):
     """FA-F42-R1-008: the run-time check compares the emulator's root collections with the inventory."""
 
+    def test_test_emu_wires_runtime_data_inventory_gate_inside_emulators_exec(self) -> None:
+        """FA-F42-R1-008-002: Cloud Functions CI must not drop --runtime from test:emu (M1 mutant)."""
+        script = json.loads((ROOT / "functions" / "package.json").read_text(encoding="utf-8"))["scripts"]["test:emu"]
+        self.assertIn("firebase emulators:exec", script)
+        self.assertRegex(
+            script,
+            r'firebase emulators:exec[^"]+"npm --prefix functions test && python3 ci_gates/check_data_inventory\.py --runtime"',
+        )
+
     def test_an_uninventoried_root_collection_fails_and_test_fixtures_are_named(self) -> None:
         inventory = gate.load_json(ROOT, gate.INVENTORY)
         findings = gate.check_runtime_collections(["matters", "documents", "zz_unknown_store", *gate.RUNTIME_TEST_COLLECTIONS], inventory)

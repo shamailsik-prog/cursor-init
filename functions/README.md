@@ -19,7 +19,9 @@ npm --prefix functions run test:emu
 ```
 
 This runs `firebase emulators:exec --only auth,firestore --project demo-sikander`.
-It uses the ports in the repo `firebase.json`: Firestore 18088, Auth 19099 and
+After the Vitest suite it runs `python3 ci_gates/check_data_inventory.py --runtime`
+(FA-F42-R1-008: every root collection the suite wrote must appear in
+`infra/retention/inventory.json`). It uses the ports in the repo `firebase.json`: Firestore 18088, Auth 19099 and
 Functions 15001. The suites in `test/` detect the emulators through
 `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST`, and skip
 themselves when those are not set.

@@ -759,7 +759,8 @@ def check_coverage(root: Path, inventory: dict) -> tuple[list[Finding], list[str
 # test:emu`), every root collection in the emulator must be inventoried, so a store the static scan cannot read (a name
 # built at run time, a helper's argument) still fails CI once a test writes it. These are the suite's own fixture
 # collections, written only by tests (functions/test/jobs.ts and the P2 suites), never by the product.
-RUNTIME_TEST_COLLECTIONS: tuple[str, ...] = ()
+# f09_effects: synthetic counter docs for the F09 idempotency e2e probe (functions/test/f09-atomic-idempotency.e2e.emu.test.ts).
+RUNTIME_TEST_COLLECTIONS: tuple[str, ...] = ("f09_effects",)
 
 
 def list_emulator_collections(host: str, project: str) -> list[str]:
