@@ -15,12 +15,15 @@ In `functions/src/retention/partnerLineage.ts`:
 
 Cycles (`cycle` ↔ `cycleB`) and depth overflow still fail closed.
 
+Re-audit **M3** (frontier dedupe kept, but `parent already in seen → null`) still passes equal-layer diamond tests; **`FA-F42-R1-006-001-001-001`** pins the parent-already-seen half with `X = { createdBy: F, partnerGrantedBy: Q }`, `Q.createdBy = F`.
+
 ## Tests
 
 | Case | Location |
 | --- | --- |
 | PROBE161_DIAMOND_X / Y shapes | `functions/test/f42-retention.units.test.ts` — `FA-F42-R1-006-001-001` |
 | Mutant guard (join node, two roots) | same file — `FA-F42-R1-006-001-001 mutant guard` |
+| Unequal-depth diamond (F before Q on frontier; kills re-audit **M3**) | same file — `FA-F42-R1-006-001-001-001` |
 | P→Q→R, cycle, sibling emulator paths | existing `FA-F42-R1-006*` suite (unchanged) |
 
 ```bash

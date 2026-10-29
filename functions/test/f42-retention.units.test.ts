@@ -305,6 +305,20 @@ describe("F42 units: treatments, plan and holds", () => {
     expect(ancestors).toEqual(new Set(["left", "right", "root"]))
   })
 
+  it("FA-F42-R1-006-001-001-001: unequal-depth diamond — founder on X before Q reaches F (kills M3)", async () => {
+    const { partnerLineageAncestors, refusePartnerLineage } = await import("../src/retention/partnerLineage")
+    const users: Record<string, { createdBy?: string; partnerGrantedBy?: string }> = {
+      F: {},
+      Q: { createdBy: "F" },
+      // createdBy lists founder F first on the frontier; Q's parent F is already seen when Q expands.
+      X: { createdBy: "F", partnerGrantedBy: "Q" },
+      side: { createdBy: "other" },
+    }
+    const load = async (uid: string) => users[uid]
+    expect(await partnerLineageAncestors("X", load)).toEqual(new Set(["F", "Q"]))
+    await expect(refusePartnerLineage({ approver: "X", requester: "side" }, load)).resolves.toBeUndefined()
+  })
+
   it("FA-F42-R1-006: the shipped approver tenure is the PROPOSED 30 days, and validation refuses one missing, zero or fractional", () => {
     const inv = inventory()
     expect(purgePolicy().deletion.approverMinTenureDays).toBe(30)
