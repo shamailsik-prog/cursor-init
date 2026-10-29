@@ -1121,7 +1121,7 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     expect((await send(approveApi, f, f.Q, { requestId: req.requestId })).status).toBe("in_progress")
   })
 
-  it("FA-F42-R1-006-001: a two-step create chain cannot approve the founder's deletion request", async () => {
+  it("FA-F42-R1-006-001: unattested two-step create chain stops at approver_not_independent (does not exercise lineage)", async () => {
     retentionTestSeam.policy = testPolicy()
     const firmId = uniq("f42r1chain")
     firms.push(firmId)
@@ -1145,6 +1145,59 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
     const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
     expect(`${err.status} ${err.code}`).toBe("403 approver_not_independent")
     expect((await adminDb().collection("matter_tombstones").doc(f.matterId).get()).exists).toBe(false)
+  })
+
+  it("FA-F42-R1-006-003-001-004: attested multi-hop chain refuses leaf approver on transitive lineage (kills M3 unwire refusePartnerLineage)", async () => {
+    retentionTestSeam.policy = testPolicy()
+    const bootstrapRef = adminDb().collection("platform").doc("bootstrap")
+    const savedBootstrap = (await bootstrapRef.get()).exists ? (await bootstrapRef.get()).data() : null
+    if (savedBootstrap) await bootstrapRef.delete()
+    const founderEmail = `${uniq("f42r1003001004")}@example.test`
+    vi.stubEnv("SIKANDER_BOOTSTRAP_FOUNDER_EMAIL", founderEmail)
+    try {
+      const founder = await mintIdToken(null, { email: founderEmail, emailVerified: true })
+      uids.push(founder.uid)
+      const { firmId } = await onboardFirmApi({ token: founder.token, data: { name: "Lineage emu attested chain" } } as never)
+      const F = await signIn(founder.uid, founderEmail)
+      firms.push(firmId)
+      const matterId = uniq("f42r1003001004")
+      await seedMatter(firmId, matterId, TITLE, [F.uid])
+      const f: Firm = { firmId, P: F, Q: F, A: F, matterId }
+      const qEmail = `${uniq("lineage-q")}@example.test`
+      const { uid: qUid } = await send(createFirmUserApi, f, F, { email: qEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(qUid)
+      await send(attestIndependentPartnerApi, f, F, { uid: qUid })
+      const Q = await signIn(qUid, qEmail)
+      const rEmail = `${uniq("lineage-r")}@example.test`
+      const { uid: rUid } = await send(createFirmUserApi, f, Q, { email: rEmail, role: "partner", clearanceLevel: "privileged-restricted" })
+      uids.push(rUid)
+      await send(attestIndependentPartnerApi, f, Q, { uid: rUid })
+      const R = await signIn(rUid, rEmail)
+      await ageUser(founder.uid, { createdAt: 400, partnerSince: 400 })
+      await ageUser(qUid, { createdAt: 400, partnerSince: 400 })
+      await ageUser(rUid, { createdAt: 400, partnerSince: 400 })
+      expect((await adminDb().collection("users").doc(rUid).get()).get("createdBy")).toBe(Q.uid)
+      expect((await adminDb().collection("users").doc(rUid).get()).get("partnerAttestedBy")).toBe(Q.uid)
+      expect((await adminDb().collection("users").doc(qUid).get()).get("partnerAttestedBy")).toBe(F.uid)
+      const req = await send(requestApi, f, F, { matterId, reasonCode: "client_instruction" })
+      const err = await apiErrorOf(send(approveApi, f, R, { requestId: req.requestId }))
+      expect(`${err.status} ${err.code}`).toBe("403 approver_lineage_of_requester")
+      const deny = (
+        await adminDb()
+          .collection("audit_log")
+          .where("firmId", "==", firmId)
+          .where("action", "==", "retention.approve_deletion")
+          .where("actorId", "==", R.uid)
+          .where("reason", "==", "approver_lineage_of_requester")
+          .get()
+      ).docs
+      expect(deny.length).toBeGreaterThan(0)
+      expect((await adminDb().collection("matter_tombstones").doc(matterId).get()).exists).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      if (savedBootstrap) await bootstrapRef.set(savedBootstrap)
+      else await bootstrapRef.delete()
+    }
   })
 
   it("FA-F42-R1-006-003-001 RED: a sole founder who attests one hire cannot have that hire approve the founder's deletion request", async () => {
