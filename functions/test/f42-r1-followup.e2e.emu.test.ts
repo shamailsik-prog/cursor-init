@@ -580,6 +580,92 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-002: legacy committee outputs (no matterI
     expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-paged-ocr-trail`).get()).exists).toBe(false)
   })
 
+  it.each([
+    [
+      "p1_ocr_operations",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string) => {
+        await db.collection("p1_ocr_operations").doc(`${f.matterId}-op-page-a`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: `${f.matterId}-decoy-a`,
+          classification: "internal",
+          text: "decoy",
+        })
+        await db.collection("p1_ocr_operations").doc(`${f.matterId}-op-page-b`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: `${f.matterId}-decoy-b`,
+          classification: "internal",
+          text: "decoy",
+        })
+        await db.collection("p1_ocr_operations").doc(`${f.matterId}-op-page-target`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: docId,
+          classification: "internal",
+          text: "target trail",
+        })
+      },
+    ],
+    [
+      "jobs",
+      async (db: ReturnType<typeof adminDb>, f: Firm, docId: string) => {
+        await db.collection("jobs").doc(`${f.matterId}-job-page-a`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: `${f.matterId}-decoy-a`,
+          jobType: "ocr",
+          classification: "internal",
+          engine: "p2",
+          status: "done",
+        })
+        await db.collection("jobs").doc(`${f.matterId}-job-page-b`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: `${f.matterId}-decoy-b`,
+          jobType: "ocr",
+          classification: "internal",
+          engine: "p2",
+          status: "done",
+        })
+        await db.collection("jobs").doc(`${f.matterId}-job-page-target`).set({
+          firmId: f.firmId,
+          matterId: f.matterId,
+          documentId: docId,
+          jobType: "ocr",
+          classification: "internal",
+          engine: "p2",
+          status: "done",
+        })
+      },
+    ],
+  ] as const)(
+    "FA-F42-R1-002-001-003-003-001: absent-matterId legacy output is purged when the matter %s trail names its documentId past the first page",
+    async (_collection, seedPagedTrail) => {
+      retentionTestSeam.policy = testPolicy()
+      retentionTestSeam.trailDocumentIdPageSize = 2
+      const f = await newFirm()
+      const db = adminDb()
+      const docId = `${f.matterId}-past-first-${_collection}-page`
+      await db.collection("committee_outputs").doc(`${f.matterId}-legacy-paged-${_collection}-trail`).set({
+        firmId: f.firmId,
+        actorId: f.P.uid,
+        documentIds: [docId],
+        text: `${TITLE} legacy paged ${_collection} trail`,
+        classification: "internal",
+        createdAt: Date.now(),
+      })
+      await seedPagedTrail(db, f, docId)
+      await db.collection("documents").doc(`${f.matterId}-live`).set({ firmId: f.firmId, matterId: f.matterId, classification: "internal" })
+      const { requestId } = await requestAndApprove(f)
+      await drain(f.firmId, new FakeClock(Date.now()))
+      const prep = await db.collection("deletion_requests").doc(requestId).get()
+      expect((prep.get("legacyTrailDocumentIds") as string[] | undefined) ?? []).toContain(docId)
+      expect((await send(statusApi, f, f.P, { requestId })).status).toBe("completed")
+      expect((await db.collection("committee_outputs").doc(`${f.matterId}-legacy-paged-${_collection}-trail`).get()).exists).toBe(false)
+    }
+  )
+
   it("FA-F42-R1-002-001-001 P3: a firm orphan legacy output is not purged or counted on another matter's deletion", async () => {
     retentionTestSeam.policy = testPolicy()
     const f = await newFirm()
