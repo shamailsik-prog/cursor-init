@@ -249,6 +249,8 @@ describe.skipIf(!EMULATORS)("audit F09: a committed effect is never repeated for
 
   afterAll(async () => {
     await Promise.all(createdFirms.map((id) => db().collection("firms").doc(id).delete()))
+    const probe = await db().collection("f09_effects").get()
+    await Promise.all(probe.docs.map((d) => d.ref.delete()))
   })
 
   // -------------------------------------------------------------------------
