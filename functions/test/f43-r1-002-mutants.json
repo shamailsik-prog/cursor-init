@@ -1,0 +1,29 @@
+[
+  {
+    "id": "F43-R1-002-M01",
+    "area": "ack-hold",
+    "file": "functions/src/alerts/raise.ts",
+    "old": "const reopen = current !== undefined && (current.state === \"resolved\" || ackHoldExpired(current, nowMs))",
+    "new": "const reopen = current !== undefined && current.state === \"resolved\"",
+    "tests": ["test/f43-r1-002-ack-hold.unit.test.ts", "test/f43-alerts-escalation.e2e.emu.test.ts", "-t", "FA-F43-R1-002"],
+    "why": "ackHoldExpired must reopen acknowledged alerts after the hold; resolved-only reopen forever suppresses paging (FA-F43-R1-002)"
+  },
+  {
+    "id": "F43-R1-002-M02",
+    "area": "ack-hold",
+    "file": "functions/src/alerts/model.ts",
+    "old": "export const ACK_HOLD_MS = ACK_WINDOW_MS.warning",
+    "new": "export const ACK_HOLD_MS = Number.MAX_SAFE_INTEGER",
+    "tests": ["test/f43-r1-002-ack-hold.unit.test.ts"],
+    "why": "ACK_HOLD_MS must not be infinite or recurrence never pages again"
+  },
+  {
+    "id": "F43-R1-002-M03",
+    "area": "ack-hold",
+    "file": "functions/src/alerts/raise.ts",
+    "old": "      acknowledgedAt: null,\n      acknowledgedBy: null,",
+    "new": "      acknowledgedAt: current?.acknowledgedAt ?? null,\n      acknowledgedBy: current?.acknowledgedBy ?? null,",
+    "tests": ["test/f43-r1-002-ack-hold.unit.test.ts", "test/f43-alerts-escalation.e2e.emu.test.ts", "-t", "FA-F43-R1-002"],
+    "why": "reopen must clear acknowledgment so escalation and paging treat the alert as fresh"
+  }
+]
