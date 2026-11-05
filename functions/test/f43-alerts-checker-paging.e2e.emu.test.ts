@@ -84,7 +84,7 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const tag = uniq("p").slice(2)
     const row = (firmId: string) => ({ firmId, state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T), reservedMicroUsd: 1, monthKey: "2001-05", createdAt: Timestamp.fromMillis(T) })
     const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
-    // Ids order the quarantined query: firm A's backlog first ("000000…"), firm B's after every other id ("zzzzzz…").
+    // Equal `leaseUntil`, so the document id is the tie-break: firm A's backlog first ("000000…"), firm B's after every other id ("zzzzzz…").
     await writeAll([
       ...Array.from({ length: BACKLOG }, (_, i) => [ref(`000000f43-${tag}-${String(i).padStart(4, "0")}`), row(firmA)] as [DocumentReference, DocumentData]),
       ...Array.from({ length: 3 }, (_, i) => [ref(`zzzzzzf43-${tag}-${i}`), row(firmB)] as [DocumentReference, DocumentData]),
@@ -138,6 +138,27 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const before = (await alertOf(firmA, "job.queue_age"))!.count as number
     const again = await runUntil(["jobs"], (run) => at(2 + run), 2, async () => ((await alertOf(firmA, "job.queue_age"))!.count as number) > before)
     expect(again).not.toBeNull()
+  })
+
+  it("FA-F43-R1-004: a late id with the oldest leaseUntil is alerted on the first quarantined page, and the cursor stores that time", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const T = Date.parse("1970-01-03T00:00:00.000Z")
+    const tag = uniq("q").slice(2)
+    const row = (firmId: string, leaseMs: number) => ({ firmId, state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(leaseMs), reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(leaseMs) })
+    const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
+    await writeAll([
+      ...Array.from({ length: BACKLOG }, (_, i) => [ref(`000000f43-${tag}-${String(i).padStart(4, "0")}`), row(firmA, T + 10_000 + i)] as [DocumentReference, DocumentData]),
+      ...Array.from({ length: 3 }, (_, i) => [ref(`zzzzzzf43-${tag}-${i}`), row(firmB, T + i)] as [DocumentReference, DocumentData]),
+    ])
+    const older = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").where("leaseUntil", "<", Timestamp.fromMillis(T)).count().get()).data().count
+    expect(older).toBe(0)
+
+    const { runAlertChecker } = await checker()
+    await runAlertChecker({ now: () => T + 60 * 60_000, passes: ["reservations"] })
+
+    expect((await alertOf(firmB, "ai.reservation_unresolved"))?.detail).toMatchObject({ quarantined: 3 })
+    const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: { toMillis?: () => number }; id?: string } | undefined
+    expect(typeof cursor?.at?.toMillis).toBe("function")
+    expect(cursor!.at!.toMillis!()).toBeGreaterThan(T + 2)
   })
 
   it("the window is bounded: 5 pages of 100 rows per query per run", async () => {
