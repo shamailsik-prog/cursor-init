@@ -14,14 +14,17 @@ allowlists it), so the repoint can drop the projection here.
   ``case_law_master`` row with the citation is attached (nothing is rewritten); otherwise a row is
   inserted with the deterministic id ``uuid5(NAMESPACE_URL, "corpus-service:case_law_master:staging/<id>")``
   (F23 uses ``quarantine/<queue id>``), with F23's field mapping plus provenance.
-* ``publish_statute``: under a per-section lock (namespace 0x0F21); an existing ``statutes_master`` row
-  with the same ``(short_name, section_number)`` (the table's unique key) or, without a short name, the
-  same source, act and section, is attached; otherwise a row with a deterministic id is inserted.
-  FA-F21-017: attaching a changed text replaces ``section_text`` on that same row and records the
-  prior text's hash on the staging row (a new version, not a second master row). When the staging
-  row carries a non-empty PakistanCode ``act_keys`` set, master rows of that short name whose keys
-  are absent from the set are marked ``is_repealed``. An empty set retires nothing. The survivor of
-  a legacy duplicate key is the earliest ``created_at``, then ``id``, not an unordered uuid pick.
+* ``publish_statute``: under a per-act lock and then a per-section lock (namespace 0x0F21); an existing
+  ``statutes_master`` row with the same ``(short_name, section_number)`` (the table's unique key) or,
+  without a short name, the same source, act and section, is attached; otherwise a row with a
+  deterministic id is inserted. FA-F21-017: attaching a changed text replaces ``section_text`` on that
+  same row and records the prior text's hash on the staging row (a new version, not a second master
+  row). When the staging row carries a non-empty PakistanCode ``act_keys`` set, master rows of that
+  short name whose keys are absent from the set are marked ``is_repealed``. An empty set retires
+  nothing. The survivor of a legacy duplicate key is the earliest ``created_at``, then ``id``.
+  FA-F21-021: a PakistanCode row stamped ``harvest_at`` does not overwrite text, clear ``is_repealed``,
+  insert a missing key, or retire keys when an equal or newer ``harvest_at`` is already stored for
+  that short name. The comparison is the harvest clock, not ``updated_at``.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
 
@@ -32,7 +35,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Final, Optional, Tuple
+from typing import Any, Final, NamedTuple, Optional, Tuple
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -42,6 +45,8 @@ from scraper.models import CaseLawMaster, EmbeddingQueue, StatutesMaster
 from scraper.parsers.pakistancode_keys import (
     PAKISTANCODE_SOURCE,
     act_keys_from_metadata,
+    harvest_is_stale,
+    harvest_token_from_metadata,
     keys_to_retire,
     note_section_version,
 )
@@ -54,6 +59,24 @@ PUBLICATION_NAMESPACE: Final = uuid.NAMESPACE_URL
 # CITATION_LOCK_NAMESPACE; a rules test pins that the two agree).
 F23_CITATION_LOCK_NAMESPACE: Final = 0x0F23
 STATUTE_LOCK_NAMESPACE: Final = 0x0F21
+
+
+class StatutePublication(NamedTuple):
+    """Result of projecting one statutes_staging row into statutes_master."""
+
+    id: Optional[uuid.UUID]
+    attached: bool
+    changed: bool
+    stale: bool = False
+
+
+def statute_act_lock_key(short_name: str) -> str:
+    """Advisory-lock key for every PakistanCode section of one short name.
+
+    Taken before the per-section lock so two harvests of the same act cannot
+    interleave a retirement and a stale insert.
+    """
+    return f"act:{short_name}"
 CASE_YEAR_RANGE: Final = (1947, 2100)  # case_law_master's ck_case_law_year_sane
 
 
@@ -132,8 +155,27 @@ async def publish_case(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, bool]:
     return case_id, False
 
 
-async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_name: Optional[str], section: str) -> None:
-    """Mark PakistanCode master rows the current harvest no longer contains. See ``keys_to_retire``."""
+async def _lock_statute(db: Any, key: str) -> None:
+    await db.execute(text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:key))"),
+                     {"namespace": STATUTE_LOCK_NAMESPACE, "key": key})
+
+
+async def _stored_harvest_max(db: Any, short_name: str):
+    return (await db.execute(
+        select(func.max(StatutesMaster.harvest_at)).where(
+            StatutesMaster.short_name == short_name,
+            StatutesMaster.source_site == PAKISTANCODE_SOURCE,
+        )
+    )).scalar()
+
+
+async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_name: Optional[str], section: str,
+                                            incoming) -> None:
+    """Mark PakistanCode master rows the current harvest no longer contains. See ``keys_to_retire``.
+
+    A row already decided by a newer harvest is left as it is. A row this harvest retires
+    takes this harvest's clock, so a later older publish of that key is stale.
+    """
     if source.source_name != PAKISTANCODE_SOURCE or not short_name:
         return
     live = act_keys_from_metadata(getattr(st, "parsing_metadata", None))
@@ -148,19 +190,29 @@ async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_
     )).scalars().all()
     retiring = set(keys_to_retire((row.section_number for row in rows), live, section))
     for row in rows:
-        if row.section_number in retiring:
-            row.is_repealed = True
+        if row.section_number not in retiring:
+            continue
+        if incoming is not None and row.harvest_at is not None and row.harvest_at > incoming:
+            continue
+        row.is_repealed = True
+        if incoming is not None:
+            row.harvest_at = incoming
 
 
-async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, bool, bool]:
-    """(the statutes_master id, attached to an existing row, the attached row's text differs)."""
+async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
+    """Project one statute staging row. ``stale`` means a newer harvest already won the act."""
     act = (st.extracted_act_name or "").strip()
     section = (st.extracted_section_number or "").strip()
     short_name = (st.extracted_short_name or "").strip() or None
     body = st.extracted_section_text or st.raw_text
+    pakistancode = source.source_name == PAKISTANCODE_SOURCE and short_name is not None
+    incoming = harvest_token_from_metadata(getattr(st, "parsing_metadata", None)) if pakistancode else None
+    if pakistancode:
+        await _lock_statute(db, statute_act_lock_key(short_name))
     key = statute_key(source.source_name, act, short_name, section)
-    await db.execute(text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:key))"),
-                     {"namespace": STATUTE_LOCK_NAMESPACE, "key": key})
+    await _lock_statute(db, key)
+    if pakistancode and harvest_is_stale(incoming, await _stored_harvest_max(db, short_name)):
+        return StatutePublication(None, False, False, True)
     if short_name is not None:
         match = (StatutesMaster.short_name == short_name, StatutesMaster.section_number == section)
     else:
@@ -168,6 +220,7 @@ async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, boo
                  StatutesMaster.statute_name == act, StatutesMaster.section_number == section)
     existing = (await db.execute(
         select(StatutesMaster).where(*match).order_by(StatutesMaster.created_at, StatutesMaster.id).limit(1)
+        .with_for_update()
     )).scalars().first()
     if existing is not None:
         changed = (existing.section_text or "") != (body or "")
@@ -179,9 +232,11 @@ async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, boo
                 existing.section_title = st.extracted_section_title
         if existing.is_repealed:
             existing.is_repealed = False
-        await _retire_absent_pakistancode_keys(db, st, source, short_name, section)
+        if incoming is not None:
+            existing.harvest_at = incoming
+        await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)
         await db.flush()
-        return existing.id, True, changed
+        return StatutePublication(existing.id, True, changed, False)
     statute_id = statute_publication_id(key)
     db.add(StatutesMaster(
         id=statute_id,
@@ -193,8 +248,9 @@ async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, boo
         source_site=source.source_name,
         source_url=st.source_url,
         confidence_score=st.confidence_score,
+        harvest_at=incoming,
     ))
     await db.flush()
-    await _retire_absent_pakistancode_keys(db, st, source, short_name, section)
+    await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)
     await db.flush()
-    return statute_id, False, False
+    return StatutePublication(statute_id, False, False, False)

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,13 @@ from scraper.parsers.pakistancode_keys import (
     act_keys_from_metadata,
     apply_harvest,
     apply_legacy_rekey,
+    harvest_is_stale,
+    harvest_token_from_metadata,
     key_div_texts,
     keys_to_retire,
     lookup_real_section,
+    schedule_container_label,
+    suppresses_plain_text_fallback,
     note_section_version,
     plan_legacy_rekey,
     section_by_key,
@@ -356,6 +361,8 @@ def test_harvester_stages_locked_keys_and_f21_fixture_numbers_stay_real(monkeypa
     assert db.rows[0].parsing_metadata["act_keys"] == keys
     assert act_keys_from_metadata(db.rows[0].parsing_metadata) == frozenset(keys)
     assert db.rows[0].parsing_metadata["source_name"] == "PakistanCode"
+    assert len({row.parsing_metadata["harvest_at"] for row in db.rows}) == 1
+    assert "+" in db.rows[0].parsing_metadata["harvest_at"] or db.rows[0].parsing_metadata["harvest_at"].endswith("Z")
     fixture = key_div_texts([
         "1. Short title. This Act may be called the F21 Test Penal Act 2099 (synthetic).",
         "2. Definitions. In the F21 Test Penal Act 2099 words are synthetic fixture text.",
@@ -363,16 +370,156 @@ def test_harvester_stages_locked_keys_and_f21_fixture_numbers_stay_real(monkeypa
     assert [section.key for section in fixture.sections] == ["1", "2"]
 
 
+def test_fa_f21_018_flat_heading_before_body_does_not_become_a_schedule_item():
+    """A flat heading with no preceding body section does not relabel later numbered divs.
+
+    The live page shape is not in this repository. A previous sibling heading is not an
+    ancestor container, so the later divs are unscoped: lookup of "1" returns nothing.
+    """
+    from bs4 import BeautifulSoup
+
+    later = "2. Extent. This later numbered div is longer than twenty characters."
+    flat = f"<div id='wrap'><div class='section'>{HEADING}</div><div class='section'>{SECTION_1}</div><div class='section'>{later}</div></div>"
+    soup = BeautifulSoup(flat, "html.parser")
+    nodes = soup.find_all("div", class_="section")
+    assert [schedule_container_label(node) for node in nodes] == [None, None, None]
+    keyed = key_div_texts([node.get_text(" ", strip=True) for node in nodes], [schedule_container_label(node) for node in nodes])
+    keys = [item.key for item in keyed.sections]
+    assert keys[0] == "schedule-heading:first"
+    assert keys[1].startswith("unscoped:1-") and keys[2].startswith("unscoped:2-")
+    assert not any(key.startswith("schedule:first:") for key in keys)
+    assert lookup_real_section({item.key: PublishedSection(item.key, item.text, item.kind, item.lookup_number, [item.text]) for item in keyed.sections}, "1") is None
+    nested = "<div class='schedule'><h2>THE FIRST SCHEDULE</h2><div class='section'>1. Stamp on a conveyance is nested under the heading.</div></div>"
+    node = BeautifulSoup(nested, "html.parser").find("div", class_="section")
+    assert schedule_container_label(node) == "first"
+    contained = key_div_texts([node.get_text(" ", strip=True)], [schedule_container_label(node)])
+    assert [item.key for item in contained.sections] == ["schedule:first:1"]
+    assert contained.sections[0].lookup_number is None
+
+
+def test_fa_f21_018_scope_stays_open_after_a_body_section():
+    """Once a body section has opened schedule scope, a later numbered div stays a schedule item."""
+    later = "3. A later numbered div follows the schedule and is longer than twenty characters."
+    keyed = key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM, later])
+    assert [item.key for item in keyed.sections] == ["1", "schedule-heading:first", "schedule:first:1", "schedule:first:3"]
+    assert keyed.sections[0].lookup_number == "1"
+    assert keyed.sections[3].kind == "schedule-item" and keyed.sections[3].lookup_number is None
+
+
+def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
+    """Paragraph splitting is the no-kept-div path. Kept numbered divs never enter it.
+
+    A page whose only section div is a short heading still runs the splitter, and the
+    heading is staged as well. Two paragraph sections that share a number collapse in
+    that preexisting splitter. Two div.section nodes that share a number do not.
+    """
+    from scraper.net import fetch_policy
+    from scraper.tasks import pakistancode
+
+    calls = {"n": 0}
+    real = pakistancode.split_into_sections
+
+    def _wrapped(text, name=None):
+        calls["n"] += 1
+        return real(text, name)
+
+    class _Resp:
+        def __init__(self, body, status=200):
+            self.status_code = status
+            self.text = body
+
+    class _Client:
+        def __init__(self, page):
+            self.page = page
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            if url.endswith("/ppc1860"):
+                return _Resp(self.page)
+            if url.endswith("/federal"):
+                return _Resp("<html></html>")
+            return _Resp("missing", status=404)
+
+    class _Source:
+        id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+        source_name = "PakistanCode"
+
+    class _DB:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            self.rows.append(row)
+
+        async def commit(self):
+            return None
+
+    async def _asleep():
+        return None
+
+    monkeypatch.setattr(pakistancode, "split_into_sections", _wrapped)
+    monkeypatch.setattr(pakistancode, "TARGET_SLUGS", ["ppc1860"])
+    monkeypatch.setattr(pakistancode.asyncio, "sleep", lambda *args, **kwargs: _asleep())
+
+    def _run(page):
+        calls["n"] = 0
+        db = _DB()
+        monkeypatch.setattr(fetch_policy, "fetcher_for", lambda *args, **kwargs: _Client(page))
+        asyncio.run(pakistancode.scrape_pakistancode(_Source(), db))
+        return calls["n"], db.rows
+
+    alpha = "1. Alpha section text is longer than twenty characters."
+    beta = "1. Beta section text is longer than twenty characters."
+    calls_n, rows = _run(f"<html><div class='section'>{alpha}</div><div class='section'>{beta}</div></html>")
+    assert calls_n == 0
+    assert len(rows) == 2
+    assert rows[0].extracted_section_number != rows[1].extracted_section_number
+    assert all(row.extracted_section_number != "1" for row in rows)
+    assert "act_keys" in rows[0].parsing_metadata
+
+    calls_n, rows = _run(
+        "<html><p>1. Alpha paragraph is longer than twenty characters for the parser.</p>"
+        "<p>1. Beta paragraph is also longer than twenty characters and a duplicate number.</p></html>"
+    )
+    assert calls_n == 1
+    assert len(rows) == 1 and rows[0].extracted_section_number == "1"
+    assert rows[0].parsing_metadata["section_kind"] == "fallback"
+    assert "act_keys" not in rows[0].parsing_metadata
+
+    calls_n, rows = _run(
+        f"<html><div class='section'>{HEADING}</div>"
+        "<p>1. Alpha paragraph is longer than twenty characters for the parser.</p>"
+        "<p>2. Beta paragraph is longer than twenty characters for the parser.</p></html>"
+    )
+    assert calls_n == 1
+    keys = [row.extracted_section_number for row in rows]
+    assert keys[0] == "schedule-heading:first"
+    assert "1" in keys and "2" in keys
+    assert all("act_keys" not in row.parsing_metadata for row in rows)
+
+    calls_n, rows = _run("<html><div class='section'>" + ("q" * 20) + "</div></html>")
+    assert calls_n == 1
+    heading_only = key_div_texts([HEADING])
+    assert suppresses_plain_text_fallback(heading_only) is False
+    assert suppresses_plain_text_fallback(key_div_texts([SECTION_1])) is True
+
+
 def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
-    """The retrieval writer uses the same version and retirement rules. No database."""
+    """A newer harvest amends in place and retires absent keys. The clock is harvest_at."""
     from types import SimpleNamespace
 
     from scraper.models import StatutesStaging
     from scraper.publication.retrieval import publish_statute
 
     class _Result:
-        def __init__(self, rows):
-            self._rows = rows
+        def __init__(self, rows=None, scalar=None):
+            self._rows = list(rows or [])
+            self._scalar = scalar
 
         def scalars(self):
             return self
@@ -382,6 +529,9 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
 
         def all(self):
             return list(self._rows)
+
+        def scalar(self):
+            return self._scalar
 
     class _DB:
         def __init__(self, current, deleted):
@@ -397,17 +547,23 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
 
         async def execute(self, statement, params=None):
             self.calls += 1
-            if self.calls == 1:
+            if self.calls in (1, 2):
                 return _Result([])
-            if self.calls == 2:
+            if self.calls == 3:
+                return _Result(scalar=self.current.harvest_at)
+            if self.calls == 4:
                 return _Result([self.current])
             return _Result([self.current, self.deleted])
 
+    older = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 11, 2, tzinfo=timezone.utc)
     current = SimpleNamespace(
-        id=uuid.uuid4(), section_number="2", section_text=SECTION_2, section_title="Definitions", is_repealed=True,
+        id=uuid.uuid4(), section_number="2", section_text=SECTION_2, section_title="Definitions",
+        is_repealed=True, harvest_at=older,
     )
     deleted = SimpleNamespace(
-        id=uuid.uuid4(), section_number="9", section_text="old insertion", section_title=None, is_repealed=False,
+        id=uuid.uuid4(), section_number="9", section_text="old insertion", section_title=None,
+        is_repealed=False, harvest_at=older,
     )
     amended = "2. Definitions. The amended text of this numbered section replaces the prior version in full."
     staging = StatutesStaging(
@@ -418,21 +574,78 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
         extracted_section_text=amended,
         raw_text=amended,
         confidence_score=0.85,
-        parsing_metadata={"act_keys": ["1", "2"], "keying": "fa-f21-017", "source_name": "PakistanCode"},
+        parsing_metadata={
+            "act_keys": ["1", "2"], "keying": "fa-f21-017", "source_name": "PakistanCode",
+            "harvest_at": newer.isoformat(),
+        },
     )
     db = _DB(current, deleted)
-    published_id, attached, changed = asyncio.run(publish_statute(
-        db, staging, SimpleNamespace(source_name="PakistanCode"),
-    ))
-    assert (published_id, attached, changed) == (current.id, True, True)
-    assert current.section_text == amended and current.is_repealed is False
-    assert deleted.is_repealed is True and deleted.section_number == "9"
+    published = asyncio.run(publish_statute(db, staging, SimpleNamespace(source_name="PakistanCode")))
+    assert (published.id, published.attached, published.changed, published.stale) == (current.id, True, True, False)
+    assert current.section_text == amended and current.is_repealed is False and current.harvest_at == newer
+    assert deleted.is_repealed is True and deleted.harvest_at == newer and deleted.section_number == "9"
     assert staging.parsing_metadata["section_version"] == 2
     assert staging.parsing_metadata["act_keys"] == ["1", "2"]
+    assert db.calls == 5
+
+
+def test_publish_statute_refuses_a_stale_harvest_without_clearing_repeal():
+    """An older act_keys set must not un-repeal a key or retire what a newer harvest kept."""
+    from types import SimpleNamespace
+
+    from scraper.models import StatutesStaging
+    from scraper.publication.retrieval import publish_statute
+
+    class _Result:
+        def __init__(self, scalar=None):
+            self._scalar = scalar
+
+        def scalar(self):
+            return self._scalar
+
+    class _DB:
+        def __init__(self):
+            self.calls = 0
+
+        def add(self, row):
+            raise AssertionError("a stale harvest must not insert a master row")
+
+        async def flush(self):
+            raise AssertionError("a stale harvest must not flush")
+
+        async def execute(self, statement, params=None):
+            self.calls += 1
+            if self.calls == 3:
+                return _Result(scalar=datetime(2026, 11, 2, tzinfo=timezone.utc))
+            return _Result()
+
+    staging = StatutesStaging(
+        extracted_act_name="Fixture Act",
+        extracted_short_name="ppc1860",
+        extracted_section_number="3",
+        extracted_section_text="3. Stale text that must not be written back onto the retired key.",
+        raw_text="3. Stale text that must not be written back onto the retired key.",
+        confidence_score=0.85,
+        parsing_metadata={"act_keys": ["1", "3"], "harvest_at": "2026-11-01T00:00:00+00:00"},
+    )
+    db = _DB()
+    published = asyncio.run(publish_statute(db, staging, SimpleNamespace(source_name="PakistanCode")))
+    assert published.stale is True and published.id is None and published.changed is False
     assert db.calls == 3
+    assert "section_version" not in (staging.parsing_metadata or {})
 
 
 def test_acceptance_helpers_do_not_invent_a_live_key_set():
+    older = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    assert harvest_token_from_metadata({"harvest_at": older.isoformat()}) == older
+    assert harvest_token_from_metadata({"harvest_at": "2026-11-01T00:00:00"}) is None
+    assert harvest_token_from_metadata({}) is None
+    assert harvest_is_stale(older, newer) is True
+    assert harvest_is_stale(newer, older) is False
+    assert harvest_is_stale(newer, newer) is False
+    assert harvest_is_stale(None, newer) is True
+    assert harvest_is_stale(older, None) is False
     assert act_keys_from_metadata(None) is None
     assert act_keys_from_metadata({"act_keys": []}) is None
     assert act_keys_from_metadata({"act_keys": ["1", ""]}) is None

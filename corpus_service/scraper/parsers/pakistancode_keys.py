@@ -17,10 +17,21 @@ Walk ``div.section`` texts in document order.
    consume the 50-div cap. A div of 21 characters is kept. ``len`` is Unicode characters.
 3. At most 50 kept divs are staged, in document order. Further kept divs are dropped by
    the cap.
-4. A schedule heading opens schedule scope for the following divs. Scope does not close
-   on a later body section. Preamble and Explanation label that div only. A numberless
-   div that merely starts with a structural word (``Table of rates``, ``The form of``)
-   does not open schedule scope and does not rename later sections.
+4. Schedule scope (FA-F21-018). The live PakistanCode document was not fetched: the
+   site certificate chain did not verify, and this repository has no saved page. A flat
+   sibling heading is therefore not treated as a container.
+
+   * A heading that follows a body section opens schedule scope for later flat siblings.
+     Scope stays open. It is not closed because a later div looks like a body section.
+   * A heading that appears before any body section does not open scope. Later numbered
+     flat siblings are ``unscoped``, not body ``N`` and not ``schedule:L:N``.
+   * A div whose ancestor (not a previous ``div.section`` sibling, and not a wrapper
+     whose other children are only section divs) is itself a schedule heading is a
+     schedule item under that label, including when no body section precedes it.
+
+   Preamble and Explanation label that div only. A numberless div that merely starts
+   with a structural word (``Table of rates``, ``The form of``) does not open schedule
+   scope and does not rename later sections.
 5. Keys, all deterministic, none positional, none a uuid:
 
    * unique body section number ``N`` → ``N`` (stable when the text is amended)
@@ -28,6 +39,7 @@ Walk ``div.section`` texts in document order.
    * schedule item ``N`` under label ``L`` → ``schedule:L:N`` (or with ``-<sha8>`` when
      that schedule repeats ``N``)
    * schedule heading → ``schedule-heading:L``
+   * numbered div under an unopened flat heading → ``unscoped:N-<sha8>``
    * preamble / explanation / other numberless div → ``<kind>-<sha8>``
    * a second kept div that would otherwise reuse a key → ``<key>~2``, ``~3``, …
 
@@ -37,7 +49,7 @@ Walk ``div.section`` texts in document order.
    another version. Amending a content-addressed div changes that div's key only.
 
 6. Lookup by a real section number is equality on the unique body key ``N``. A schedule
-   item is not that key. A retired key is not returned.
+   item is not that key. An ``unscoped`` div is not that key. A retired key is not returned.
 7. An empty live key set never retires existing rows. The key being published is never
    retired by its own harvest set.
 """
@@ -47,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Iterable, Mapping, Optional, Sequence
 
 # A div longer than this is content. Length == 20 is still short and is skipped
@@ -97,6 +110,60 @@ def schedule_label(text: str) -> Optional[str]:
         return None
     token = matched.group("lead") or matched.group("trail") or "schedule"
     return token.lower()
+
+
+def _is_section_div(node) -> bool:
+    if getattr(node, "name", None) != "div" or not hasattr(node, "get"):
+        return False
+    classes = node.get("class")
+    if not classes:
+        return False
+    if isinstance(classes, str):
+        classes = [classes]
+    return any(re.search(r"section", str(item), re.IGNORECASE) for item in classes)
+
+
+def _node_contains(child, node) -> bool:
+    if child is node:
+        return True
+    descendants = getattr(child, "descendants", None)
+    return descendants is not None and node in descendants
+
+
+def schedule_container_label(node) -> Optional[str]:
+    """Schedule label when an ancestor, apart from other section divs, is a heading.
+
+    A previous ``div.section`` sibling is not this signal. A wrapper whose other children
+    are only section divs is not a container either, so a flat list stays flat. The public
+    site was not used to invent that shape: its certificate chain did not verify.
+    """
+    parents = getattr(node, "parents", None)
+    if parents is None:
+        return None
+    for ancestor in parents:
+        name = getattr(ancestor, "name", None)
+        if name in (None, "[document]", "html", "body"):
+            break
+        parts = []
+        holds_node = False
+        for child in list(getattr(ancestor, "children", ())):
+            if _node_contains(child, node):
+                holds_node = True
+                continue
+            if _is_section_div(child):
+                continue
+            if hasattr(child, "get_text"):
+                text = child.get_text(" ", strip=True)
+            else:
+                text = str(child).strip()
+            if text:
+                parts.append(text)
+        if not holds_node:
+            continue
+        label = schedule_label(" ".join(parts))
+        if label:
+            return label
+    return None
 
 
 def parse_section_number(text: str) -> Optional[str]:
@@ -150,26 +217,40 @@ def _title_for(text: str, number: Optional[str]) -> Optional[str]:
     return sentence[:500]
 
 
-def _classify(texts: Sequence[str]) -> tuple:
+def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> tuple:
     """Kept divs in order, plus how many short non-headings were skipped."""
     kept: list[_Classified] = []
     skipped = 0
     schedule: Optional[str] = None
-    for raw in texts:
+    body_seen = False
+    heading_before_body = False
+    for index, raw in enumerate(texts):
         text = normalise_div_text(raw)
+        container = None
+        if containers is not None:
+            container = containers[index] or None
         label = schedule_label(text)
         if label is not None:
-            schedule = label
+            if body_seen:
+                schedule = label
+            else:
+                heading_before_body = True
+                schedule = None
             kept.append(_Classified(text=text, kind="schedule-heading", number=None, label=label))
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
             skipped += 1
             continue
         number = parse_section_number(text)
-        if number is not None and schedule is not None:
-            kept.append(_Classified(text=text, kind="schedule-item", number=number, label=schedule))
+        open_label = container or schedule
+        if number is not None and open_label is not None:
+            kept.append(_Classified(text=text, kind="schedule-item", number=number, label=open_label))
+            continue
+        if number is not None and heading_before_body:
+            kept.append(_Classified(text=text, kind="unscoped", number=number, label=None))
             continue
         if number is not None:
+            body_seen = True
             kept.append(_Classified(text=text, kind="section", number=number, label=None))
             continue
         kind = _structural_kind(text) or "div"
@@ -189,6 +270,8 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
         return f"{base}-{content_token(item.text)}"
     if item.kind == "schedule-heading" and item.label is not None:
         return f"schedule-heading:{item.label}"
+    if item.kind == "unscoped" and item.number is not None:
+        return f"unscoped:{item.number}-{content_token(item.text)}"
     if item.kind == "preamble":
         return f"preamble-{content_token(item.text)}"
     if item.kind == "explanation":
@@ -196,9 +279,32 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
     return f"div-{content_token(item.text)}"
 
 
-def key_div_texts(texts: Sequence[str]) -> DivKeyingResult:
-    """Stage identity for one PakistanCode act page. ``texts`` is document order."""
-    classified, skipped = _classify(texts)
+_FALLBACK_SUPPRESSED_KINDS = frozenset({"section", "schedule-item", "preamble", "explanation", "div", "unscoped"})
+
+
+def suppresses_plain_text_fallback(result: DivKeyingResult) -> bool:
+    """True when kept divs already carry the page's sections.
+
+    A page of only schedule headings does not suppress the paragraph fallback.
+    Headings are still staged by the caller. A page with no kept div does not
+    suppress it either. That is the same no-div and all-short-div reach as the
+    harvester had before FA-F21-017.
+    """
+    return any(item.kind in _FALLBACK_SUPPRESSED_KINDS for item in result.sections)
+
+
+def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> DivKeyingResult:
+    """Stage identity for one PakistanCode act page. ``texts`` is document order.
+
+    ``containers[i]`` is the schedule label of a real ancestor of that div, or None
+    for a flat sibling. It must be the same length as ``texts``.
+    """
+    texts = tuple(texts)
+    if containers is not None:
+        containers = tuple(containers)
+        if len(containers) != len(texts):
+            raise ValueError("PakistanCode schedule containers must align with div texts")
+    classified, skipped = _classify(texts, containers)
     dropped = max(0, len(classified) - MAX_STAGED_DIVS)
     staged = classified[:MAX_STAGED_DIVS]
     body_counts: dict = {}
@@ -347,6 +453,39 @@ def act_keys_from_metadata(metadata: Optional[Mapping]) -> Optional[frozenset]:
     if not all(isinstance(key, str) and key for key in raw):
         return None
     return frozenset(raw)
+
+
+def harvest_token_from_metadata(metadata: Optional[Mapping]) -> Optional[datetime]:
+    """The harvest clock stamped on a staging row, or None when it is missing or naive.
+
+    A naive timestamp is refused so two clocks cannot be ordered by accident.
+    ``updated_at`` is not this value: a late publish of older text also happens now.
+    """
+    if not isinstance(metadata, Mapping):
+        return None
+    raw = metadata.get("harvest_at")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def harvest_is_stale(incoming: Optional[datetime], stored_max: Optional[datetime]) -> bool:
+    """An incoming harvest must not overwrite a newer one already stored for the act.
+
+    No stored clock means nothing has won yet. A stored clock with no incoming clock
+    fails closed. Equal clocks are the same harvest and may attach.
+    """
+    if stored_max is None:
+        return False
+    if incoming is None:
+        return True
+    return incoming < stored_max
 
 
 def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[str]], current_key: str) -> list:

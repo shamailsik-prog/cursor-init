@@ -259,6 +259,9 @@ MASTER_WRITER_ALLOWLIST = {
     # Audit F21 (spec R8): the corpus lifecycle's retrieval projection, the one place an approved record
     # is written into case_law_master / statutes_master (after the review gate, never by a source task).
     "scraper.publication.retrieval": "retrieval projection of approved records (F21)",
+    # FA-F21-021: migration 009 adds nullable statutes_master.harvest_at. The statement is
+    # ALTER TABLE only. It inserts, updates and deletes no row.
+    "migrations.009_statute_harvest_at": "nullable harvest_at column (FA-F21-021); no row DML",
 }
 # Updaters only: they change rows already in a master table by assigning attributes on instances
 # they loaded, which the scan does not count as a write. Their scanned `writes` must stay empty, so
