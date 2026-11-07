@@ -24,9 +24,11 @@ from scraper.parsers.pakistancode_keys import (
     act_keys_from_metadata,
     apply_harvest,
     apply_legacy_rekey,
+    act_inventory_is_complete,
     harvest_is_stale,
     harvest_token_from_metadata,
     key_div_texts,
+    pre_clock_act,
     keys_to_retire,
     lookup_real_section,
     schedule_container_label,
@@ -358,8 +360,9 @@ def test_harvester_stages_locked_keys_and_f21_fixture_numbers_stay_real(monkeypa
     assert all(row.extracted_section_number != (row.extracted_section_text or "")[:20] for row in db.rows)
     assert db.rows[1].parsing_metadata["lookup_number"] == "1"
     assert db.rows[3].parsing_metadata["lookup_number"] is None
-    assert db.rows[0].parsing_metadata["act_keys"] == keys
-    assert act_keys_from_metadata(db.rows[0].parsing_metadata) == frozenset(keys)
+    assert db.rows[3].parsing_metadata["section_kind"] == "schedule-item"
+    assert all("act_keys" not in row.parsing_metadata for row in db.rows)
+    assert act_keys_from_metadata(db.rows[0].parsing_metadata) is None
     assert db.rows[0].parsing_metadata["source_name"] == "PakistanCode"
     assert len({row.parsing_metadata["harvest_at"] for row in db.rows}) == 1
     assert "+" in db.rows[0].parsing_metadata["harvest_at"] or db.rows[0].parsing_metadata["harvest_at"].endswith("Z")
@@ -398,12 +401,18 @@ def test_fa_f21_018_flat_heading_before_body_does_not_become_a_schedule_item():
 
 
 def test_fa_f21_018_scope_stays_open_after_a_body_section():
-    """Once a body section has opened schedule scope, a later numbered div stays a schedule item."""
+    """Once a body section has opened schedule scope, a later numbered div stays a schedule item.
+
+    That classification is not a publication. The page is not a complete inventory, so the
+    harvester omits act_keys and publish quarantines the schedule item instead of retiring
+    the body section. No captured page substantiates closing or keeping the scope.
+    """
     later = "3. A later numbered div follows the schedule and is longer than twenty characters."
     keyed = key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM, later])
     assert [item.key for item in keyed.sections] == ["1", "schedule-heading:first", "schedule:first:1", "schedule:first:3"]
     assert keyed.sections[0].lookup_number == "1"
     assert keyed.sections[3].kind == "schedule-item" and keyed.sections[3].lookup_number is None
+    assert act_inventory_is_complete(keyed) is False
 
 
 def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
@@ -533,6 +542,9 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
         def scalar(self):
             return self._scalar
 
+        def one(self):
+            return self._scalar
+
     class _DB:
         def __init__(self, current, deleted):
             self.current = current
@@ -550,7 +562,7 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
             if self.calls in (1, 2):
                 return _Result([])
             if self.calls == 3:
-                return _Result(scalar=self.current.harvest_at)
+                return _Result(scalar=(2, self.current.harvest_at))
             if self.calls == 4:
                 return _Result([self.current])
             return _Result([self.current, self.deleted])
@@ -603,6 +615,9 @@ def test_publish_statute_refuses_a_stale_harvest_without_clearing_repeal():
         def scalar(self):
             return self._scalar
 
+        def one(self):
+            return self._scalar
+
     class _DB:
         def __init__(self):
             self.calls = 0
@@ -616,7 +631,7 @@ def test_publish_statute_refuses_a_stale_harvest_without_clearing_repeal():
         async def execute(self, statement, params=None):
             self.calls += 1
             if self.calls == 3:
-                return _Result(scalar=datetime(2026, 11, 2, tzinfo=timezone.utc))
+                return _Result(scalar=(1, datetime(2026, 11, 2, tzinfo=timezone.utc)))
             return _Result()
 
     staging = StatutesStaging(
@@ -646,6 +661,12 @@ def test_acceptance_helpers_do_not_invent_a_live_key_set():
     assert harvest_is_stale(newer, newer) is False
     assert harvest_is_stale(None, newer) is True
     assert harvest_is_stale(older, None) is False
+    assert pre_clock_act(2, None) is True
+    assert pre_clock_act(0, None) is False
+    assert pre_clock_act(2, newer) is False
+    assert act_inventory_is_complete(key_div_texts([SECTION_1, SECTION_2])) is True
+    assert act_inventory_is_complete(key_div_texts([HEADING, SECTION_1])) is False
+    assert act_inventory_is_complete(key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM])) is False
     assert act_keys_from_metadata(None) is None
     assert act_keys_from_metadata({"act_keys": []}) is None
     assert act_keys_from_metadata({"act_keys": ["1", ""]}) is None

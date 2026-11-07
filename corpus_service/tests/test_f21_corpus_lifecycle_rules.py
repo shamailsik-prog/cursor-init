@@ -40,8 +40,14 @@ BEAT = {
     "publish-corpus": ("scraper.tasks.corpus_pipeline.publish_corpus", 300),
     "reconcile-corpus": ("scraper.tasks.corpus_pipeline.reconcile_corpus", 3600),
 }
-# The only modules that may write a master table (R12): the retrieval projection and F23's route.
-MASTER_WRITERS = {"scraper.publication.retrieval", "scraper.routers.quarantine"}
+# Modules whose scanned text writes a master table (R12). The retrieval projection and F23's route
+# write rows. Migration 009's only such statement is ALTER TABLE statutes_master ADD COLUMN
+# harvest_at; it inserts, updates and deletes no row.
+MASTER_WRITERS = {
+    "scraper.publication.retrieval",
+    "scraper.routers.quarantine",
+    "migrations.009_statute_harvest_at",
+}
 # Updaters of rows already in a master table (F20's reviewed list); their scanned writes stay empty.
 MASTER_UPDATERS = {"scraper.tasks.embeddings", "scraper.tasks.cross_reference"}
 STATE_WRITERS = {"scraper.tasks.lifecycle", "migrations.005_corpus_lifecycle"}

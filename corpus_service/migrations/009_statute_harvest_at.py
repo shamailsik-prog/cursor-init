@@ -7,8 +7,24 @@ DDL when the column is already there.
 
 The column is the harvest clock of the PakistanCode publish that last decided the
 row. It is left NULL on existing rows. Nothing here rewrites section text or
-is_repealed, and this module is not run against a live database by the change that
-adds it.
+is_repealed, and this module does not invent timestamps or backfill rows.
+
+Rollout. Run `python -m scraper.migrate` before the new publish code serves
+traffic. That is necessary and not sufficient:
+
+* Existing PakistanCode rows stay authoritative while every ``harvest_at`` for
+  that short name is NULL.
+* A publish whose text matches the stored row may store its own ``harvest_at``
+  on that row. It does not change the text, does not clear ``is_repealed``, and
+  does not retire any other row.
+* A stamped publish that would change text, insert a key, or clear repeal while
+  the act has no clock is left ``approved`` and retried on a later publish tick.
+  An unstamped legacy publish that would change the row is dead-lettered
+  ``harvest_clock_uninitialized``.
+* After any row of the act has a clock, an older stamp is ``stale_harvest`` and
+  writes nothing. An equal or newer stamp may amend and retire.
+* Re-harvest after migrate. Do not copy a clock onto old rows by hand and do not
+  point this migration at a live database from a workstation.
 
 DDL: run only by `python -m scraper.migrate` as the schema owner, in the caller's
 transaction, never by the API's init_db().

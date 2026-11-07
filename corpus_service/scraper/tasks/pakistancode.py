@@ -2,6 +2,7 @@ import asyncio, re, logging
 from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
 from scraper.parsers.pakistancode_keys import (
+    act_inventory_is_complete,
     key_div_texts,
     normalise_div_text,
     schedule_container_label,
@@ -80,20 +81,23 @@ async def scrape_pakistancode(source, db):
                 if keyed is not None and suppresses_plain_text_fallback(keyed):
                     # Kept body, schedule, preamble, explanation, or numberless divs are the
                     # page. The paragraph splitter is not run, so it cannot collapse two divs
-                    # that share a number.
-                    act_keys = [item.key for item in keyed.sections]
+                    # that share a number. act_keys is omitted when any div is unscoped or a
+                    # schedule item: that page is not a proven inventory, so publish will not retire.
+                    act_keys = [item.key for item in keyed.sections] if act_inventory_is_complete(keyed) else None
                     for item in keyed.sections:
+                        extra = {
+                            "section_kind": item.kind,
+                            "lookup_number": item.lookup_number,
+                            "schedule_label": item.schedule_label,
+                            "keying": "fa-f21-017",
+                            "harvest_at": harvest_at,
+                        }
+                        if act_keys is not None:
+                            extra["act_keys"] = act_keys
                         db.add(_staged(
                             source, url, act_name, slug[:10], item.key, item.text,
                             section_title=item.title,
-                            extra_metadata={
-                                "section_kind": item.kind,
-                                "lookup_number": item.lookup_number,
-                                "schedule_label": item.schedule_label,
-                                "act_keys": act_keys,
-                                "keying": "fa-f21-017",
-                                "harvest_at": harvest_at,
-                            },
+                            extra_metadata=extra,
                         ))
                         rows += 1
                 else:

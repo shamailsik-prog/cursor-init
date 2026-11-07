@@ -52,6 +52,20 @@ def _staging(section, text, harvest_at, act_keys, source_id=None):
     )
 
 
+def _publish_row(section, text, harvest_at, act_keys):
+    from scraper.database import SessionLocal
+    from scraper.publication.retrieval import publish_statute
+
+    async def _run():
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging(section, text, harvest_at, act_keys)
+                db.add(row)
+                return await publish_statute(db, row, SOURCE)
+
+    return run(_run())
+
+
 def _rows():
     return run(fetch(
         "SELECT section_number, section_text, is_repealed, harvest_at "
@@ -232,3 +246,201 @@ def test_fa_f21_021_a_stale_publish_waits_for_the_act_lock(corpus_db):
     stored = _rows()
     assert len(stored) == 1
     assert stored[0][0] == "1" and stored[0][1] == TEXT_1 and stored[0][2] is False
+
+
+def test_pre_clock_rows_accept_a_matching_stamp_and_refuse_a_different_one(corpus_db):
+    """Rows left NULL by migration 009 are not an empty act.
+
+    No timestamp is written except the incoming harvest_at of a publish whose text
+    already matches. A differing stamped row stays approved. A differing unstamped
+    row is dead-lettered. Neither changes text, clears repeal, inserts a key, or retires.
+    """
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+
+    async def _seed_legacy():
+        from scraper.database import SessionLocal
+        from scraper.models import StatutesMaster
+
+        async with SessionLocal() as db:
+            async with db.begin():
+                db.add(StatutesMaster(
+                    statute_name="Legacy Act", short_name="ppc1860", section_number="2",
+                    section_text=TEXT_2, source_site="PakistanCode", is_repealed=False, harvest_at=None,
+                ))
+                db.add(StatutesMaster(
+                    statute_name="Legacy Act", short_name="ppc1860", section_number="3",
+                    section_text=TEXT_3, source_site="PakistanCode", is_repealed=True, harvest_at=None,
+                ))
+
+    run(_seed_legacy())
+
+    async def _source_id():
+        return uuid.UUID(str((await fetch("SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"))[0][0]))
+
+    async def _hold_different_text():
+        from scraper.database import SessionLocal
+        from scraper.tasks import lifecycle
+        from scraper.tasks.publish import publish
+
+        source_id = await _source_id()
+        before = (await fetch("SELECT count(*) FROM embedding_queue"))[0][0]
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging("2", TEXT_2_AMENDED, T1, ["2"], source_id=source_id)
+                db.add(row)
+                await db.flush()
+                lifecycle.move_through(db, row, [lifecycle.NORMALISED, lifecycle.APPROVED], actor=lifecycle.ACTOR_GATE)
+                state = await publish(db, row)
+                assert state == lifecycle.APPROVED
+                assert row.lifecycle_state == lifecycle.APPROVED
+                assert row.published_id is None
+        after = (await fetch("SELECT count(*) FROM embedding_queue"))[0][0]
+        return before, after
+
+    before, after = run(_hold_different_text())
+    assert before == after
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2 and stored["2"][2] is False and stored["2"][3] is None
+    assert stored["3"][1] == TEXT_3 and stored["3"][2] is True and stored["3"][3] is None
+
+    async def _refuse_unstamped():
+        from scraper.database import SessionLocal
+        from scraper.tasks import lifecycle
+        from scraper.tasks.publish import REASON_CLOCK_UNINITIALIZED, publish
+
+        source_id = await _source_id()
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging("2", TEXT_2_AMENDED, T1, ["2"], source_id=source_id)
+                row.parsing_metadata = {"act_keys": ["2"], "keying": "fa-f21-017", "source_name": "PakistanCode"}
+                db.add(row)
+                await db.flush()
+                lifecycle.move_through(db, row, [lifecycle.NORMALISED, lifecycle.APPROVED], actor=lifecycle.ACTOR_GATE)
+                state = await publish(db, row)
+                assert state == lifecycle.DEAD_LETTER
+                assert row.state_reason == REASON_CLOCK_UNINITIALIZED
+                assert row.published_id is None
+
+    run(_refuse_unstamped())
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2 and stored["2"][3] is None
+    assert run(fetch("SELECT count(*) FROM statutes_master WHERE short_name = 'ppc1860'"))[0][0] == 2
+
+    held_new = _publish_row("9", "9. A new key must not appear while the act has no harvest clock.", T1, ["2", "3", "9"])
+    assert held_new.clock_held is True and held_new.id is None
+    assert run(fetch("SELECT count(*) FROM statutes_master WHERE short_name = 'ppc1860' AND section_number = '9'"))[0][0] == 0
+
+    confirmed = _publish_row("3", TEXT_3, T1, ["3"])
+    assert confirmed.stale is False and confirmed.changed is False and confirmed.clock_held is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["3"][1] == TEXT_3 and stored["3"][2] is True
+    assert stored["3"][3] == datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert stored["2"][1] == TEXT_2 and stored["2"][2] is False and stored["2"][3] is None
+
+    stale = _publish_row("2", TEXT_2_AMENDED, "2026-10-01T00:00:00+00:00", ["2"])
+    assert stale.stale is True and stale.id is None
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2 and stored["2"][3] is None
+
+    amended = _publish_row("2", TEXT_2_AMENDED, T2, ["2", "3"])
+    assert amended.attached is True and amended.changed is True and amended.stale is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2_AMENDED and stored["2"][2] is False
+    assert stored["2"][3] == datetime(2026, 11, 2, tzinfo=timezone.utc)
+    assert stored["3"][2] is True and stored["3"][1] == TEXT_3
+
+
+def test_ambiguous_sections_are_quarantined_and_do_not_publish_or_retire(corpus_db):
+    """Unscoped and schedule-item rows are not master rows. Lookup exclusion is not the control.
+
+    The keyer may still classify them. No captured PakistanCode page substantiates that
+    classification, so the gate quarantines them and publish writes nothing.
+    """
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+
+    async def _body():
+        from scraper.database import SessionLocal
+        from scraper.publication.retrieval import publish_statute
+
+        async with SessionLocal() as db:
+            async with db.begin():
+                return await publish_statute(db, _staging("1", TEXT_1, T2, ["1"]), SOURCE)
+
+    body = run(_body())
+    assert body.stale is False and body.id is not None
+
+    async def _withhold(kind, key):
+        from scraper.database import SessionLocal
+        from scraper.publication.retrieval import publish_statute
+        from scraper.tasks import lifecycle
+        from scraper.tasks.publish import publish
+
+        source_id = uuid.UUID(str((await fetch(
+            "SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"
+        ))[0][0]))
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging(key, "1. Ambiguous text that must not become a master row or retire section 1.", T3, ["1"])
+                row.parsing_metadata = {
+                    **row.parsing_metadata,
+                    "section_kind": kind,
+                    "act_keys": [key],
+                }
+                row.source_id = source_id
+                db.add(row)
+                await db.flush()
+                lifecycle.move_through(db, row, [lifecycle.NORMALISED, lifecycle.APPROVED], actor=lifecycle.ACTOR_GATE)
+                state = await publish(db, row)
+                direct = await publish_statute(db, row, SOURCE)
+                assert state == lifecycle.DEAD_LETTER
+                assert row.state_reason == "ambiguous_section_identity"
+                assert direct.withheld is True and direct.id is None
+        return kind
+
+    assert run(_withhold("unscoped", "unscoped:1-abcdef12")) == "unscoped"
+    assert run(_withhold("schedule-item", "schedule:first:1")) == "schedule-item"
+    stored = _rows()
+    assert [row[0] for row in stored] == ["1"]
+    assert stored[0][1] == TEXT_1 and stored[0][2] is False
+
+    async def _gate(kind):
+        from scraper.database import SessionLocal
+        from scraper.tasks.promotion import gate
+
+        source_id = uuid.UUID(str((await fetch(
+            "SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"
+        ))[0][0]))
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging("schedule:first:9", "9. Quarantined before approval.", T3, None, source_id=source_id)
+                row.parsing_metadata = {"section_kind": kind, "keying": "fa-f21-017", "source_name": "PakistanCode"}
+                db.add(row)
+                await db.flush()
+                decision = await gate(db, row)
+                assert decision == "quarantined"
+                assert row.lifecycle_state == "quarantined"
+                assert row.quarantine_reason == "ambiguous_section_identity"
+        queued = await fetch(
+            "SELECT count(*) FROM quarantine_queue WHERE reason = 'ambiguous_section_identity'"
+        )
+        return queued[0][0]
+
+    assert run(_gate("schedule-item")) >= 1
+    assert run(fetch(
+        "SELECT count(*) FROM statutes_master WHERE section_number LIKE 'schedule:%' OR section_number LIKE 'unscoped:%'"
+    ))[0][0] == 0
+
+    # A body section from a page that also classified a schedule item carries no act_keys.
+    # Publishing that body must not retire the sibling. A present key set still retires.
+    incomplete = _publish_row("2", TEXT_2, T3, None)
+    assert incomplete.id is not None and incomplete.withheld is False and incomplete.stale is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["1"][1] == TEXT_1 and stored["1"][2] is False
+    assert stored["2"][2] is False
+    retired = _publish_row("4", "4. A complete key set that names only this section retires the others.", T3, ["4"])
+    assert retired.id is not None and retired.stale is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["4"][2] is False
+    assert stored["1"][2] is True and stored["2"][2] is True

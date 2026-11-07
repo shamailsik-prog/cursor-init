@@ -77,6 +77,7 @@ from scraper.publication.vocabulary import REASON_BATCH_INVALID_PREFIX
 from scraper.source_identity import META_SOURCE_ID, META_SOURCE_NAME, as_source_uuid, is_present
 from scraper.tasks import lifecycle
 from scraper.tasks.outcomes import INTERRUPTIONS
+from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION, section_kind_is_ambiguous
 from scraper.trust import REASON_CITATION_MISSING, promotion_error_reason, publication_decision
 
 logger = logging.getLogger(__name__)
@@ -318,6 +319,14 @@ async def _decide_statute(db, st: StatutesStaging, job_id=None) -> str:
     retrieval store by the publish consumer; never into Annex A, whose statute histories come from
     curated batches. Its identity (act + section) was checked by the normaliser."""
     src, resolved_by = await _resolve_source(db, st)
+    kind = None
+    if isinstance(st.parsing_metadata, dict):
+        raw_kind = st.parsing_metadata.get("section_kind")
+        kind = raw_kind if isinstance(raw_kind, str) else None
+    if section_kind_is_ambiguous(kind):
+        _quarantine(db, st, src, REASON_AMBIGUOUS_SECTION, resolved_by,
+                    extra_details={"section_kind": kind}, job_id=job_id)
+        return "quarantined"
     decision = publication_decision(src.trust_level if src is not None else None, st.confidence_score)
     if not decision.promote:
         _quarantine(db, st, src, decision.reason, resolved_by, job_id=job_id)

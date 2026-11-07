@@ -50,7 +50,12 @@ Walk ``div.section`` texts in document order.
 
 6. Lookup by a real section number is equality on the unique body key ``N``. A schedule
    item is not that key. An ``unscoped`` div is not that key. A retired key is not returned.
-7. An empty live key set never retires existing rows. The key being published is never
+7. No captured PakistanCode page is in this repository, and the live site's certificate
+   chain did not verify, so ``unscoped`` and ``schedule-item`` keys are a classification
+   only. They are not published. A harvest that contains either kind does not carry
+   ``act_keys``, so it cannot retire other rows. ``schedule-heading`` is the div text
+   itself and may be published. This is not a claim about the live document order.
+8. An empty live key set never retires existing rows. The key being published is never
    retired by its own harvest set.
 """
 
@@ -280,6 +285,25 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
 
 
 _FALLBACK_SUPPRESSED_KINDS = frozenset({"section", "schedule-item", "preamble", "explanation", "div", "unscoped"})
+# Kinds that do not depend on an unproven schedule layout. ``schedule-item`` (flat sticky
+# scope or an ancestor container) and ``unscoped`` (heading before any body section) are
+# withheld at publication: no captured page substantiates either shape.
+PUBLISHABLE_SECTION_KINDS = frozenset({"section", "preamble", "explanation", "div", "schedule-heading"})
+AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-item"})
+REASON_AMBIGUOUS_SECTION = "ambiguous_section_identity"
+
+
+def section_kind_is_ambiguous(kind: Optional[str]) -> bool:
+    """True for a key whose schedule layout is not backed by a captured page."""
+    return kind in AMBIGUOUS_SECTION_KINDS
+
+
+def act_inventory_is_complete(result: DivKeyingResult) -> bool:
+    """True when every kept div may be published and the key set may retire absences.
+
+    One ambiguous div means the page is not a proven inventory of the act.
+    """
+    return bool(result.sections) and all(item.kind in PUBLISHABLE_SECTION_KINDS for item in result.sections)
 
 
 def suppresses_plain_text_fallback(result: DivKeyingResult) -> bool:
@@ -476,16 +500,26 @@ def harvest_token_from_metadata(metadata: Optional[Mapping]) -> Optional[datetim
 
 
 def harvest_is_stale(incoming: Optional[datetime], stored_max: Optional[datetime]) -> bool:
-    """An incoming harvest must not overwrite a newer one already stored for the act.
+    """An incoming harvest must not overwrite a newer clock already stored for the act.
 
-    No stored clock means nothing has won yet. A stored clock with no incoming clock
-    fails closed. Equal clocks are the same harvest and may attach.
+    A missing stored clock is not stale by this comparator. It is also not permission
+    to change existing rows: ``pre_clock_act`` is that guard. A stored clock with no
+    incoming clock fails closed. Equal clocks are the same harvest and may attach.
     """
     if stored_max is None:
         return False
     if incoming is None:
         return True
     return incoming < stored_max
+
+
+def pre_clock_act(row_count: int, stored_max: Optional[datetime]) -> bool:
+    """True when master rows for the act exist and every ``harvest_at`` is NULL.
+
+    Those rows are the pre-clock corpus. The first stamped publish must not treat
+    them as an empty act. No timestamp is invented for them.
+    """
+    return row_count > 0 and stored_max is None
 
 
 def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[str]], current_key: str) -> list:
