@@ -12,19 +12,24 @@ is_repealed, and this module does not invent timestamps or backfill rows.
 Rollout. Run `python -m scraper.migrate` before the new publish code serves
 traffic. That is necessary and not sufficient:
 
-* Existing PakistanCode rows stay authoritative while every ``harvest_at`` for
-  that short name is NULL.
-* A publish whose text matches the stored row may store its own ``harvest_at``
-  on that row. It does not change the text, does not clear ``is_repealed``, and
-  does not retire any other row.
-* A stamped publish that would change text, insert a key, or clear repeal while
-  the act has no clock is left ``approved`` and retried on a later publish tick.
-  An unstamped legacy publish that would change the row is dead-lettered
-  ``harvest_clock_uninitialized``.
-* After any row of the act has a clock, an older stamp is ``stale_harvest`` and
-  writes nothing. An equal or newer stamp may amend and retire.
-* Re-harvest after migrate. Do not copy a clock onto old rows by hand and do not
-  point this migration at a live database from a workstation.
+* A publish whose text matches one stored row may store its own ``harvest_at``
+  on that row only. It does not change the text, does not clear ``is_repealed``,
+  and does not retire any other row. One stamp does not date the siblings.
+  Their history is unknown; this migration does not invent it.
+* While any row of the act still has NULL ``harvest_at``, a publish that would
+  change text, clear repeal, insert a key, or retire is not applied. A stamp
+  that is not strictly newer than a clock already stored is dead-lettered
+  ``harvest_baseline_incomplete``. That reason does not mean the refused text
+  was historically stale. A strictly newer stamp stays ``approved`` until every
+  existing row has its own clock, and is then applied only if it is still newer.
+* An unstamped publish that would change an undated row, or insert another key
+  into an act whose rows are all still undated, is dead-lettered
+  ``harvest_clock_uninitialized``. An unstamped publish after any clock is
+  stored is ``stale_harvest`` and writes nothing. Do not weaken that gate.
+* After every existing row has its own clock, an older stamp is ``stale_harvest``.
+  An equal or newer stamp may amend and retire under the ordinary rule.
+* Re-harvest after the baseline is complete. Do not copy a clock onto old rows
+  by hand and do not point this migration at a live database from a workstation.
 
 DDL: run only by `python -m scraper.migrate` as the schema owner, in the caller's
 transaction, never by the API's init_db().

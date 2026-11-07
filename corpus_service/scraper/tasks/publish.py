@@ -36,6 +36,9 @@ REASON_PUBLISHED_RECORD_MISSING = "published_record_missing"
 REASON_SOURCE_NOT_PROMOTABLE = "source_not_promotable"
 REASON_STALE_HARVEST = "stale_harvest"
 REASON_CLOCK_UNINITIALIZED = "harvest_clock_uninitialized"
+# Not a claim that the refused text is historically stale. Some master rows for the
+# act still have no harvest clock, and this publish is not a same-text confirmation.
+REASON_BASELINE_INCOMPLETE = "harvest_baseline_incomplete"
 # Review-queue resolutions that keep an open review (F23's CHECK vocabulary; nothing writes them today).
 _OPEN_RESOLUTIONS = ("needs_edit", "escalated")
 
@@ -134,9 +137,11 @@ async def publish(db, st, *, job_id=None) -> str:
         published_id, attached = await retrieval.publish_case(db, st, src)
     else:
         published = await retrieval.publish_statute(db, st, src)
-        if published.stale or published.withheld or published.clock_refused:
+        if published.stale or published.withheld or published.clock_refused or published.baseline_incomplete:
             if published.withheld:
                 reason = REASON_AMBIGUOUS_SECTION
+            elif published.baseline_incomplete:
+                reason = REASON_BASELINE_INCOMPLETE
             elif published.clock_refused:
                 reason = REASON_CLOCK_UNINITIALIZED
             else:

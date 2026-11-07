@@ -25,6 +25,7 @@ from scraper.parsers.pakistancode_keys import (
     apply_harvest,
     apply_legacy_rekey,
     act_inventory_is_complete,
+    snapshot_is_incomplete,
     harvest_is_stale,
     harvest_token_from_metadata,
     key_div_texts,
@@ -562,7 +563,7 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
             if self.calls in (1, 2):
                 return _Result([])
             if self.calls == 3:
-                return _Result(scalar=(2, self.current.harvest_at))
+                return _Result(scalar=(2, self.current.harvest_at, 0))
             if self.calls == 4:
                 return _Result([self.current])
             return _Result([self.current, self.deleted])
@@ -631,7 +632,7 @@ def test_publish_statute_refuses_a_stale_harvest_without_clearing_repeal():
         async def execute(self, statement, params=None):
             self.calls += 1
             if self.calls == 3:
-                return _Result(scalar=(1, datetime(2026, 11, 2, tzinfo=timezone.utc)))
+                return _Result(scalar=(1, datetime(2026, 11, 2, tzinfo=timezone.utc), 0))
             return _Result()
 
     staging = StatutesStaging(
@@ -664,6 +665,8 @@ def test_acceptance_helpers_do_not_invent_a_live_key_set():
     assert pre_clock_act(2, None) is True
     assert pre_clock_act(0, None) is False
     assert pre_clock_act(2, newer) is False
+    assert snapshot_is_incomplete(1) is True
+    assert snapshot_is_incomplete(0) is False
     assert act_inventory_is_complete(key_div_texts([SECTION_1, SECTION_2])) is True
     assert act_inventory_is_complete(key_div_texts([HEADING, SECTION_1])) is False
     assert act_inventory_is_complete(key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM])) is False

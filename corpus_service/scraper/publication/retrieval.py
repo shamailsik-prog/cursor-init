@@ -23,11 +23,13 @@ allowlists it), so the repoint can drop the projection here.
   short name whose keys are absent from the set are marked ``is_repealed``. An empty set retires
   nothing. The survivor of a legacy duplicate key is the earliest ``created_at``, then ``id``.
   FA-F21-021: a PakistanCode row stamped ``harvest_at`` does not overwrite text, clear ``is_repealed``,
-  insert a missing key, or retire keys when an equal or newer ``harvest_at`` is already stored for
-  that short name. The comparison is the harvest clock, not ``updated_at``. Existing rows whose
-  ``harvest_at`` is NULL are the pre-clock corpus: a publish may stamp the clock only when the
-  text already matches and the row stays repealed if it was repealed. It does not otherwise
-  change those rows, insert a new key, or retire siblings. No historical timestamp is written
+  insert a missing key, or retire keys when an older ``harvest_at`` is already stored for that
+  short name, and a missing incoming clock is the same refusal when any clock is stored. The
+  comparison is the harvest clock, not ``updated_at``. Rows whose ``harvest_at`` is NULL have
+  no stored history. A matching publish may stamp that one row. It does not date the siblings,
+  so while any row is still NULL this path does not change text, clear repeal, insert a key, or
+  retire. A same-clock difference on an undated row is ``harvest_baseline_incomplete``, which
+  does not claim the refused text is historically stale. No historical timestamp is written
   by migration. ``unscoped`` and ``schedule-item`` rows are not published.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
@@ -53,8 +55,8 @@ from scraper.parsers.pakistancode_keys import (
     harvest_token_from_metadata,
     keys_to_retire,
     note_section_version,
-    pre_clock_act,
     section_kind_is_ambiguous,
+    snapshot_is_incomplete,
 )
 from scraper.tasks.promotion import citation_lock_key
 
@@ -77,6 +79,7 @@ class StatutePublication(NamedTuple):
     withheld: bool = False
     clock_held: bool = False
     clock_refused: bool = False
+    baseline_incomplete: bool = False
 
 
 def statute_act_lock_key(short_name: str) -> str:
@@ -170,14 +173,21 @@ async def _lock_statute(db: Any, key: str) -> None:
 
 
 async def _act_clock(db: Any, short_name: str):
-    """(row count, newest harvest_at) for one PakistanCode short name. NULL clocks stay NULL."""
-    count, stored_max = (await db.execute(
-        select(func.count(StatutesMaster.id), func.max(StatutesMaster.harvest_at)).where(
+    """(row count, newest harvest_at, rows still missing a clock) for one short name.
+
+    ``max`` ignores NULL. A non-NULL max therefore does not mean every row is dated.
+    """
+    count, stored_max, null_rows = (await db.execute(
+        select(
+            func.count(StatutesMaster.id),
+            func.max(StatutesMaster.harvest_at),
+            func.count(StatutesMaster.id).filter(StatutesMaster.harvest_at.is_(None)),
+        ).where(
             StatutesMaster.short_name == short_name,
             StatutesMaster.source_site == PAKISTANCODE_SOURCE,
         )
     )).one()
-    return int(count), stored_max
+    return int(count), stored_max, int(null_rows or 0)
 
 
 def _section_kind(st: Any) -> Optional[str]:
@@ -218,27 +228,45 @@ async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_
             row.harvest_at = incoming
 
 
-async def _confirm_pre_clock_row(db: Any, existing, body: str, incoming) -> StatutePublication:
-    """Stamp a NULL-clock row only when the publish already matches it.
+def _baseline_refusal(incoming, stored_max) -> StatutePublication:
+    """Refuse a write that is not a confirmation of an undated row.
 
-    A different text, a new key, or a repeal change is not applied. A stamped
-    mismatch stays unpublished so a later tick can run after a confirming
-    sibling has stored a clock. An unstamped mismatch cannot be ordered later
-    and is refused. Nothing here writes a made-up timestamp, and nothing retires.
+    A strictly newer stamp stays approved so a later tick can run after every
+    existing row has its own clock. Any other stamp is terminal. The terminal
+    result is not ``stale``: there is no stored history that this text contradicts.
+    """
+    if stored_max is not None and (incoming is None or incoming <= stored_max):
+        return StatutePublication(
+            None, False, False, False, False, False, False, True,
+        )
+    if incoming is None:
+        return StatutePublication(None, False, False, False, False, False, True, False)
+    return StatutePublication(None, False, False, False, False, True, False, False)
+
+
+async def _unknown_history_row(db: Any, existing, body: str, incoming, stored_max) -> StatutePublication:
+    """Apply the unknown-history baseline while any master row has no clock.
+
+    A matching publish stamps that row and nothing else. Sibling text, repeal,
+    new keys, and retirement are not derived from one dated row. No timestamp
+    is invented for a row this publish does not match.
     """
     if existing is None:
+        # A new key is not part of the undated corpus. Holding it would insert
+        # it on a later tick at the same clock that only confirmed other rows.
         if incoming is None:
-            return StatutePublication(None, False, False, False, False, False, True)
-        return StatutePublication(None, False, False, False, False, True, False)
+            return StatutePublication(None, False, False, False, False, False, True, False)
+        return StatutePublication(None, False, False, False, False, False, False, True)
     same_text = (existing.section_text or "") == (body or "")
-    if same_text:
+    if existing.harvest_at is None and same_text:
         if incoming is not None:
             existing.harvest_at = incoming
         await db.flush()
-        return StatutePublication(existing.id, True, False, False, False, False, False)
-    if incoming is None:
-        return StatutePublication(None, False, False, False, False, False, True)
-    return StatutePublication(None, False, False, False, False, True, False)
+        return StatutePublication(existing.id, True, False, False, False, False, False, False)
+    if same_text:
+        await db.flush()
+        return StatutePublication(existing.id, True, False, False, False, False, False, False)
+    return _baseline_refusal(incoming, stored_max)
 
 
 async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
@@ -255,11 +283,11 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         await _lock_statute(db, statute_act_lock_key(short_name))
     key = statute_key(source.source_name, act, short_name, section)
     await _lock_statute(db, key)
-    row_count, stored_max = (0, None)
+    stored_max, null_rows = None, 0
     if pakistancode:
-        row_count, stored_max = await _act_clock(db, short_name)
+        _row_count, stored_max, null_rows = await _act_clock(db, short_name)
         if harvest_is_stale(incoming, stored_max):
-            return StatutePublication(None, False, False, True, False, False, False)
+            return StatutePublication(None, False, False, True, False, False, False, False)
     if short_name is not None:
         match = (StatutesMaster.short_name == short_name, StatutesMaster.section_number == section)
     else:
@@ -269,8 +297,8 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         select(StatutesMaster).where(*match).order_by(StatutesMaster.created_at, StatutesMaster.id).limit(1)
         .with_for_update()
     )).scalars().first()
-    if pakistancode and pre_clock_act(row_count, stored_max):
-        return await _confirm_pre_clock_row(db, existing, body, incoming)
+    if pakistancode and snapshot_is_incomplete(null_rows):
+        return await _unknown_history_row(db, existing, body, incoming, stored_max)
     if existing is not None:
         changed = (existing.section_text or "") != (body or "")
         if changed:

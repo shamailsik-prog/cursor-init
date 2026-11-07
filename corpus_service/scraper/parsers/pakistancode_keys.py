@@ -516,10 +516,22 @@ def harvest_is_stale(incoming: Optional[datetime], stored_max: Optional[datetime
 def pre_clock_act(row_count: int, stored_max: Optional[datetime]) -> bool:
     """True when master rows for the act exist and every ``harvest_at`` is NULL.
 
-    Those rows are the pre-clock corpus. The first stamped publish must not treat
-    them as an empty act. No timestamp is invented for them.
+    ``max(harvest_at)`` becoming non-NULL does not by itself end this state for
+    the siblings. ``snapshot_is_incomplete`` is that wider check. No timestamp
+    is invented for these rows.
     """
     return row_count > 0 and stored_max is None
+
+
+def snapshot_is_incomplete(null_rows: int) -> bool:
+    """True while any master row of the act still has no harvest clock.
+
+    One matching stamp dates that row only. Sibling text, repeal, insertion,
+    and retirement stay unchanged until every existing row has its own clock.
+    A refused same-clock sibling write is not a finding that the write is
+    historically stale: the NULL rows have no stored history to compare.
+    """
+    return null_rows > 0
 
 
 def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[str]], current_key: str) -> list:

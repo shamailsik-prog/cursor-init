@@ -328,7 +328,7 @@ def test_pre_clock_rows_accept_a_matching_stamp_and_refuse_a_different_one(corpu
     assert run(fetch("SELECT count(*) FROM statutes_master WHERE short_name = 'ppc1860'"))[0][0] == 2
 
     held_new = _publish_row("9", "9. A new key must not appear while the act has no harvest clock.", T1, ["2", "3", "9"])
-    assert held_new.clock_held is True and held_new.id is None
+    assert held_new.baseline_incomplete is True and held_new.clock_held is False and held_new.id is None
     assert run(fetch("SELECT count(*) FROM statutes_master WHERE short_name = 'ppc1860' AND section_number = '9'"))[0][0] == 0
 
     confirmed = _publish_row("3", TEXT_3, T1, ["3"])
@@ -343,11 +343,25 @@ def test_pre_clock_rows_accept_a_matching_stamp_and_refuse_a_different_one(corpu
     stored = {row[0]: row for row in _rows()}
     assert stored["2"][1] == TEXT_2 and stored["2"][3] is None
 
-    amended = _publish_row("2", TEXT_2_AMENDED, T2, ["2", "3"])
+    # Section 2 is still undated. A newer stamp must not change it until that
+    # row has its own confirming clock. This does not say the newer text is stale.
+    held_amend = _publish_row("2", TEXT_2_AMENDED, T2, ["2", "3"])
+    assert held_amend.clock_held is True and held_amend.changed is False and held_amend.id is None
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2 and stored["2"][3] is None
+    assert stored["3"][2] is True and stored["3"][1] == TEXT_3
+
+    confirmed_two = _publish_row("2", TEXT_2, T2, ["2", "3"])
+    assert confirmed_two.changed is False and confirmed_two.baseline_incomplete is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == TEXT_2 and stored["2"][3] == datetime(2026, 11, 2, tzinfo=timezone.utc)
+    assert stored["3"][2] is True
+
+    amended = _publish_row("2", TEXT_2_AMENDED, T3, ["2", "3"])
     assert amended.attached is True and amended.changed is True and amended.stale is False
     stored = {row[0]: row for row in _rows()}
     assert stored["2"][1] == TEXT_2_AMENDED and stored["2"][2] is False
-    assert stored["2"][3] == datetime(2026, 11, 2, tzinfo=timezone.utc)
+    assert stored["2"][3] == datetime(2026, 11, 3, tzinfo=timezone.utc)
     assert stored["3"][2] is True and stored["3"][1] == TEXT_3
 
 
@@ -444,3 +458,179 @@ def test_ambiguous_sections_are_quarantined_and_do_not_publish_or_retire(corpus_
     stored = {row[0]: row for row in _rows()}
     assert stored["4"][2] is False
     assert stored["1"][2] is True and stored["2"][2] is True
+
+
+def _without_clock(section, text, act_keys):
+    row = _staging(section, text, None, act_keys)
+    row.parsing_metadata = {"act_keys": act_keys, "keying": "fa-f21-017", "source_name": "PakistanCode"}
+    return row
+
+
+def test_a_stamped_harvest_publishes_every_section_and_an_unstamped_batch_does_not(corpus_db):
+    """The harvester stamps one clock on the batch. The legacy fixture did not.
+
+    Stamped sections of an empty act all publish. Unstamped sections after the
+    first NULL row are ``harvest_clock_uninitialized``. After a clock exists,
+    an unstamped change is ``stale_harvest`` and writes nothing.
+    """
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+
+    async def _source_id():
+        return uuid.UUID(str((await fetch("SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"))[0][0]))
+
+    async def _through(row):
+        from scraper.database import SessionLocal
+        from scraper.tasks import lifecycle
+        from scraper.tasks.publish import publish
+
+        source_id = await _source_id()
+        async with SessionLocal() as db:
+            async with db.begin():
+                row.source_id = source_id
+                db.add(row)
+                await db.flush()
+                lifecycle.move_through(db, row, [lifecycle.NORMALISED, lifecycle.APPROVED], actor=lifecycle.ACTOR_GATE)
+                state = await publish(db, row)
+                return state, row.lifecycle_state, row.state_reason
+
+    for section, text in (("1", TEXT_1), ("2", TEXT_2), ("3", TEXT_3)):
+        state, lifecycle_state, reason = run(_through(_staging(section, text, T1, None)))
+        assert state == "embedded" and lifecycle_state == "embedded" and reason is None
+    stored = {row[0]: row for row in _rows()}
+    assert set(stored) == {"1", "2", "3"}
+    assert all(row[2] is False and row[3] == datetime(2026, 11, 1, tzinfo=timezone.utc) for row in stored.values())
+
+    def _legacy(section, text):
+        row = _without_clock(section, text, None)
+        row.extracted_short_name = "legacyconc"
+        return row
+
+    first_state, _first_life, first_reason = run(_through(_legacy("1", TEXT_1)))
+    second_state, second_life, second_reason = run(_through(_legacy("2", TEXT_2)))
+    assert first_state == "embedded" and first_reason is None
+    assert second_state == "dead_letter" and second_life == "dead_letter"
+    assert second_reason == "harvest_clock_uninitialized"
+    assert run(fetch("SELECT count(*), max(harvest_at) FROM statutes_master WHERE short_name = 'legacyconc'"))[0] == (1, None)
+
+    stale_state, stale_life, stale_reason = run(_through(_without_clock("1", TEXT_1 + " changed", ["1"])))
+    assert stale_state == "dead_letter" and stale_life == "dead_letter" and stale_reason == "stale_harvest"
+    stored = {row[0]: row for row in _rows()}
+    assert stored["1"][1] == TEXT_1 and stored["1"][3] == datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+
+def test_one_matching_stamp_does_not_date_or_rewrite_its_siblings(corpus_db):
+    """Unknown history: a matching stamp dates that row only.
+
+    There is no stored baseline against which the sibling text could be called
+    historically stale. The same clock must not change it, repeal it, or insert
+    a key. A later clock may, once every existing row has its own stamp.
+    """
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+    text_2 = "2. Body two text long enough for the unknown-history baseline."
+    text_2_changed = "2. Body two changed at the same clock as the first matching stamp."
+    text_3 = "3. Body three stays in force while any sibling is undated."
+
+    async def _seed():
+        from scraper.database import SessionLocal
+        from scraper.models import StatutesMaster
+
+        async with SessionLocal() as db:
+            async with db.begin():
+                for section, text in (("1", TEXT_1), ("2", text_2), ("3", text_3)):
+                    db.add(StatutesMaster(
+                        statute_name="Legacy Act", short_name="ppc1860", section_number=section,
+                        section_text=text, source_site="PakistanCode", is_repealed=False, harvest_at=None,
+                    ))
+
+    run(_seed())
+    matched = _publish_row("1", TEXT_1, T1, ["1", "2", "3"])
+    assert matched.changed is False and matched.baseline_incomplete is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["1"][3] == datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert stored["2"][3] is None and stored["3"][3] is None
+
+    async def _equal_clock():
+        from scraper.database import SessionLocal
+        from scraper.tasks import lifecycle
+        from scraper.tasks.publish import REASON_BASELINE_INCOMPLETE, publish
+
+        source_id = uuid.UUID(str((await fetch("SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"))[0][0]))
+        async with SessionLocal() as db:
+            async with db.begin():
+                row = _staging("2", text_2_changed, T1, ["2"], source_id=source_id)
+                db.add(row)
+                await db.flush()
+                lifecycle.move_through(db, row, [lifecycle.NORMALISED, lifecycle.APPROVED], actor=lifecycle.ACTOR_GATE)
+                state = await publish(db, row)
+                assert state == lifecycle.DEAD_LETTER
+                assert row.state_reason == REASON_BASELINE_INCOMPLETE
+                assert row.published_id is None
+                return row.lifecycle_state
+
+    assert run(_equal_clock()) == "dead_letter"
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == text_2 and stored["2"][2] is False and stored["2"][3] is None
+    assert stored["1"][2] is False and stored["3"][2] is False
+    assert run(fetch("SELECT count(*) FROM statutes_master WHERE short_name = 'ppc1860'"))[0][0] == 3
+
+    inserted = _publish_row("4", "4. A new key must wait until every legacy row has its own clock.", T2, ["4"])
+    assert inserted.baseline_incomplete is True and inserted.id is None
+    stored = {row[0]: row for row in _rows()}
+    assert "4" not in stored
+    assert stored["1"][2] is False and stored["2"][2] is False and stored["3"][2] is False
+
+    assert _publish_row("2", text_2, T1, ["1", "2", "3"]).changed is False
+    assert _publish_row("3", text_3, T1, ["1", "2", "3"]).changed is False
+    amended = _publish_row("2", text_2_changed, T2, ["2"])
+    assert amended.changed is True and amended.stale is False
+    stored = {row[0]: row for row in _rows()}
+    assert stored["2"][1] == text_2_changed and stored["2"][2] is False
+    assert stored["1"][2] is True and stored["3"][2] is True
+
+
+def test_matching_stamp_and_equal_clock_sibling_publish_do_not_interleave(corpus_db):
+    """The act lock serialises the two publishes. Neither order rewrites the sibling."""
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+    text_2 = "2. Body two text long enough for the concurrent baseline."
+
+    async def _seed():
+        from scraper.database import SessionLocal
+        from scraper.models import StatutesMaster
+
+        async with SessionLocal() as db:
+            async with db.begin():
+                for section, text in (("1", TEXT_1), ("2", text_2)):
+                    db.add(StatutesMaster(
+                        statute_name="Legacy Act", short_name="ppc1860", section_number=section,
+                        section_text=text, source_site="PakistanCode", is_repealed=False, harvest_at=None,
+                    ))
+
+    run(_seed())
+
+    async def _race():
+        from scraper.database import SessionLocal
+        from scraper.publication.retrieval import publish_statute
+
+        async def confirm():
+            async with SessionLocal() as db:
+                async with db.begin():
+                    return await publish_statute(db, _staging("1", TEXT_1, T1, ["1", "2"]), SOURCE)
+
+        async def sibling():
+            async with SessionLocal() as db:
+                async with db.begin():
+                    return await publish_statute(
+                        db, _staging("2", text_2 + " changed", T1, ["2"]), SOURCE,
+                    )
+
+        return await asyncio.gather(confirm(), sibling())
+
+    confirmed, sibling = run(_race())
+    assert confirmed.changed is False and confirmed.id is not None
+    assert sibling.changed is False and sibling.id is None
+    stored = {row[0]: row for row in _rows()}
+    assert stored["1"][1] == TEXT_1 and stored["1"][3] == datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert stored["2"][1] == text_2 and stored["2"][2] is False and stored["2"][3] is None
