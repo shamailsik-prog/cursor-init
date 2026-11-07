@@ -17,6 +17,11 @@ allowlists it), so the repoint can drop the projection here.
 * ``publish_statute``: under a per-section lock (namespace 0x0F21); an existing ``statutes_master`` row
   with the same ``(short_name, section_number)`` (the table's unique key) or, without a short name, the
   same source, act and section, is attached; otherwise a row with a deterministic id is inserted.
+  FA-F21-017: attaching a changed text replaces ``section_text`` on that same row and records the
+  prior text's hash on the staging row (a new version, not a second master row). When the staging
+  row carries a non-empty PakistanCode ``act_keys`` set, master rows of that short name whose keys
+  are absent from the set are marked ``is_repealed``. An empty set retires nothing. The survivor of
+  a legacy duplicate key is the earliest ``created_at``, then ``id``, not an unordered uuid pick.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
 
@@ -31,8 +36,15 @@ from typing import Any, Final, Optional, Tuple
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm.attributes import flag_modified
 
 from scraper.models import CaseLawMaster, EmbeddingQueue, StatutesMaster
+from scraper.parsers.pakistancode_keys import (
+    PAKISTANCODE_SOURCE,
+    act_keys_from_metadata,
+    keys_to_retire,
+    note_section_version,
+)
 from scraper.tasks.promotion import citation_lock_key
 
 CASE_MASTER: Final = "case_law_master"
@@ -120,6 +132,26 @@ async def publish_case(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, bool]:
     return case_id, False
 
 
+async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_name: Optional[str], section: str) -> None:
+    """Mark PakistanCode master rows the current harvest no longer contains. See ``keys_to_retire``."""
+    if source.source_name != PAKISTANCODE_SOURCE or not short_name:
+        return
+    live = act_keys_from_metadata(getattr(st, "parsing_metadata", None))
+    if live is None:
+        return
+    rows = (await db.execute(
+        select(StatutesMaster).where(
+            StatutesMaster.short_name == short_name,
+            StatutesMaster.source_site == PAKISTANCODE_SOURCE,
+            StatutesMaster.is_repealed.is_(False),
+        )
+    )).scalars().all()
+    retiring = set(keys_to_retire((row.section_number for row in rows), live, section))
+    for row in rows:
+        if row.section_number in retiring:
+            row.is_repealed = True
+
+
 async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, bool, bool]:
     """(the statutes_master id, attached to an existing row, the attached row's text differs)."""
     act = (st.extracted_act_name or "").strip()
@@ -135,10 +167,21 @@ async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, boo
         match = (StatutesMaster.short_name.is_(None), StatutesMaster.source_site == source.source_name,
                  StatutesMaster.statute_name == act, StatutesMaster.section_number == section)
     existing = (await db.execute(
-        select(StatutesMaster.id, StatutesMaster.section_text).where(*match).order_by(StatutesMaster.created_at).limit(1)
-    )).first()
+        select(StatutesMaster).where(*match).order_by(StatutesMaster.created_at, StatutesMaster.id).limit(1)
+    )).scalars().first()
     if existing is not None:
-        return existing[0], True, existing[1] != body
+        changed = (existing.section_text or "") != (body or "")
+        if changed:
+            st.parsing_metadata = note_section_version(st.parsing_metadata, existing.section_text or "", body or "")
+            flag_modified(st, "parsing_metadata")
+            existing.section_text = body
+            if st.extracted_section_title:
+                existing.section_title = st.extracted_section_title
+        if existing.is_repealed:
+            existing.is_repealed = False
+        await _retire_absent_pakistancode_keys(db, st, source, short_name, section)
+        await db.flush()
+        return existing.id, True, changed
     statute_id = statute_publication_id(key)
     db.add(StatutesMaster(
         id=statute_id,
@@ -151,5 +194,7 @@ async def publish_statute(db: Any, st: Any, source: Any) -> Tuple[uuid.UUID, boo
         source_url=st.source_url,
         confidence_score=st.confidence_score,
     ))
+    await db.flush()
+    await _retire_absent_pakistancode_keys(db, st, source, short_name, section)
     await db.flush()
     return statute_id, False, False
