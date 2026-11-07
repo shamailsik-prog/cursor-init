@@ -25,6 +25,7 @@ from typing import Optional
 from sqlalchemy import func, select
 
 from scraper.models import QuarantineDecision, QuarantineQueue, ScraperSource, StatutesStaging
+from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION
 from scraper.publication import retrieval
 from scraper.tasks import lifecycle
 from scraper.tasks.promotion import _resolve_source, publication_decision
@@ -33,6 +34,11 @@ REASON_REVIEW_REJECTED = "review_rejected"
 REASON_RESOLVED_WITHOUT_EVIDENCE = "review_resolved_without_evidence"
 REASON_PUBLISHED_RECORD_MISSING = "published_record_missing"
 REASON_SOURCE_NOT_PROMOTABLE = "source_not_promotable"
+REASON_STALE_HARVEST = "stale_harvest"
+REASON_CLOCK_UNINITIALIZED = "harvest_clock_uninitialized"
+# Not a claim that the refused text is historically stale. Some master rows for the
+# act still have no harvest clock, and this publish is not a same-text confirmation.
+REASON_BASELINE_INCOMPLETE = "harvest_baseline_incomplete"
 # Review-queue resolutions that keep an open review (F23's CHECK vocabulary; nothing writes them today).
 _OPEN_RESOLUTIONS = ("needs_edit", "escalated")
 
@@ -130,7 +136,23 @@ async def publish(db, st, *, job_id=None) -> str:
     if table == retrieval.CASE_MASTER:
         published_id, attached = await retrieval.publish_case(db, st, src)
     else:
-        published_id, attached, changed = await retrieval.publish_statute(db, st, src)
+        published = await retrieval.publish_statute(db, st, src)
+        if published.stale or published.withheld or published.clock_refused or published.baseline_incomplete:
+            if published.withheld:
+                reason = REASON_AMBIGUOUS_SECTION
+            elif published.baseline_incomplete:
+                reason = REASON_BASELINE_INCOMPLETE
+            elif published.clock_refused:
+                reason = REASON_CLOCK_UNINITIALIZED
+            else:
+                reason = REASON_STALE_HARVEST
+            lifecycle.move(db, st, lifecycle.DEAD_LETTER, actor=lifecycle.ACTOR_PUBLISH, job_id=job_id,
+                           reason=reason,
+                           details=lifecycle.summary_details(content_changed=False, source=src.source_name))
+            return lifecycle.DEAD_LETTER
+        if published.clock_held:
+            return lifecycle.APPROVED
+        published_id, attached, changed = published.id, published.attached, published.changed
         st.promoted = True
         st.promoted_at = func.now()
         st.promoted_to_id = published_id

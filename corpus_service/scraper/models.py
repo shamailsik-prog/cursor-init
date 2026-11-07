@@ -367,6 +367,9 @@ class StatutesMaster(Base):
     year_amended: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     is_repealed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
+    # FA-F21-021: harvest clock of the PakistanCode publish that last decided this row.
+    # NULL until that publish. It is not updated_at and it is not a legal schedule field.
+    harvest_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     repealed_by: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     source_site: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

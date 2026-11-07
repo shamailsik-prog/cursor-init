@@ -51,6 +51,7 @@ NUMBERED_MIGRATIONS = (
     "006_harvest_operator_state",
     "007_record_embedding_chunks",
     "008_corpus_admin_audit",
+    "009_statute_harvest_at",
 )
 
 
