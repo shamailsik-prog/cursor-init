@@ -424,6 +424,16 @@ def test_c_a_trusted_record_is_published_into_annex_a_then_the_retrieval_store(c
 # (d) two workers never move the same record; a locked record is skipped, not waited on
 # ---------------------------------------------------------------------------------------------
 def _stage_statutes(db, n, *, source="PakistanCode", state=None):
+    """Stage one harvested batch.
+
+    The PakistanCode harvester stamps one ``harvest_at`` on every section of a
+    page. This fixture is that contract: concurrent lifecycle movement of rows
+    a harvest already stamped. It is not the legacy queue, which omits
+    ``harvest_at`` and is covered by the publication tests. ``act_keys`` stays
+    absent, so the batch does not retire. No historical clock is invented for
+    master rows; the value is the harvest stamp the production task writes.
+    """
+    harvest_at = "2026-11-07T00:00:00+00:00"
     ids = []
     for i in range(n):
         sid = uuid.uuid4()
@@ -431,11 +441,11 @@ def _stage_statutes(db, n, *, source="PakistanCode", state=None):
                    "INSERT INTO statutes_staging (id, source_id, source_site, source_url, raw_text, extracted_act_name, "
                    "extracted_short_name, extracted_section_number, extracted_section_text, confidence_score, "
                    "parsing_metadata, created_at) SELECT :id, s.id, s.source_name, :url, :text, 'F21 Concurrency Act 2099', "
-                   "'f21conc', :sec, :text, 0.85, jsonb_build_object('source_id', s.id::text, 'source_name', s.source_name), "
-                   "now() - make_interval(secs => :age) FROM scraper_sources s WHERE s.source_name = :n",
+                   "'f21conc', :sec, :text, 0.85, jsonb_build_object('source_id', s.id::text, 'source_name', s.source_name, "
+                   "'harvest_at', CAST(:harvest_at AS text)), now() - make_interval(secs => :age) FROM scraper_sources s WHERE s.source_name = :n",
                    id=sid, url=f"https://pakistancode.gov.pk/english/statues/details/f21conc{i}",
                    text=f"Section {i}. Synthetic F21 concurrency fixture text for section {i}.", sec=str(i),
-                   age=float(n - i), n=source)
+                   age=float(n - i), n=source, harvest_at=harvest_at)
         ids.append(sid)
     return ids
 
