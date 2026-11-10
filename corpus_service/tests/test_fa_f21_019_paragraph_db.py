@@ -134,11 +134,11 @@ def test_fa_f21_019_heading_only_page_does_not_publish_a_spurious_section(corpus
         "(parsing_metadata -> 'act_keys') IS NULL "
         "FROM statutes_staging WHERE extracted_short_name = 'headonly1'"
     ))
-    assert staged == [("schedule-heading:first", HEADING, True)]
+    assert staged == [("schedule-heading:1", HEADING, True)]
     published = _publish_short_name("headonly1")
     assert len(published) == 1 and published[0].withheld is False and published[0].id is not None
     master = run(fetch(
         "SELECT section_number, section_text, is_repealed FROM statutes_master "
         "WHERE short_name = 'headonly1' ORDER BY section_number"
     ))
-    assert master == [("schedule-heading:first", HEADING, False)]
+    assert master == [("schedule-heading:1", HEADING, False)]

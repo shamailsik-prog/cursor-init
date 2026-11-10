@@ -32,7 +32,11 @@ allowlists it), so the repoint can drop the projection here.
   does not claim the refused text is historically stale. No historical timestamp is written
   by migration. An ``unscoped`` row is not published. A ``schedule-item`` is published
   under its ``schedule:L:N`` key (FA-17). A live set of only schedule keys does not
-  retire body section keys.
+  retire body section keys. R-LABEL-001: ``L`` is the canonical label. An existing
+  row whose label is an older spelling of that same schedule is that row. Publish
+  attaches to it and does not rewrite ``section_number``, insert a second row, or
+  retire the stored key. Two stored rows that already share the identity are not
+  merged; that publish returns ``alias_conflict`` and retires nothing.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
 
@@ -55,8 +59,10 @@ from scraper.parsers.pakistancode_keys import (
     act_keys_from_metadata,
     harvest_is_stale,
     harvest_token_from_metadata,
+    is_schedule_publication_key,
     keys_to_retire,
     note_section_version,
+    schedule_key_identity,
     section_kind_is_ambiguous,
     snapshot_is_incomplete,
 )
@@ -82,6 +88,7 @@ class StatutePublication(NamedTuple):
     clock_held: bool = False
     clock_refused: bool = False
     baseline_incomplete: bool = False
+    alias_conflict: bool = False
 
 
 def statute_act_lock_key(short_name: str) -> str:
@@ -271,6 +278,23 @@ async def _unknown_history_row(db: Any, existing, body: str, incoming, stored_ma
     return _baseline_refusal(incoming, stored_max)
 
 
+async def _schedule_identity_rows(db: Any, short_name: str, section: str) -> list:
+    """Master rows of this act whose schedule key is the same canonical schedule.
+
+    The stored key is not required to equal ``section``. Callers refuse the publish
+    when more than one row matches, and they do not rewrite ``section_number``.
+    """
+    ident = schedule_key_identity(section)
+    rows = (await db.execute(
+        select(StatutesMaster).where(
+            StatutesMaster.short_name == short_name,
+            StatutesMaster.source_site == PAKISTANCODE_SOURCE,
+        ).order_by(StatutesMaster.created_at, StatutesMaster.id)
+        .with_for_update()
+    )).scalars().all()
+    return [row for row in rows if schedule_key_identity(row.section_number or "") == ident]
+
+
 async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
     """Project one statute staging row. ``stale`` means a newer harvest already won the act."""
     act = (st.extracted_act_name or "").strip()
@@ -299,6 +323,11 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         select(StatutesMaster).where(*match).order_by(StatutesMaster.created_at, StatutesMaster.id).limit(1)
         .with_for_update()
     )).scalars().first()
+    if pakistancode and is_schedule_publication_key(section):
+        matches = await _schedule_identity_rows(db, short_name, section)
+        if len(matches) > 1:
+            return StatutePublication(None, False, False, False, False, False, False, False, True)
+        existing = matches[0] if matches else None
     if pakistancode and snapshot_is_incomplete(null_rows):
         return await _unknown_history_row(db, existing, body, incoming, stored_max)
     if existing is not None:

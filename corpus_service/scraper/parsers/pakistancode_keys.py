@@ -64,6 +64,22 @@ Walk ``div.section`` texts in document order.
    (``schedule:`` and ``schedule-heading:``) does not retire any other key. A page
    that kept a schedule heading or schedule item and also dropped divs at the 50-div
    cap omits ``act_keys``, so the dropped tail is not retired.
+9. Schedule label ``L`` is canonical (R-LABEL-001). Ordinal words through twentieth,
+   a strict roman numeral, an arabic numeral, and ``Schedule No. 1`` are one arabic
+   string: ``THE FIRST SCHEDULE``, ``SCHEDULE I``, ``Schedule l`` and ``Schedule 1``
+   are all ``1``. OCR repair of ``l``/``I``/``1`` and ``O``/``0`` runs only on a
+   heading token. A lone ``l`` is that OCR class, not roman fifty. A lone ``C``,
+   ``D`` or ``M`` is a letter, not 100, 500 or 1000. ``Schedule A`` and
+   ``Tariff Schedule`` are stable slugs (``a``, ``tariff``) and are not numbers.
+   ``Schedule ll``, ``Schedule 0``, ``Schedule lO`` and a heading that names two
+   different numbers are not headings.
+
+   Compatibility is lookup aliasing, not a live rekey. A stored ``schedule:first:*``
+   or ``schedule:i:*`` or ``schedule:l:*`` row is the same row as the canonical key.
+   Publish attaches to that row and leaves its ``section_number`` as stored. It does
+   not insert a second row and does not retire the old key. Two stored rows that
+   already share one canonical identity are not merged and are not retired; that
+   publish is refused. No migration rewrites a database.
 
 The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
 number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
@@ -91,14 +107,44 @@ SHA_CHARS = 8
 PAKISTANCODE_SOURCE = "PakistanCode"
 MAX_SECTION_KEY_CHARS = 100
 
-_ORDINAL = (
-    r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
-    r"\d+(?:st|nd|rd|th)|[ivxlcdm]{1,8}"
-)
-_SCHEDULE_HEADING = re.compile(
-    rf"^(?:the\s+)?(?:(?P<lead>{_ORDINAL})\s+)?schedule(?:\s+(?P<trail>{_ORDINAL}))?$",
+_ORDINAL_WORDS = {
+    "first": "1",
+    "second": "2",
+    "third": "3",
+    "fourth": "4",
+    "fifth": "5",
+    "sixth": "6",
+    "seventh": "7",
+    "eighth": "8",
+    "ninth": "9",
+    "tenth": "10",
+    "eleventh": "11",
+    "twelfth": "12",
+    "thirteenth": "13",
+    "fourteenth": "14",
+    "fifteenth": "15",
+    "sixteenth": "16",
+    "seventeenth": "17",
+    "eighteenth": "18",
+    "nineteenth": "19",
+    "twentieth": "20",
+}
+# Strict roman. A lone L is not read here: that glyph is the OCR class l/I/1.
+_ROMAN_RE = re.compile(
+    r"^M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
     re.IGNORECASE,
 )
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+_BARE_SCHEDULE = re.compile(r"^(?:the\s+)?schedule$", re.IGNORECASE)
+_LEAD_SCHEDULE = re.compile(r"^(?:the\s+)?(?P<tok>\S+)\s+schedule$", re.IGNORECASE)
+_TRAIL_NO_SCHEDULE = re.compile(r"^(?:the\s+)?schedule\s+no\.?\s*(?P<tok>\S+)$", re.IGNORECASE)
+_TRAIL_SCHEDULE = re.compile(r"^(?:the\s+)?schedule\s+(?P<tok>\S+)$", re.IGNORECASE)
+_NAMED_SCHEDULE = re.compile(
+    r"^(?:the\s+)?(?P<name>[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3})\s+schedule$",
+    re.IGNORECASE,
+)
+_SCHEDULE_COPY = re.compile(r"~\d+$")
+_SCHEDULE_ITEM_BODY = re.compile(r"^(?P<label>.+):(?P<item>\d+[A-Za-z]?(?:-[0-9a-f]{8})?)$")
 _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
     re.IGNORECASE,
@@ -117,18 +163,168 @@ def content_token(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:SHA_CHARS]
 
 
+def _roman_to_int(token: str) -> Optional[int]:
+    if not token or not _ROMAN_RE.fullmatch(token):
+        return None
+    total = 0
+    prev = 0
+    for char in reversed(token.upper()):
+        value = _ROMAN_VALUES[char]
+        if value < prev:
+            total -= value
+        else:
+            total += value
+            prev = value
+    if total < 1:
+        return None
+    return total
+
+
+def canonical_ordinal(token: str) -> Optional[str]:
+    """Arabic schedule number for one heading token, or None when it is not one.
+
+    OCR repair runs only here, and only when the token is already a heading token.
+    A digit anchors ``l``/``I``/``1`` and ``O``/``0``. A lone ``l`` is that same
+    class. A longer valid roman numeral is not rewritten character by character,
+    so ``ii`` is 2 and not 11.
+    """
+    word = (token or "").strip().lower()
+    if not word:
+        return None
+    spelled = _ORDINAL_WORDS.get(word)
+    if spelled is not None:
+        return spelled
+    suffix = re.fullmatch(r"([0-9]+)(?:st|nd|rd|th)", word)
+    if suffix is not None:
+        digits = suffix.group(1)
+        if len(digits) > 1 and digits.startswith("0"):
+            return None
+        number = int(digits)
+        if number < 1:
+            return None
+        return str(number)
+    if re.fullmatch(r"[0-9]+", word):
+        if len(word) > 1 and word.startswith("0"):
+            return None
+        number = int(word)
+        if number < 1:
+            return None
+        return str(number)
+    if re.fullmatch(r"[0-9lio]+", word) and re.search(r"[0-9]", word):
+        repaired = word.replace("l", "1").replace("i", "1").replace("o", "0")
+        if re.fullmatch(r"[1-9][0-9]*", repaired):
+            return repaired
+        return None
+    if word == "l":
+        return "1"
+    if len(word) == 1 and word not in {"i", "v", "x"}:
+        return None
+    roman = _roman_to_int(word)
+    if roman is None:
+        return None
+    return str(roman)
+
+
+def _schedule_slug(name: str) -> Optional[str]:
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    if not slug or slug == "schedule" or re.fullmatch(r"[0-9]+", slug):
+        return None
+    if canonical_ordinal(slug) is not None:
+        return None
+    if len(slug) > 60:
+        return None
+    return slug
+
+
+def canonical_schedule_label(label: Optional[str]) -> Optional[str]:
+    """The label stored in a new key. Numbered surface forms collapse; names do not."""
+    if label is None:
+        return None
+    text = str(label).strip()
+    if not text:
+        return None
+    number = canonical_ordinal(text)
+    if number is not None:
+        return number
+    if text.lower() == "schedule":
+        return "schedule"
+    slug = _schedule_slug(text)
+    if slug is not None:
+        return slug
+    return text.lower()
+
+
 def schedule_label(text: str) -> Optional[str]:
     """The schedule label when ``text`` is only a schedule heading, else None.
 
     The whole div must be the heading. A longer div that starts with a structural
-    word is not a heading and does not open schedule scope.
+    word is not a heading and does not open schedule scope. Numbered headings
+    return the canonical arabic label. Named headings return a slug.
     """
     cleaned = _WS.sub(" ", text or "").strip().rstrip(".").strip()
-    matched = _SCHEDULE_HEADING.fullmatch(cleaned)
-    if matched is None:
+    if not cleaned:
         return None
-    token = matched.group("lead") or matched.group("trail") or "schedule"
-    return token.lower()
+    if _BARE_SCHEDULE.fullmatch(cleaned):
+        return "schedule"
+    lead = _LEAD_SCHEDULE.fullmatch(cleaned)
+    if lead is not None:
+        number = canonical_ordinal(lead.group("tok"))
+        if number is not None:
+            return number
+    trail_no = _TRAIL_NO_SCHEDULE.fullmatch(cleaned)
+    if trail_no is not None:
+        return canonical_ordinal(trail_no.group("tok"))
+    trail = _TRAIL_SCHEDULE.fullmatch(cleaned)
+    if trail is not None:
+        token = trail.group("tok")
+        number = canonical_ordinal(token)
+        if number is not None:
+            return number
+        if re.fullmatch(r"[A-Za-z]", token):
+            return _schedule_slug(token)
+        return None
+    named = _NAMED_SCHEDULE.fullmatch(cleaned)
+    if named is not None:
+        name = named.group("name")
+        tokens = name.split()
+        if any(canonical_ordinal(token) is not None for token in tokens):
+            return None
+        if any(re.fullmatch(r"[lio]+", token, re.IGNORECASE) for token in tokens):
+            return None
+        return _schedule_slug(name)
+    return None
+
+
+def schedule_key_identity(key: str) -> str:
+    """Canonical identity of a schedule key. Other keys are returned unchanged.
+
+    ``schedule:first:1``, ``schedule:i:1`` and ``schedule:l:1`` share
+    ``schedule:1:1``. The item suffix, including ``-<sha8>`` and ``~n``, stays.
+    A named slug is not rewritten into a number. Applying this twice is a no-op.
+    """
+    if not isinstance(key, str) or not key.startswith(("schedule:", "schedule-heading:")):
+        return key
+    copy = ""
+    body = key
+    copied = _SCHEDULE_COPY.search(body)
+    if copied is not None:
+        copy = copied.group(0)
+        body = body[:copied.start()]
+    if body.startswith("schedule-heading:"):
+        label = body[len("schedule-heading:"):]
+        if not label or ":" in label:
+            return key
+        canonical = canonical_schedule_label(label)
+        if not canonical:
+            return key
+        return f"schedule-heading:{canonical}{copy}"
+    matched = _SCHEDULE_ITEM_BODY.fullmatch(body[len("schedule:"):])
+    if matched is None:
+        return key
+    canonical = canonical_schedule_label(matched.group("label"))
+    if not canonical:
+        return key
+    return f"schedule:{canonical}:{matched.group('item')}{copy}"
 
 
 def _is_section_div(node) -> bool:
@@ -247,7 +443,7 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
         text = normalise_div_text(raw)
         container = None
         if containers is not None:
-            container = containers[index] or None
+            container = canonical_schedule_label(containers[index] or None)
         label = schedule_label(text)
         if label is not None:
             if body_seen:
@@ -470,18 +666,35 @@ class HarvestDelta:
 def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
     """Publish ``sections`` onto ``store``.
 
-    A new key is inserted once. The same key with the same text is unchanged. The same
-    key with new text appends a version and keeps the key (the numbered-section rule).
-    A live key absent from this harvest is retired. A harvest whose keys are all
-    schedule keys does not retire a body section: adding a schedule is not an inventory
-    that repeals the act. No second row is created for an existing key, and an
-    unchanged text is not written again.
+    A new key is inserted once. The same key, or a schedule key with the same canonical
+    identity, and the same text is unchanged. New text appends a version and keeps the
+    stored key. The stored schedule key is not rewritten. A retired row with that
+    identity is revived on the stored key, versions included. A live key whose identity is
+    absent from this harvest is retired. A harvest whose keys are all schedule keys
+    does not retire a body section: adding a schedule is not an inventory that repeals
+    the act. Two rows that already share one schedule identity are left as they
+    are: this harvest does not pick one, insert a third, or retire them. No second row
+    is created for an existing identity, and an unchanged text is not written again.
     """
     delta = HarvestDelta()
-    seen = set()
+    by_identity: dict = {}
+    conflicts = set()
+    for key, row in store.items():
+        ident = schedule_key_identity(key)
+        if ident in by_identity:
+            conflicts.add(ident)
+        else:
+            by_identity[ident] = key
+    seen_raw = set()
+    seen_identities = set()
     for section in sections:
-        seen.add(section.key)
-        current = store.get(section.key)
+        ident = schedule_key_identity(section.key)
+        seen_raw.add(section.key)
+        seen_identities.add(ident)
+        if ident in conflicts:
+            continue
+        current_key = by_identity.get(ident)
+        current = store.get(current_key) if current_key is not None else None
         if current is None:
             store[section.key] = PublishedSection(
                 key=section.key,
@@ -492,6 +705,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
                 retired=False,
                 title=section.title,
             )
+            by_identity[ident] = section.key
             delta.inserted.append(section.key)
             continue
         current.retired = False
@@ -501,12 +715,15 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
         if current.text != section.text:
             current.versions.append(section.text)
             current.text = section.text
-            delta.amended.append(section.key)
+            delta.amended.append(current.key)
         else:
-            delta.unchanged.append(section.key)
-    schedule_only = bool(seen) and all(is_schedule_publication_key(key) for key in seen)
+            delta.unchanged.append(current.key)
+    schedule_only = bool(seen_raw) and all(is_schedule_publication_key(key) for key in seen_raw)
     for key, row in store.items():
-        if key in seen or row.retired:
+        if row.retired:
+            continue
+        ident = schedule_key_identity(key)
+        if ident in seen_identities or ident in conflicts:
             continue
         if schedule_only and not is_schedule_publication_key(key):
             continue
@@ -535,10 +752,25 @@ def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> O
 
 
 def section_by_key(store: Mapping[str, PublishedSection], key: str) -> Optional[PublishedSection]:
+    """The live row for ``key``.
+
+    An exact key wins. Otherwise one live schedule row with the same canonical
+    identity is that row. Zero or several matches return None, so two stored
+    spellings are not collapsed by lookup order.
+    """
     row = store.get(key)
-    if row is None or row.retired:
+    if row is not None:
+        if row.retired:
+            return None
+        return row
+    ident = schedule_key_identity(key)
+    hits = [
+        candidate for stored, candidate in store.items()
+        if not candidate.retired and schedule_key_identity(stored) == ident
+    ]
+    if len(hits) != 1:
         return None
-    return row
+    return hits[0]
 
 
 def note_section_version(metadata: Optional[Mapping], prior_text: str, new_text: str) -> dict:
@@ -635,8 +867,10 @@ def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[st
     A live set that contains only schedule keys does not retire a body section, a
     preamble, an explanation, or an unscoped key. Those rows stay. Schedule keys that
     the set omits can still be retired: the schedule inventory named them as absent.
-    ``current_key`` is added after that schedule-only check, so publishing a body row
-    whose stamped set is only schedule keys does not repeal its siblings.
+    A stored schedule key whose canonical identity is in the live set is not retired
+    and is not treated as a different row. ``current_key`` is added after that
+    schedule-only check, so publishing a body row whose stamped set is only schedule
+    keys does not repeal its siblings.
     """
     if live_keys is None:
         return []
@@ -646,9 +880,12 @@ def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[st
     schedule_only = all(is_schedule_publication_key(key) for key in live)
     if current_key:
         live.add(current_key)
+    live_ids = {schedule_key_identity(key) for key in live}
     retired = []
     for key in existing_keys:
         if not isinstance(key, str) or not key or key in live:
+            continue
+        if schedule_key_identity(key) in live_ids:
             continue
         if schedule_only and not is_schedule_publication_key(key):
             continue
