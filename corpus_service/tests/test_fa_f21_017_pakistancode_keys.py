@@ -25,6 +25,8 @@ from scraper.parsers.pakistancode_keys import (
     apply_harvest,
     apply_legacy_rekey,
     act_inventory_is_complete,
+    fallback_act_keys,
+    page_has_text_besides_schedule_headings,
     snapshot_is_incomplete,
     harvest_is_stale,
     harvest_token_from_metadata,
@@ -419,9 +421,10 @@ def test_fa_f21_018_scope_stays_open_after_a_body_section():
 def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
     """Paragraph splitting is the no-kept-div path. Kept numbered divs never enter it.
 
-    A page whose only section div is a short heading still runs the splitter, and the
-    heading is staged as well. Two paragraph sections that share a number collapse in
-    that preexisting splitter. Two div.section nodes that share a number do not.
+    Two paragraph sections that share a number are both staged, under distinct
+    ``N-<sha8>`` keys, and the page stamps ``act_keys``. A page whose text is only a
+    schedule heading does not run the splitter and does not stamp ``act_keys``.
+    Two ``div.section`` nodes that share a number still do not enter the splitter.
     """
     from scraper.net import fetch_policy
     from scraper.tasks import pakistancode
@@ -497,12 +500,18 @@ def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
         "<p>1. Beta paragraph is also longer than twenty characters and a duplicate number.</p></html>"
     )
     assert calls_n == 1
-    assert len(rows) == 1 and rows[0].extracted_section_number == "1"
-    assert rows[0].parsing_metadata["section_kind"] == "fallback"
-    assert "act_keys" not in rows[0].parsing_metadata
+    assert len(rows) == 2
+    assert all(row.parsing_metadata["section_kind"] == "fallback" for row in rows)
+    texts = " ".join(row.extracted_section_text for row in rows)
+    assert "Alpha paragraph" in texts and "Beta paragraph" in texts
+    assert rows[0].extracted_section_number != rows[1].extracted_section_number
+    assert all(row.extracted_section_number != "1" for row in rows)
+    assert all(row.extracted_section_number.startswith("1-") for row in rows)
+    assert rows[0].parsing_metadata["act_keys"] == [row.extracted_section_number for row in rows]
+    assert rows[1].parsing_metadata["act_keys"] == rows[0].parsing_metadata["act_keys"]
 
     calls_n, rows = _run(
-        f"<html><div class='section'>{HEADING}</div>"
+        f"<html><h1>Fixture Act</h1><div class='section'>{HEADING}</div>"
         "<p>1. Alpha paragraph is longer than twenty characters for the parser.</p>"
         "<p>2. Beta paragraph is longer than twenty characters for the parser.</p></html>"
     )
@@ -510,13 +519,30 @@ def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
     keys = [row.extracted_section_number for row in rows]
     assert keys[0] == "schedule-heading:first"
     assert "1" in keys and "2" in keys
-    assert all("act_keys" not in row.parsing_metadata for row in rows)
+    assert all(row.parsing_metadata["act_keys"] == keys for row in rows)
+    assert fallback_act_keys(key_div_texts([HEADING]), [(key, "schedule-heading" if key.startswith("schedule-heading") else "fallback") for key in keys]) == keys
+
+    calls_n, rows = _run(
+        f"<html><h1>The Stamp Act, 1899</h1><div class='section'>{HEADING}</div></html>"
+    )
+    assert calls_n == 0
+    assert [row.extracted_section_number for row in rows] == ["schedule-heading:first"]
+    assert rows[0].extracted_section_text == HEADING
+    assert "act_keys" not in rows[0].parsing_metadata
+    assert page_has_text_besides_schedule_headings(
+        f"The Stamp Act, 1899 {HEADING}", [HEADING], "The Stamp Act, 1899",
+    ) is False
+    assert page_has_text_besides_schedule_headings(
+        f"The Stamp Act, 1899 {HEADING} 1. Alpha paragraph is longer than twenty characters.",
+        [HEADING], "The Stamp Act, 1899",
+    ) is True
 
     calls_n, rows = _run("<html><div class='section'>" + ("q" * 20) + "</div></html>")
     assert calls_n == 1
     heading_only = key_div_texts([HEADING])
     assert suppresses_plain_text_fallback(heading_only) is False
     assert suppresses_plain_text_fallback(key_div_texts([SECTION_1])) is True
+    assert fallback_act_keys(key_div_texts([HEADING, SECTION_1]), [("schedule-heading:first", "schedule-heading"), ("unscoped:1-aaaaaaaa", "unscoped")]) is None
 
 
 def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():

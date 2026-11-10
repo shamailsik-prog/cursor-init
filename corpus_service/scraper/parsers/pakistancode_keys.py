@@ -57,6 +57,11 @@ Walk ``div.section`` texts in document order.
    itself and may be published. This is not a claim about the live document order.
 8. An empty live key set never retires existing rows. The key being published is never
    retired by its own harvest set.
+
+The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
+number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
+``act_keys`` when it parsed those sections. It omits the set for an ``unscoped`` div,
+a ``schedule-item``, a page of only schedule headings, and an unparsed single chunk.
 """
 
 from __future__ import annotations
@@ -309,12 +314,62 @@ def act_inventory_is_complete(result: DivKeyingResult) -> bool:
 def suppresses_plain_text_fallback(result: DivKeyingResult) -> bool:
     """True when kept divs already carry the page's sections.
 
-    A page of only schedule headings does not suppress the paragraph fallback.
-    Headings are still staged by the caller. A page with no kept div does not
-    suppress it either. That is the same no-div and all-short-div reach as the
-    harvester had before FA-F21-017.
+    A page of only schedule headings does not suppress the paragraph fallback here:
+    a heading div beside real paragraphs must still be split. The harvester itself
+    skips the splitter when the page text is those headings (and the act title) and
+    nothing else, so a heading-only page is not turned into a section. A page with
+    no kept div does not suppress the fallback either.
     """
     return any(item.kind in _FALLBACK_SUPPRESSED_KINDS for item in result.sections)
+
+
+def page_has_text_besides_schedule_headings(
+    full_text: str, headings: Sequence[str], act_name: str = "",
+) -> bool:
+    """True when ``full_text`` is not just the schedule headings and the act title.
+
+    Each heading is removed once, and the act title is removed once. A paragraph that
+    only mentions a heading still leaves its own words, so the splitter still runs.
+    A page whose text is the heading (and the ``h1`` the harvester already stored as
+    the act name) does not.
+    """
+    residual = normalise_div_text(full_text)
+    act = normalise_div_text(act_name)
+    if act:
+        residual = normalise_div_text(residual.replace(act, " ", 1))
+    counts: dict = {}
+    for heading in headings:
+        token = normalise_div_text(heading)
+        if token:
+            counts[token] = counts.get(token, 0) + 1
+    for token in sorted(counts, key=len, reverse=True):
+        for _ in range(counts[token]):
+            updated = residual.replace(token, " ", 1)
+            if updated == residual:
+                break
+            residual = normalise_div_text(updated)
+    return residual != ""
+
+
+def fallback_act_keys(divs: Optional[DivKeyingResult], staged: Sequence[tuple]) -> Optional[list]:
+    """``act_keys`` for the paragraph-splitter path, or None when the set must be omitted.
+
+    The same omission as the div path: a page that kept an ``unscoped`` div or a
+    ``schedule-item`` does not carry ``act_keys`` and cannot retire other rows.
+    A harvest of only schedule headings also omits the set. A heading is not an
+    inventory of the act. Any other non-empty staged list, including fallback
+    paragraph keys, is the set, in document order.
+    """
+    if divs is not None and any(section_kind_is_ambiguous(item.kind) for item in divs.sections):
+        return None
+    if any(section_kind_is_ambiguous(kind) for _key, kind in staged):
+        return None
+    if not staged or all(kind == "schedule-heading" for _key, kind in staged):
+        return None
+    keys = [key for key, _kind in staged if isinstance(key, str) and key]
+    if len(keys) != len(staged):
+        return None
+    return keys
 
 
 def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> DivKeyingResult:
