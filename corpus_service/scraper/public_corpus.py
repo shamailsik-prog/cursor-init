@@ -12,6 +12,10 @@ Spec: docs/superpowers/specs/2026-10-18-f24-bounded-public-corpus-queries-design
   ``trust_level`` is exactly ``trusted`` (since F20 only a trusted ``direct`` route may write the
   table). Anything else (not promoted, blocked, a missing or unknown source, a value outside the
   vocabulary) is never returned.
+* FA-F21-020: ``list_statutes`` also omits ``is_repealed`` rows unless the caller
+  passes ``include_repealed``. The predicate is in the same WHERE as the trust
+  and name filters, before ORDER BY and LIMIT. ``statute_detail`` does not apply
+  it, and nothing deletes the row.
 * Ruling 3, query text: trimmed, 2-200 characters, no control characters, not only LIKE
   metacharacters; ``\\``, ``%`` and ``_`` are escaped and matched with an explicit ESCAPE clause.
 * Ruling 4, summary DTOs from explicit column lists: no list reads a text or vector column; no
@@ -276,6 +280,27 @@ def limit_param(default: int):
     return page_limit
 
 
+def include_repealed_param(
+    include_repealed: Optional[str] = Query(
+        None,
+        description="Omit or false for current law. The exact word true includes repealed sections.",
+    ),
+) -> bool:
+    """Current law unless the caller opts in with the exact word ``true``.
+
+    An omitted parameter and ``false`` list sections that are not repealed.
+    Any other value, including ``1``, ``yes`` and ``TRUE``, is 422 and does not
+    opt in.
+    """
+    if include_repealed is None:
+        return False
+    if include_repealed == "true":
+        return True
+    if include_repealed == "false":
+        return False
+    raise HTTPException(status_code=422, detail="include_repealed must be true or false")
+
+
 # -- statements -----------------------------------------------------------------------------------------
 def search_cases_stmt(query_text: str, after: Optional[uuid.UUID], limit: int) -> Select:
     """Published case-law summaries whose citation or title contains ``query_text`` literally, in id
@@ -298,13 +323,28 @@ def search_cases_stmt(query_text: str, after: Optional[uuid.UUID], limit: int) -
     return stmt
 
 
-def list_statutes_stmt(statute_name: Optional[str], after: Optional[uuid.UUID], limit: int) -> Select:
-    stmt = select(*STATUTE_SUMMARY_COLUMNS).where(published_statutes()).order_by(StatutesMaster.id).limit(limit + 1)
+def list_statutes_stmt(
+    statute_name: Optional[str],
+    after: Optional[uuid.UUID],
+    limit: int,
+    *,
+    include_repealed: bool = False,
+) -> Select:
+    """Published statute summaries in id order, ``limit + 1`` rows.
+
+    Repealed sections are left out unless ``include_repealed`` is true. That
+    predicate is applied with the trust and name filters, before ORDER BY and
+    LIMIT, so a page, its cursor and a full walk count the same rows.
+    ``statute_detail_stmt`` does not use it.
+    """
+    stmt = select(*STATUTE_SUMMARY_COLUMNS).where(published_statutes())
+    if not include_repealed:
+        stmt = stmt.where(StatutesMaster.is_repealed.is_(False))
     if statute_name is not None:
         stmt = stmt.where(StatutesMaster.statute_name.ilike(like_contains(statute_name), escape=LIKE_ESCAPE))
     if after is not None:
         stmt = stmt.where(StatutesMaster.id > after)
-    return stmt
+    return stmt.order_by(StatutesMaster.id).limit(limit + 1)
 
 
 def case_detail_stmt(case_id: uuid.UUID) -> Select:
@@ -474,8 +514,18 @@ async def case_detail(case_id: uuid.UUID, *, timeout_ms: int) -> Optional[CaseDe
     return CaseDetail.model_validate(dict(rows[0]._mapping)) if rows else None
 
 
-async def list_statutes(name: Optional[str], after: Optional[uuid.UUID], limit: int, *, timeout_ms: int) -> StatutePage:
-    rows = await fetch_rows(list_statutes_stmt(name, after, limit), timeout_ms=timeout_ms)
+async def list_statutes(
+    name: Optional[str],
+    after: Optional[uuid.UUID],
+    limit: int,
+    *,
+    timeout_ms: int,
+    include_repealed: bool = False,
+) -> StatutePage:
+    rows = await fetch_rows(
+        list_statutes_stmt(name, after, limit, include_repealed=include_repealed),
+        timeout_ms=timeout_ms,
+    )
     return page_of(rows, limit, STATUTE_CURSOR, StatuteSummary, StatutePage)
 
 

@@ -266,7 +266,11 @@ unauthenticated; `/export/cases` (`scraper/routers/export.py`) needs the admin k
   `source_site` names a `scraper_sources` row whose `trust_level` is exactly `trusted` or `review`;
   a statute section when its `source_site` names a `trusted` source. Anything else (not promoted, a
   `blocked`, unknown or missing source) is never returned, and a detail request for it is `404`, the
-  same as a missing id. Staging and quarantine are never read.
+  same as a missing id. Staging and quarantine are never read. `GET /statutes` also omits repealed
+  sections unless `include_repealed` is the exact word `true` (omitted or `false` lists current law;
+  any other value is `422`). The repeal predicate is in the same WHERE as the trust and name
+  filters, before the keyset limit, so page size, `next_cursor` and a full walk count the filtered
+  rows. A repealed section stays in `statutes_master`, and `GET /statutes/{id}` still returns it.
 - **Summary DTOs.** Lists return `{"items": [...], "next_cursor": ...}` with summary fields only (no
   text column). Detail routes add the text. No public response carries `embedding`, `search_text`,
   quality fields or provenance (`source_site`, `source_url`, `source_file_path`).

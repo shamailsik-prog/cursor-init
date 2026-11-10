@@ -413,7 +413,7 @@ PUBLIC_HELPER = "scraper.public_corpus"
 PUBLIC_HELPER_API = frozenset({
     "CasePage", "CaseDetail", "StatutePage", "StatuteDetail",
     "SEARCH_DEFAULT_LIMIT", "STATUTES_DEFAULT_LIMIT", "MAX_PAGE_SIZE", "CASE_CURSOR", "STATUTE_CURSOR",
-    "limit_param", "query_text_or_422", "cursor_or_400",
+    "limit_param", "include_repealed_param", "query_text_or_422", "cursor_or_400",
     "search_cases", "case_detail", "list_statutes", "statute_detail",
     "acquire_export_slot", "export_is_truncated", "stream_export_cases", "ExportDeadlineExceeded",
 })
