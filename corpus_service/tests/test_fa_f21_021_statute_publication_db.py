@@ -365,11 +365,11 @@ def test_pre_clock_rows_accept_a_matching_stamp_and_refuse_a_different_one(corpu
     assert stored["3"][2] is True and stored["3"][1] == TEXT_3
 
 
-def test_ambiguous_sections_are_quarantined_and_do_not_publish_or_retire(corpus_db):
-    """Unscoped and schedule-item rows are not master rows. Lookup exclusion is not the control.
+def test_unscoped_sections_are_quarantined_and_do_not_publish_or_retire(corpus_db):
+    """An unscoped row is not a master row. Lookup exclusion is not the control.
 
-    The keyer may still classify them. No captured PakistanCode page substantiates that
-    classification, so the gate quarantines them and publish writes nothing.
+    A flat heading before any body section does not prove a parent. The gate quarantines
+    that div and publish writes nothing, so it cannot retire a body section.
     """
     migrated = corpus_db.migrate()
     assert migrated.returncode == 0, migrated.stderr
@@ -414,7 +414,6 @@ def test_ambiguous_sections_are_quarantined_and_do_not_publish_or_retire(corpus_
         return kind
 
     assert run(_withhold("unscoped", "unscoped:1-abcdef12")) == "unscoped"
-    assert run(_withhold("schedule-item", "schedule:first:1")) == "schedule-item"
     stored = _rows()
     assert [row[0] for row in stored] == ["1"]
     assert stored[0][1] == TEXT_1 and stored[0][2] is False
@@ -441,13 +440,12 @@ def test_ambiguous_sections_are_quarantined_and_do_not_publish_or_retire(corpus_
         )
         return queued[0][0]
 
-    assert run(_gate("schedule-item")) >= 1
+    assert run(_gate("unscoped")) >= 1
     assert run(fetch(
         "SELECT count(*) FROM statutes_master WHERE section_number LIKE 'schedule:%' OR section_number LIKE 'unscoped:%'"
     ))[0][0] == 0
 
-    # A body section from a page that also classified a schedule item carries no act_keys.
-    # Publishing that body must not retire the sibling. A present key set still retires.
+    # A publish with no act_keys must not retire the sibling. A present key set still retires.
     incomplete = _publish_row("2", TEXT_2, T3, None)
     assert incomplete.id is not None and incomplete.withheld is False and incomplete.stale is False
     stored = {row[0]: row for row in _rows()}

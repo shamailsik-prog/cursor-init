@@ -364,8 +364,8 @@ def test_harvester_stages_locked_keys_and_f21_fixture_numbers_stay_real(monkeypa
     assert db.rows[1].parsing_metadata["lookup_number"] == "1"
     assert db.rows[3].parsing_metadata["lookup_number"] is None
     assert db.rows[3].parsing_metadata["section_kind"] == "schedule-item"
-    assert all("act_keys" not in row.parsing_metadata for row in db.rows)
-    assert act_keys_from_metadata(db.rows[0].parsing_metadata) is None
+    assert all(row.parsing_metadata["act_keys"] == keys for row in db.rows)
+    assert act_keys_from_metadata(db.rows[0].parsing_metadata) == frozenset(keys)
     assert db.rows[0].parsing_metadata["source_name"] == "PakistanCode"
     assert len({row.parsing_metadata["harvest_at"] for row in db.rows}) == 1
     assert "+" in db.rows[0].parsing_metadata["harvest_at"] or db.rows[0].parsing_metadata["harvest_at"].endswith("Z")
@@ -406,16 +406,20 @@ def test_fa_f21_018_flat_heading_before_body_does_not_become_a_schedule_item():
 def test_fa_f21_018_scope_stays_open_after_a_body_section():
     """Once a body section has opened schedule scope, a later numbered div stays a schedule item.
 
-    That classification is not a publication. The page is not a complete inventory, so the
-    harvester omits act_keys and publish quarantines the schedule item instead of retiring
-    the body section. No captured page substantiates closing or keeping the scope.
+    FA-17 publishes that item. The page is a complete inventory, so its keys include the
+    body section and the schedule keys in document order. Lookup of "1" stays the body.
+    No captured page substantiates closing or keeping the scope.
     """
     later = "3. A later numbered div follows the schedule and is longer than twenty characters."
     keyed = key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM, later])
     assert [item.key for item in keyed.sections] == ["1", "schedule-heading:first", "schedule:first:1", "schedule:first:3"]
     assert keyed.sections[0].lookup_number == "1"
     assert keyed.sections[3].kind == "schedule-item" and keyed.sections[3].lookup_number is None
-    assert act_inventory_is_complete(keyed) is False
+    assert act_inventory_is_complete(keyed) is True
+    assert lookup_real_section(
+        {item.key: PublishedSection(item.key, item.text, item.kind, item.lookup_number, [item.text]) for item in keyed.sections},
+        "1",
+    ).text == SECTION_1
 
 
 def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
@@ -695,7 +699,7 @@ def test_acceptance_helpers_do_not_invent_a_live_key_set():
     assert snapshot_is_incomplete(0) is False
     assert act_inventory_is_complete(key_div_texts([SECTION_1, SECTION_2])) is True
     assert act_inventory_is_complete(key_div_texts([HEADING, SECTION_1])) is False
-    assert act_inventory_is_complete(key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM])) is False
+    assert act_inventory_is_complete(key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM])) is True
     assert act_keys_from_metadata(None) is None
     assert act_keys_from_metadata({"act_keys": []}) is None
     assert act_keys_from_metadata({"act_keys": ["1", ""]}) is None

@@ -50,18 +50,27 @@ Walk ``div.section`` texts in document order.
 
 6. Lookup by a real section number is equality on the unique body key ``N``. A schedule
    item is not that key. An ``unscoped`` div is not that key. A retired key is not returned.
-7. No captured PakistanCode page is in this repository, and the live site's certificate
-   chain did not verify, so ``unscoped`` and ``schedule-item`` keys are a classification
-   only. They are not published. A harvest that contains either kind does not carry
-   ``act_keys``, so it cannot retire other rows. ``schedule-heading`` is the div text
-   itself and may be published. This is not a claim about the live document order.
+7. FA-17 publishes a schedule item under the key in rule 5. The parent is the label
+   already on that item: an ancestor whose own text is a schedule heading, or a flat
+   heading that follows a body section. ``schedule:L:N`` is never a body key ``N`` or
+   ``N-<sha8>``. A repeated item number inside one schedule uses ``-<sha8>``. An
+   identical second copy uses ``~2``, ``~3``, …. Separate items stay separate rows.
+   An ``unscoped`` div has no proven parent and is not published. A page that kept one
+   omits ``act_keys``. ``schedule-heading`` remains the div text and may be published.
+   This is not a claim about the live document order: no captured page is in this
+   repository, and the live certificate chain was not re-checked for this finding.
 8. An empty live key set never retires existing rows. The key being published is never
-   retired by its own harvest set.
+   retired by its own harvest set. A live set made only of schedule keys
+   (``schedule:`` and ``schedule-heading:``) does not retire any other key. A page
+   that kept a schedule heading or schedule item and also dropped divs at the 50-div
+   cap omits ``act_keys``, so the dropped tail is not retired.
 
 The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
 number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
 ``act_keys`` when it parsed those sections. It omits the set for an ``unscoped`` div,
-a ``schedule-item``, a page of only schedule headings, and an unparsed single chunk.
+a page of only schedule headings, and an unparsed single chunk. A ``schedule-item``
+does not reach that path: kept schedule items suppress the splitter and are staged
+on the div path, which includes them in ``act_keys`` when the inventory is complete.
 """
 
 from __future__ import annotations
@@ -290,16 +299,30 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
 
 
 _FALLBACK_SUPPRESSED_KINDS = frozenset({"section", "schedule-item", "preamble", "explanation", "div", "unscoped"})
-# Kinds that do not depend on an unproven schedule layout. ``schedule-item`` (flat sticky
-# scope or an ancestor container) and ``unscoped`` (heading before any body section) are
-# withheld at publication: no captured page substantiates either shape.
-PUBLISHABLE_SECTION_KINDS = frozenset({"section", "preamble", "explanation", "div", "schedule-heading"})
-AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-item"})
+# ``unscoped`` is a numbered div with no proven parent: a flat heading before any body
+# section, and no ancestor heading. It stays withheld (FA-17). A schedule item already
+# carries that parent label and is published under ``schedule:L:N``.
+PUBLISHABLE_SECTION_KINDS = frozenset({
+    "section", "preamble", "explanation", "div", "schedule-heading", "schedule-item",
+})
+AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped"})
 REASON_AMBIGUOUS_SECTION = "ambiguous_section_identity"
+_SCHEDULE_KEY_PREFIXES = ("schedule:", "schedule-heading:")
+
+
+def is_schedule_publication_key(key: str) -> bool:
+    """True for a schedule heading or schedule item, never for a body section key.
+
+    Body keys are ``N``, ``N-<sha8>``, and ``~n`` copies of those, plus preamble,
+    explanation, div, and unscoped keys. Schedule keys use ``schedule:L:N`` and
+    ``schedule-heading:L`` with the same ``-<sha8>`` and ``~n`` suffixes. The
+    prefixes do not overlap a body key.
+    """
+    return isinstance(key, str) and key.startswith(_SCHEDULE_KEY_PREFIXES)
 
 
 def section_kind_is_ambiguous(kind: Optional[str]) -> bool:
-    """True for a key whose schedule layout is not backed by a captured page."""
+    """True when no parent schedule was proven and the div must not be published."""
     return kind in AMBIGUOUS_SECTION_KINDS
 
 
@@ -307,8 +330,17 @@ def act_inventory_is_complete(result: DivKeyingResult) -> bool:
     """True when every kept div may be published and the key set may retire absences.
 
     One ambiguous div means the page is not a proven inventory of the act.
+    A schedule heading or schedule item on a page that also dropped divs at the
+    50-div cap is not an inventory either: the dropped tail must not be retired
+    because earlier schedule rows occupied slots.
     """
-    return bool(result.sections) and all(item.kind in PUBLISHABLE_SECTION_KINDS for item in result.sections)
+    if not result.sections or any(item.kind not in PUBLISHABLE_SECTION_KINDS for item in result.sections):
+        return False
+    if result.dropped_by_cap and any(
+        item.kind in ("schedule-item", "schedule-heading") for item in result.sections
+    ):
+        return False
+    return True
 
 
 def suppresses_plain_text_fallback(result: DivKeyingResult) -> bool:
@@ -354,11 +386,11 @@ def page_has_text_besides_schedule_headings(
 def fallback_act_keys(divs: Optional[DivKeyingResult], staged: Sequence[tuple]) -> Optional[list]:
     """``act_keys`` for the paragraph-splitter path, or None when the set must be omitted.
 
-    The same omission as the div path: a page that kept an ``unscoped`` div or a
-    ``schedule-item`` does not carry ``act_keys`` and cannot retire other rows.
-    A harvest of only schedule headings also omits the set. A heading is not an
-    inventory of the act. Any other non-empty staged list, including fallback
-    paragraph keys, is the set, in document order.
+    A page that kept an ``unscoped`` div does not carry ``act_keys`` and cannot retire
+    other rows. A harvest of only schedule headings also omits the set. A heading is
+    not an inventory of the act. Any other non-empty staged list, including fallback
+    paragraph keys, is the set, in document order. Schedule items are staged on the
+    div path, which includes them when ``act_inventory_is_complete`` is true.
     """
     if divs is not None and any(section_kind_is_ambiguous(item.kind) for item in divs.sections):
         return None
@@ -440,8 +472,10 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
 
     A new key is inserted once. The same key with the same text is unchanged. The same
     key with new text appends a version and keeps the key (the numbered-section rule).
-    A live key absent from this harvest is retired. No second row is created for an
-    existing key, and an unchanged text is not written again.
+    A live key absent from this harvest is retired. A harvest whose keys are all
+    schedule keys does not retire a body section: adding a schedule is not an inventory
+    that repeals the act. No second row is created for an existing key, and an
+    unchanged text is not written again.
     """
     delta = HarvestDelta()
     seen = set()
@@ -470,10 +504,14 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
             delta.amended.append(section.key)
         else:
             delta.unchanged.append(section.key)
+    schedule_only = bool(seen) and all(is_schedule_publication_key(key) for key in seen)
     for key, row in store.items():
-        if key not in seen and not row.retired:
-            row.retired = True
-            delta.retired.append(key)
+        if key in seen or row.retired:
+            continue
+        if schedule_only and not is_schedule_publication_key(key):
+            continue
+        row.retired = True
+        delta.retired.append(key)
     return delta
 
 
@@ -594,15 +632,28 @@ def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[st
 
     An empty or missing live set retires nothing (a failed or empty page must not wipe
     an act). ``current_key`` is the row being published and is never retired by itself.
+    A live set that contains only schedule keys does not retire a body section, a
+    preamble, an explanation, or an unscoped key. Those rows stay. Schedule keys that
+    the set omits can still be retired: the schedule inventory named them as absent.
+    ``current_key`` is added after that schedule-only check, so publishing a body row
+    whose stamped set is only schedule keys does not repeal its siblings.
     """
     if live_keys is None:
         return []
     live = {key for key in live_keys if isinstance(key, str) and key}
     if not live:
         return []
+    schedule_only = all(is_schedule_publication_key(key) for key in live)
     if current_key:
         live.add(current_key)
-    return sorted(key for key in existing_keys if isinstance(key, str) and key and key not in live)
+    retired = []
+    for key in existing_keys:
+        if not isinstance(key, str) or not key or key in live:
+            continue
+        if schedule_only and not is_schedule_publication_key(key):
+            continue
+        retired.append(key)
+    return sorted(retired)
 
 
 # --- legacy prefix rekey (dry-run / in-memory apply; no database) ---------------------------------

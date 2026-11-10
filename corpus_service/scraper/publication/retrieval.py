@@ -30,7 +30,9 @@ allowlists it), so the repoint can drop the projection here.
   so while any row is still NULL this path does not change text, clear repeal, insert a key, or
   retire. A same-clock difference on an undated row is ``harvest_baseline_incomplete``, which
   does not claim the refused text is historically stale. No historical timestamp is written
-  by migration. ``unscoped`` and ``schedule-item`` rows are not published.
+  by migration. An ``unscoped`` row is not published. A ``schedule-item`` is published
+  under its ``schedule:L:N`` key (FA-17). A live set of only schedule keys does not
+  retire body section keys.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
 

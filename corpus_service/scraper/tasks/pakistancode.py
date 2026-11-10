@@ -84,8 +84,10 @@ async def scrape_pakistancode(source, db):
                 if keyed is not None and suppresses_plain_text_fallback(keyed):
                     # Kept body, schedule, preamble, explanation, or numberless divs are the
                     # page. The paragraph splitter is not run, so it cannot collapse two divs
-                    # that share a number. act_keys is omitted when any div is unscoped or a
-                    # schedule item: that page is not a proven inventory, so publish will not retire.
+                    # that share a number. act_keys is those keys in document order when the
+                    # inventory is complete, which includes schedule items (FA-17). It is
+                    # omitted for an unscoped div, and for a schedule page that also dropped
+                    # divs at the cap, so publish will not retire that tail.
                     act_keys = [item.key for item in keyed.sections] if act_inventory_is_complete(keyed) else None
                     for item in keyed.sections:
                         extra = {
@@ -109,8 +111,8 @@ async def scrape_pakistancode(source, db):
                     # text is only those headings (and the act title) does not run the splitter,
                     # so the title is not staged as a spurious section. Paragraph sections that
                     # share a number are both kept, under the splitter's N-<sha8> keys. act_keys
-                    # is the staged set, and is omitted for an unscoped div, a schedule item, or
-                    # a heading-only page.
+                    # is the staged set, and is omitted for an unscoped div or a heading-only
+                    # page. Schedule items do not reach this branch: they suppress the splitter.
                     pending = []
                     heading_texts = []
                     if keyed is not None:
