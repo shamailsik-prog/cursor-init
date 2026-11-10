@@ -32,10 +32,6 @@ NEW_TEXT = "1. Stamp duty after the same schedule was re-read as a roman numeral
 FIRST_FORMS = (
     "THE FIRST SCHEDULE",
     "FIRST SCHEDULE",
-    "SCHEDULE I",
-    "Schedule i",
-    "Schedule l",
-    "Schedule L",
     "Schedule 1",
     "Schedule No. 1",
     "SCHEDULE NO. 1",
@@ -72,7 +68,6 @@ TENTH_OCR_FORMS = (
     "Schedule 10",
     "Schedule l0",
     "Schedule 1O",
-    "SCHEDULE X",
 )
 
 
@@ -97,7 +92,10 @@ def test_ordinal_roman_arabic_and_ocr_share_one_canonical_label():
     assert {schedule_label(text) for text in ELEVENTH_FORMS} == {"11"}
     assert {schedule_label(text) for text in TENTH_OCR_FORMS} == {"10"}
     assert {_item_key_for(text) for text in FIRST_FORMS} == {"schedule:1:1"}
-    assert schedule_label("THE FIFTH SCHEDULE") == schedule_label("SCHEDULE V") == "5"
+    assert schedule_label("THE FIFTH SCHEDULE") == "5"
+    assert schedule_label("SCHEDULE V") is None
+    assert schedule_label("SCHEDULE I") is None
+    assert schedule_label("Schedule l") is None
     assert schedule_label("SCHEDULE IV") == schedule_label("4TH SCHEDULE") == "4"
     assert schedule_label("THE SCHEDULE") == schedule_label("SCHEDULE") == "schedule"
     assert schedule_label("SCHEDULE") != "1"
@@ -160,7 +158,7 @@ def test_rename_across_harvests_keeps_one_row_and_does_not_retire_the_body():
         "schedule-heading:first": _stored("schedule-heading:first", "THE FIRST SCHEDULE", "schedule-heading"),
         "schedule:first:1": _stored("schedule:first:1", OLD_TEXT, "schedule-item"),
     }
-    keyed = key_div_texts([BODY, "SCHEDULE I", NEW_TEXT])
+    keyed = key_div_texts([BODY, "Schedule 1", NEW_TEXT])
     assert [section.key for section in keyed.sections] == ["1", "schedule-heading:1", "schedule:1:1"]
     apply_harvest(store, keyed.sections)
     live = {key: row for key, row in store.items() if not row.retired}
@@ -171,11 +169,11 @@ def test_rename_across_harvests_keeps_one_row_and_does_not_retire_the_body():
     assert item.text == normalise_div_text(NEW_TEXT)
     assert item.versions == [normalise_div_text(OLD_TEXT), normalise_div_text(NEW_TEXT)]
     assert item.kind == "schedule-item"
-    assert live["schedule-heading:first"].text == "SCHEDULE I"
+    assert live["schedule-heading:first"].text == "Schedule 1"
     assert section_by_key(store, "schedule:1:1") is item
     assert section_by_key(store, "schedule:first:1") is item
-    assert section_by_key(store, "schedule:i:1") is item
-    assert section_by_key(store, "schedule:l:1") is item
+    assert section_by_key(store, "schedule:i:1") is None
+    assert section_by_key(store, "schedule:l:1") is None
     assert lookup_real_section(store, "1") is live["1"]
     assert lookup_real_section(store, "schedule:1:1") is None
     again = apply_harvest(store, keyed.sections)
@@ -199,11 +197,14 @@ def test_old_schedule_labels_are_not_retired_by_the_canonical_inventory():
     ]
     retired = keys_to_retire(existing, live, "1")
     assert "schedule:first:1" not in retired
-    assert "schedule:i:1" not in retired
-    assert "schedule:l:1" not in retired
     assert "schedule-heading:first" not in retired
     assert "1" not in retired
-    assert retired == ["2", "preamble-abcd1234", "schedule:first:1-deadbeef", "schedule:first:9"]
+    assert "schedule:i:1" in retired
+    assert "schedule:l:1" in retired
+    assert retired == [
+        "2", "preamble-abcd1234", "schedule:first:1-deadbeef", "schedule:first:9",
+        "schedule:i:1", "schedule:l:1",
+    ]
     covered = keys_to_retire(
         ["schedule:first:1-deadbeef~2"],
         ["schedule:1:1-deadbeef~2"],
@@ -211,7 +212,11 @@ def test_old_schedule_labels_are_not_retired_by_the_canonical_inventory():
     )
     assert covered == []
     assert schedule_key_identity("schedule:first:1-deadbeef~2") == "schedule:1:1-deadbeef~2"
-    assert schedule_key_identity(schedule_key_identity("schedule:l:1")) == "schedule:1:1"
+    assert schedule_key_identity("schedule:l:1") == "schedule:l:1"
+    assert schedule_key_identity(schedule_key_identity("schedule:l:1")) == "schedule:l:1"
+    assert schedule_key_identity("schedule:i:1") == "schedule:i:1"
+    assert schedule_key_identity("schedule:l:1", mode="roman") == "schedule:50:1"
+    assert schedule_key_identity("schedule:i:1", mode="roman") == "schedule:1:1"
     assert schedule_key_identity("schedule:a:1") == "schedule:a:1"
     assert schedule_key_identity("schedule-heading:tariff") == "schedule-heading:tariff"
     assert schedule_key_identity("1") == "1"
@@ -228,7 +233,7 @@ def test_two_alias_rows_are_not_merged_and_the_body_stays():
     store = {
         "1": _stored("1", BODY, "section", "1"),
         "schedule:first:1": _stored("schedule:first:1", OLD_TEXT, "schedule-item"),
-        "schedule:i:1": _stored("schedule:i:1", NEW_TEXT, "schedule-item"),
+        "schedule:1:1": _stored("schedule:1:1", NEW_TEXT, "schedule-item"),
     }
     incoming = KeyedDiv(
         key="schedule:1:1",
@@ -240,12 +245,11 @@ def test_two_alias_rows_are_not_merged_and_the_body_stays():
     )
     apply_harvest(store, [incoming])
     assert store["schedule:first:1"].retired is False
-    assert store["schedule:i:1"].retired is False
+    assert store["schedule:1:1"].retired is False
     assert store["schedule:first:1"].text == normalise_div_text(OLD_TEXT)
-    assert store["schedule:i:1"].text == normalise_div_text(NEW_TEXT)
-    assert "schedule:1:1" not in store
+    assert store["schedule:1:1"].text == normalise_div_text(NEW_TEXT)
     assert store["1"].retired is False
-    assert section_by_key(store, "schedule:1:1") is None
+    assert section_by_key(store, "schedule:1st:1") is None
 
 
 def test_a_retired_alias_comes_back_on_the_same_row():

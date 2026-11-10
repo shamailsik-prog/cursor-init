@@ -143,7 +143,7 @@ def _seed(short_name, rows):
 
 
 def test_rename_across_harvests_leaves_no_orphan_and_no_duplicate(corpus_db, monkeypatch):
-    """schedule:first:1 stays the only item row when the next harvest says SCHEDULE I."""
+    """schedule:first:1 stays the only item row when the next harvest says Schedule 1."""
     migrated = corpus_db.migrate()
     assert migrated.returncode == 0, migrated.stderr
     slug = "rlabrename"
@@ -152,7 +152,7 @@ def test_rename_across_harvests_leaves_no_orphan_and_no_duplicate(corpus_db, mon
         ("schedule-heading:first", "THE FIRST SCHEDULE"),
         ("schedule:first:1", OLD_ITEM),
     ])
-    _install_pages(monkeypatch, _page(slug, [BODY, "SCHEDULE I", NEW_ITEM]))
+    _install_pages(monkeypatch, _page(slug, [BODY, "Schedule 1", NEW_ITEM]))
     _harvest()
     outcomes = _gate_and_publish(slug)
     assert [item[3] for item in outcomes] == ["embedded", "embedded", "embedded"]
@@ -162,7 +162,7 @@ def test_rename_across_harvests_leaves_no_orphan_and_no_duplicate(corpus_db, mon
     assert set(by_key) == {"1", "schedule-heading:first", "schedule:first:1"}
     assert by_key["1"][1] == normalise_div_text(BODY) and by_key["1"][2] is False
     assert by_key["schedule:first:1"][1] == normalise_div_text(NEW_ITEM) and by_key["schedule:first:1"][2] is False
-    assert by_key["schedule-heading:first"][1] == "SCHEDULE I" and by_key["schedule-heading:first"][2] is False
+    assert by_key["schedule-heading:first"][1] == "Schedule 1" and by_key["schedule-heading:first"][2] is False
     assert all(not str(key).startswith("schedule:i:") for key in by_key)
     assert "schedule:1:1" not in by_key
     assert "schedule-heading:1" not in by_key
@@ -170,14 +170,14 @@ def test_rename_across_harvests_leaves_no_orphan_and_no_duplicate(corpus_db, mon
 
 
 def test_two_stored_spellings_are_not_merged_or_repealed(corpus_db, monkeypatch):
-    """Fail closed when schedule:first:1 and schedule:i:1 both already exist."""
+    """Fail closed when schedule:first:1 and schedule:1:1 both already exist."""
     migrated = corpus_db.migrate()
     assert migrated.returncode == 0, migrated.stderr
     slug = "rlabconfli"
     _seed(slug, [
         ("1", BODY),
         ("schedule:first:1", OLD_ITEM),
-        ("schedule:i:1", OTHER_ITEM),
+        ("schedule:1:1", OTHER_ITEM),
     ])
     _install_pages(monkeypatch, _page(slug, [BODY, "Schedule 1", NEW_ITEM]))
     _harvest()
@@ -189,8 +189,7 @@ def test_two_stored_spellings_are_not_merged_or_repealed(corpus_db, monkeypatch)
     master = {row[0]: row for row in _master(slug)}
     assert master["1"][1] == normalise_div_text(BODY) and master["1"][2] is False
     assert master["schedule:first:1"][1] == normalise_div_text(OLD_ITEM) and master["schedule:first:1"][2] is False
-    assert master["schedule:i:1"][1] == normalise_div_text(OTHER_ITEM) and master["schedule:i:1"][2] is False
-    assert "schedule:1:1" not in master
+    assert master["schedule:1:1"][1] == normalise_div_text(OTHER_ITEM) and master["schedule:1:1"][2] is False
     assert normalise_div_text(NEW_ITEM) not in {row[1] for row in master.values()}
 
 

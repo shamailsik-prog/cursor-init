@@ -25,7 +25,7 @@ from typing import Optional
 from sqlalchemy import func, select
 
 from scraper.models import QuarantineDecision, QuarantineQueue, ScraperSource, StatutesStaging
-from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION
+from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION, ambiguous_section_reason
 from scraper.publication import retrieval
 from scraper.tasks import lifecycle
 from scraper.tasks.promotion import _resolve_source, publication_decision
@@ -145,7 +145,9 @@ async def publish(db, st, *, job_id=None) -> str:
             or published.baseline_incomplete or published.alias_conflict
         ):
             if published.withheld:
-                reason = REASON_AMBIGUOUS_SECTION
+                meta = getattr(st, "parsing_metadata", None)
+                kind = meta.get("section_kind") if isinstance(meta, dict) else None
+                reason = ambiguous_section_reason(kind if isinstance(kind, str) else None) or REASON_AMBIGUOUS_SECTION
             elif published.alias_conflict:
                 reason = REASON_SCHEDULE_ALIAS_CONFLICT
             elif published.baseline_incomplete:

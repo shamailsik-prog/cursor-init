@@ -226,7 +226,9 @@ async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_
             StatutesMaster.is_repealed.is_(False),
         )
     )).scalars().all()
-    retiring = set(keys_to_retire((row.section_number for row in rows), live, section))
+    retiring = set(keys_to_retire(
+        (row.section_number for row in rows), live, section, label_mode=_roman_label_mode(st),
+    ))
     for row in rows:
         if row.section_number not in retiring:
             continue
@@ -278,13 +280,23 @@ async def _unknown_history_row(db: Any, existing, body: str, incoming, stored_ma
     return _baseline_refusal(incoming, stored_max)
 
 
-async def _schedule_identity_rows(db: Any, short_name: str, section: str) -> list:
+def _roman_label_mode(st: Any) -> Optional[str]:
+    """``roman`` only when this harvest proved a roman schedule sequence."""
+    metadata = getattr(st, "parsing_metadata", None)
+    if isinstance(metadata, dict) and metadata.get("schedule_label_mode") == "roman":
+        return "roman"
+    return None
+
+
+async def _schedule_identity_rows(db: Any, short_name: str, section: str, mode: Optional[str] = None) -> list:
     """Master rows of this act whose schedule key is the same canonical schedule.
 
     The stored key is not required to equal ``section``. Callers refuse the publish
     when more than one row matches, and they do not rewrite ``section_number``.
+    A stored ``i``/``v``/``x``/``l`` matches a number only when ``mode`` is ``roman``,
+    and ``l`` then matches 50, not the First Schedule.
     """
-    ident = schedule_key_identity(section)
+    ident = schedule_key_identity(section, mode=mode)
     rows = (await db.execute(
         select(StatutesMaster).where(
             StatutesMaster.short_name == short_name,
@@ -292,7 +304,7 @@ async def _schedule_identity_rows(db: Any, short_name: str, section: str) -> lis
         ).order_by(StatutesMaster.created_at, StatutesMaster.id)
         .with_for_update()
     )).scalars().all()
-    return [row for row in rows if schedule_key_identity(row.section_number or "") == ident]
+    return [row for row in rows if schedule_key_identity(row.section_number or "", mode=mode) == ident]
 
 
 async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
@@ -324,7 +336,7 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         .with_for_update()
     )).scalars().first()
     if pakistancode and is_schedule_publication_key(section):
-        matches = await _schedule_identity_rows(db, short_name, section)
+        matches = await _schedule_identity_rows(db, short_name, section, _roman_label_mode(st))
         if len(matches) > 1:
             return StatutePublication(None, False, False, False, False, False, False, False, True)
         existing = matches[0] if matches else None

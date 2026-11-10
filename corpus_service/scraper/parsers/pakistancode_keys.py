@@ -64,22 +64,36 @@ Walk ``div.section`` texts in document order.
    (``schedule:`` and ``schedule-heading:``) does not retire any other key. A page
    that kept a schedule heading or schedule item and also dropped divs at the 50-div
    cap omits ``act_keys``, so the dropped tail is not retired.
-9. Schedule label ``L`` is canonical (R-LABEL-001). Ordinal words through twentieth,
-   a strict roman numeral, an arabic numeral, and ``Schedule No. 1`` are one arabic
-   string: ``THE FIRST SCHEDULE``, ``SCHEDULE I``, ``Schedule l`` and ``Schedule 1``
-   are all ``1``. OCR repair of ``l``/``I``/``1`` and ``O``/``0`` runs only on a
-   heading token. A lone ``l`` is that OCR class, not roman fifty. A lone ``C``,
-   ``D`` or ``M`` is a letter, not 100, 500 or 1000. ``Schedule A`` and
+9. Schedule label ``L`` is canonical when the heading is unambiguous (R-LABEL-001),
+   and a single letter ``I``/``V``/``X``/``L`` is not (R-LETTER-ROMAN-001). Ordinal
+   words through twentieth, a multi-character roman numeral, an arabic numeral, and
+   ``Schedule No. 1`` are one arabic string. ``THE FIRST SCHEDULE`` and ``Schedule 1``
+   are ``1``. ``SCHEDULE II`` is ``2``. OCR repair of ``l``/``I``/``1`` and ``O``/``0``
+   runs only on a heading token that already contains a digit (``l0`` is ``10``).
+   A lone ``C``, ``D`` or ``M`` is a letter, not 100, 500 or 1000. ``Schedule A`` and
    ``Tariff Schedule`` are stable slugs (``a``, ``tariff``) and are not numbers.
    ``Schedule ll``, ``Schedule 0``, ``Schedule lO`` and a heading that names two
    different numbers are not headings.
 
+   A lone ``I``, ``V``, ``X`` or ``L`` is ambiguous. It becomes a roman value
+   (1, 5, 10, 50) only when the same page's sibling headings prove a roman
+   sequence: a multi-character roman is present and no unambiguous letter is.
+   It stays a letter slug when an unambiguous letter is present and no
+   multi-character roman is. Mixed evidence, or no evidence either way, does not
+   pick a label. Those headings and the items under them are
+   ``schedule-unresolved``. They are quarantined as
+   ``schedule_letter_roman_ambiguous`` and the page omits ``act_keys``. A lone
+   ``L`` is never the First Schedule.
+
    Compatibility is lookup aliasing, not a live rekey. A stored ``schedule:first:*``
-   or ``schedule:i:*`` or ``schedule:l:*`` row is the same row as the canonical key.
-   Publish attaches to that row and leaves its ``section_number`` as stored. It does
-   not insert a second row and does not retire the old key. Two stored rows that
-   already share one canonical identity are not merged and are not retired; that
-   publish is refused. No migration rewrites a database.
+   row is the same row as ``schedule:1:*``. Publish attaches to that row and leaves
+   its ``section_number`` as stored. It does not insert a second row and does not
+   retire the old key. A stored ``schedule:i:*``, ``schedule:v:*``, ``schedule:x:*``
+   or ``schedule:l:*`` row is not that numeric row unless this harvest's sibling
+   proof is roman, and even then ``L`` is 50, not 1. Two stored rows that already
+   share one canonical identity are not merged and are not retired; that publish
+   is refused. No migration rewrites a database. Equality on the raw stored key
+   does not follow an alias.
 
 The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
 number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
@@ -129,7 +143,7 @@ _ORDINAL_WORDS = {
     "nineteenth": "19",
     "twentieth": "20",
 }
-# Strict roman. A lone L is not read here: that glyph is the OCR class l/I/1.
+# Strict roman of at least two characters. A lone I, V, X or L is ambiguous.
 _ROMAN_RE = re.compile(
     r"^M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
     re.IGNORECASE,
@@ -151,6 +165,10 @@ _NUMBER_RE = re.compile(
 )
 _STRUCTURAL_KIND = re.compile(r"^(preamble|explanation)\b", re.IGNORECASE)
 _WS = re.compile(r"\s+")
+# Single letters that are both a roman numeral and a schedule letter. C, D and M
+# are letters only: a one-character roman is not read from them.
+_AMBIGUOUS_SINGLE = frozenset({"i", "v", "x", "l"})
+_ROMAN_SINGLE_VALUE = {"i": "1", "v": "5", "x": "10", "l": "50"}
 
 
 def normalise_div_text(text: str) -> str:
@@ -164,7 +182,7 @@ def content_token(text: str) -> str:
 
 
 def _roman_to_int(token: str) -> Optional[int]:
-    if not token or not _ROMAN_RE.fullmatch(token):
+    if not token or len(token) < 2 or not _ROMAN_RE.fullmatch(token):
         return None
     total = 0
     prev = 0
@@ -181,12 +199,12 @@ def _roman_to_int(token: str) -> Optional[int]:
 
 
 def canonical_ordinal(token: str) -> Optional[str]:
-    """Arabic schedule number for one heading token, or None when it is not one.
+    """Arabic schedule number for one unambiguous heading token, or None.
 
-    OCR repair runs only here, and only when the token is already a heading token.
-    A digit anchors ``l``/``I``/``1`` and ``O``/``0``. A lone ``l`` is that same
-    class. A longer valid roman numeral is not rewritten character by character,
-    so ``ii`` is 2 and not 11.
+    OCR repair runs only here, and only when the token is already a heading token
+    that contains a digit. A lone ``I``, ``V``, ``X`` or ``L`` is not a number:
+    the act's sibling headings decide that. A longer valid roman numeral is not
+    rewritten character by character, so ``ii`` is 2 and not 11.
     """
     word = (token or "").strip().lower()
     if not word:
@@ -215,9 +233,7 @@ def canonical_ordinal(token: str) -> Optional[str]:
         if re.fullmatch(r"[1-9][0-9]*", repaired):
             return repaired
         return None
-    if word == "l":
-        return "1"
-    if len(word) == 1 and word not in {"i", "v", "x"}:
+    if len(word) < 2:
         return None
     roman = _roman_to_int(word)
     if roman is None:
@@ -236,8 +252,12 @@ def _schedule_slug(name: str) -> Optional[str]:
     return slug
 
 
-def canonical_schedule_label(label: Optional[str]) -> Optional[str]:
-    """The label stored in a new key. Numbered surface forms collapse; names do not."""
+def canonical_schedule_label(label: Optional[str], *, mode: Optional[str] = None) -> Optional[str]:
+    """The label stored in a new key. Numbered surface forms collapse; names do not.
+
+    ``mode="roman"`` is the only way a stored single letter ``i``/``v``/``x``/``l``
+    becomes a roman value, and ``l`` becomes ``50``. Any other mode leaves the letter.
+    """
     if label is None:
         return None
     text = str(label).strip()
@@ -246,61 +266,133 @@ def canonical_schedule_label(label: Optional[str]) -> Optional[str]:
     number = canonical_ordinal(text)
     if number is not None:
         return number
-    if text.lower() == "schedule":
+    word = text.lower()
+    if word in _AMBIGUOUS_SINGLE:
+        if mode == "roman":
+            return _ROMAN_SINGLE_VALUE[word]
+        return word
+    if word == "schedule":
         return "schedule"
     slug = _schedule_slug(text)
     if slug is not None:
         return slug
-    return text.lower()
+    return word
 
 
-def schedule_label(text: str) -> Optional[str]:
-    """The schedule label when ``text`` is only a schedule heading, else None.
+@dataclass(frozen=True)
+class _HeadingToken:
+    """One schedule heading token before act-level resolution."""
 
-    The whole div must be the heading. A longer div that starts with a structural
-    word is not a heading and does not open schedule scope. Numbered headings
-    return the canonical arabic label. Named headings return a slug.
+    kind: str
+    value: str
+    raw: str
+
+
+def classify_heading_token(token: str) -> Optional[_HeadingToken]:
+    """Class of one heading token. A single ``I``/``V``/``X``/``L`` stays ambiguous."""
+    word = (token or "").strip().lower()
+    if not word:
+        return None
+    spelled = _ORDINAL_WORDS.get(word)
+    if spelled is not None:
+        return _HeadingToken("number", spelled, word)
+    number = canonical_ordinal(word)
+    if number is not None and len(word) >= 2 and _roman_to_int(word) is not None:
+        return _HeadingToken("roman_multi", number, word)
+    if number is not None:
+        return _HeadingToken("number", number, word)
+    if len(word) == 1 and word in _AMBIGUOUS_SINGLE:
+        return _HeadingToken("ambiguous", word, word)
+    if len(word) == 1 and word.isalpha():
+        return _HeadingToken("letter", word, word)
+    return None
+
+
+def parse_schedule_heading(text: str) -> Optional[_HeadingToken]:
+    """The heading token when ``text`` is only a schedule heading, else None.
+
+    An ambiguous single letter is still a heading. It is not yet a label.
     """
     cleaned = _WS.sub(" ", text or "").strip().rstrip(".").strip()
     if not cleaned:
         return None
     if _BARE_SCHEDULE.fullmatch(cleaned):
-        return "schedule"
+        return _HeadingToken("bare", "schedule", "schedule")
     lead = _LEAD_SCHEDULE.fullmatch(cleaned)
     if lead is not None:
-        number = canonical_ordinal(lead.group("tok"))
-        if number is not None:
-            return number
+        token = classify_heading_token(lead.group("tok"))
+        if token is not None:
+            return token
     trail_no = _TRAIL_NO_SCHEDULE.fullmatch(cleaned)
     if trail_no is not None:
-        return canonical_ordinal(trail_no.group("tok"))
+        token = classify_heading_token(trail_no.group("tok"))
+        if token is not None and token.kind in ("number", "roman_multi", "ambiguous"):
+            return token
+        return None
     trail = _TRAIL_SCHEDULE.fullmatch(cleaned)
     if trail is not None:
-        token = trail.group("tok")
-        number = canonical_ordinal(token)
-        if number is not None:
-            return number
-        if re.fullmatch(r"[A-Za-z]", token):
-            return _schedule_slug(token)
+        token = classify_heading_token(trail.group("tok"))
+        if token is not None:
+            return token
         return None
     named = _NAMED_SCHEDULE.fullmatch(cleaned)
     if named is not None:
         name = named.group("name")
         tokens = name.split()
-        if any(canonical_ordinal(token) is not None for token in tokens):
+        if any(classify_heading_token(token) is not None for token in tokens):
             return None
         if any(re.fullmatch(r"[lio]+", token, re.IGNORECASE) for token in tokens):
             return None
-        return _schedule_slug(name)
+        slug = _schedule_slug(name)
+        if slug is None:
+            return None
+        return _HeadingToken("name", slug, slug)
     return None
 
 
-def schedule_key_identity(key: str) -> str:
+def schedule_evidence_mode(tokens: Sequence[_HeadingToken]) -> str:
+    """How sibling headings resolve an ambiguous single letter.
+
+    ``roman``: a multi-character roman is present and no unambiguous letter is.
+    ``letter``: an unambiguous letter is present and no multi-character roman is.
+    ``mixed``: both of those are present. ``insufficient``: an ambiguous letter
+    has neither. ``plain``: nothing ambiguous needs a decision.
+    """
+    roman = any(token.kind == "roman_multi" for token in tokens)
+    letter = any(token.kind == "letter" for token in tokens)
+    ambiguous = any(token.kind == "ambiguous" for token in tokens)
+    if roman and letter:
+        return "mixed"
+    if roman:
+        return "roman"
+    if letter:
+        return "letter"
+    if ambiguous:
+        return "insufficient"
+    return "plain"
+
+
+def schedule_label(text: str) -> Optional[str]:
+    """The schedule label when ``text`` is an unambiguous heading, else None.
+
+    The whole div must be the heading. A lone ``I``, ``V``, ``X`` or ``L`` is not
+    given a number or a letter slug here: that needs the sibling headings.
+    """
+    parsed = parse_schedule_heading(text)
+    if parsed is None or parsed.kind == "ambiguous":
+        return None
+    return parsed.value
+
+
+def schedule_key_identity(key: str, *, mode: Optional[str] = None) -> str:
     """Canonical identity of a schedule key. Other keys are returned unchanged.
 
-    ``schedule:first:1``, ``schedule:i:1`` and ``schedule:l:1`` share
-    ``schedule:1:1``. The item suffix, including ``-<sha8>`` and ``~n``, stays.
-    A named slug is not rewritten into a number. Applying this twice is a no-op.
+    ``schedule:first:1`` and ``schedule:1:1`` share an identity. ``schedule:ii:1``
+    shares ``schedule:2:1``. A stored ``schedule:i:*``, ``schedule:v:*``,
+    ``schedule:x:*`` or ``schedule:l:*`` stays on that letter unless ``mode`` is
+    ``roman``, and ``schedule:l:*`` then shares ``schedule:50:*``, not the First
+    Schedule. The item suffix, including ``-<sha8>`` and ``~n``, stays. Applying
+    this twice is a no-op.
     """
     if not isinstance(key, str) or not key.startswith(("schedule:", "schedule-heading:")):
         return key
@@ -310,18 +402,19 @@ def schedule_key_identity(key: str) -> str:
     if copied is not None:
         copy = copied.group(0)
         body = body[:copied.start()]
+    fold = mode if mode == "roman" else None
     if body.startswith("schedule-heading:"):
         label = body[len("schedule-heading:"):]
         if not label or ":" in label:
             return key
-        canonical = canonical_schedule_label(label)
+        canonical = canonical_schedule_label(label, mode=fold)
         if not canonical:
             return key
         return f"schedule-heading:{canonical}{copy}"
     matched = _SCHEDULE_ITEM_BODY.fullmatch(body[len("schedule:"):])
     if matched is None:
         return key
-    canonical = canonical_schedule_label(matched.group("label"))
+    canonical = canonical_schedule_label(matched.group("label"), mode=fold)
     if not canonical:
         return key
     return f"schedule:{canonical}:{matched.group('item')}{copy}"
@@ -375,9 +468,45 @@ def schedule_container_label(node) -> Optional[str]:
                 parts.append(text)
         if not holds_node:
             continue
-        label = schedule_label(" ".join(parts))
-        if label:
-            return label
+        parsed = parse_schedule_heading(" ".join(parts))
+        if parsed is not None and parsed.kind != "ambiguous":
+            return parsed.value
+    return None
+
+
+def schedule_container_token(node) -> Optional[str]:
+    """Raw heading token of an ancestor, before sibling headings resolve it.
+
+    ``SCHEDULE I`` stays ``i`` and ``SCHEDULE II`` stays ``ii``, so a later pass
+    can still tell a letter from a roman numeral. The resolved label is
+    ``schedule_container_label``.
+    """
+    parents = getattr(node, "parents", None)
+    if parents is None:
+        return None
+    for ancestor in parents:
+        name = getattr(ancestor, "name", None)
+        if name in (None, "[document]", "html", "body"):
+            break
+        parts = []
+        holds_node = False
+        for child in list(getattr(ancestor, "children", ())):
+            if _node_contains(child, node):
+                holds_node = True
+                continue
+            if _is_section_div(child):
+                continue
+            if hasattr(child, "get_text"):
+                text = child.get_text(" ", strip=True)
+            else:
+                text = str(child).strip()
+            if text:
+                parts.append(text)
+        if not holds_node:
+            continue
+        parsed = parse_schedule_heading(" ".join(parts))
+        if parsed is not None:
+            return parsed.raw
     return None
 
 
@@ -413,6 +542,7 @@ class DivKeyingResult:
     sections: tuple
     skipped_short: int
     dropped_by_cap: int
+    schedule_label_mode: Optional[str] = None
 
 
 @dataclass
@@ -432,34 +562,85 @@ def _title_for(text: str, number: Optional[str]) -> Optional[str]:
     return sentence[:500]
 
 
+def _token_from_container(raw: Optional[str]) -> Optional[_HeadingToken]:
+    text = _WS.sub(" ", raw or "").strip()
+    if not text:
+        return None
+    if "schedule" in text.lower():
+        return parse_schedule_heading(text)
+    return classify_heading_token(text)
+
+
+def _collect_heading_tokens(
+    texts: Sequence[str], containers: Optional[Sequence[Optional[str]]],
+) -> list:
+    tokens = []
+    for raw in texts:
+        parsed = parse_schedule_heading(normalise_div_text(raw))
+        if parsed is not None:
+            tokens.append(parsed)
+    if containers is not None:
+        for raw in containers:
+            parsed = _token_from_container(raw)
+            if parsed is not None:
+                tokens.append(parsed)
+    return tokens
+
+
+def _resolve_heading(parsed: Optional[_HeadingToken], mode: str) -> Optional[tuple]:
+    """``("label", value)`` or ``("unresolved", raw)``. None when there is no heading."""
+    if parsed is None:
+        return None
+    if mode == "mixed" or (parsed.kind == "ambiguous" and mode not in ("roman", "letter")):
+        return ("unresolved", parsed.raw)
+    if parsed.kind == "ambiguous":
+        if mode == "roman":
+            return ("label", _ROMAN_SINGLE_VALUE[parsed.value])
+        return ("label", parsed.value)
+    return ("label", parsed.value)
+
+
 def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> tuple:
-    """Kept divs in order, plus how many short non-headings were skipped."""
+    """Kept divs in order, plus how many short non-headings were skipped, plus the mode."""
+    mode = schedule_evidence_mode(_collect_heading_tokens(texts, containers))
     kept: list[_Classified] = []
     skipped = 0
-    schedule: Optional[str] = None
+    scope: Optional[tuple] = None
     body_seen = False
     heading_before_body = False
     for index, raw in enumerate(texts):
         text = normalise_div_text(raw)
-        container = None
-        if containers is not None:
-            container = canonical_schedule_label(containers[index] or None)
-        label = schedule_label(text)
-        if label is not None:
-            if body_seen:
-                schedule = label
+        container = _token_from_container(containers[index]) if containers is not None else None
+        parsed = parse_schedule_heading(text)
+        if parsed is not None:
+            outcome = _resolve_heading(parsed, mode)
+            if outcome[0] == "unresolved":
+                kept.append(_Classified(
+                    text=text, kind="schedule-unresolved", number=None, label=outcome[1],
+                ))
+                scope = outcome if body_seen else None
             else:
+                kept.append(_Classified(
+                    text=text, kind="schedule-heading", number=None, label=outcome[1],
+                ))
+                scope = outcome if body_seen else None
+            if not body_seen:
                 heading_before_body = True
-                schedule = None
-            kept.append(_Classified(text=text, kind="schedule-heading", number=None, label=label))
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
             skipped += 1
             continue
         number = parse_section_number(text)
-        open_label = container or schedule
-        if number is not None and open_label is not None:
-            kept.append(_Classified(text=text, kind="schedule-item", number=number, label=open_label))
+        chosen = _resolve_heading(container, mode) if container is not None else scope
+        if number is not None and chosen is not None and chosen[0] == "unresolved":
+            kept.append(_Classified(
+                text=text, kind="schedule-unresolved", number=number, label=chosen[1],
+            ))
+            continue
+        if number is not None and chosen is not None and chosen[0] == "label":
+            kept.append(_Classified(
+                text=text, kind="schedule-item", number=number, label=chosen[1],
+            ))
             continue
         if number is not None and heading_before_body:
             kept.append(_Classified(text=text, kind="unscoped", number=number, label=None))
@@ -470,7 +651,7 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
             continue
         kind = _structural_kind(text) or "div"
         kept.append(_Classified(text=text, kind=kind, number=None, label=None))
-    return kept, skipped
+    return kept, skipped, mode
 
 
 def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts: Mapping[tuple, int]) -> str:
@@ -485,6 +666,12 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
         return f"{base}-{content_token(item.text)}"
     if item.kind == "schedule-heading" and item.label is not None:
         return f"schedule-heading:{item.label}"
+    if item.kind == "schedule-unresolved":
+        if item.number is not None and item.label:
+            return f"unresolved-schedule:{item.label}:{item.number}"
+        if item.label:
+            return f"unresolved-schedule-heading:{item.label}"
+        return f"unresolved-schedule-{content_token(item.text)}"
     if item.kind == "unscoped" and item.number is not None:
         return f"unscoped:{item.number}-{content_token(item.text)}"
     if item.kind == "preamble":
@@ -494,15 +681,20 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
     return f"div-{content_token(item.text)}"
 
 
-_FALLBACK_SUPPRESSED_KINDS = frozenset({"section", "schedule-item", "preamble", "explanation", "div", "unscoped"})
+_FALLBACK_SUPPRESSED_KINDS = frozenset({
+    "section", "schedule-item", "preamble", "explanation", "div", "unscoped", "schedule-unresolved",
+})
 # ``unscoped`` is a numbered div with no proven parent: a flat heading before any body
 # section, and no ancestor heading. It stays withheld (FA-17). A schedule item already
 # carries that parent label and is published under ``schedule:L:N``.
+# ``schedule-unresolved`` is a heading whose single letter I/V/X/L has no roman or
+# letter proof, or a schedule on a page whose evidence is mixed (R-LETTER-ROMAN-001).
 PUBLISHABLE_SECTION_KINDS = frozenset({
     "section", "preamble", "explanation", "div", "schedule-heading", "schedule-item",
 })
-AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped"})
+AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-unresolved"})
 REASON_AMBIGUOUS_SECTION = "ambiguous_section_identity"
+REASON_SCHEDULE_LETTER_ROMAN = "schedule_letter_roman_ambiguous"
 _SCHEDULE_KEY_PREFIXES = ("schedule:", "schedule-heading:")
 
 
@@ -517,9 +709,22 @@ def is_schedule_publication_key(key: str) -> bool:
     return isinstance(key, str) and key.startswith(_SCHEDULE_KEY_PREFIXES)
 
 
+def ambiguous_section_reason(kind: Optional[str]) -> Optional[str]:
+    """Quarantine reason for a kind that must not be published, else None.
+
+    ``unscoped`` keeps ``ambiguous_section_identity``. An unresolved schedule letter
+    uses ``schedule_letter_roman_ambiguous`` so the two holds stay distinct.
+    """
+    if kind == "unscoped":
+        return REASON_AMBIGUOUS_SECTION
+    if kind == "schedule-unresolved":
+        return REASON_SCHEDULE_LETTER_ROMAN
+    return None
+
+
 def section_kind_is_ambiguous(kind: Optional[str]) -> bool:
-    """True when no parent schedule was proven and the div must not be published."""
-    return kind in AMBIGUOUS_SECTION_KINDS
+    """True when the div must not be published and the page must not retire keys."""
+    return ambiguous_section_reason(kind) is not None
 
 
 def act_inventory_is_complete(result: DivKeyingResult) -> bool:
@@ -611,7 +816,7 @@ def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[s
         containers = tuple(containers)
         if len(containers) != len(texts):
             raise ValueError("PakistanCode schedule containers must align with div texts")
-    classified, skipped = _classify(texts, containers)
+    classified, skipped, mode = _classify(texts, containers)
     dropped = max(0, len(classified) - MAX_STAGED_DIVS)
     staged = classified[:MAX_STAGED_DIVS]
     body_counts: dict = {}
@@ -639,7 +844,10 @@ def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[s
             lookup_number=lookup,
             schedule_label=item.label if item.kind in ("schedule-heading", "schedule-item") else None,
         ))
-    return DivKeyingResult(sections=tuple(sections), skipped_short=skipped, dropped_by_cap=dropped)
+    return DivKeyingResult(
+        sections=tuple(sections), skipped_short=skipped, dropped_by_cap=dropped,
+        schedule_label_mode=mode,
+    )
 
 
 @dataclass
@@ -663,7 +871,7 @@ class HarvestDelta:
     retired: list = field(default_factory=list)
 
 
-def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
+def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Optional[str] = None) -> HarvestDelta:
     """Publish ``sections`` onto ``store``.
 
     A new key is inserted once. The same key, or a schedule key with the same canonical
@@ -675,20 +883,27 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
     the act. Two rows that already share one schedule identity are left as they
     are: this harvest does not pick one, insert a third, or retire them. No second row
     is created for an existing identity, and an unchanged text is not written again.
+    ``label_mode="roman"`` is the sibling proof that lets a stored ``i``/``v``/``x``/``l``
+    share the roman value. Without it those letters stay letters, and ``l`` never
+    shares the First Schedule.
     """
     delta = HarvestDelta()
+    fold = label_mode if label_mode == "roman" else None
     by_identity: dict = {}
     conflicts = set()
     for key, row in store.items():
-        ident = schedule_key_identity(key)
+        ident = schedule_key_identity(key, mode=fold)
         if ident in by_identity:
             conflicts.add(ident)
         else:
             by_identity[ident] = key
     seen_raw = set()
     seen_identities = set()
+    blocked = any(section_kind_is_ambiguous(section.kind) for section in sections)
     for section in sections:
-        ident = schedule_key_identity(section.key)
+        if section_kind_is_ambiguous(section.kind):
+            continue
+        ident = schedule_key_identity(section.key, mode=fold)
         seen_raw.add(section.key)
         seen_identities.add(ident)
         if ident in conflicts:
@@ -718,11 +933,13 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv]) -> HarvestDelta:
             delta.amended.append(current.key)
         else:
             delta.unchanged.append(current.key)
+    if blocked:
+        return delta
     schedule_only = bool(seen_raw) and all(is_schedule_publication_key(key) for key in seen_raw)
     for key, row in store.items():
         if row.retired:
             continue
-        ident = schedule_key_identity(key)
+        ident = schedule_key_identity(key, mode=fold)
         if ident in seen_identities or ident in conflicts:
             continue
         if schedule_only and not is_schedule_publication_key(key):
@@ -751,22 +968,26 @@ def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> O
     return hits[0]
 
 
-def section_by_key(store: Mapping[str, PublishedSection], key: str) -> Optional[PublishedSection]:
+def section_by_key(
+    store: Mapping[str, PublishedSection], key: str, *, label_mode: Optional[str] = None,
+) -> Optional[PublishedSection]:
     """The live row for ``key``.
 
     An exact key wins. Otherwise one live schedule row with the same canonical
     identity is that row. Zero or several matches return None, so two stored
-    spellings are not collapsed by lookup order.
+    spellings are not collapsed by lookup order. A single letter ``i``/``v``/``x``/``l``
+    matches a number only when ``label_mode`` is ``roman``, and ``l`` then matches 50.
     """
     row = store.get(key)
     if row is not None:
         if row.retired:
             return None
         return row
-    ident = schedule_key_identity(key)
+    fold = label_mode if label_mode == "roman" else None
+    ident = schedule_key_identity(key, mode=fold)
     hits = [
         candidate for stored, candidate in store.items()
-        if not candidate.retired and schedule_key_identity(stored) == ident
+        if not candidate.retired and schedule_key_identity(stored, mode=fold) == ident
     ]
     if len(hits) != 1:
         return None
@@ -859,7 +1080,10 @@ def snapshot_is_incomplete(null_rows: int) -> bool:
     return null_rows > 0
 
 
-def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[str]], current_key: str) -> list:
+def keys_to_retire(
+    existing_keys: Iterable[str], live_keys: Optional[Iterable[str]], current_key: str,
+    *, label_mode: Optional[str] = None,
+) -> list:
     """Keys a successful non-empty harvest retires.
 
     An empty or missing live set retires nothing (a failed or empty page must not wipe
@@ -870,7 +1094,9 @@ def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[st
     A stored schedule key whose canonical identity is in the live set is not retired
     and is not treated as a different row. ``current_key`` is added after that
     schedule-only check, so publishing a body row whose stamped set is only schedule
-    keys does not repeal its siblings.
+    keys does not repeal its siblings. ``label_mode="roman"`` is required before a
+    stored ``i``/``v``/``x``/``l`` is treated as the roman value. ``l`` is then 50,
+    not the First Schedule.
     """
     if live_keys is None:
         return []
@@ -880,12 +1106,13 @@ def keys_to_retire(existing_keys: Iterable[str], live_keys: Optional[Iterable[st
     schedule_only = all(is_schedule_publication_key(key) for key in live)
     if current_key:
         live.add(current_key)
-    live_ids = {schedule_key_identity(key) for key in live}
+    fold = label_mode if label_mode == "roman" else None
+    live_ids = {schedule_key_identity(key, mode=fold) for key in live}
     retired = []
     for key in existing_keys:
         if not isinstance(key, str) or not key or key in live:
             continue
-        if schedule_key_identity(key) in live_ids:
+        if schedule_key_identity(key, mode=fold) in live_ids:
             continue
         if schedule_only and not is_schedule_publication_key(key):
             continue
