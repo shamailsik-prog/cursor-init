@@ -179,11 +179,11 @@ def _schedule_html():
 
 def _expected_schedule_keys():
     return [
-        _item_key("first", "1", ALPHA, True),
-        _item_key("first", "1", BETA, True),
-        _item_key("first", "3", SAME, True, 1),
-        _item_key("first", "3", SAME, True, 2),
-        _item_key("second", "1", MORTGAGE, False),
+        _item_key("1", "1", ALPHA, True),
+        _item_key("1", "1", BETA, True),
+        _item_key("1", "3", SAME, True, 1),
+        _item_key("1", "3", SAME, True, 2),
+        _item_key("2", "1", MORTGAGE, False),
     ]
 
 
@@ -209,7 +209,7 @@ def test_fa_17_multi_schedule_items_publish_without_retiring_body(corpus_db, mon
 
     nodes = BeautifulSoup(schedule, "html.parser").find_all("div", class_="section")
     containers = [schedule_container_label(node) for node in nodes]
-    assert containers == ["first", "first", "first", "first", "second"]
+    assert containers == ["1", "1", "1", "1", "2"]
     expected = _expected_schedule_keys()
     assert [item.key for item in key_div_texts(
         [node.get_text(" ", strip=True) for node in nodes], containers,
@@ -261,7 +261,7 @@ def test_fa_17_multi_schedule_items_publish_without_retiring_body(corpus_db, mon
                     source_url="https://pakistancode.gov.pk/english/statues/details/" + slug,
                     extracted_act_name="Schedule Fixture Act",
                     extracted_short_name=slug,
-                    extracted_section_number="schedule:second:1",
+                    extracted_section_number="schedule:2:1",
                     extracted_section_title="Fixture",
                     extracted_section_text=MORTGAGE_AMENDED,
                     raw_text=MORTGAGE_AMENDED,
@@ -282,10 +282,10 @@ def test_fa_17_multi_schedule_items_publish_without_retiring_body(corpus_db, mon
     master = _master(slug)
     assert len(master) == 8
     by_key = {row[0]: row for row in master}
-    assert by_key["schedule:second:1"][1] == MORTGAGE_AMENDED and by_key["schedule:second:1"][2] is False
+    assert by_key["schedule:2:1"][1] == MORTGAGE_AMENDED and by_key["schedule:2:1"][2] is False
     assert by_key["1"][2] is False and by_key["2"][2] is False and by_key["3"][2] is False
-    assert by_key[_item_key("first", "1", ALPHA, True)][1] == ALPHA
-    assert by_key[_item_key("first", "3", SAME, True, 2)][1] == SAME
+    assert by_key[_item_key("1", "1", ALPHA, True)][1] == ALPHA
+    assert by_key[_item_key("1", "3", SAME, True, 2)][1] == SAME
 
 
 def test_fa_17_heading_only_schedule_does_not_retire_body_or_invent_items(corpus_db, monkeypatch):
@@ -304,13 +304,13 @@ def test_fa_17_heading_only_schedule_does_not_retire_body_or_invent_items(corpus
         "FROM statutes_staging WHERE extracted_short_name = :name",
         name=slug,
     ))
-    assert staged == [("schedule-heading:first", HEADING, True)]
+    assert staged == [("schedule-heading:1", HEADING, True)]
     outcomes = _gate_and_publish(slug)
-    assert outcomes == [("schedule-heading:first", "schedule-heading", "promoted", "embedded", None)]
+    assert outcomes == [("schedule-heading:1", "schedule-heading", "promoted", "embedded", None)]
     master = _master(slug)
     assert {(row[0], row[1], row[2]) for row in master} == {
         ("1", SEEDED, False),
-        ("schedule-heading:first", HEADING, False),
+        ("schedule-heading:1", HEADING, False),
     }
 
 
@@ -337,15 +337,15 @@ def test_fa_17_unscoped_div_is_quarantined_and_does_not_retire_body(corpus_db, m
         name=slug,
     ))
     assert len(staged) == 2
-    assert staged[0][0] == "schedule-heading:first" and staged[0][2] == "schedule-heading" and staged[0][3] is True
+    assert staged[0][0] == "schedule-heading:1" and staged[0][2] == "schedule-heading" and staged[0][3] is True
     assert staged[1][1] == FLAT and staged[1][2] == "unscoped" and staged[1][0].startswith("unscoped:1-")
     assert staged[1][3] is True
     outcomes = _gate_and_publish(slug)
-    assert outcomes[0] == ("schedule-heading:first", "schedule-heading", "promoted", "embedded", None)
+    assert outcomes[0] == ("schedule-heading:1", "schedule-heading", "promoted", "embedded", None)
     assert outcomes[1][1] == "unscoped" and outcomes[1][2] == "quarantined" and outcomes[1][3] is None
     assert outcomes[1][4] == "ambiguous_section_identity"
     master = _master(slug)
-    assert [row[0] for row in master] == ["1", "schedule-heading:first"]
+    assert [row[0] for row in master] == ["1", "schedule-heading:1"]
     assert master[0][1] == SEEDED and master[0][2] is False
     assert all(not str(row[0]).startswith("unscoped:") for row in master)
     kept = run(fetch(

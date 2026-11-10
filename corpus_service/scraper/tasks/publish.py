@@ -25,7 +25,7 @@ from typing import Optional
 from sqlalchemy import func, select
 
 from scraper.models import QuarantineDecision, QuarantineQueue, ScraperSource, StatutesStaging
-from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION
+from scraper.parsers.pakistancode_keys import REASON_AMBIGUOUS_SECTION, ambiguous_section_reason
 from scraper.publication import retrieval
 from scraper.tasks import lifecycle
 from scraper.tasks.promotion import _resolve_source, publication_decision
@@ -39,6 +39,9 @@ REASON_CLOCK_UNINITIALIZED = "harvest_clock_uninitialized"
 # Not a claim that the refused text is historically stale. Some master rows for the
 # act still have no harvest clock, and this publish is not a same-text confirmation.
 REASON_BASELINE_INCOMPLETE = "harvest_baseline_incomplete"
+# Two master rows already share the canonical schedule identity. Publish refuses
+# rather than choosing one, inserting a third, or retiring either.
+REASON_SCHEDULE_ALIAS_CONFLICT = "schedule_label_alias_conflict"
 # Review-queue resolutions that keep an open review (F23's CHECK vocabulary; nothing writes them today).
 _OPEN_RESOLUTIONS = ("needs_edit", "escalated")
 
@@ -137,9 +140,16 @@ async def publish(db, st, *, job_id=None) -> str:
         published_id, attached = await retrieval.publish_case(db, st, src)
     else:
         published = await retrieval.publish_statute(db, st, src)
-        if published.stale or published.withheld or published.clock_refused or published.baseline_incomplete:
+        if (
+            published.stale or published.withheld or published.clock_refused
+            or published.baseline_incomplete or published.alias_conflict
+        ):
             if published.withheld:
-                reason = REASON_AMBIGUOUS_SECTION
+                meta = getattr(st, "parsing_metadata", None)
+                kind = meta.get("section_kind") if isinstance(meta, dict) else None
+                reason = ambiguous_section_reason(kind if isinstance(kind, str) else None) or REASON_AMBIGUOUS_SECTION
+            elif published.alias_conflict:
+                reason = REASON_SCHEDULE_ALIAS_CONFLICT
             elif published.baseline_incomplete:
                 reason = REASON_BASELINE_INCOMPLETE
             elif published.clock_refused:

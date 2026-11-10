@@ -8,7 +8,7 @@ from scraper.parsers.pakistancode_keys import (
     normalise_div_text,
     page_has_text_besides_schedule_headings,
     parse_section_number,
-    schedule_container_label,
+    schedule_container_token,
     suppresses_plain_text_fallback,
 )
 from scraper.parsers.statute_parser import split_into_sections, detect_statute_name
@@ -78,7 +78,7 @@ async def scrape_pakistancode(source, db):
                 harvest_at = datetime.now(timezone.utc).isoformat()
                 keyed = key_div_texts(
                     [div.get_text(" ", strip=True) for div in div_nodes],
-                    [schedule_container_label(div) for div in div_nodes],
+                    [schedule_container_token(div) for div in div_nodes],
                 ) if div_nodes else None
                 rows = 0
                 if keyed is not None and suppresses_plain_text_fallback(keyed):
@@ -94,6 +94,7 @@ async def scrape_pakistancode(source, db):
                             "section_kind": item.kind,
                             "lookup_number": item.lookup_number,
                             "schedule_label": item.schedule_label,
+                            "schedule_label_mode": keyed.schedule_label_mode,
                             "keying": "fa-f21-017",
                             "harvest_at": harvest_at,
                         }
@@ -121,6 +122,7 @@ async def scrape_pakistancode(source, db):
                                 "section_kind": item.kind,
                                 "lookup_number": item.lookup_number,
                                 "schedule_label": item.schedule_label,
+                                "schedule_label_mode": keyed.schedule_label_mode,
                                 "keying": "fa-f21-017",
                                 "harvest_at": harvest_at,
                             }))

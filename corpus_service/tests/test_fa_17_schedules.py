@@ -55,15 +55,15 @@ def _page():
 def _expected_keys():
     return [
         "1",
-        "schedule-heading:first",
-        _item_key("first", "1", ALPHA, True),
-        _item_key("first", "1", BETA, True),
-        _item_key("first", "3", SAME, True, 1),
-        _item_key("first", "3", SAME, True, 2),
-        _item_key("first", "4", FORM, False),
-        "schedule-heading:second",
-        _item_key("second", "1", MORTGAGE, False),
-        _item_key("second", "4", FORM, False),
+        "schedule-heading:1",
+        _item_key("1", "1", ALPHA, True),
+        _item_key("1", "1", BETA, True),
+        _item_key("1", "3", SAME, True, 1),
+        _item_key("1", "3", SAME, True, 2),
+        _item_key("1", "4", FORM, False),
+        "schedule-heading:2",
+        _item_key("2", "1", MORTGAGE, False),
+        _item_key("2", "4", FORM, False),
     ]
 
 
@@ -79,8 +79,8 @@ def test_schedule_identity_scopes_repeats_and_does_not_collide_with_body_keys():
     assert body_keys == {"1"}
     assert body_keys.isdisjoint(schedule_keys)
     assert all(key.startswith("schedule:") for key in schedule_keys)
-    assert _item_key("first", "4", FORM, False) != _item_key("second", "4", FORM, False)
-    assert not _item_key("second", "4", FORM, False).endswith("~2")
+    assert _item_key("1", "4", FORM, False) != _item_key("2", "4", FORM, False)
+    assert not _item_key("2", "4", FORM, False).endswith("~2")
     store = {}
     apply_harvest(store, keyed.sections)
     found = lookup_real_section(store, "1")
@@ -104,10 +104,10 @@ def test_schedule_item_is_publishable_and_the_page_is_a_complete_inventory():
         "</div>"
     )
     node = BeautifulSoup(html, "html.parser").find("div", class_="section")
-    assert schedule_container_label(node) == "first"
+    assert schedule_container_label(node) == "1"
     contained = key_div_texts([node.get_text(" ", strip=True)], [schedule_container_label(node)])
     assert contained.sections[0].kind == "schedule-item"
-    assert contained.sections[0].key == "schedule:first:1"
+    assert contained.sections[0].key == "schedule:1:1"
     assert contained.sections[0].lookup_number is None
     assert act_inventory_is_complete(contained) is True
 
@@ -121,7 +121,7 @@ def test_schedule_only_harvest_does_not_retire_body_keys():
     assert all(item.kind == "schedule-item" for item in keyed.sections)
     assert keys_to_retire(["1", "2", "schedule:second:9"], live, live[0]) == ["schedule:second:9"]
     assert keys_to_retire(["1", "2"], live, "2") == []
-    assert keys_to_retire(["1", "2", "preamble-abcd1234"], ["schedule-heading:first"], "schedule-heading:first") == []
+    assert keys_to_retire(["1", "2", "preamble-abcd1234"], ["schedule-heading:1"], "schedule-heading:1") == []
 
     store = {
         "1": PublishedSection("1", BODY, "section", "1", [BODY]),
@@ -157,10 +157,10 @@ def test_unscoped_div_without_a_proven_parent_stays_withheld():
 
 def test_heading_only_schedule_is_not_an_act_inventory():
     keyed = key_div_texts([FIRST])
-    assert keyed.sections[0].key == "schedule-heading:first"
+    assert keyed.sections[0].key == "schedule-heading:1"
     assert keyed.sections[0].kind == "schedule-heading"
     assert fallback_act_keys(keyed, [(keyed.sections[0].key, "schedule-heading")]) is None
-    assert keys_to_retire(["1", "2"], None, "schedule-heading:first") == []
+    assert keys_to_retire(["1", "2"], None, "schedule-heading:1") == []
 
 
 def test_capped_schedule_page_is_not_an_inventory_and_an_uncapped_one_is():

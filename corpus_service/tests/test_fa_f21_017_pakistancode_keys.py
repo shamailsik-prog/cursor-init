@@ -83,8 +83,8 @@ def test_acceptance_1_first_harvest_stages_every_kept_div_including_numberless()
     assert first.sections[1].key == "1" and first.sections[1].lookup_number == "1"
     assert first.sections[0].key.startswith("preamble-")
     assert first.sections[3].key.startswith("explanation-")
-    assert first.sections[4].key == "schedule-heading:first"
-    assert first.sections[5].key == "schedule:first:1"
+    assert first.sections[4].key == "schedule-heading:1"
+    assert first.sections[5].key == "schedule:1:1"
     assert [section.key for section in first.sections] == [section.key for section in second.sections]
     short_preamble = key_div_texts(["Preamble"])
     assert short_preamble.skipped_short == 0 and len(short_preamble.sections) == 1
@@ -163,10 +163,10 @@ def test_acceptance_5_duplicate_number_is_distinct_and_stable_across_reruns():
     texts = [SECTION_1, HEADING, SCHEDULE_ITEM]
     runs = [_keys(texts) for _ in range(3)]
     assert runs[0] == runs[1] == runs[2]
-    assert runs[0] == ["1", "schedule-heading:first", "schedule:first:1"]
+    assert runs[0] == ["1", "schedule-heading:1", "schedule:1:1"]
     store: dict = {}
     deltas = [apply_harvest(store, key_div_texts(texts).sections) for _ in range(3)]
-    assert deltas[0].inserted == ["1", "schedule-heading:first", "schedule:first:1"]
+    assert deltas[0].inserted == ["1", "schedule-heading:1", "schedule:1:1"]
     assert deltas[1].inserted == [] and deltas[2].inserted == []
     assert deltas[2].retired == [] and deltas[2].amended == []
     assert all(len(row.versions) == 1 and row.retired is False for row in store.values())
@@ -189,10 +189,10 @@ def test_acceptance_6_lookup_by_real_number_returns_the_section_not_the_schedule
     assert found is not None
     assert found.key == "1" and found.kind == "section"
     assert "Short title" in found.text and "conveyance" not in found.text.lower()
-    schedule = section_by_key(store, "schedule:first:1")
+    schedule = section_by_key(store, "schedule:1:1")
     assert schedule is not None and schedule.kind == "schedule-item"
     assert "conveyance" in schedule.text.lower()
-    assert lookup_real_section(store, "schedule:first:1") is None
+    assert lookup_real_section(store, "schedule:1:1") is None
     store["1"].retired = True
     assert lookup_real_section(store, "1") is None
 
@@ -359,7 +359,7 @@ def test_harvester_stages_locked_keys_and_f21_fixture_numbers_stay_real(monkeypa
     assert len(db.rows) == 4
     keys = [row.extracted_section_number for row in db.rows]
     assert keys[0].startswith("preamble-") and len(keys[0]) == len("preamble-") + 8
-    assert keys[1:] == ["1", "schedule-heading:first", "schedule:first:1"]
+    assert keys[1:] == ["1", "schedule-heading:1", "schedule:1:1"]
     assert all(row.extracted_section_number != (row.extracted_section_text or "")[:20] for row in db.rows)
     assert db.rows[1].parsing_metadata["lookup_number"] == "1"
     assert db.rows[3].parsing_metadata["lookup_number"] is None
@@ -391,15 +391,15 @@ def test_fa_f21_018_flat_heading_before_body_does_not_become_a_schedule_item():
     assert [schedule_container_label(node) for node in nodes] == [None, None, None]
     keyed = key_div_texts([node.get_text(" ", strip=True) for node in nodes], [schedule_container_label(node) for node in nodes])
     keys = [item.key for item in keyed.sections]
-    assert keys[0] == "schedule-heading:first"
+    assert keys[0] == "schedule-heading:1"
     assert keys[1].startswith("unscoped:1-") and keys[2].startswith("unscoped:2-")
-    assert not any(key.startswith("schedule:first:") for key in keys)
+    assert not any(key.startswith("schedule:") for key in keys[1:])
     assert lookup_real_section({item.key: PublishedSection(item.key, item.text, item.kind, item.lookup_number, [item.text]) for item in keyed.sections}, "1") is None
     nested = "<div class='schedule'><h2>THE FIRST SCHEDULE</h2><div class='section'>1. Stamp on a conveyance is nested under the heading.</div></div>"
     node = BeautifulSoup(nested, "html.parser").find("div", class_="section")
-    assert schedule_container_label(node) == "first"
+    assert schedule_container_label(node) == "1"
     contained = key_div_texts([node.get_text(" ", strip=True)], [schedule_container_label(node)])
-    assert [item.key for item in contained.sections] == ["schedule:first:1"]
+    assert [item.key for item in contained.sections] == ["schedule:1:1"]
     assert contained.sections[0].lookup_number is None
 
 
@@ -412,7 +412,7 @@ def test_fa_f21_018_scope_stays_open_after_a_body_section():
     """
     later = "3. A later numbered div follows the schedule and is longer than twenty characters."
     keyed = key_div_texts([SECTION_1, HEADING, SCHEDULE_ITEM, later])
-    assert [item.key for item in keyed.sections] == ["1", "schedule-heading:first", "schedule:first:1", "schedule:first:3"]
+    assert [item.key for item in keyed.sections] == ["1", "schedule-heading:1", "schedule:1:1", "schedule:1:3"]
     assert keyed.sections[0].lookup_number == "1"
     assert keyed.sections[3].kind == "schedule-item" and keyed.sections[3].lookup_number is None
     assert act_inventory_is_complete(keyed) is True
@@ -521,7 +521,7 @@ def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
     )
     assert calls_n == 1
     keys = [row.extracted_section_number for row in rows]
-    assert keys[0] == "schedule-heading:first"
+    assert keys[0] == "schedule-heading:1"
     assert "1" in keys and "2" in keys
     assert all(row.parsing_metadata["act_keys"] == keys for row in rows)
     assert fallback_act_keys(key_div_texts([HEADING]), [(key, "schedule-heading" if key.startswith("schedule-heading") else "fallback") for key in keys]) == keys
@@ -530,7 +530,7 @@ def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
         f"<html><h1>The Stamp Act, 1899</h1><div class='section'>{HEADING}</div></html>"
     )
     assert calls_n == 0
-    assert [row.extracted_section_number for row in rows] == ["schedule-heading:first"]
+    assert [row.extracted_section_number for row in rows] == ["schedule-heading:1"]
     assert rows[0].extracted_section_text == HEADING
     assert "act_keys" not in rows[0].parsing_metadata
     assert page_has_text_besides_schedule_headings(
@@ -546,7 +546,7 @@ def test_fa_f21_019_fallback_runs_only_when_no_content_div_is_kept(monkeypatch):
     heading_only = key_div_texts([HEADING])
     assert suppresses_plain_text_fallback(heading_only) is False
     assert suppresses_plain_text_fallback(key_div_texts([SECTION_1])) is True
-    assert fallback_act_keys(key_div_texts([HEADING, SECTION_1]), [("schedule-heading:first", "schedule-heading"), ("unscoped:1-aaaaaaaa", "unscoped")]) is None
+    assert fallback_act_keys(key_div_texts([HEADING, SECTION_1]), [("schedule-heading:1", "schedule-heading"), ("unscoped:1-aaaaaaaa", "unscoped")]) is None
 
 
 def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
