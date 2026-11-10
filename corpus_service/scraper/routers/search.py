@@ -52,10 +52,14 @@ async def statutes(
     statute_name: Optional[str] = Query(None, description="2-200 characters; matched literally"),
     limit: int = Depends(pc.limit_param(pc.STATUTES_DEFAULT_LIMIT)),
     cursor: Optional[str] = Query(None, description="next_cursor from the previous page"),
+    include_repealed: bool = Depends(pc.include_repealed_param),
 ):
+    """Current law. Repealed sections stay out unless ``include_repealed`` is ``true``."""
     name = pc.query_text_or_422("statute_name", statute_name) if statute_name is not None else None
     after = pc.cursor_or_400(pc.STATUTE_CURSOR, cursor)
-    return await pc.list_statutes(name, after, limit, timeout_ms=_timeout_ms())
+    return await pc.list_statutes(
+        name, after, limit, include_repealed=include_repealed, timeout_ms=_timeout_ms(),
+    )
 
 
 @router.get("/statutes/{statute_id}", response_model=pc.StatuteDetail)
