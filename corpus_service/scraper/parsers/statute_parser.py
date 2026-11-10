@@ -17,6 +17,8 @@ from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse, unquote
 from bs4 import BeautifulSoup
 
+from scraper.parsers.pakistancode_keys import TEXT_CAP, content_token
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -171,30 +173,70 @@ def _make_section_dict(number: str, title: str, text: str, statute_name: str) ->
         "section_text": _clean_section_text(text),
     }
 
+def _section_number_token(section: Dict[str, str]) -> str:
+    return str(section.get("section_number", "")).strip()
+
+
+def _rejected_section_number(section: Dict[str, str], number: str) -> bool:
+    """True when the preexisting gate drops the number.
+
+    The nested check is the original one. It drops only an integer above 5000.
+    A constitution title does not change that, because a number above 5000 is not
+    below 3000.
+    """
+    try:
+        num_int = int(re.sub(r"[^0-9]", "", number.lower()) or "0")
+    except ValueError:
+        return False
+    if num_int > 2000:
+        if not (num_int < 3000 and "constitution" in section.get("section_title", "").lower()):
+            if num_int > 5000:
+                return True
+    return False
+
+
+def _identity_key(number: str, text: str, repeated: bool, seen: Dict[str, int]) -> str:
+    """Stable key for one recognised section. A repeated number is not bare ``N``.
+
+    Both copies of a repeated number take ``N-<sha8>`` of the stored text (capped at
+    ``TEXT_CAP``), the same content address FA-F21-017 uses for a repeated body div.
+    A second copy of the same text takes ``~2``, ``~3``, … so the text is kept.
+    A number that occurs once stays ``N``.
+    """
+    stored = (text or "")[:TEXT_CAP]
+    base = f"{number}-{content_token(stored)}" if repeated else number
+    seen[base] = seen.get(base, 0) + 1
+    if seen[base] == 1:
+        return base
+    return f"{base}~{seen[base]}"
+
+
 def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    seen = set()
+    """Keep every recognised section. A shared number is disambiguated, not dropped.
+
+    A unique section shorter than 20 characters is still omitted: that gate predates
+    FA-F21-019 and is how the strategies reject a fragment. A section that shares its
+    number with another recognised section is kept even when it is that short, and its
+    text is not replaced by the other copy. Numbers above 5000 are still omitted.
+    """
+    candidates = []
+    for section in sections:
+        number = _section_number_token(section)
+        if not number or _rejected_section_number(section, number):
+            continue
+        candidates.append((section, number))
+    counts: Dict[str, int] = {}
+    for _section, number in candidates:
+        counts[number] = counts.get(number, 0) + 1
+    seen: Dict[str, int] = {}
     out = []
-    for s in sections:
-        key = s.get("section_number", "").strip().lower()
-        # allow duplicate numbers if text differs substantially (>50 chars diff) - keep first only for safety
-        if key in seen:
+    for section, number in candidates:
+        text = section.get("section_text", "")
+        if counts[number] == 1 and len(text) < 20:
             continue
-        # filter tiny sections that are likely not real
-        if len(s.get("section_text", "")) < 20:
-            continue
-        # filter bogus numbers like 99999
-        try:
-            num_int = int(re.sub(r'[^0-9]', '', key) or '0')
-            if num_int > 2000:  # statutes rarely exceed 1000 sections except constitution
-                # still keep constitution but skip crazy
-                if not (num_int < 3000 and "constitution" in s.get("section_title", "").lower()):
-                    # but allow if number is e.g., 511
-                    if num_int > 5000:
-                        continue
-        except ValueError:
-            pass
-        seen.add(key)
-        out.append(s)
+        kept = dict(section)
+        kept["section_number"] = _identity_key(number, text, counts[number] > 1, seen)
+        out.append(kept)
     return out
 
 # ---------------------------------------------------------------------------

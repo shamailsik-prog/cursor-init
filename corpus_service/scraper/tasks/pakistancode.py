@@ -3,8 +3,11 @@ from bs4 import BeautifulSoup
 from scraper.net import fetch_policy
 from scraper.parsers.pakistancode_keys import (
     act_inventory_is_complete,
+    fallback_act_keys,
     key_div_texts,
     normalise_div_text,
+    page_has_text_besides_schedule_headings,
+    parse_section_number,
     schedule_container_label,
     suppresses_plain_text_fallback,
 )
@@ -102,40 +105,64 @@ async def scrape_pakistancode(source, db):
                         rows += 1
                 else:
                     # No section divs, only short non-heading noise, or only schedule headings.
-                    # Headings are staged and do not by themselves retire the act. The paragraph
-                    # fallback still runs, and a fallback row whose text is the heading is not
-                    # staged a second time. This path carries no act_keys.
-                    heading_texts = set()
+                    # Headings are staged. They do not by themselves retire the act. A page whose
+                    # text is only those headings (and the act title) does not run the splitter,
+                    # so the title is not staged as a spurious section. Paragraph sections that
+                    # share a number are both kept, under the splitter's N-<sha8> keys. act_keys
+                    # is the staged set, and is omitted for an unscoped div, a schedule item, or
+                    # a heading-only page.
+                    pending = []
+                    heading_texts = []
                     if keyed is not None:
                         for item in keyed.sections:
-                            db.add(_staged(
-                                source, url, act_name, slug[:10], item.key, item.text,
-                                section_title=item.title,
-                                extra_metadata={
-                                    "section_kind": item.kind,
-                                    "lookup_number": item.lookup_number,
-                                    "schedule_label": item.schedule_label,
-                                    "keying": "fa-f21-017",
-                                    "harvest_at": harvest_at,
-                                },
-                            ))
-                            heading_texts.add(normalise_div_text(item.text))
-                            rows += 1
-                    full_text = clean_html(rr.text)
-                    parsed = split_into_sections(full_text, act_name)
-                    for p in parsed:
-                        body = p["section_text"][:20000]
-                        if normalise_div_text(body) in heading_texts:
-                            continue
-                        title = (p.get("section_title") or "")[:500]
-                        db.add(_staged(
-                            source, url, act_name, slug[:10], p["section_number"], body,
-                            section_title=title,
-                            extra_metadata={
-                                "section_kind": "fallback",
+                            pending.append((item.key, item.text, item.title, {
+                                "section_kind": item.kind,
+                                "lookup_number": item.lookup_number,
+                                "schedule_label": item.schedule_label,
                                 "keying": "fa-f21-017",
                                 "harvest_at": harvest_at,
-                            },
+                            }))
+                            heading_texts.append(item.text)
+                    full_text = clean_html(rr.text)
+                    headings_only = bool(heading_texts) and (
+                        keyed is None or all(item.kind == "schedule-heading" for item in keyed.sections)
+                    )
+                    if headings_only and not page_has_text_besides_schedule_headings(full_text, heading_texts, act_name):
+                        parsed = []
+                    else:
+                        parsed = split_into_sections(full_text, act_name)
+                    heading_norm = {normalise_div_text(text) for text in heading_texts}
+                    for p in parsed:
+                        body = p["section_text"][:20000]
+                        if normalise_div_text(body) in heading_norm:
+                            continue
+                        if heading_texts and not page_has_text_besides_schedule_headings(body, heading_texts, act_name):
+                            continue
+                        title = (p.get("section_title") or "")[:500]
+                        pending.append((p["section_number"], body, title, {
+                            "section_kind": "fallback",
+                            "keying": "fa-f21-017",
+                            "harvest_at": harvest_at,
+                        }))
+                    # An unparsed single chunk is not an inventory of the act. Staging it keeps
+                    # the text, and omitting act_keys means it cannot retire real sections.
+                    body_rows = [item for item in pending if item[3]["section_kind"] == "fallback"]
+                    parsed_body = [
+                        item for item in body_rows
+                        if parse_section_number(normalise_div_text(item[1])) is not None
+                    ]
+                    if body_rows and not parsed_body:
+                        act_keys = None
+                    else:
+                        act_keys = fallback_act_keys(
+                            keyed, [(number, extra["section_kind"]) for number, _text, _title, extra in pending],
+                        )
+                    for number, text, title, extra in pending:
+                        if act_keys is not None:
+                            extra = {**extra, "act_keys": act_keys}
+                        db.add(_staged(
+                            source, url, act_name, slug[:10], number, text,
+                            section_title=title, extra_metadata=extra,
                         ))
                         rows += 1
                 await db.commit()
