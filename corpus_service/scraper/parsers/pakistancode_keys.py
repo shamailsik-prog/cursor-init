@@ -71,7 +71,14 @@ Walk ``div.section`` texts in document order.
      its key only when no real section has the number.
      ``Omitted by Act II of 2000, see s. 2`` is that placeholder: alone it
      keeps the key and is not current law, and beside a real section it is
-     dropped so the real section keeps the bare key. A citation placeholder
+     dropped so the real section keeps the bare key. Two non-live placeholders
+     for one number, and no live section, are not two sections
+     (RESID-004-SEE-002). A ``see s.`` omission and a Finance ``Omitted by``
+     note share bare ``N``. The lexicographically earliest normalised text is
+     the one that is kept, with status ``omitted``, ``repealed`` or
+     ``deleted``. The other is dropped. Lookup does not serve that row as
+     current law. A repeated non-footnote ``3. [Omitted.]`` is not this case
+     and stays content-addressed. A citation placeholder
      still counts as a body div for schedule scope; dropping it on a collision
      does not close a scope it already opened.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
@@ -107,6 +114,21 @@ Walk ``div.section`` texts in document order.
      An en dash or em dash is the same mark as the hyphen. ``12-15`` and
      ``1-7-2001`` keep the bare number the hyphen already delimited. They are
      not letter suffixes. ``Act No. XII-A`` is not a section number.
+     A space then a capital is not by itself a heading (RESID-003-CAP-001).
+     ``12-A Title`` and ``12-A Inserted rates.`` are headings when a short
+     title ends in a period or a dash, or when the number sits with its
+     neighbours: the previous body section, if there is one, has the same
+     base, and the next body section, if there is one, is that base or the
+     next integer. A space-form heading already accepted is itself a body
+     neighbour, so ``12-B`` after ``12-A`` and before 13 stays ``12B``, and a
+     refused wrap joins that heading rather than an earlier section. An
+     amendment footnote is not a neighbour. The search stops at a schedule
+     heading: a schedule item is not the next body section, and a space-form
+     inside that schedule is left for schedule identity. ``12-A`` after 12
+     and before 13 is ``12A``. A wrapped body line ``12-I Pakistan`` or
+     ``12-I The Federal Government`` inside section 11 stays in section 11.
+     A refused line with no body section before it is not published as that
+     suffix. ``12-A.`` and ``12-I.`` keep the punctuated form.
    * repeated body number ``N`` → ``N-<sha8>`` of the stored text
    * schedule item ``N`` under label ``L`` → ``schedule:L:N`` (or with ``-<sha8>`` when
      that schedule repeats ``N``)
@@ -123,6 +145,10 @@ Walk ``div.section`` texts in document order.
 
 6. Lookup by a real section number is equality on the unique body key ``N``. A schedule
    item is not that key. An ``unscoped`` div is not that key. A retired key is not returned.
+   The suffix letter is folded to capitals at lookup (LOOKUP-003-001), so ``12a``,
+   ``12A``, ``12-a`` and ``12-A`` name one row. A glued ``12a.`` is still stored as
+   ``12a``. Lookup does not rewrite a row. Two live rows that differ only by that
+   case are a tie and are not served.
 7. FA-17 publishes a schedule item under the key in rule 5. The parent is the label
    already on that item: an ancestor whose own text is a schedule heading, or a flat
    heading that follows a body section. ``schedule:L:N`` is never a body key ``N`` or
@@ -256,8 +282,10 @@ _SCHEDULE_ITEM_BODY = re.compile(
 # A heading word (``12-Fees``, ``12-Tax``) and an amendment lead (``12-Ins.``)
 # stay behind the hyphen, which remains the delimiter. A digit after the hyphen
 # is still a range or a date (``12-15``, ``1-7-2001``). A space-terminated
-# suffix is a heading only when a capitalised title follows (``12-A Title``)
-# or the text ends. ``12-I shall`` and ``12-A of the`` are prose, not headings.
+# suffix matches here when a capital follows (``12-A Title``) or the text ends.
+# ``12-I shall`` and ``12-A of the`` are prose, not headings. A capital is not
+# enough to publish the number (RESID-003-CAP-001): ``space_hyphen_heading_ok``
+# keeps a wrapped ``12-I Pakistan`` inside the section that already holds it.
 # One glued letter matches the old token. Repeated capitals are listed before
 # that single letter so ``12AA`` is not read as ``12A`` when the trailing
 # punctuation may be empty. ``(?-i:...)`` stays capitals under IGNORECASE.
@@ -733,7 +761,9 @@ def parse_section_number(text: str) -> Optional[str]:
     ``12A.`` and ``12-A.`` and ``12-a.`` are ``12A``. ``12AA.`` and ``12-AA.`` are
     ``12AA``. ``Article 12AA.`` is ``12AA``. A glued ``12a.`` stays ``12a``.
     A hyphen before a digit is the delimiter it already was. ``12-I shall`` and
-    ``12-A of`` are not section numbers.
+    ``12-A of`` are not section numbers. A space then a capital is still a
+    number here. ``space_hyphen_heading_ok`` decides whether that number is a
+    heading once the neighbouring sections are known (RESID-003-CAP-001).
     """
     matched = _NUMBER_RE.match(text or "")
     if matched is None:
@@ -749,6 +779,101 @@ def parse_section_number(text: str) -> Optional[str]:
     if letters:
         return matched.group("digits") + letters
     return matched.group("digits")
+
+
+# RESID-003-CAP-001. The number pattern still sees ``12-A Title``. Publishing
+# that number needs a short title or a neighbour that agrees. No nested
+# quantifier: one anchored alternative, then a forward word scan.
+_SPACE_HYPHEN_START = re.compile(
+    r"^\s*(?P<digits>\d+)[\u2013\u2014-](?P<letters>"
+    + _REPEATED_CAPITAL
+    + r"|[A-Za-z])(?=\s+(?-i:[A-Z]))",
+    re.IGNORECASE,
+)
+_TITLE_WORD_CAP = 8
+
+
+def space_hyphen_suffix_key(text: str) -> Optional[str]:
+    """Glued key when ``text`` opens with a space-form hyphen suffix, else None.
+
+    ``12-A Title`` and ``12-A Inserted rates.`` are ``12A``. ``12-A. Title`` is
+    punctuated and returns None. ``12-I shall`` is prose and returns None.
+    """
+    matched = _SPACE_HYPHEN_START.match(text or "")
+    if matched is None:
+        return None
+    return matched.group("digits") + matched.group("letters").upper()
+
+
+def _numeric_base(number: Optional[str]) -> Optional[int]:
+    matched = re.match(r"(\d+)", number or "")
+    if matched is None:
+        return None
+    return int(matched.group(1))
+
+
+def _space_hyphen_title(text: str) -> bool:
+    """True when a short title after the suffix ends in a period or a dash.
+
+    ``12-A Title.`` and ``12-A Inserted rates.`` and ``12-A Rates—`` match.
+    The splitter stores an em dash as a hyphen, so ``Rates-`` is that title.
+    ``12-I Pakistan continues ...`` does not: the stop is not inside the
+    first eight words. The scan is one forward pass.
+    """
+    matched = _SPACE_HYPHEN_START.match(text or "")
+    if matched is None:
+        return False
+    rest = text[matched.end():]
+    words = 0
+    index = 0
+    limit = len(rest)
+    while index < limit and words < _TITLE_WORD_CAP:
+        while index < limit and rest[index].isspace():
+            index += 1
+        if index >= limit:
+            return False
+        start = index
+        while index < limit and not rest[index].isspace():
+            index += 1
+        token = rest[start:index]
+        words += 1
+        if (
+            token.endswith(".")
+            or token.endswith("-")
+            or token.endswith(".-")
+            or "\u2014" in token
+            or "\u2013" in token
+        ):
+            return True
+    return False
+
+
+def space_hyphen_heading_ok(
+    text: str, previous: Optional[str], following: Optional[str],
+) -> bool:
+    """True when a space-form hyphen suffix may be its own section.
+
+    A short title ended by a period or a dash is a heading. Otherwise the
+    suffix is a heading only when it sits with its base. No previous body
+    section, or that section's base is this base. No following body section,
+    or that section's base is this base or the next integer. ``12-A`` after
+    12 and before 13 is a heading. ``12-I Pakistan`` inside section 11 is not.
+    """
+    key = space_hyphen_suffix_key(text)
+    if key is None:
+        return False
+    if _space_hyphen_title(text):
+        return True
+    base = _numeric_base(key)
+    prev = _numeric_base(previous)
+    nxt = _numeric_base(following)
+    if base is None:
+        return False
+    if prev is not None and prev != base:
+        return False
+    if nxt is not None and nxt != base and nxt != (base + 1):
+        return False
+    return True
 
 
 def is_short_amendment_footnote(text: str) -> bool:
@@ -1447,7 +1572,218 @@ def _without_colliding_footnotes(kept: list, skipped: int) -> tuple:
     return filtered, skipped
 
 
-def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> tuple:
+class _FoldEntry:
+    """One div or splitter row, plus whether body-heading fold must ignore it."""
+
+    __slots__ = ("text", "blocked")
+
+    def __init__(self, text: str, blocked: bool = False) -> None:
+        self.text = text
+        self.blocked = blocked
+
+
+def _schedule_boundary(text: str) -> str:
+    """``whole`` when the text is only a schedule heading, ``embedded`` when a line is.
+
+    A flat schedule heading is its own div. The paragraph splitter leaves that
+    heading on a later line of the previous chunk. Either one ends body scope.
+    """
+    if parse_schedule_heading(normalise_div_text(text)) is not None:
+        return "whole"
+    for line in (text or "").splitlines():
+        if parse_schedule_heading(normalise_div_text(line)) is not None:
+            return "embedded"
+    return ""
+
+
+def space_heading_fold_plan(texts, blocked=None) -> dict:
+    """Host index for each space-form line that is not a heading, or None.
+
+    None means the line has no body section to join, so its suffix must not be
+    published. ``blocked`` marks rows fold must ignore, such as a container item
+    or a bare omission marker. A missing index is kept. Schedule scope matches
+    ``_classify``:
+    after a body section has been seen, a schedule heading closes the body.
+    Later numbered rows are schedule items and are not body neighbours, and a
+    space-form inside that scope is not folded into an item or a body section.
+    An amendment footnote is not a neighbour. A space-form heading that this
+    plan accepts is a neighbour, so a following wrap joins that heading and a
+    following suffix is judged from it.
+    """
+    flags = tuple(blocked or ())
+    entries = [
+        _FoldEntry(text, blocked=index < len(flags) and bool(flags[index]))
+        for index, text in enumerate(texts)
+    ]
+    count = len(entries)
+    normalised = [normalise_div_text(entry.text) for entry in entries]
+    boundary = [
+        "" if entry.blocked else _schedule_boundary(entry.text) for entry in entries
+    ]
+    in_schedule = [False] * count
+    scope = False
+    body_seen = False
+    for index, entry in enumerate(entries):
+        in_schedule[index] = scope
+        if entry.blocked or scope:
+            continue
+        if boundary[index] == "whole":
+            if body_seen:
+                scope = True
+            continue
+        numbered = (
+            parse_section_number(normalised[index]) is not None
+            and not is_amendment_footnote(normalised[index])
+        )
+        if numbered:
+            body_seen = True
+        if boundary[index] == "embedded" and (body_seen or numbered):
+            scope = True
+
+    def plain_anchor(index: int) -> bool:
+        if entries[index].blocked or in_schedule[index] or boundary[index] == "whole":
+            return False
+        if space_hyphen_suffix_key(normalised[index]) is not None:
+            return False
+        if is_amendment_footnote(normalised[index]):
+            return False
+        return parse_section_number(normalised[index]) is not None
+
+    def title_heading(index: int) -> bool:
+        if entries[index].blocked or in_schedule[index] or boundary[index] == "whole":
+            return False
+        if space_hyphen_suffix_key(normalised[index]) is None:
+            return False
+        return _space_hyphen_title(normalised[index])
+
+    confirmed = []
+    confirmed_set = set()
+    for index in range(count):
+        if plain_anchor(index) or title_heading(index):
+            confirmed.append(index)
+            confirmed_set.add(index)
+
+    def previous_host(index: int):
+        for host in reversed(confirmed):
+            if host < index:
+                return host
+        return None
+
+    def following_number(index: int):
+        if boundary[index] == "embedded":
+            return None
+        for cursor in range(index + 1, count):
+            if boundary[cursor] == "whole" or in_schedule[cursor]:
+                return None
+            if cursor in confirmed_set and (plain_anchor(cursor) or title_heading(cursor)):
+                return parse_section_number(normalised[cursor])
+        return None
+
+    plan = {}
+    for index in range(count):
+        if entries[index].blocked or in_schedule[index]:
+            continue
+        if space_hyphen_suffix_key(normalised[index]) is None or index in confirmed_set:
+            continue
+        host = previous_host(index)
+        previous = parse_section_number(normalised[host]) if host is not None else None
+        if space_hyphen_heading_ok(normalised[index], previous, following_number(index)):
+            confirmed.append(index)
+            confirmed.sort()
+            confirmed_set.add(index)
+            continue
+        plan[index] = host
+    return plan
+
+
+def _absorb_false_space_headings(texts, containers):
+    """Join a wrapped space-form line to the body section it continues.
+
+    ``12-I Pakistan`` and ``12-I The Federal Government`` inside section 11
+    are not sections. Their text stays on section 11. A real ``12-A`` that
+    ``space_hyphen_heading_ok`` accepts stays its own div, and a later wrap
+    joins that div rather than an earlier section. A schedule heading ends
+    the body search, so a schedule item is not the next section and a
+    space-form inside the schedule is not pulled into an item. An amendment
+    footnote is not a host. A line with no previous section is marked for
+    suppression and is not published as ``12I``.
+    """
+    raw = tuple(texts)
+    boxes = tuple(containers) if containers is not None else None
+    plan = space_heading_fold_plan(
+        raw,
+        blocked=[boxes is not None and bool(boxes[index]) for index in range(len(raw))],
+    )
+    if not plan:
+        return raw, boxes, set()
+    normalised = [normalise_div_text(text) for text in raw]
+    pieces = {index: [normalised[index]] for index in range(len(normalised))}
+    drop = set()
+    suppress_at = set()
+    for index, host in plan.items():
+        if host is None:
+            suppress_at.add(index)
+            continue
+        pieces[host].append(normalised[index])
+        drop.add(index)
+    new_texts = []
+    new_boxes = [] if boxes is not None else None
+    suppress = set()
+    for index in range(len(normalised)):
+        if index in drop:
+            continue
+        if index in suppress_at:
+            suppress.add(len(new_texts))
+        new_texts.append(" ".join(pieces[index]))
+        if new_boxes is not None:
+            new_boxes.append(boxes[index])
+    return new_texts, new_boxes, suppress
+
+
+def _collapse_nonlive_footnote_placeholders(kept: list, skipped: int) -> tuple:
+    """One bare key when every body row for a number is a non-live footnote.
+
+    A ``see s.`` omission and a Finance ``Omitted by`` note are both non-live.
+    Keeping both publishes ``6-<sha>`` twice (RESID-004-SEE-002). The
+    lexicographically earliest normalised text keeps bare ``N`` and its
+    placeholder status. The others are dropped. Nothing is served as current
+    law. A live section is already preferred by ``_without_colliding_footnotes``.
+    A repeated ``3. [Omitted.]`` is not a footnote and is left content-addressed.
+    """
+    groups: dict = {}
+    for index, item in enumerate(kept):
+        if item.kind != "section" or not item.number:
+            continue
+        if omission_placeholder_status(item.text) not in NON_LIVE_PROVISION_STATUSES:
+            continue
+        if not is_amendment_footnote(item.text):
+            continue
+        groups.setdefault(item.number, []).append(index)
+    drop = set()
+    for number, indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        if any(
+            item.kind == "section" and item.number == number and not is_amendment_footnote(item.text)
+            for item in kept
+        ):
+            continue
+        winner = min(indexes, key=lambda item_index: normalise_div_text(kept[item_index].text))
+        for item_index in indexes:
+            if item_index == winner:
+                continue
+            drop.add(item_index)
+            skipped += 1
+    if not drop:
+        return kept, skipped
+    return [item for index, item in enumerate(kept) if index not in drop], skipped
+
+
+def _classify(
+    texts: Sequence[str],
+    containers: Optional[Sequence[Optional[str]]] = None,
+    suppress: Optional[Iterable[int]] = None,
+) -> tuple:
     """Kept divs in order, plus how many noise divs were skipped, plus the mode.
 
     The skip count is short noise and unstaged amendment footnotes. Neither uses
@@ -1456,6 +1792,7 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
     mode = schedule_evidence_mode(_collect_heading_tokens(texts, containers))
     kept: list[_Classified] = []
     skipped = 0
+    suppressed = set(suppress or ())
     scope: Optional[tuple] = None
     body_seen = False
     heading_before_body = False
@@ -1480,6 +1817,18 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
             continue
         if is_unstaged_amendment_footnote(text):
             skipped += 1
+            continue
+        if index in suppressed:
+            # A refused space-form with no section to join is not ``12I``.
+            if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
+                letters = _LETTERS.sub("", text).lower()
+                if letters in _OMISSION_WORDS:
+                    kept.append(_Classified(text=text, kind="short-ambiguous", number=None, label=None))
+                else:
+                    skipped += 1
+                continue
+            kind = _structural_kind(text) or "div"
+            kept.append(_Classified(text=text, kind=kind, number=None, label=None))
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
             disposition = short_div_disposition(text)
@@ -1511,6 +1860,7 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
         kind = _structural_kind(text) or "div"
         kept.append(_Classified(text=text, kind=kind, number=None, label=None))
     kept, skipped = _without_colliding_footnotes(kept, skipped)
+    kept, skipped = _collapse_nonlive_footnote_placeholders(kept, skipped)
     return kept, skipped, mode
 
 
@@ -1680,7 +2030,8 @@ def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[s
         containers = tuple(containers)
         if len(containers) != len(texts):
             raise ValueError("PakistanCode schedule containers must align with div texts")
-    classified, skipped, mode = _classify(texts, containers)
+    texts, containers, suppress = _absorb_false_space_headings(texts, containers)
+    classified, skipped, mode = _classify(texts, containers, suppress)
     dropped = max(0, len(classified) - MAX_STAGED_DIVS)
     staged = classified[:MAX_STAGED_DIVS]
     body_counts: dict = {}
@@ -1865,6 +2216,63 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     return delta
 
 
+# LOOKUP-003-001. A bare body key, digits plus at most four suffix letters.
+# ``12-Fees`` does not match. The fold is lookup only: keying still stores ``12a``.
+_BARE_BODY_KEY = re.compile(r"^(\d+)([A-Za-z]{0,4})$")
+_NO_BODY_ROW = object()
+
+
+def lookup_section_key(number: str) -> str:
+    """Body key compared at lookup. A suffix letter is upper-cased.
+
+    ``12a``, ``12A``, ``12-a`` and ``12-A`` are ``12A``. ``12`` stays ``12``.
+    ``12-Fees`` is unchanged. This does not rewrite a stored row. A glued
+    ``12a.`` remains stored as ``12a`` (LOOKUP-003-001).
+    """
+    folded = canonical_section_number((number or "").strip())
+    matched = _BARE_BODY_KEY.fullmatch(folded)
+    if matched is None or not matched.group(2):
+        return folded
+    return matched.group(1) + matched.group(2).upper()
+
+
+def _live_body_hits(store: Mapping[str, PublishedSection], number: str) -> list:
+    """Live body rows whose key is ``number``, with the suffix letter folded."""
+    folded = lookup_section_key(number)
+    if not folded:
+        return []
+    if _BARE_BODY_KEY.fullmatch(folded):
+        return [
+            row for row in store.values()
+            if not row.retired and not _non_live(row) and row.kind == "section"
+            and isinstance(row.key, str) and _BARE_BODY_KEY.fullmatch(row.key)
+            and lookup_section_key(row.key) == folded
+        ]
+    return [
+        row for row in store.values()
+        if not row.retired and not _non_live(row) and row.kind == "section" and row.key == folded
+    ]
+
+
+def _resolve_folded_body(store: Mapping[str, PublishedSection], number: str):
+    """The one live body row, None when it must not be served, or a sentinel.
+
+    The sentinel means no body row of this number is stored, so schedule
+    identity may still be tried. A tie, a retired row, and a non-live
+    placeholder return None.
+    """
+    hits = _live_body_hits(store, number)
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        return None
+    folded = lookup_section_key(number)
+    for stored in store:
+        if isinstance(stored, str) and _BARE_BODY_KEY.fullmatch(stored) and lookup_section_key(stored) == folded:
+            return None
+    return _NO_BODY_ROW
+
+
 def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> Optional[PublishedSection]:
     """The live body section whose key is the real number ``number``.
 
@@ -1872,15 +2280,14 @@ def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> O
     omission or repeal placeholder are not returned. The placeholder stays in
     the store. Two live rows with the same key cannot occur; zero or many
     matches return None so a tie is never broken by publish order. ``12-A`` is
-    the same body key as ``12A``.
+    the same body key as ``12A``. ``12a`` is the same lookup as ``12A``
+    (LOOKUP-003-001). The stored key is not rewritten. Two live rows that
+    differ only by the suffix case are a tie.
     """
     wanted = canonical_section_number((number or "").strip())
     if not wanted:
         return None
-    hits = [
-        row for row in store.values()
-        if not row.retired and not _non_live(row) and row.kind == "section" and row.key == wanted
-    ]
+    hits = _live_body_hits(store, wanted)
     if len(hits) != 1:
         return None
     return hits[0]
@@ -1891,14 +2298,22 @@ def section_by_key(
 ) -> Optional[PublishedSection]:
     """The live row for ``key``.
 
-    An exact key wins. ``12-A`` is the same body key as ``12A``. Otherwise one
+    An exact key wins. ``12-A`` is the same body key as ``12A``. ``12a`` is the
+    same body key at lookup as ``12A`` (LOOKUP-003-001). Otherwise one
     live schedule row with the same canonical identity is that row. Zero or
     several matches return None, so two stored spellings are not collapsed by
-    lookup order. A single letter ``i``/``v``/``x``/``l``
+    lookup order. Two live body rows that differ only by the suffix case are
+    a tie. A single letter ``i``/``v``/``x``/``l``
     matches a number only when ``label_mode`` is ``roman``, and ``l`` then matches 50.
     A numbered placeholder is not current law and is not returned. The row stays
     in the store.
     """
+    if isinstance(key, str):
+        canonical = canonical_section_number(key)
+        if _BARE_BODY_KEY.fullmatch(canonical or ""):
+            resolved = _resolve_folded_body(store, canonical)
+            if resolved is not _NO_BODY_ROW:
+                return resolved
     key = canonical_section_number(key) if isinstance(key, str) else key
     row = store.get(key)
     if row is not None:

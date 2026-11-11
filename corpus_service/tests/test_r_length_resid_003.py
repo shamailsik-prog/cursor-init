@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 
 from scraper.parsers.pakistancode_keys import (
+    PublishedSection,
     apply_harvest,
     canonical_section_number,
     is_amendment_footnote,
@@ -481,3 +482,237 @@ def test_hyphen_suffix_match_stays_linear_past_ten_thousand_characters():
     assert parse_section_number(prose) is None
     assert key_div_texts([hit]).sections[0].key == "12A"
     assert time.perf_counter() - started < 1.0
+
+
+S11 = (
+    "11. Charge of tax. Tax shall be charged in accordance with this section "
+    "for the tax year on the taxable income of every person who is resident."
+)
+PHANTOM_PAKISTAN = (
+    "12-I Pakistan source income of a resident person is charged for the "
+    "tax year under this section and the line is not a separate heading."
+)
+PHANTOM_FEDERAL = (
+    "12-I The Federal Government may exempt a class of income from this "
+    "charge by a notification published in the official Gazette for this section."
+)
+S13 = (
+    "13. Other. This other section applies to every instrument presented "
+    "for registration under this Act."
+)
+# No stop inside the first eight words, so the title signal does not carry it.
+LONG_12A = (
+    "12-A Inserted rates apply to every instrument presented for registration "
+    "after the amendment and this sentence has no early stop so it is not a title"
+)
+TITLE_12A = (
+    "12-A Title. The title case heading applies to every instrument "
+    "presented for registration under this Act."
+)
+EM_12A = (
+    "12-A Rates\u2014 The inserted rates in this section apply to every "
+    "instrument presented for registration under this Act."
+)
+S4 = (
+    "4. Commencement. This Act comes into force on the day it is published "
+    "in the official Gazette and it extends to the whole of Pakistan."
+)
+S5 = (
+    "5. Definitions. Words used in this Act have the meanings given in "
+    "this section and in no other section of this Act."
+)
+
+
+def _numbers(text):
+    return [section["section_number"] for section in split_into_sections(text, "Fixture Act")]
+
+
+def test_capital_line_wrap_inside_section_11_is_not_a_phantom_12I():
+    """RESID-003-CAP-001. A wrapped body line is not ``12-A Title``.
+
+    Accepting every capital after the suffix keys both lines as live ``12I``.
+    Refusing every space-form drops ``12-A Inserted rates.`` between 12 and 13.
+    The long sentence has no title stop, so only the neighbour check keeps it
+    as ``12A``. ``12-A Title.`` and the em-dash title sit between 4 and 5, so
+    only the title signal keeps them.
+    """
+    wrapped = [S11, PHANTOM_PAKISTAN, PHANTOM_FEDERAL, REAL_12]
+    keyed = key_div_texts(wrapped)
+    assert [section.key for section in keyed.sections] == ["11", "12"]
+    assert PHANTOM_PAKISTAN in keyed.sections[0].text
+    assert PHANTOM_FEDERAL in keyed.sections[0].text
+    assert keyed.sections[0].provision_status is None
+    assert all(not section.key.startswith("12I") for section in keyed.sections)
+    plain = "\n".join(wrapped)
+    assert _numbers(plain) == ["11", "12"]
+    body = split_into_sections(plain, "Fixture Act")[0]["section_text"]
+    assert PHANTOM_PAKISTAN in body
+    assert PHANTOM_FEDERAL in body
+    between = [REAL_12, REAL_12A_SPACE, S13]
+    assert [section.key for section in key_div_texts(between).sections] == ["12", "12A", "13"]
+    assert _numbers("\n".join(between)) == ["12", "12A", "13"]
+    long_between = [REAL_12, LONG_12A, S13]
+    assert [section.key for section in key_div_texts(long_between).sections] == ["12", "12A", "13"]
+    assert _numbers("\n".join(long_between)) == ["12", "12A", "13"]
+    long_inside = [S11, LONG_12A, REAL_12]
+    assert [section.key for section in key_div_texts(long_inside).sections] == ["11", "12"]
+    assert LONG_12A in key_div_texts(long_inside).sections[0].text
+    assert "12A" not in _numbers("\n".join(long_inside))
+    titled = key_div_texts([S4, TITLE_12A, S5])
+    assert [section.key for section in titled.sections] == ["4", "12A", "5"]
+    assert _numbers("\n".join([S4, TITLE_12A, S5])) == ["4", "12A", "5"]
+    em = key_div_texts([S4, EM_12A, S5])
+    assert [section.key for section in em.sections] == ["4", "12A", "5"]
+    assert _numbers("\n".join([S4, EM_12A, S5])) == ["4", "12A", "5"]
+    from bs4 import BeautifulSoup
+
+    html = "".join(f"<p>{line}</p>" for line in wrapped)
+    html_sections = _strategy_3_p_filtered_digit_start(BeautifulSoup(html, "html.parser"), "Fixture Act")
+    assert [section["section_number"] for section in html_sections] == ["11", "12"]
+    assert PHANTOM_PAKISTAN in html_sections[0]["section_text"]
+    assert PHANTOM_FEDERAL in html_sections[0]["section_text"]
+    started = time.perf_counter()
+    wide = "12-I Pakistan " + ("source " * 2000)
+    assert len(wide) >= 10000
+    wide_keys = [section.key for section in key_div_texts([S11, wide, REAL_12]).sections]
+    assert wide_keys == ["11", "12"]
+    assert time.perf_counter() - started < 1.0
+
+
+def test_lookup_folds_suffix_case_and_does_not_rekey_glued_12a():
+    """LOOKUP-003-001. ``12a`` and ``12A`` are one lookup. The stored key stays.
+
+    Upper-casing at key time would make the glued row ``12A``. A case-sensitive
+    compare makes ``lookup('12A')`` miss the ``12a`` row. Two live casings are
+    a tie, so lookup does not pick one.
+    """
+    glued = (
+        "12a. Inserted rates. The inserted rates in this section apply to "
+        "instruments presented after the amendment."
+    )
+    keyed = key_div_texts([glued])
+    assert keyed.sections[0].key == "12a"
+    assert parse_section_number(glued) == "12a"
+    store: dict = {}
+    apply_harvest(store, keyed.sections)
+    for query in ("12a", "12A", "12-a", "12-A", "12\u2013a", "12\u2014A"):
+        assert lookup_real_section(store, query) is store["12a"]
+        assert section_by_key(store, query) is store["12a"]
+    upper: dict = {}
+    apply_harvest(upper, key_div_texts([REAL_12A]).sections)
+    assert upper["12A"].key == "12A"
+    for query in ("12a", "12A", "12-a", "12-A"):
+        assert lookup_real_section(upper, query) is upper["12A"]
+        assert section_by_key(upper, query) is upper["12A"]
+    both = {
+        "12a": PublishedSection(
+            key="12a", text=glued, kind="section", lookup_number="12a", versions=[glued],
+        ),
+        "12A": PublishedSection(
+            key="12A", text=REAL_12A, kind="section", lookup_number="12A", versions=[REAL_12A],
+        ),
+    }
+    assert lookup_real_section(both, "12A") is None
+    assert lookup_real_section(both, "12a") is None
+    assert section_by_key(both, "12-A") is None
+    omitted = PublishedSection(
+        key="12a", text=glued, kind="section", lookup_number="12a", versions=[glued],
+        provision_status="omitted",
+    )
+    assert lookup_real_section({"12a": omitted}, "12A") is None
+    assert section_by_key({"12a": omitted}, "12a") is None
+
+
+LONG_12B = (
+    "12-B Inserted rates apply to every instrument presented for registration "
+    "after the amendment and this sentence has no early stop so it is not a title"
+)
+PHANTOM_13I = (
+    "13-I Pakistan source income of a resident person continues in this "
+    "provision and the wrapped line is not a heading of its own at all"
+)
+ITEM_1 = (
+    "1. Description of the stamp duty in this schedule is long enough to remain an item."
+)
+ITEM_2 = (
+    "2. Description of the instrument in this schedule is long enough to stay the item."
+)
+SUBS_NOTE = "1. Subs. by Act II of 2001, s. 3."
+SHORT_TITLE = (
+    "1. Short title. This Act may be called the Fixture Act and it extends "
+    "to the whole of Pakistan."
+)
+
+
+def test_space_heading_fold_keeps_schedule_scope_and_accepted_hosts():
+    """A schedule item is not a body neighbour, and a kept suffix heading is a host.
+
+    Using item 1 as the next section rejects ``12-A`` and merges it into
+    section 12. Skipping every space-form heading merges ``12-B`` into
+    section 11 and merges ``13-I`` into section 12. A footnote host publishes
+    live section 1. A leading refusal that keeps ``section_number`` 12I is a
+    live section. Each of those is asserted the other way.
+    """
+    assert is_amendment_footnote(SUBS_NOTE) is True
+    with_schedule = key_div_texts([REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1])
+    assert [section.key for section in with_schedule.sections] == [
+        "12", "12A", "schedule-heading:1", "schedule:1:1",
+    ]
+    assert "Inserted rates apply" not in with_schedule.sections[0].text
+    assert "Inserted rates apply" in with_schedule.sections[1].text
+    absent = key_div_texts([REAL_12, LONG_12A])
+    assert [section.key for section in absent.sections] == ["12", "12A"]
+    inside = key_div_texts([S11, "Schedule 1", ITEM_2, LONG_12A])
+    assert [section.key for section in inside.sections] == [
+        "11", "schedule-heading:1", "schedule:1:2", "schedule:1:12A",
+    ]
+    assert "Inserted rates apply" not in inside.sections[2].text
+    assert inside.sections[2].text == ITEM_2
+    hosts = key_div_texts([REAL_12, REAL_12A_SPACE, PHANTOM_13I, S13])
+    assert [section.key for section in hosts.sections] == ["12", "12A", "13"]
+    assert PHANTOM_13I in hosts.sections[1].text
+    assert PHANTOM_13I not in hosts.sections[0].text
+    suffix = key_div_texts([S11, TITLE_12A, LONG_12B, S13])
+    assert [section.key for section in suffix.sections] == ["11", "12A", "12B", "13"]
+    assert "12-B Inserted rates" not in suffix.sections[0].text
+    noted = key_div_texts([S11, SUBS_NOTE, PHANTOM_PAKISTAN, REAL_12])
+    assert [section.key for section in noted.sections] == ["11", "12"]
+    assert PHANTOM_PAKISTAN in noted.sections[0].text
+    assert "Subs. by Act II" not in noted.sections[0].text
+    orphan = key_div_texts([PHANTOM_PAKISTAN, SHORT_TITLE])
+    assert [section.key for section in orphan.sections if section.kind == "section"] == ["1"]
+    assert any(
+        section.kind == "div" and "Pakistan source income" in section.text
+        for section in orphan.sections
+    )
+    assert all(not section.key.startswith("12I") for section in orphan.sections)
+    plain_hosts = "\n".join([REAL_12, REAL_12A_SPACE, PHANTOM_13I, S13])
+    assert _numbers(plain_hosts) == ["12", "12A", "13"]
+    host_rows = split_into_sections(plain_hosts, "Fixture Act")
+    assert PHANTOM_13I not in host_rows[0]["section_text"]
+    assert "Pakistan source income" in host_rows[1]["section_text"]
+    plain_suffix = "\n".join([S11, TITLE_12A, LONG_12B, S13])
+    assert _numbers(plain_suffix) == ["11", "12A", "12B", "13"]
+    assert "12-B Inserted rates" not in split_into_sections(plain_suffix, "Fixture Act")[0]["section_text"]
+    plain_schedule = "\n".join([REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1])
+    scheduled = split_into_sections(plain_schedule, "Fixture Act")
+    assert [row["section_number"] for row in scheduled] == ["12", "12A", "1"]
+    assert "Inserted rates apply" not in scheduled[0]["section_text"]
+    assert "Inserted rates apply" in scheduled[1]["section_text"]
+    plain_orphan = PHANTOM_PAKISTAN + "\n" + SHORT_TITLE
+    opened = split_into_sections(plain_orphan, "Fixture Act")
+    assert all(row["section_number"] != "12I" for row in opened)
+    assert any(row["section_number"] == "1" for row in opened)
+    assert any(
+        row.get("section_kind") == "div" and "Pakistan source income" in row["section_text"]
+        for row in opened
+    )
+    from bs4 import BeautifulSoup
+
+    html = "".join(
+        f"<p>{line}</p>" for line in (REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1)
+    )
+    html_rows = _strategy_3_p_filtered_digit_start(BeautifulSoup(html, "html.parser"), "Fixture Act")
+    assert [row["section_number"] for row in html_rows] == ["12", "12A", "1"]
+    assert "Inserted rates apply" not in html_rows[0]["section_text"]
+    assert all(row.get("section_kind") != "schedule-boundary" for row in html_rows)

@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 from scraper.parsers.pakistancode_keys import (
     HYPHEN_LETTER_SUFFIX,
     HYPHEN_SUFFIX_SPACE_OR_END,
+    NON_LIVE_PROVISION_STATUSES,
     PROSE_HYPHEN_CONTINUATION,
     SECTION_NUMBER_TOKEN,
     SHORT_DIV_MAX_EXCLUSIVE,
@@ -30,7 +31,9 @@ from scraper.parsers.pakistancode_keys import (
     is_unstaged_amendment_footnote,
     normalise_div_text,
     omission_placeholder_status,
+    parse_schedule_heading,
     short_div_disposition,
+    space_heading_fold_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -443,7 +446,7 @@ def _real_section_numbers(sections: List[Dict[str, str]]) -> set:
     """Numbers that belong to a provision which is not an amendment footnote."""
     found = set()
     for section in sections:
-        if section.get("section_kind") == "short-ambiguous":
+        if section.get("section_kind") in ("short-ambiguous", "div", "schedule-boundary"):
             continue
         text = section.get("section_text", "")
         if is_amendment_footnote(text):
@@ -472,6 +475,75 @@ def _drop_footnote_section(section: Dict[str, str], real_numbers: set) -> bool:
     return bool(number) and number in real_numbers
 
 
+def _fold_space_heading_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Put a wrapped ``12-I Pakistan`` line back into the section it continues.
+
+    A space-form suffix is its own section only when ``space_heading_fold_plan``
+    keeps it (RESID-003-CAP-001). Otherwise its text is appended to the latest
+    accepted body section, including an accepted ``12-A`` heading. A line with
+    no such section keeps its text and loses the rejected suffix, so it is not
+    published as ``12I``. ``12-A Inserted rates.`` between 12 and 13 stays ``12A``.
+    """
+    plan = space_heading_fold_plan(
+        [section.get("section_text", "") for section in sections],
+        blocked=[section.get("section_kind") == "short-ambiguous" for section in sections],
+    )
+    if not plan:
+        return sections
+    drop = set()
+    for index, host in plan.items():
+        text = sections[index].get("section_text", "")
+        if host is None:
+            kept = sections[index]
+            normalised = normalise_div_text(text)
+            kept["section_kind"] = "div"
+            kept["section_text"] = normalised
+            kept["section_title"] = normalised[:500]
+            kept["section_number"] = f"div-{content_token(normalised)}"
+            continue
+        target = sections[host]
+        target["section_text"] = (target.get("section_text", "").rstrip() + "\n" + text.strip()).strip()
+        drop.add(index)
+    if not drop:
+        return sections
+    return [section for index, section in enumerate(sections) if index not in drop]
+
+
+def _collapse_splitter_placeholders(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """One bare key when every row for a number is a non-live footnote.
+
+    The lexicographically earliest normalised text is kept (RESID-004-SEE-002).
+    A repeated non-footnote ``3. [Omitted.]`` is not collapsed.
+    """
+    groups: Dict[str, List[int]] = {}
+    for index, section in enumerate(sections):
+        if section.get("section_kind") == "short-ambiguous":
+            continue
+        number = _section_number_token(section)
+        text = section.get("section_text", "")
+        if not number or not is_amendment_footnote(text):
+            continue
+        if omission_placeholder_status(text) not in NON_LIVE_PROVISION_STATUSES:
+            continue
+        groups.setdefault(number, []).append(index)
+    drop = set()
+    for number, indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        if any(
+            _section_number_token(section) == number
+            and section.get("section_kind") != "short-ambiguous"
+            and not is_amendment_footnote(section.get("section_text", ""))
+            for section in sections
+        ):
+            continue
+        winner = min(indexes, key=lambda item: normalise_div_text(sections[item].get("section_text", "")))
+        drop.update(item for item in indexes if item != winner)
+    if not drop:
+        return sections
+    return [section for index, section in enumerate(sections) if index not in drop]
+
+
 def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Keep every recognised section. A shared number is disambiguated, not dropped.
 
@@ -484,9 +556,13 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     or ``~2`` for a second copy) and is not numbered. Numbers above 5000 are
     still omitted.
     """
+    sections = _fold_space_heading_sections(sections)
+    sections = _collapse_splitter_placeholders(sections)
     real_numbers = _real_section_numbers(sections)
     provisions = []
     for section in sections:
+        if section.get("section_kind") in ("div", "schedule-boundary"):
+            continue
         if _drop_footnote_section(section, real_numbers):
             continue
         if section.get("section_kind") == "short-ambiguous":
@@ -502,6 +578,17 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     ambiguous_seen: Dict[str, int] = {}
     out = []
     for section in sections:
+        if section.get("section_kind") == "schedule-boundary":
+            continue
+        if section.get("section_kind") == "div":
+            text = normalise_div_text(section.get("section_text", ""))
+            kept = dict(section)
+            kept["section_text"] = text
+            kept["section_title"] = text[:500]
+            kept["section_kind"] = "div"
+            kept["section_number"] = f"div-{content_token(text)}"
+            out.append(kept)
+            continue
         if _drop_footnote_section(section, real_numbers):
             continue
         if section.get("section_kind") == "short-ambiguous":
@@ -637,6 +724,15 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
                 continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
+                continue
+            if parse_schedule_heading(normalise_div_text(txt)) is not None:
+                # Kept through the fold so a later schedule item is not a body neighbour.
+                sections.append({
+                    "section_number": "",
+                    "section_title": txt[:500],
+                    "section_text": txt,
+                    "section_kind": "schedule-boundary",
+                })
                 continue
             if _DIGIT_START_LINE.match(p.get_text(separator=" ", strip=True)) is None:
                 continue
