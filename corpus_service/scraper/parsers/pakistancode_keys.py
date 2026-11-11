@@ -68,7 +68,10 @@ Walk ``div.section`` texts in document order.
      ``Substitution``, ``Insertion of`` and ``Amendment of section X.-``
      followed by operative text stay live. A RESID-001 placeholder that is not
      this citation note keeps its key. A placeholder that is this note keeps
-     its key only when no real section has the number. A citation placeholder
+     its key only when no real section has the number.
+     ``Omitted by Act II of 2000, see s. 2`` is that placeholder: alone it
+     keeps the key and is not current law, and beside a real section it is
+     dropped so the real section keeps the bare key. A citation placeholder
      still counts as a body div for schedule scope; dropping it on a collision
      does not close a scope it already opened.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
@@ -723,6 +726,11 @@ _CITE_JOIN = re.compile(r"(?:,\s*and\s+|,\s+|\s+and\s+)", re.IGNORECASE)
 # listed before the bare comma. Fixed alternatives, not a repeated group. A
 # comma that is not followed by a verb is left where it stands.
 _VERB_CHAIN = re.compile(r"(?:,\s+and\s+|\s+and\s+|,\s+)", re.IGNORECASE)
+# ``see s. 2`` after that comma. One section word, then a number. No repeat.
+_SEE_XREF = re.compile(
+    rf"\s*{_SECTION_WORD}\.?\s*\d+[A-Za-z]?",
+    re.IGNORECASE,
+)
 _FOR_QUOTE = re.compile(
     r"""\s*,?\s*for\s+(?:the\s+(?:words|word|figures|figure)\s+)?"""
     r"""["\u201c][^"\u201d]{1,200}["\u201d]""",
@@ -1061,16 +1069,44 @@ def is_long_amendment_footnote(text: str) -> bool:
     return any(_whole_body_is_citation_footnote(body) for body in _citation_footnote_bodies(text))
 
 
+def _see_crossref_placeholder(text: str) -> bool:
+    """True for ``Omitted`` or ``Repealed by <instrument>, see s. N``.
+
+    ``see s. N`` names no instrument, so the long-note grammar does not take
+    the line. It is still an amendment footnote for collision. Alone, the
+    line stays a non-live placeholder on the bare key.
+    """
+    if omission_placeholder_status(text) not in {"omitted", "repealed"}:
+        return False
+    for match in _VERB_CHAIN.finditer(text):
+        if match.group(0).strip() != ",":
+            continue
+        lead = _LONG_FOOTNOTE_LEAD.match(text, match.end())
+        if lead is None or not lead.group(0).lower().startswith("see"):
+            continue
+        if _consume_verb_unit(text, match.end()) is not None:
+            continue
+        if _SEE_XREF.match(text, lead.end()) is not None:
+            return True
+    return False
+
+
 def is_amendment_footnote(text: str) -> bool:
     """True for a short marginal note or a citation footnote of any length.
 
     Short notes are R-LENGTH-RESID-002 and R-LENGTH-RESID-005, including a bare
     ``Ins.`` and ``Rep. of X.`` that name no instrument. Citation notes are
-    R-LENGTH-RESID-004. A real amending section (``Substitution``, ``Insertion
-    of``, ``Amendment of section X.-``) is neither.
+    R-LENGTH-RESID-004. ``Omitted by <instrument>, see s. N`` and the repealed
+    form are included so a real section with that number keeps the bare key.
+    A real amending section (``Substitution``, ``Insertion of``,
+    ``Amendment of section X.-``) is none of these.
     """
     normalised = normalise_div_text(text)
-    return is_short_amendment_footnote(normalised) or is_long_amendment_footnote(normalised)
+    return (
+        is_short_amendment_footnote(normalised)
+        or is_long_amendment_footnote(normalised)
+        or _see_crossref_placeholder(normalised)
+    )
 
 
 def is_unstaged_amendment_footnote(text: str) -> bool:
@@ -1307,7 +1343,10 @@ def _without_colliding_footnotes(kept: list, skipped: int) -> tuple:
 
     The real provision keeps ``N`` or ``schedule:L:N``. Order does not matter:
     the real set is collected before anything is dropped. A placeholder that is
-    the only text for that number stays. An unstaged note never reaches ``kept``.
+    the only text for that number stays, including ``Omitted by <instrument>,
+    see s. N``. That cross-reference is an amendment footnote here, so a real
+    section with the same number keeps the bare key. An unstaged note never
+    reaches ``kept``.
     """
     real = set()
     for item in kept:

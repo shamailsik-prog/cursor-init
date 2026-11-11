@@ -358,6 +358,70 @@ def test_a_see_cross_reference_stays_an_omission_placeholder():
     assert store["6"].text == note
 
 
+def test_a_see_crossref_yields_when_a_real_section_shares_the_number():
+    """RESID-004-SEE-001. Beside a real section 6 the placeholder is dropped.
+
+    ``is_amendment_footnote`` is what the collision path reads. Forcing it
+    false on this note leaves two ``6-<sha>`` keys, and lookup of ``6``
+    returns nothing. Forcing ``is_unstaged_amendment_footnote`` true drops
+    the note when it is the only text, so bare key ``6`` is gone. Alone,
+    the note keeps ``6`` and status ``omitted`` and is not current law.
+    """
+    notes = (
+        "6. Omitted by Act II of 2000, see s. 2.",
+        "5. Rep. by Ord. IV of 2002, see s. 5.",
+    )
+    reals = {
+        "6": (
+            "6. Savings of the omitted entries are recorded by the registrar "
+            "when a court so directs and not otherwise."
+        ),
+        "5": (
+            "5. Definitions. Words used in this Act have the meanings given in "
+            "this section and in no other section."
+        ),
+    }
+    statuses = {"6": "omitted", "5": "repealed"}
+    for note in notes:
+        number = note.split(".", 1)[0]
+        real = reals[number]
+        assert is_amendment_footnote(note) is True
+        assert is_long_amendment_footnote(note) is False
+        assert is_unstaged_amendment_footnote(note) is False
+        assert omission_placeholder_status(note) == statuses[number]
+        alone = key_div_texts([note])
+        assert len(alone.sections) == 1
+        assert alone.sections[0].key == number
+        assert alone.sections[0].text == note
+        assert alone.sections[0].provision_status == statuses[number]
+        assert alone.skipped_short == 0
+        store: dict = {}
+        apply_harvest(store, alone.sections)
+        assert lookup_real_section(store, number) is None
+        assert store[number].provision_status == statuses[number]
+        for ordered in ([note, real], [real, note]):
+            result = key_div_texts(ordered)
+            assert [section.key for section in result.sections] == [number]
+            assert result.sections[0].text == real
+            assert result.sections[0].provision_status is None
+            assert result.skipped_short == 1
+            assert note not in result.sections[0].text
+            paired: dict = {}
+            apply_harvest(paired, result.sections)
+            found = lookup_real_section(paired, number)
+            assert found is not None and found.text == real
+        for ordered in (f"{note}\n{real}", f"{real}\n{note}"):
+            sections = split_into_sections(ordered, "Fixture Act")
+            assert [section["section_number"] for section in sections] == [number]
+            assert sections[0]["section_text"] == real
+            assert note not in sections[0]["section_text"]
+        alone_split = split_into_sections(note, "Fixture Act")
+        assert len(alone_split) == 1
+        assert alone_split[0]["section_number"] == number
+        assert alone_split[0]["section_text"] == note
+        assert alone_split[0].get("provision_status") == statuses[number]
+
+
 def test_a_wef_date_keeps_a_standalone_omission_or_repeal():
     """``(w.e.f. ...)`` is a date on the placeholder, not a reason to drop it.
 
@@ -661,4 +725,5 @@ def test_policy_note_records_the_citation_footnote_rule():
     assert "Amendment of section X.-" in note
     assert "sub-section" in note and "w.e.f." in note
     assert "(w.e.f. ...)" in note
+    assert "Omitted by Act II of 2000, see s. 2" in note
     assert "50-div cap" in note
