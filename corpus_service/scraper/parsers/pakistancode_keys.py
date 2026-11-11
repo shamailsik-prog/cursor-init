@@ -26,9 +26,9 @@ Walk ``div.section`` texts in document order.
      ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions
      for identity: the full word, and ``Rep.`` with nothing after it, are section
      text, not noise. ``1. Omitted.`` and ``2. Rep.`` are non-live placeholders
-     (R-LENGTH-RESID-001). ``2. Repeal.`` is a section heading and stays live. A
-     footnote longer than 20 characters is still staged: that collision predates
-     this gate. When the whole body after the number is only an omission, repeal
+     (R-LENGTH-RESID-001). ``2. Repeal.`` is a section heading and stays live.
+     A citation footnote of any length is the same noise (R-LENGTH-RESID-004).
+     When the whole body after the number is only an omission, repeal
      or deletion placeholder, the key is unchanged and ``provision_status`` is
      ``omitted``, ``repealed`` or ``deleted``. Publish sets ``is_repealed``. The
      public statute list and ``lookup_real_section`` do not serve that row as
@@ -40,6 +40,29 @@ Walk ``div.section`` texts in document order.
    * RESID-005-POLICY. A page that contains only these short footnotes stages no
      rows. The notes are noise, so the page is not quarantined and ``act_keys`` is
      omitted. An omitted set retires nothing.
+   * RESID-004-POLICY. A citation footnote of any length is unstaged noise, the
+     same as a short note. The whole body after the number, and nothing else, is
+     ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
+     ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, then one or
+     more Act, Ord., P.O. or Regulation citations joined by a comma or
+     ``and``. ``and`` may also start another verb, so ``Subs.`` / ``Ins.`` /
+     ``Omitted`` / ``Added`` / ``Rep.`` / ``Amended`` can mix on one line:
+     ``Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3`` is
+     one note. ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
+     same lead. After the section reference the note may add ``for "..."``,
+     ``for the words "..."``, or ``w.e.f.`` a date. A title word such as
+     ``Civil`` is not an instrument number. ``Substitution of section 5 and
+     insertion of section 5A`` stays live.
+     It takes no key (``N``, ``N-<sha8>``, ``schedule:L:N`` or ``~n``), it does
+     not use the 50-div cap, and a page of only those notes is not quarantined
+     and omits ``act_keys``. When a note and a real section share a number, the
+     real section keeps that key whether the note is first or last.
+     ``Substitution``, ``Insertion of`` and ``Amendment of section X.-``
+     followed by operative text stay live. A RESID-001 placeholder that is not
+     this citation note keeps its key. A placeholder that is this note keeps
+     its key only when no real section has the number. A citation placeholder
+     still counts as a body div for schedule scope; dropping it on a collision
+     does not close a scope it already opened.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
      (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
      numbered provision, is not given a number. It is staged as ``short-ambiguous``
@@ -131,10 +154,13 @@ Walk ``div.section`` texts in document order.
 
 The paragraph splitter is outside this div walk (FA-F21-019). It uses the same
 three-way test at its ``< 15`` and ``< 20`` gates: a short numbered provision is kept,
-a short numbered amendment footnote is rejected with the other noise, a bare omission
+a short numbered amendment footnote is rejected with the other noise, a citation
+footnote of any length is rejected the same way (R-LENGTH-RESID-004), a bare omission
 marker is its own ``short-ambiguous`` item and is not swallowed into the previous
 section, and other noise under those gates is still rejected. A numbered placeholder
-keeps its number and receives the same ``provision_status`` as a div. A repeated
+keeps its number and receives the same ``provision_status`` as a div, unless that
+placeholder is a citation footnote sharing its number with a real section, in which
+case the real section keeps the number. A repeated
 paragraph number is kept as ``N-<sha8>`` of each stored text, not dropped. That
 harvest stamps ``act_keys`` when it parsed those sections. It omits the set for an
 ``unscoped`` div, a ``short-ambiguous`` div, a page of only schedule headings, and an
@@ -210,13 +236,14 @@ _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
     re.IGNORECASE,
 )
-# Marginal amendment notes, and only at or under 20 characters.
+# Marginal amendment notes of at most 20 characters (R-LENGTH-RESID-002 / 005).
 # ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
 # for identity (R-LENGTH-RESID-001). ``1. Omitted.`` and ``2. Rep.`` are non-live
 # placeholders; ``2. Repeal.`` stays live. The ``by`` formula is R-LENGTH-RESID-002.
 # A bare abbreviation (``Ins.``, ``Subs.``, ``Am.``, ``Amd.``, ``Amdt.``) and an
 # abbreviation followed by ``of`` (``Rep. of X.``) are R-LENGTH-RESID-005. Bare
-# ``Rep.`` is not in that list.
+# ``Rep.`` is not in that list. A citation footnote of any length is
+# ``_LONG_FOOTNOTE_LEAD`` (R-LENGTH-RESID-004), not this short pattern.
 _AMENDMENT_NOTE_RE = re.compile(
     r"^(?:subs(?:tituted)?|ins(?:erted)?|added|omitted|rep(?:ealed)?|am(?:ended)?)\.?\s+by\b",
     re.IGNORECASE,
@@ -639,9 +666,10 @@ def is_short_amendment_footnote(text: str) -> bool:
     ``Am.``, ``Amd.`` or ``Amdt.``. An abbreviation followed by ``of``, as in
     ``7. Rep. of X.``. They are noise, so they cannot take ``N`` or ``schedule:L:N``.
 
-    ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` are provisions. A longer note
-    is not decided here. R-LENGTH-RESID-001 marks a staged placeholder non-live
-    without changing this noise test.
+    ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` are provisions. A longer
+    citation note is ``is_amendment_footnote`` (R-LENGTH-RESID-004).
+    R-LENGTH-RESID-001 marks a staged placeholder non-live without changing
+    this short-note test.
     """
     normalised = normalise_div_text(text)
     if not normalised or len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
@@ -654,6 +682,363 @@ def is_short_amendment_footnote(text: str) -> bool:
         or _BARE_AMENDMENT_ABBREV_RE.match(body) is not None
         or _AMENDMENT_OF_RE.match(body) is not None
     )
+
+
+# R-LENGTH-RESID-004. The whole body after the number is the note. A longer
+# alternative is listed before the abbreviation it starts with, so ``substituted``
+# is not read as ``subs``. ``(?!\w)`` is the end of the lead: a period is not a
+# word character, so ``\b`` would miss ``Subs.``.
+_LONG_FOOTNOTE_LEAD = re.compile(
+    r"(?i:substituted|subs\.?|inserted|ins\.?|added|omitted\s+by|repealed\s+by|"
+    r"rep\.\s+by|re-?numbered|amended\s+by|amdt\.\s+by|amd\.\s+by|am\.\s+by|"
+    r"see(?:\s+also)?)(?!\w)"
+)
+# One ``as`` target, then whitespace. No repeated group: ``sub-section`` and
+# ``clause`` are fixed words, and the parenthesis holds at most six characters.
+_AS_SECTION_REF = re.compile(
+    r"(?i:as)\s+"
+    r"(?:sub-section|subsection|clause|sections|section|secs|sec|ss|s)\.?\s*"
+    r"(?:\(\s*[0-9A-Za-z]{1,6}\s*\)|\d+[A-Za-z]?)\s+"
+)
+_SECTION_WORD = r"(?:sections|section|secs|sec|ss|s)"
+_FIRST_SECTION_REF = re.compile(
+    rf"\s*(?:,\s*)?(?:for\s+)?{_SECTION_WORD}\.?\s*\d+[A-Za-z]?",
+    re.IGNORECASE,
+)
+_NEXT_SECTION_REF = re.compile(
+    rf"\s*(?:,\s*|\s+and\s+|\s*&\s+)(?:{_SECTION_WORD}\.?\s*)?\d+[A-Za-z]?",
+    re.IGNORECASE,
+)
+_CITE_JOIN = re.compile(r"(?:,\s*and\s+|,\s+|\s+and\s+)", re.IGNORECASE)
+# A new verb after ``and``. Fixed alternatives, not a repeated group.
+_VERB_CHAIN = re.compile(r"(?:,\s+and\s+|\s+and\s+)", re.IGNORECASE)
+_FOR_QUOTE = re.compile(
+    r"""\s*,?\s*for\s+(?:the\s+(?:words|word|figures|figure)\s+)?"""
+    r"""["\u201c][^"\u201d]{1,200}["\u201d]""",
+    re.IGNORECASE,
+)
+_QUOTE_REPLACEMENT = re.compile(
+    r"""\s+the\s+(?:words|word|figures|figure)\s+["\u201c][^"\u201d]{1,200}["\u201d]""",
+    re.IGNORECASE,
+)
+_WEF_LEAD = re.compile(r"\s*,?\s*(?:w\.e\.f\.|with\s+effect\s+from)\s+", re.IGNORECASE)
+_DATE_GLUE = frozenset({"the", "day", "of"})
+_MONTHS = frozenset({
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "jan", "feb", "mar", "apr",
+    "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+})
+# A title word starts with a capital. ``of``, ``and`` and ``the`` may sit between
+# title words. ``court under the Finance Act`` does not match: ``court`` is not
+# a title word. The instrument keyword is case-insensitive so ``ACT`` matches.
+_NAMED_INSTRUMENT = (
+    r"(?:(?i:the)\s+)?"
+    r"[A-Z][A-Za-z'.-]*"
+    r"(?:\s+(?:[A-Z][A-Za-z'.-]*|(?i:of|and|the)|\([A-Z][A-Za-z'.-]{1,40}\)))*"
+    r"\s+(?i:Act|Ordinance|Regulation)(?!\w),?\s+\d{4}"
+    r"(?:\s*\(\s*(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}\s*\))?"
+)
+_NUMBERED_ACT = (
+    r"(?i:Act)(?!\w)\s+(?:(?i:No)\.\s+)?(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+)
+_NUMBERED_ORD = (
+    r"(?:(?i:Ordinance)(?!\w)\s+|(?i:Ord)\.\s+)"
+    r"(?:(?i:No)\.\s+)?(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+)
+_NUMBERED_PO = (
+    r"(?i:P)\.\s*(?i:O)\.\s*(?:(?i:No)\.\s+)?"
+    r"(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+)
+_NUMBERED_REG = (
+    r"(?i:Regulation)(?!\w)\s+(?:(?i:No)\.\s+)?"
+    r"(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+)
+_CITATION = re.compile(
+    rf"(?:{_NAMED_INSTRUMENT}|{_NUMBERED_ACT}|{_NUMBERED_ORD}|{_NUMBERED_PO}|{_NUMBERED_REG})"
+)
+# Instrument numbers only. A title word such as ``Civil`` is not one of these.
+_INSTRUMENT_NUMBER = re.compile(
+    r"(?i:Act|Ordinance|Regulation)(?!\w)\s+(?:(?i:No)\.\s+)?"
+    r"([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|(?i:Ord)\.\s+(?:(?i:No)\.\s+)?([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|(?i:P)\.\s*(?i:O)\.\s*(?:(?i:No)\.\s+)?"
+    r"([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|\(\s*([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}\s*\)"
+)
+
+
+def _roman_ok(token: str) -> bool:
+    """True for an arabic instrument number or a real roman numeral, including ``V``."""
+    text = (token or "").strip()
+    if re.fullmatch(r"[1-9]\d*", text):
+        return True
+    letters = text.upper()
+    if not letters or not re.fullmatch(r"[IVXLCDM]+", letters):
+        return False
+    if len(letters) == 1:
+        return letters in _ROMAN_VALUES
+    return _roman_to_int(letters) is not None
+
+
+def _instrument_numbers(cite: str) -> list:
+    """Roman or arabic tokens that stand in an instrument-number slot.
+
+    ``Act V of 1976`` and ``(XII of 1991)`` contribute a token. ``Civil`` in
+    ``the Civil Courts Act, 1962`` does not: it is a title word, not ``Act
+    CIVIL of``.
+    """
+    found = []
+    for match in _INSTRUMENT_NUMBER.finditer(cite or ""):
+        found.extend(group for group in match.groups() if group)
+    return found
+
+
+def _citation_ok(cite: str) -> bool:
+    """True when ``cite`` is one instrument and each instrument number is real.
+
+    ``Act CIVIL of 2001`` matches the shape and fails here: ``CIVIL`` is not a
+    roman numeral. ``Act V`` and ``Act II`` pass. A four-digit year is not an
+    instrument number, and neither is a title word.
+    """
+    if _CITATION.fullmatch(cite or "") is None:
+        return False
+    return all(_roman_ok(token) for token in _instrument_numbers(cite))
+
+
+def _date_token(token: str) -> bool:
+    low = token.lower().rstrip(".")
+    if low in _DATE_GLUE or low in _MONTHS:
+        return True
+    if re.fullmatch(r"\d{1,2}(?:st|nd|rd|th)?", low):
+        return True
+    if re.fullmatch(r"\d{4}", low):
+        return True
+    return re.fullmatch(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}", low) is not None
+
+
+def _consume_section_refs(text: str, pos: int) -> int:
+    """Advance past ``s. 2``, ``s. 2 and s. 3`` or ``ss. 2 & 3``. No nested repeat."""
+    first = _FIRST_SECTION_REF.match(text, pos)
+    if first is None:
+        return pos
+    pos = first.end()
+    while True:
+        nxt = _NEXT_SECTION_REF.match(text, pos)
+        if nxt is None:
+            return pos
+        pos = nxt.end()
+
+
+def _consume_citations(text: str) -> Optional[int]:
+    """End offset after one or more citations joined by a comma or ``and``.
+
+    Returns None when the text does not open with a citation. A join that is
+    not followed by another citation is left for the trailing-clause scan.
+    """
+    pos = 0
+    count = 0
+    while pos < len(text):
+        if count:
+            join = _CITE_JOIN.match(text, pos)
+            if join is None:
+                break
+            cite = _CITATION.match(text, join.end())
+            if cite is None or not _citation_ok(text[join.end():cite.end()]):
+                break
+            pos = cite.end()
+        else:
+            cite = _CITATION.match(text, pos)
+            if cite is None or not _citation_ok(text[pos:cite.end()]):
+                return None
+            pos = cite.end()
+        count += 1
+        pos = _consume_section_refs(text, pos)
+    if count < 1:
+        return None
+    return pos
+
+
+def _consume_wef(text: str, pos: int) -> Optional[int]:
+    """End offset after ``w.e.f.`` or ``with effect from`` and one date.
+
+    At most eight date tokens. A lead with no numeric token does not advance.
+    """
+    lead = _WEF_LEAD.match(text, pos)
+    if lead is None:
+        return None
+    cursor = lead.end()
+    numbers = 0
+    tokens = 0
+    while tokens < 8 and cursor < len(text):
+        if tokens:
+            gap = re.match(r"[\s,]+", text[cursor:])
+            if gap is None:
+                break
+            cursor += gap.end()
+        word = re.match(r"[A-Za-z0-9./-]+", text[cursor:])
+        if word is None or not _date_token(word.group(0)):
+            break
+        if any(ch.isdigit() for ch in word.group(0)):
+            numbers += 1
+        cursor += word.end()
+        tokens += 1
+    if numbers < 1:
+        return None
+    return cursor
+
+
+def _consume_trailing_clauses(text: str, pos: int) -> int:
+    """Advance past ``for "..."`` and ``w.e.f. <date>`` clauses. Each step grows."""
+    while pos < len(text):
+        quoted = _FOR_QUOTE.match(text, pos)
+        if quoted is not None:
+            pos = quoted.end()
+            replacement = _QUOTE_REPLACEMENT.match(text, pos)
+            if replacement is not None:
+                pos = replacement.end()
+            continue
+        wef = _consume_wef(text, pos)
+        if wef is None:
+            return pos
+        pos = wef
+    return pos
+
+
+def _unwrap_note(body: str) -> str:
+    """Drop one trailing stop and up to two layers of wrapping brackets."""
+    text = (body or "").strip()
+    if text.endswith("."):
+        text = text[:-1].rstrip()
+    for _ in range(2):
+        if len(text) >= 2 and text[0] in "[(" and text[-1] in "])":
+            text = text[1:-1].strip()
+            if text.endswith("."):
+                text = text[:-1].rstrip()
+        else:
+            break
+    return text
+
+
+def _consume_verb_unit(text: str, pos: int) -> Optional[int]:
+    """One ``<verb> by <instrument>[, s. N][ for ...]`` unit, from ``pos``.
+
+    The verb is matched once. Citations, section references and trailing
+    clauses are the same forward scan as a single note. Returns None when
+    the verb is missing or the instrument does not follow.
+    """
+    lead = _LONG_FOOTNOTE_LEAD.match(text, pos)
+    if lead is None:
+        return None
+    cursor = lead.end()
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    as_ref = _AS_SECTION_REF.match(text, cursor)
+    if as_ref is not None:
+        cursor = as_ref.end()
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+    lead_text = lead.group(0).lower().rstrip(".")
+    if not lead_text.endswith("by") and not lead_text.startswith("see"):
+        by = re.match(r"(?i:by)\s+", text[cursor:])
+        if by is None:
+            return None
+        cursor += by.end()
+    elif lead_text.startswith("see"):
+        by = re.match(r"(?i:by)\s+", text[cursor:])
+        if by is not None:
+            cursor += by.end()
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    tail = text[cursor:]
+    end = _consume_citations(tail)
+    if end is None:
+        return None
+    end = _consume_trailing_clauses(tail, end)
+    return cursor + end
+
+
+def _whole_body_is_citation_footnote(body: str) -> bool:
+    """True when ``body`` is only an amendment footnote, from the first word to the end.
+
+    The lead is ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
+    ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, optionally
+    ``as sub-section (1)`` or ``as clause (x)``. Then one or more Act,
+    Ordinance, P.O. or Regulation citations, an optional section reference,
+    and optional ``for "..."`` or ``w.e.f.`` clauses. ``and`` may repeat that
+    whole unit with a different verb. Anything left over, including an
+    operative sentence, does not match. ``Substitution``, ``Insertion`` and
+    ``Amendment of`` do not match the lead.
+    """
+    text = _unwrap_note(body)
+    pos = _consume_verb_unit(text, 0)
+    if pos is None:
+        return False
+    while True:
+        join = _VERB_CHAIN.match(text, pos)
+        if join is None:
+            break
+        nxt = _consume_verb_unit(text, join.end())
+        if nxt is None:
+            break
+        pos = nxt
+    return text[pos:].strip() == ""
+
+
+def _citation_footnote_bodies(text: str) -> list:
+    """Bodies to test: the text after the number, and the text after one letter suffix.
+
+    ``12-A.`` is keyed as ``12`` (R-LENGTH-RESID-003). The letter stays in the
+    body. A footnote written after that letter is still a footnote. The key
+    does not change, because a footnote is not staged.
+    """
+    normalised = normalise_div_text(text)
+    if parse_section_number(normalised) is None:
+        return []
+    body = _NUMBER_RE.sub("", normalised, count=1).strip()
+    bodies = [body]
+    suffix = _LETTER_SUFFIX_RE.match(body)
+    if suffix is not None:
+        bodies.append(suffix.group("rest").strip())
+    return bodies
+
+
+def is_long_amendment_footnote(text: str) -> bool:
+    """True when the whole numbered body is a citation footnote of any length.
+
+    This does not decide staging. A RESID-001 placeholder that uses the same
+    words (``Omitted by the Finance Act, 1990...``) is recognised here and is
+    still staged when it is the only text for that number.
+    """
+    return any(_whole_body_is_citation_footnote(body) for body in _citation_footnote_bodies(text))
+
+
+def is_amendment_footnote(text: str) -> bool:
+    """True for a short marginal note or a citation footnote of any length.
+
+    Short notes are R-LENGTH-RESID-002 and R-LENGTH-RESID-005, including a bare
+    ``Ins.`` and ``Rep. of X.`` that name no instrument. Citation notes are
+    R-LENGTH-RESID-004. A real amending section (``Substitution``, ``Insertion
+    of``, ``Amendment of section X.-``) is neither.
+    """
+    normalised = normalise_div_text(text)
+    return is_short_amendment_footnote(normalised) or is_long_amendment_footnote(normalised)
+
+
+def is_unstaged_amendment_footnote(text: str) -> bool:
+    """True when the note is noise and must not be staged.
+
+    A short note is always noise, including one that also reads as a placeholder.
+    A citation footnote is noise unless the whole body is a RESID-001 omission,
+    repeal or deletion placeholder. That placeholder keeps its key when it is
+    the only text for the number. ``footnote_collides_with_real`` drops it when
+    a real section shares the number.
+    """
+    normalised = normalise_div_text(text)
+    if is_short_amendment_footnote(normalised):
+        return True
+    if not is_long_amendment_footnote(normalised):
+        return False
+    return omission_placeholder_status(normalised) is None
 
 
 def _status_for_word(word: str) -> str:
@@ -679,6 +1064,10 @@ def _citation_tail_ok(tail: str) -> bool:
         return False
     if re.search(r"\d\.\s+[A-Z]", text):
         return False
+    # ``Rep. by Act II and Amended by Act III`` is a mixed note, not one placeholder.
+    for match in re.finditer(r"(?i:\sand\s+)", text):
+        if _LONG_FOOTNOTE_LEAD.match(text, match.end()):
+            return False
     for match in re.finditer(r"([A-Za-z]+)\.\s+", text):
         if match.group(1).lower() not in _CITATION_ABBREV:
             return False
@@ -733,12 +1122,14 @@ def short_div_disposition(text: str) -> str:
     does not drop it, and it is not merged into a neighbour.
     ``ambiguous`` — the letters are only an omission or repeal marker, and there is
     no section number to publish. Fail closed: quarantine, do not invent ``N``.
-    ``noise`` — 20 characters or fewer and neither of the above, including a short
-    numbered amendment footnote. Skip it.
-    ``content`` — longer than the noise gate. The caller uses the ordinary rules.
+    ``noise`` — 20 characters or fewer and neither of the above, or an unstaged
+    amendment footnote of any length (R-LENGTH-RESID-002, R-LENGTH-RESID-004).
+    Skip it.
+    ``content`` — longer than the noise gate and not an unstaged footnote. The
+    caller uses the ordinary rules.
     """
     normalised = normalise_div_text(text)
-    if is_short_amendment_footnote(normalised):
+    if is_unstaged_amendment_footnote(normalised):
         return "noise"
     if parse_section_number(normalised) is not None:
         return "provision"
@@ -834,8 +1225,49 @@ def _resolve_heading(parsed: Optional[_HeadingToken], mode: str) -> Optional[tup
     return ("label", parsed.value)
 
 
+def _footnote_collision_id(item: _Classified):
+    """The identity a citation footnote must not share with a real provision."""
+    if item.number is None:
+        return None
+    if item.kind == "section":
+        return ("section", item.number)
+    if item.kind == "schedule-item":
+        return ("schedule-item", item.label, item.number)
+    if item.kind == "unscoped":
+        return ("unscoped", item.number)
+    if item.kind == "schedule-unresolved":
+        return ("schedule-unresolved", item.label, item.number)
+    return None
+
+
+def _without_colliding_footnotes(kept: list, skipped: int) -> tuple:
+    """Drop a citation footnote that shares its number with a real provision.
+
+    The real provision keeps ``N`` or ``schedule:L:N``. Order does not matter:
+    the real set is collected before anything is dropped. A placeholder that is
+    the only text for that number stays. An unstaged note never reaches ``kept``.
+    """
+    real = set()
+    for item in kept:
+        ident = _footnote_collision_id(item)
+        if ident is not None and not is_amendment_footnote(item.text):
+            real.add(ident)
+    filtered = []
+    for item in kept:
+        ident = _footnote_collision_id(item)
+        if ident is not None and ident in real and is_amendment_footnote(item.text):
+            skipped += 1
+            continue
+        filtered.append(item)
+    return filtered, skipped
+
+
 def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]] = None) -> tuple:
-    """Kept divs in order, plus how many short non-headings were skipped, plus the mode."""
+    """Kept divs in order, plus how many noise divs were skipped, plus the mode.
+
+    The skip count is short noise and unstaged amendment footnotes. Neither uses
+    the 50-div cap.
+    """
     mode = schedule_evidence_mode(_collect_heading_tokens(texts, containers))
     kept: list[_Classified] = []
     skipped = 0
@@ -860,6 +1292,9 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
                 scope = outcome if body_seen else None
             if not body_seen:
                 heading_before_body = True
+            continue
+        if is_unstaged_amendment_footnote(text):
+            skipped += 1
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
             disposition = short_div_disposition(text)
@@ -890,6 +1325,7 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
             continue
         kind = _structural_kind(text) or "div"
         kept.append(_Classified(text=text, kind=kind, number=None, label=None))
+    kept, skipped = _without_colliding_footnotes(kept, skipped)
     return kept, skipped, mode
 
 

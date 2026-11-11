@@ -21,7 +21,8 @@ from scraper.parsers.pakistancode_keys import (
     SHORT_DIV_MAX_EXCLUSIVE,
     TEXT_CAP,
     content_token,
-    is_short_amendment_footnote,
+    is_amendment_footnote,
+    is_unstaged_amendment_footnote,
     normalise_div_text,
     omission_placeholder_status,
     short_div_disposition,
@@ -219,26 +220,101 @@ def _identity_key(number: str, text: str, repeated: bool, seen: Dict[str, int]) 
     return f"{base}~{seen[base]}"
 
 
-def _only_short_footnotes(text: str) -> bool:
-    """True when every non-blank line is a short amendment footnote.
+def _only_unstaged_footnotes(text: str) -> bool:
+    """True when every non-blank line is an unstaged amendment footnote.
 
     A page of only those notes is not a section. The single-chunk fallback must
-    not publish it as section 1 (RESID-005-POLICY).
+    not publish it as section 1 (RESID-005-POLICY, RESID-004-POLICY). A
+    RESID-001 placeholder is not unstaged, so a page of placeholders is not
+    this case.
     """
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    return bool(lines) and all(is_short_amendment_footnote(line) for line in lines)
+    return bool(lines) and all(is_unstaged_amendment_footnote(line) for line in lines)
+
+
+_HEADING_SMALL_WORDS = frozenset({"a", "an", "and", "for", "of", "the"})
+
+
+def _heading_line(line: str) -> bool:
+    """True for an unnumbered title, not a sentence.
+
+    ``Resid004 Notes Only Act 2099`` is a heading. ``This Act may be cited as
+    the Example and it applies throughout Pakistan.`` is a sentence: it has a
+    stop, and words that do not start a title.
+    """
+    text = (line or "").strip().rstrip(".")
+    if not text or re.search(r"[.?;!]", text):
+        return False
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'’.-]*", text)
+    if not words:
+        return False
+    for word in words:
+        if word.isdigit() or re.fullmatch(r"[IVXLCDM]+", word, re.IGNORECASE):
+            continue
+        if word.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if not word[0].isupper():
+            return False
+    return True
+
+
+def _page_chrome_line(line: str) -> bool:
+    """True for a line that is not statute text.
+
+    Page numbers, rules and a short title are the noise the length gate already
+    skips. A title-case heading of any length is the same chrome. A numbered
+    provision is not chrome. A longer unnumbered sentence is not chrome either.
+    """
+    text = (line or "").strip()
+    if not text:
+        return True
+    if short_div_disposition(text) == "noise":
+        return True
+    return _heading_line(text)
+
+
+def _footnotes_and_chrome_only(text: str) -> bool:
+    """True when the page is citation footnotes plus short page chrome.
+
+    The ultimate fallback must not publish that page as section 1. A short title
+    and a longer title-case heading above the notes are chrome. A numbered
+    provision, including a RESID-001 placeholder, is not chrome. A longer
+    unnumbered sentence is the statute: the footnote line is removed and the
+    sentence stays (R-LENGTH-RESID-004).
+    """
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not any(is_unstaged_amendment_footnote(line) for line in lines):
+        return False
+    for line in lines:
+        if is_unstaged_amendment_footnote(line):
+            continue
+        if not _page_chrome_line(line):
+            return False
+    return True
+
+
+def _without_unstaged_footnote_lines(text: str) -> str:
+    """The same text with whole-line amendment footnotes removed."""
+    kept = [
+        line
+        for line in (text or "").splitlines()
+        if not (line.strip() and is_unstaged_amendment_footnote(line))
+    ]
+    return _clean_section_text("\n".join(kept))
 
 
 def _rejected_by_length(text: str, limit: int) -> bool:
     """True when an old length gate still rejects this fragment.
 
     A numbered provision and a bare omission marker are never rejected for length.
-    A short numbered amendment footnote is rejected at every gate: it is noise, and
-    a 15-to-20-character note used to pass the ``< 15`` gate and take ``N``.
-    Other noise shorter than ``limit`` is still rejected. ``limit`` is the gate that
-    was already there (10, 15, or 20), so this does not start rejecting longer noise.
+    An unstaged amendment footnote is rejected at every gate, whatever its
+    length: it is noise, and a 15-to-20-character note used to pass the ``< 15``
+    gate and take ``N``. A citation footnote longer than 20 is the same noise
+    (R-LENGTH-RESID-004). Other noise shorter than ``limit`` is still rejected.
+    ``limit`` is the gate that was already there (10, 15, or 20), so this does
+    not start rejecting longer noise that is not a footnote.
     """
-    if is_short_amendment_footnote(text):
+    if is_unstaged_amendment_footnote(text):
         return True
     if not text or len(text) >= limit:
         return False
@@ -302,19 +378,55 @@ def _short_result_wins(result: List[Dict[str, str]]) -> bool:
     return len(text) <= SHORT_DIV_MAX_EXCLUSIVE and short_div_disposition(text) == "provision"
 
 
+def _real_section_numbers(sections: List[Dict[str, str]]) -> set:
+    """Numbers that belong to a provision which is not an amendment footnote."""
+    found = set()
+    for section in sections:
+        if section.get("section_kind") == "short-ambiguous":
+            continue
+        text = section.get("section_text", "")
+        if is_amendment_footnote(text):
+            continue
+        number = _section_number_token(section)
+        if number and not _rejected_section_number(section, number):
+            found.add(number)
+    return found
+
+
+def _drop_footnote_section(section: Dict[str, str], real_numbers: set) -> bool:
+    """True when this row must not take a section key.
+
+    An unstaged note is always dropped. A RESID-001 placeholder that is also a
+    citation footnote is dropped only when a real section has the same number,
+    and then the real section stays the unique key. Order does not matter.
+    """
+    if section.get("section_kind") == "short-ambiguous":
+        return False
+    text = section.get("section_text", "")
+    if not is_amendment_footnote(text):
+        return False
+    if is_unstaged_amendment_footnote(text):
+        return True
+    number = _section_number_token(section)
+    return bool(number) and number in real_numbers
+
+
 def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Keep every recognised section. A shared number is disambiguated, not dropped.
 
     A unique numbered provision is kept even when it is shorter than 20 characters.
-    Noise that is unique and shorter than 20 is still omitted. A section that shares
-    its number with another recognised section is kept even when it is that short, and
-    its text is not replaced by the other copy. A bare omission marker stays its own
-    row (``ambiguous-<sha8>``, or ``~2`` for a second copy) and is not numbered.
-    Numbers above 5000 are still omitted.
+    Noise that is unique and shorter than 20 is still omitted. An amendment
+    footnote is omitted, and it is not counted, so a real section that shares its
+    number stays ``N``. A section that shares its number with another recognised
+    section is kept even when it is that short, and its text is not replaced by
+    the other copy. A bare omission marker stays its own row (``ambiguous-<sha8>``,
+    or ``~2`` for a second copy) and is not numbered. Numbers above 5000 are
+    still omitted.
     """
+    real_numbers = _real_section_numbers(sections)
     provisions = []
     for section in sections:
-        if is_short_amendment_footnote(section.get("section_text", "")):
+        if _drop_footnote_section(section, real_numbers):
             continue
         if section.get("section_kind") == "short-ambiguous":
             continue
@@ -329,7 +441,7 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     ambiguous_seen: Dict[str, int] = {}
     out = []
     for section in sections:
-        if is_short_amendment_footnote(section.get("section_text", "")):
+        if _drop_footnote_section(section, real_numbers):
             continue
         if section.get("section_kind") == "short-ambiguous":
             text = normalise_div_text(section.get("section_text", ""))
@@ -383,7 +495,7 @@ def _strategy_1_p_class_section(soup: BeautifulSoup, statute_name: str) -> List[
             txt = p.get_text(separator="\n", strip=True)
             if not txt or _rejected_by_length(txt, 10):
                 continue
-            if is_short_amendment_footnote(txt):
+            if is_unstaged_amendment_footnote(txt):
                 continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
@@ -418,7 +530,7 @@ def _strategy_2_div_section_body(soup: BeautifulSoup, statute_name: str) -> List
             txt = div.get_text(separator="\n", strip=True)
             if not txt or _rejected_by_length(txt, 15):
                 continue
-            if is_short_amendment_footnote(txt):
+            if is_unstaged_amendment_footnote(txt):
                 continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
@@ -437,7 +549,7 @@ def _strategy_2_div_section_body(soup: BeautifulSoup, statute_name: str) -> List
                 inner_ps = div.find_all("p")
                 for p in inner_ps[:10]:  # limit
                     pt = p.get_text(strip=True)
-                    if is_short_amendment_footnote(pt):
+                    if is_unstaged_amendment_footnote(pt):
                         continue
                     n, t, b = _extract_number_title_from_chunk(pt)
                     if n:
@@ -458,7 +570,7 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
         sections = []
         for p in all_p:
             txt = p.get_text(separator="\n", strip=True)
-            if not txt or is_short_amendment_footnote(txt):
+            if not txt or is_unstaged_amendment_footnote(txt):
                 continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
@@ -499,7 +611,7 @@ def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
             start = m.start()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
             chunk = plain[start:end].strip()
-            if _rejected_by_length(chunk, 15) or is_short_amendment_footnote(chunk):
+            if _rejected_by_length(chunk, 15) or is_unstaged_amendment_footnote(chunk):
                 continue
             if short_div_disposition(chunk) == "ambiguous":
                 sections.append(_ambiguous_section(chunk))
@@ -510,7 +622,7 @@ def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
         return sections
     chunks = re.split(r'\n{2,}', plain)
     for chunk in chunks:
-        if is_short_amendment_footnote(chunk):
+        if is_unstaged_amendment_footnote(chunk):
             continue
         if short_div_disposition(chunk) == "ambiguous":
             sections.append(_ambiguous_section(chunk))
@@ -550,7 +662,7 @@ def _keyword_sections(plain: str, statute_name: str, pattern: re.Pattern, articl
         start_content = m.end()
         end_content = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
         chunk = plain[m.start():end_content].strip()
-        if _rejected_by_length(chunk, 15) or is_short_amendment_footnote(chunk):
+        if _rejected_by_length(chunk, 15) or is_unstaged_amendment_footnote(chunk):
             continue
         if short_div_disposition(chunk) == "ambiguous":
             sections.append(_ambiguous_section(chunk))
@@ -632,7 +744,7 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     if not stripped:
         return []
     opening = short_div_disposition(stripped)
-    if is_short_amendment_footnote(stripped) or _only_short_footnotes(stripped):
+    if is_unstaged_amendment_footnote(stripped) or _only_unstaged_footnotes(stripped):
         return []
     if len(stripped) < 10 and opening == "noise":
         return []
@@ -717,13 +829,24 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     # Ultimate fallback: whole text as one section
     plain_text = BeautifulSoup(text, "html.parser").get_text(separator="\n") if _is_html(text) else text
     plain_text = _clean_section_text(plain_text)
-    if plain_text and not is_short_amendment_footnote(plain_text) and not _only_short_footnotes(plain_text):
+    if (
+        plain_text
+        and not is_unstaged_amendment_footnote(plain_text)
+        and not _only_unstaged_footnotes(plain_text)
+        and not _footnotes_and_chrome_only(plain_text)
+    ):
+        body = plain_text
+        if any(line.strip() and is_unstaged_amendment_footnote(line) for line in plain_text.splitlines()):
+            body = _without_unstaged_footnote_lines(plain_text)
+            remaining = [line.strip() for line in body.splitlines() if line.strip()]
+            if not body or not remaining or all(_page_chrome_line(line) for line in remaining):
+                return []
         logger.warning(f"split_into_sections: All strategies failed for {statute_name}, returning single chunk fallback")
         return [
             {
                 "section_number": "1",
                 "section_title": statute_name[:500],
-                "section_text": plain_text[:50000],  # cap to avoid massive embedding payload
+                "section_text": body[:50000],  # cap to avoid massive embedding payload
             }
         ]
     return []
