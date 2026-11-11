@@ -82,10 +82,12 @@ describe.skipIf(!EMULATORS)("FA-DATA-002 admin writers never lower a stored labe
     expect(before).toEqual([HIGH, "public"])
     const confirmed = await confirmMerge({ token: s.partner.token, data: { firmId: s.firmId, linkId: s.ids[0], note: NOTE } } as never)
     expect(confirmed.classification).toBe(HIGH)
-    atLeastStored(before, await labelsOf(s.ids))
+    const afterConfirm = await labelsOf(s.ids)
+    atLeastStored(before, afterConfirm)
+    expect(afterConfirm).toEqual([HIGH, HIGH])
     const unmerged = await unmergeEntity({ token: s.partner.token, data: { firmId: s.firmId, linkId: s.ids[0], note: NOTE } } as never)
     expect(unmerged.classification).toBe(HIGH)
-    atLeastStored(before, await labelsOf(s.ids))
+    atLeastStored(afterConfirm, await labelsOf(s.ids))
   })
 
   it("disputeLink keeps every link at least as high as it was stored", async () => {

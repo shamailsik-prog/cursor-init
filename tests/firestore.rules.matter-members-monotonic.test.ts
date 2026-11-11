@@ -95,11 +95,14 @@ describe.skipIf(!EMU)("matter_members classification is monotonic (FA-DATA-002)"
     await assertFails(updateDoc(doc(await as(PARTNER_LOW), "matter_members", memberId), { note: "lead" }))
   })
 
-  it("keeps a legacy row without classification updatable", async () => {
+  it("keeps a legacy note update allowed and requires clearance when a label is added", async () => {
     await seed({})
     await assertSucceeds(updateDoc(doc(await as(PARTNER), "matter_members", memberId), { note: "legacy" }))
-    const snap = await getDoc(doc(await as(PARTNER), "matter_members", memberId))
-    expect(snap.data()?.note).toBe("legacy")
-    expect(snap.data()).not.toHaveProperty("classification")
+    const noted = await getDoc(doc(await as(PARTNER), "matter_members", memberId))
+    expect(noted.data()?.note).toBe("legacy")
+    expect(noted.data()).not.toHaveProperty("classification")
+    await seed({})
+    await assertFails(updateDoc(doc(await as(PARTNER_LOW), "matter_members", memberId), { classification: "privileged-restricted" }))
+    await assertSucceeds(updateDoc(doc(await as(PARTNER), "matter_members", memberId), { classification: "internal" }))
   })
 })

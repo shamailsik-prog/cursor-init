@@ -169,9 +169,11 @@ service cloud.firestore {
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['matterId', 'userId', 'createdAt', 'addedBy'])
         // FA-F13-016: a stored classification cannot be removed (deleteField / merge); a legacy row without one may stay so.
         && (!('classification' in resource.data) || 'classification' in request.resource.data)
-        // FA-DATA-002: a stored label cannot fall, and the caller must be cleared for the label they write.
-        // A legacy row with no stored label stays updatable: rank() of an absent field would deny a note update.
-        && (!('classification' in resource.data) || (clearedNew() && monotonic()));
+        // FA-DATA-002: any label the update leaves on the row must be one the caller is cleared for, including a
+        // label added to a legacy row. A stored label cannot fall. A legacy note update names no label, so
+        // clearedNew() is not evaluated: rank() of an absent field would deny that update.
+        && (!('classification' in request.resource.data) || clearedNew())
+        && (!('classification' in resource.data) || monotonic());
       allow delete: if sameFirm() && isPartner() && isMember(resource.data.matterId);
     }
     match /clients/{id} {

@@ -28,7 +28,7 @@ Collections whose update can change a stored `classification`:
 
 | Collection | Update rule | Downgrade |
 | --- | --- | --- |
-| `matter_members` | `firestore.rules` matter_members `allow update`. FA-F13-016 already stops a stored label being removed. | Before: a partner member could lower the label. After: a stored label also requires `clearedNew() && monotonic()`. A legacy row with no `classification` stays updatable, because `rank()` of an absent field would deny a note update. |
+| `matter_members` | `firestore.rules` matter_members `allow update`. FA-F13-016 already stops a stored label being removed. | Before: a partner member could lower the label. After: a label the update leaves on the row requires `clearedNew()`, including a label added to a legacy row. A stored label also requires `monotonic()`. A legacy note update names no label, so `clearedNew()` is not evaluated. |
 | `matters` | `allow update` already has `cleared`, `clearedNew()`, and `monotonic()`. Lifecycle fields are locked. | No. |
 | `documents` | `allow update` already has `monotonic()`, `cleared`, and `clearedNew()`. | No. |
 | `evidence_items` | `allow update` already has `monotonic()`, `cleared`, and `clearedNew()`. | No. |
@@ -70,5 +70,5 @@ Every other collection in `firestore.rules` that stores a classification (includ
 | --- | --- | --- |
 | `judgment.classification` | `judgment_monotonic` + `declassify()` | Same |
 | `corpus_embeddings.classification_rank` | None. Rank 0 is visible through `v_research_embedding`. | Monotonic trigger, judgment floor, unknown rank rejected |
-| `matter_members` client update | Removal of a stored label denied. Lowering allowed. | Removal still denied. Stored label requires `clearedNew() && monotonic()`. Legacy row without a label stays updatable. |
+| `matter_members` client update | Removal of a stored label denied. Lowering allowed. | Removal still denied. A label left on the row requires `clearedNew()`. A stored label requires `monotonic()`. A legacy note update, which names no label, stays allowed. |
 | Listed d1 Admin SDK writers | `pair.label` / `maxLabel` already includes the stored row | Unchanged. Tests now prove a stored `privileged-restricted` row is not stored lower. |
