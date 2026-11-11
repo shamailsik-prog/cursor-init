@@ -11,17 +11,22 @@ a glued ``12a`` that stays, the insertion footnote, and the see-s pair.
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
 
+from scraper.parsers.pakistancode_keys import keys_to_retire
 from scraper.reharvest.data_003 import (
+    TEMP_PREFIX,
     MemoryStore,
     ReharvestRefusal,
     apply_transaction,
     build_report,
     count_sql,
+    guard_apply,
     is_candidate,
     plan_rows,
     select_act_sql,
@@ -85,7 +90,10 @@ def test_selector_sql_is_read_only_and_counts_by_act():
     assert "GROUP BY 1" in counts
     assert "statutes_master" in counts and "statutes_staging" in counts
     assert "DELETE" not in counts.upper() and "UPDATE" not in counts.upper()
-    assert "created_at" in export
+    assert " AS ordinal" in export
+    assert "source_ordinal" in export and "page_offset" in export and "act_keys" in export
+    assert "ORDER BY a.act, ordinal" in export
+    assert "created_at" not in export
     for row in _rows():
         if row["short_name"] == "fees":
             assert is_candidate(row) is False
@@ -189,7 +197,10 @@ def test_apply_rekeys_in_a_transaction_and_keeps_text():
     assert "INSERT" not in result["apply_sql"].upper()
     assert "DELETE" not in result["rollback_sql"].upper()
     assert "extracted_section_number" in result["apply_sql"]
-    assert "section_text" not in result["apply_sql"]
+    assert "SET section_text" not in result["apply_sql"]
+    assert "md5(convert_to(" in result["apply_sql"] and "1/0" in result["apply_sql"]
+    assert result["apply_sql"].count(TEMP_PREFIX) >= len(REKEY_IDS) * 2
+    assert result["rollback_sql"].count(TEMP_PREFIX) >= len(REKEY_IDS) * 2
     backup = [json.loads(line) for line in result["backup_jsonl"].splitlines()]
     assert {item["id"] for item in backup} == REKEY_IDS
     for row_id, (old_key, text, digest) in before.items():
@@ -331,3 +342,211 @@ def test_a_quoted_key_is_not_interpolated():
         )
     assert store.committed is False
     assert store.rows["00000000-0000-4000-8000-000000000099"]["section_number"].startswith("12'")
+
+
+def _copy(row, **changes):
+    copied = copy.deepcopy(row)
+    copied.update(changes)
+    return copied
+
+
+def test_document_order_is_the_source_ordinal_in_either_input_order():
+    wrap = _rows({"wrap"})
+    forward = plan_rows(wrap)[0].as_dict()
+    backward = plan_rows(list(reversed(wrap)))[0].as_dict()
+    stamped = []
+    for index, row in enumerate(reversed(wrap)):
+        stamped.append(_copy(row, created_at=f"1999-01-0{index + 1}T00:00:00Z"))
+    stamped_plan = plan_rows(stamped)[0].as_dict()
+    assert forward == backward == stamped_plan
+    assert all(row["new_key"] != "12I" for row in forward["rows"])
+    assert {row["action"] for row in forward["rows"] if row["old_key"] == "12"} == {"absorbed"}
+    missing = []
+    for row in wrap:
+        stripped = _copy(row)
+        stripped.pop("ordinal")
+        stripped["created_at"] = "1999-01-01T00:00:00Z"
+        missing.append(stripped)
+    refused = plan_rows(missing)[0]
+    assert refused.apply_allowed is False
+    assert refused.refusal == "no source ordinal"
+    assert all(row.action == "unordered" and row.new_key is None for row in refused.rows)
+    assert "12I" not in json.dumps(refused.as_dict())
+
+
+def test_guard_apply_replans_a_separate_live_copy():
+    rows = _rows({"bare-12a"})
+    live = copy.deepcopy(rows)
+    live[0]["section_text"] = live[0]["section_text"] + " Amended."
+    store = MemoryStore(rows)
+    with pytest.raises(ReharvestRefusal, match="live plan diverges"):
+        guard_apply(rows, live, expect_count=1, ids=[rows[0]["id"]])
+    with pytest.raises(ReharvestRefusal, match="live plan diverges"):
+        apply_transaction(store, rows, expect_count=1, ids=[rows[0]["id"]], live_rows=live)
+    assert store.committed is False
+    assert store.rows[rows[0]["id"]]["section_number"] == "12"
+
+
+def test_a_folded_12a_collides_with_a_rekey_to_12A():
+    glued = _copy(
+        next(row for row in _rows() if row["id"].endswith("000000000019")),
+        short_name="fold", statute_name="fold", ordinal=1,
+    )
+    bare = _copy(
+        next(row for row in _rows() if row["id"].endswith("000000000001")),
+        id="00000000-0000-4000-8000-000000000041",
+        short_name="fold", statute_name="fold", ordinal=2,
+    )
+    plan = plan_rows([glued, bare])[0]
+    assert plan.apply_allowed is False
+    folded = {row.old_key: row.action for row in plan.rows}
+    assert folded["12a"] == "unchanged"
+    assert folded["12"] == "collision"
+
+
+def test_a_schedule_key_is_not_rekeyed_to_a_body_key():
+    row = _copy(
+        next(item for item in _rows() if item["id"].endswith("000000000001")),
+        id="00000000-0000-4000-8000-000000000042",
+        short_name="sched", statute_name="sched",
+        section_number="schedule:1:12A", ordinal=1,
+    )
+    plan = plan_rows([row])[0]
+    assert plan.apply_allowed is True
+    assert plan.rows[0].action == "unchanged"
+    assert plan.rows[0].old_key == plan.rows[0].new_key == "schedule:1:12A"
+    store = MemoryStore([row])
+    with pytest.raises(ReharvestRefusal, match="planned re-key count"):
+        apply_transaction(store, [row], expect_count=1, ids=[row["id"]])
+    assert store.rows[row["id"]]["section_number"] == "schedule:1:12A"
+
+
+def test_act_keys_are_rewritten_so_publication_does_not_retire():
+    text_12a = next(row["section_text"] for row in _rows() if row["id"].endswith("000000000001"))
+    inventory = ["12", "13"]
+    twelve = {
+        "id": "00000000-0000-4000-8000-000000000043",
+        "table": "statutes_staging",
+        "short_name": "inventory",
+        "statute_name": "inventory",
+        "section_number": "12",
+        "section_text": text_12a,
+        "raw_text": text_12a,
+        "ordinal": 1,
+        "parsing_metadata": {"act_keys": list(inventory), "keying": "fa-f21-017"},
+    }
+    thirteen_text = (
+        "13. Other. This other section applies to every instrument presented "
+        "for registration under this Act."
+    )
+    thirteen = {
+        "id": "00000000-0000-4000-8000-000000000044",
+        "table": "statutes_staging",
+        "short_name": "inventory",
+        "statute_name": "inventory",
+        "section_number": "13",
+        "section_text": thirteen_text,
+        "raw_text": thirteen_text,
+        "ordinal": 2,
+        "parsing_metadata": {"act_keys": list(inventory), "keying": "fa-f21-017"},
+    }
+    plan = plan_rows([twelve, thirteen])[0]
+    assert plan.apply_allowed is True
+    assert list(plan.act_keys) == ["12A", "13"]
+    assert keys_to_retire(["12A", "13"], plan.act_keys, "12A") == []
+    assert "12A" in keys_to_retire(["12A", "13"], inventory, "13")
+    store = MemoryStore([twelve, thirteen])
+    result = apply_transaction(
+        store, [twelve, thirteen], expect_count=1, ids=[twelve["id"]],
+    )
+    assert store.rows[twelve["id"]]["section_number"] == "12A"
+    assert store.rows[twelve["id"]]["parsing_metadata"]["act_keys"] == ["12A", "13"]
+    assert store.rows[thirteen["id"]]["section_number"] == "13"
+    assert store.rows[thirteen["id"]]["parsing_metadata"]["act_keys"] == ["12A", "13"]
+    assert store.rows[thirteen["id"]]["parsing_metadata"]["keying"] == "fa-f21-017"
+    rollback = MemoryStore(list(store.rows.values()))
+    rollback.execute_script(result["rollback_sql"])
+    assert rollback.rows[twelve["id"]]["section_number"] == "12"
+    assert rollback.rows[twelve["id"]]["parsing_metadata"]["act_keys"] == ["12", "13"]
+    assert rollback.rows[thirteen["id"]]["parsing_metadata"]["act_keys"] == ["12", "13"]
+    divergent = [_copy(twelve), _copy(thirteen)]
+    divergent[0]["parsing_metadata"] = {"act_keys": ["12"]}
+    divergent[1]["parsing_metadata"] = {"act_keys": ["12"]}
+    refused = plan_rows(divergent)[0]
+    assert refused.apply_allowed is False
+    assert refused.refusal == "act_keys would diverge"
+
+
+def test_rollback_uses_temporary_keys_for_a_12_12A_12B_chain():
+    text_12a = next(row["section_text"] for row in _rows() if row["id"].endswith("000000000001"))
+    text_12b = next(row["section_text"] for row in _rows() if row["id"].endswith("000000000004"))
+    first = {
+        "id": "00000000-0000-4000-8000-000000000030",
+        "table": "statutes_master",
+        "short_name": "chain",
+        "statute_name": "chain",
+        "section_number": "12",
+        "section_text": text_12a,
+        "ordinal": 1,
+    }
+    second = {
+        "id": "00000000-0000-4000-8000-000000000031",
+        "table": "statutes_master",
+        "short_name": "chain",
+        "statute_name": "chain",
+        "section_number": "12A",
+        "section_text": text_12b,
+        "ordinal": 2,
+    }
+    diffs = {row.id: row for row in plan_rows([first, second])[0].rows}
+    assert diffs[first["id"]].action == "rekey" and diffs[first["id"]].new_key == "12A"
+    assert diffs[second["id"]].action == "rekey" and diffs[second["id"]].new_key == "12B"
+    store = MemoryStore([first, second])
+    result = apply_transaction(
+        store, [first, second], expect_count=2, ids=[first["id"], second["id"]],
+    )
+    assert store.rows[first["id"]]["section_number"] == "12A"
+    assert store.rows[second["id"]]["section_number"] == "12B"
+    statements = [line for line in result["rollback_sql"].splitlines() if line.startswith("WITH updated")]
+    assert len(statements) == 4
+    assert all(TEMP_PREFIX in line for line in statements[:2])
+    assert "1/0" in statements[0]
+    assert text_md5(text_12a) in statements[0]
+    assert "= '12'" in statements[2] or "= '12A'" in statements[2]
+    assert "= '12'" in statements[3] or "= '12A'" in statements[3]
+    restored = MemoryStore(list(store.rows.values()))
+    restored.execute_script(result["rollback_sql"])
+    assert restored.committed is True
+    assert restored.rows[first["id"]]["section_number"] == "12"
+    assert restored.rows[second["id"]]["section_number"] == "12A"
+
+
+def test_cli_refuses_an_output_that_aliases_the_input_or_another_output(tmp_path: Path):
+    source = tmp_path / "rows.json"
+    source.write_text("[]\n", encoding="utf-8")
+    before = source.read_bytes()
+    with pytest.raises(SystemExit, match="aliases"):
+        reharvest_main(["--input", str(source), "--output", str(source)])
+    assert source.read_bytes() == before
+    hard = tmp_path / "hard.json"
+    os.link(source, hard)
+    with pytest.raises(SystemExit, match="aliases"):
+        reharvest_main(["--input", str(source), "--output", str(hard)])
+    assert source.read_bytes() == before
+    mirror = tmp_path / "mirror.json"
+    mirror.symlink_to(source)
+    with pytest.raises(SystemExit, match="aliases"):
+        reharvest_main(["--input", str(source), "--output", str(mirror)])
+    assert source.read_bytes() == before
+    report = tmp_path / "report.json"
+    shared = tmp_path / "shared.out"
+    with pytest.raises(SystemExit, match="aliases"):
+        reharvest_main([
+            "--apply", "--expect-count", "1",
+            "--ids", "00000000-0000-4000-8000-000000000001",
+            "--input", str(source), "--output", str(report),
+            "--backup", str(shared), "--rollback", str(shared),
+            "--apply-sql", str(tmp_path / "apply.sql"),
+        ])
+    assert source.read_bytes() == before
+    assert not report.exists()

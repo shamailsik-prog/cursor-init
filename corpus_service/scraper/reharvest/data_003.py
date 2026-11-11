@@ -24,6 +24,7 @@ is required: keying the wrapped line on its own publishes ``12I``.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -33,8 +34,11 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from scraper.parsers.pakistancode_keys import (
     MAX_STAGED_DIVS,
+    act_keys_from_metadata,
     is_amendment_footnote,
+    is_schedule_publication_key,
     key_div_texts,
+    lookup_section_key,
     normalise_div_text,
     omission_placeholder_status,
     parse_section_number,
@@ -47,6 +51,10 @@ TABLE_STAGING = "statutes_staging"
 KEY_COLUMN = {
     TABLE_MASTER: "section_number",
     TABLE_STAGING: "extracted_section_number",
+}
+TEXT_COLUMN = {
+    TABLE_MASTER: "section_text",
+    TABLE_STAGING: "extracted_section_text",
 }
 TEMP_PREFIX = "data003-rekey-"
 _BARE_KEY = re.compile(r"^\d+[A-Z]{0,4}$")
@@ -101,6 +109,8 @@ class ActPlan:
     apply_allowed: bool
     rows: list = field(default_factory=list)
     refusal: Optional[str] = None
+    act_keys: Optional[tuple] = None
+    prior_act_keys: Optional[tuple] = None
 
     def as_dict(self) -> dict:
         return {
@@ -109,6 +119,7 @@ class ActPlan:
             "before_count": self.before_count,
             "apply_allowed": self.apply_allowed,
             "refusal": self.refusal,
+            "act_keys": None if self.act_keys is None else list(self.act_keys),
             "rows": [row.as_dict() for row in self.rows],
         }
 
@@ -122,6 +133,20 @@ class RekeyAction:
     new_key: str
     text_md5: str
     section_text: str
+    act_keys: Optional[tuple] = None
+    prior_act_keys: Optional[tuple] = None
+
+
+@dataclass(frozen=True)
+class InventoryUpdate:
+    """A sibling whose key stays put while its ``act_keys`` list is rewritten."""
+
+    id: str
+    table: str
+    key: str
+    text_md5: str
+    act_keys: tuple
+    prior_act_keys: tuple
 
 
 def text_md5(text: str) -> str:
@@ -233,11 +258,27 @@ def count_sql() -> str:
     )
 
 
+def _staging_ordinal_expr(alias: str) -> str:
+    """Page offset, or the harvest's own ``act_keys`` position. Not ``created_at``."""
+    meta = alias + ".parsing_metadata"
+    return (
+        "COALESCE("
+        "NULLIF(" + meta + "->>'source_ordinal', '')::integer, "
+        "NULLIF(" + meta + "->>'page_offset', '')::integer, "
+        "array_position(ARRAY(SELECT jsonb_array_elements_text(" + meta + "->'act_keys')), "
+        + alias + ".extracted_section_number)"
+        ")"
+    )
+
+
 def select_act_sql() -> str:
     """Every stored section of an act that has a candidate row.
 
     Keying a wrapped ``12-I`` line without the rest of the act publishes ``12I``.
-    The export is the whole act, in ``created_at`` then ``id`` order.
+    The export carries a source ordinal. ``statutes_master`` has no page ordinal,
+    so that column is null and the planner refuses the act. Staging uses
+    ``source_ordinal``, ``page_offset``, or the position in ``act_keys``.
+    ``created_at`` and ``id`` are not the document order.
     """
     master_act = _act_expr("m.short_name", "m.statute_name")
     master_where = _candidate_predicate("section_text", "section_title", "section_number")
@@ -245,8 +286,10 @@ def select_act_sql() -> str:
     staging_where = _candidate_predicate(
         "extracted_section_text", "extracted_section_title", "extracted_section_number",
     )
+    staging_ordinal = _staging_ordinal_expr("s")
     return (
         "-- DATA-003-REHARVEST export. Read only. No writes.\n"
+        "-- statutes_master has no stored page ordinal. A null ordinal is refused.\n"
         "WITH affected AS (\n"
         "  SELECT DISTINCT " + _act_expr("short_name", "statute_name") + " AS act\n"
         "  FROM statutes_master\n"
@@ -260,10 +303,11 @@ def select_act_sql() -> str:
         "       m.section_title,\n"
         "       m.section_text,\n"
         "       NULL::text AS raw_text,\n"
-        "       m.created_at\n"
+        "       NULL::jsonb AS parsing_metadata,\n"
+        "       NULL::integer AS ordinal\n"
         "FROM statutes_master AS m\n"
         "JOIN affected AS a ON a.act = " + master_act + "\n"
-        "ORDER BY a.act, m.created_at, m.id;\n"
+        "ORDER BY a.act, ordinal;\n"
         "\n"
         "WITH affected AS (\n"
         "  SELECT DISTINCT " + _act_expr("extracted_short_name", "extracted_act_name") + " AS act\n"
@@ -278,10 +322,11 @@ def select_act_sql() -> str:
         "       s.extracted_section_title AS section_title,\n"
         "       s.extracted_section_text AS section_text,\n"
         "       s.raw_text,\n"
-        "       s.created_at\n"
+        "       s.parsing_metadata,\n"
+        "       " + staging_ordinal + " AS ordinal\n"
         "FROM statutes_staging AS s\n"
         "JOIN affected AS a ON a.act = " + staging_act + "\n"
-        "ORDER BY a.act, s.created_at, s.id;\n"
+        "ORDER BY a.act, ordinal;\n"
     )
 
 
@@ -317,6 +362,13 @@ def normalise_row(raw: Mapping) -> dict:
     row_id = str(raw.get("id") or "").strip()
     if not row_id:
         raise ReharvestRefusal("a row has no id")
+    metadata = raw.get("parsing_metadata")
+    if metadata is None:
+        metadata = None
+    elif not isinstance(metadata, Mapping):
+        raise ReharvestRefusal(f"parsing_metadata on {row_id} is not an object")
+    else:
+        metadata = copy.deepcopy(dict(metadata))
     return {
         "id": row_id,
         "table": table,
@@ -326,8 +378,8 @@ def normalise_row(raw: Mapping) -> dict:
         "section_title": "" if title is None else str(title),
         "section_text": "" if text is None else str(text),
         "raw_text": None if pinned is None else str(pinned),
-        "ordinal": raw.get("ordinal"),
-        "created_at": "" if raw.get("created_at") is None else str(raw.get("created_at")),
+        "ordinal": _read_ordinal(raw),
+        "parsing_metadata": metadata,
     }
 
 
@@ -345,11 +397,42 @@ def _source(row: Mapping) -> tuple:
     return stored, "pinned_source_differs"
 
 
-def _sort_key(row: Mapping):
-    ordinal = row.get("ordinal")
-    if ordinal is not None:
-        return (0, int(ordinal), row["id"])
-    return (1, row.get("created_at") or "", row["id"])
+def _read_ordinal(raw: Mapping):
+    """The first source ordinal the export actually carries. ``created_at`` is not one."""
+    for key in ("ordinal", "source_ordinal", "page_offset"):
+        if key in raw:
+            return raw.get(key)
+    return None
+
+
+def _ordinal_number(row: Mapping) -> Optional[int]:
+    """A non-negative page or staging ordinal. Anything else is not document order."""
+    value = row.get("ordinal")
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip() or ""):
+        number = int(value.strip())
+    else:
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def collision_identity(key: str) -> str:
+    """The identity ``lookup_section_key`` uses for a bare body key.
+
+    ``12a`` and ``12A`` are one key. A schedule key and a content-addressed key
+    stay as stored. This is the lookup fold, not a second spelling.
+    """
+    if not key or is_schedule_publication_key(key):
+        return key or ""
+    folded = lookup_section_key(key)
+    if _BARE_KEY.fullmatch(folded or ""):
+        return folded
+    return key
 
 
 def _in_scope(row: Mapping, new_key: str) -> bool:
@@ -403,9 +486,29 @@ def _align(rows: Sequence[dict], sections) -> list:
     return assigned
 
 
+def _order_act(rows: Sequence[dict]) -> tuple:
+    """Sort by source ordinal. Missing or repeated ordinals are not an order."""
+    numbers = [_ordinal_number(row) for row in rows]
+    if any(number is None for number in numbers):
+        return None, "no source ordinal"
+    if len(set(numbers)) != len(numbers):
+        return None, "source ordinals are not unique"
+    ordered = [row for _number, row in sorted(zip(numbers, rows), key=lambda pair: pair[0])]
+    return ordered, None
+
+
 def plan_act(table: str, act: str, rows: Sequence[dict]) -> ActPlan:
-    """Diff one act. Rows are already in document order."""
-    ordered = list(rows)
+    """Diff one act. Document order is the source ordinal, or the act is refused."""
+    ordered, order_refusal = _order_act(rows)
+    if ordered is None:
+        plan = ActPlan(
+            act=act, table=table,
+            before_count=sum(1 for row in rows if is_candidate(row)),
+            apply_allowed=False, refusal=order_refusal,
+        )
+        for row in rows:
+            plan.rows.append(_diff(row, None, "unordered", order_refusal))
+        return plan
     before = sum(1 for row in ordered if is_candidate(row))
     plan = ActPlan(act=act, table=table, before_count=before, apply_allowed=True)
     if len(ordered) > MAX_STAGED_DIVS:
@@ -477,6 +580,12 @@ def plan_act(table: str, act: str, rows: Sequence[dict]) -> ActPlan:
                 "the line joins a neighbour, so it is not given its own key",
             ))
             continue
+        if is_schedule_publication_key(row["section_number"]):
+            plan.rows.append(_diff(
+                row, row["section_number"], "unchanged",
+                "a schedule key keeps its scope and is not re-keyed to a body key",
+            ))
+            continue
         new_key = section.key
         if new_key == row["section_number"]:
             plan.rows.append(_diff(row, new_key, "unchanged", "the stored key already matches"))
@@ -505,6 +614,8 @@ def plan_act(table: str, act: str, rows: Sequence[dict]) -> ActPlan:
             "the key differs and this repair does not rewrite it",
         ))
     _refuse_projected_collisions(plan)
+    if plan.apply_allowed:
+        _bind_act_keys(plan, ordered)
     return plan
 
 
@@ -532,7 +643,7 @@ def _diff(row: Mapping, new_key: Optional[str], action: str, reason: str) -> Row
 
 
 def _refuse_projected_collisions(plan: ActPlan) -> None:
-    """A new bare key that another row keeps is a collision. The act is refused."""
+    """A new key that lookup already folds onto another row is a collision."""
     moving = {row.id: row.new_key for row in plan.rows if row.action == "rekey"}
     if not moving:
         if any(row.action == "collision" for row in plan.rows):
@@ -542,7 +653,7 @@ def _refuse_projected_collisions(plan: ActPlan) -> None:
     for row in plan.rows:
         key = moving.get(row.id, row.old_key)
         if key:
-            final[key].append(row.id)
+            final[collision_identity(key)].append(row.id)
     blocked = set()
     for ids in final.values():
         if len(ids) > 1:
@@ -565,8 +676,68 @@ def _refuse_projected_collisions(plan: ActPlan) -> None:
     plan.rows = rewritten
 
 
+def _bind_act_keys(plan: ActPlan, rows: Sequence[dict]) -> None:
+    """Rewrite ``act_keys`` to the post-image, or refuse when the lists diverge.
+
+    Publication retires master keys absent from this inventory. Every sibling
+    must carry the same list, and that list must be the stored keys after the
+    re-key. A missing list on a master row is not an inventory.
+    """
+    inventories = []
+    for row in rows:
+        metadata = row.get("parsing_metadata")
+        if not isinstance(metadata, Mapping) or "act_keys" not in metadata:
+            inventories.append(None)
+            continue
+        parsed = act_keys_from_metadata(metadata)
+        if parsed is None:
+            plan.apply_allowed = False
+            plan.refusal = "act_keys would diverge"
+            return
+        inventories.append(list(metadata["act_keys"]))
+    present = [item for item in inventories if item is not None]
+    if not present:
+        return
+    if len(present) != len(inventories) or any(item != present[0] for item in present):
+        plan.apply_allowed = False
+        plan.refusal = "act_keys would diverge"
+        return
+    prior = list(present[0])
+    stored_keys = [row["section_number"] for row in rows]
+    if frozenset(prior) != frozenset(stored_keys) or len(prior) != len(stored_keys):
+        plan.apply_allowed = False
+        plan.refusal = "act_keys would diverge"
+        return
+    updated = list(prior)
+    by_id = {row.id: row for row in plan.rows}
+    for row in rows:
+        diff = by_id[row["id"]]
+        if diff.action != "rekey" or not diff.new_key:
+            continue
+        if diff.old_key not in updated:
+            plan.apply_allowed = False
+            plan.refusal = "act_keys would diverge"
+            return
+        updated[updated.index(diff.old_key)] = diff.new_key
+    post = []
+    for row in rows:
+        diff = by_id[row["id"]]
+        if row["section_number"] not in prior:
+            continue
+        if diff.action == "rekey" and diff.new_key:
+            post.append(diff.new_key)
+        else:
+            post.append(row["section_number"])
+    if frozenset(updated) != frozenset(post) or len(updated) != len(post):
+        plan.apply_allowed = False
+        plan.refusal = "act_keys would diverge"
+        return
+    plan.prior_act_keys = tuple(prior)
+    plan.act_keys = tuple(updated)
+
+
 def plan_rows(raw_rows: Sequence[Mapping]) -> list:
-    """Group an export by table and act, and plan each act in document order."""
+    """Group an export by table and act. Each act is ordered by its source ordinal."""
     groups: dict = defaultdict(list)
     seen = set()
     for raw in raw_rows:
@@ -577,8 +748,7 @@ def plan_rows(raw_rows: Sequence[Mapping]) -> list:
         groups[(row["table"], _act_of(row))].append(row)
     plans = []
     for (table, act) in sorted(groups):
-        ordered = sorted(groups[(table, act)], key=_sort_key)
-        plans.append(plan_act(table, act, ordered))
+        plans.append(plan_act(table, act, groups[(table, act)]))
     return plans
 
 
@@ -659,11 +829,20 @@ def _check_ids(ids: Iterable[str]) -> list:
     return cleaned
 
 
-def guard_apply(raw_rows: Sequence[Mapping], *, expect_count: int, ids: Sequence[str]) -> tuple:
-    """Refuse unless the id list is exactly the planned re-key set.
+def _plan_signature(plans: Sequence[ActPlan]) -> list:
+    return sorted(
+        (row.id, row.action, row.old_key, row.new_key, row.text_md5, row.table)
+        for plan in plans for row in plan.rows
+    )
 
-    A collision anywhere in the export refuses the apply, including a collision
-    in an act the id list does not mention.
+
+def guard_apply(export_rows: Sequence[Mapping], live_rows: Sequence[Mapping], *,
+                expect_count: int, ids: Sequence[str]) -> tuple:
+    """Refuse unless the live rows reproduce the export plan.
+
+    The export is planned on its own. The live rows are planned again. A text
+    or key that differs from the export is a divergence, including when both
+    arguments happen to be the same list. A collision anywhere refuses the apply.
     """
     if expect_count is None:
         raise ReharvestRefusal("apply requires --expect-count")
@@ -672,10 +851,13 @@ def guard_apply(raw_rows: Sequence[Mapping], *, expect_count: int, ids: Sequence
     id_list = _check_ids(ids)
     if len(id_list) != int(expect_count):
         raise ReharvestRefusal("expect-count does not equal the id list")
-    plans = plan_rows(raw_rows)
+    plans = plan_rows(export_rows)
     if any(not plan.apply_allowed for plan in plans):
         reasons = [f"{plan.act}: {plan.refusal}" for plan in plans if not plan.apply_allowed]
         raise ReharvestRefusal("refusing apply because of a collision or an unsafe act: " + "; ".join(reasons))
+    live_plans = plan_rows(live_rows)
+    if any(not plan.apply_allowed for plan in live_plans) or _plan_signature(plans) != _plan_signature(live_plans):
+        raise ReharvestRefusal("live plan diverges from the export plan")
     actions = [row for row in rekey_actions(plans)]
     if len(actions) != int(expect_count):
         raise ReharvestRefusal(
@@ -684,10 +866,14 @@ def guard_apply(raw_rows: Sequence[Mapping], *, expect_count: int, ids: Sequence
     planned_ids = {row.id for row in actions}
     if set(id_list) != planned_ids:
         raise ReharvestRefusal("the id list is not the planned re-key set")
-    by_id = {normalise_row(raw)["id"]: normalise_row(raw) for raw in raw_rows}
+    live_by_id = {normalise_row(raw)["id"]: normalise_row(raw) for raw in live_rows}
+    inventory = {(plan.table, plan.act): plan for plan in plans if plan.act_keys is not None}
     concrete = []
+    siblings = []
     for action in actions:
-        stored = by_id[action.id]
+        stored = live_by_id.get(action.id)
+        if stored is None:
+            raise ReharvestRefusal(f"live row missing {action.id}")
         if text_md5(stored["section_text"]) != action.text_md5:
             raise ReharvestRefusal(f"text md5 changed for {action.id}")
         if stored["section_number"] != action.old_key:
@@ -696,9 +882,13 @@ def guard_apply(raw_rows: Sequence[Mapping], *, expect_count: int, ids: Sequence
             raise ReharvestRefusal(f"empty re-key for {action.id}")
         if action.new_key.startswith(TEMP_PREFIX) or action.old_key.startswith(TEMP_PREFIX):
             raise ReharvestRefusal("a stored key uses the temporary re-key prefix")
+        plan = inventory.get((action.table, action.act))
+        act_keys = None if plan is None else plan.act_keys
+        prior_keys = None if plan is None else plan.prior_act_keys
         _quote(action.id)
         _quote(action.old_key)
         _quote(action.new_key)
+        _quote(action.text_md5)
         concrete.append(RekeyAction(
             id=action.id,
             table=action.table,
@@ -707,48 +897,111 @@ def guard_apply(raw_rows: Sequence[Mapping], *, expect_count: int, ids: Sequence
             new_key=action.new_key,
             text_md5=action.text_md5,
             section_text=stored["section_text"],
+            act_keys=act_keys,
+            prior_act_keys=prior_keys,
         ))
-    return plans, concrete
+    rekey_ids = {action.id for action in concrete}
+    for plan in plans:
+        if plan.act_keys is None:
+            continue
+        for row in plan.rows:
+            if row.id in rekey_ids:
+                continue
+            stored = live_by_id.get(row.id)
+            if stored is None or text_md5(stored["section_text"]) != row.text_md5:
+                raise ReharvestRefusal(f"live row missing {row.id}")
+            if stored["section_number"] != row.old_key:
+                raise ReharvestRefusal(f"stored key changed for {row.id}")
+            siblings.append(InventoryUpdate(
+                id=row.id, table=row.table, key=row.old_key, text_md5=row.text_md5,
+                act_keys=plan.act_keys, prior_act_keys=plan.prior_act_keys,
+            ))
+    return plans, concrete, siblings
 
 
-def render_apply_sql(actions: Sequence[RekeyAction]) -> str:
-    """One transaction. Keys move aside, then to the new key. No deletes."""
+def _json_array(keys: Sequence[str]) -> str:
+    for key in keys:
+        if _SAFE_KEY.fullmatch(key) is None:
+            raise ReharvestRefusal(f"refusing to interpolate an unsafe SQL value: {key!r}")
+    payload = json.dumps(list(keys), ensure_ascii=True)
+    if "'" in payload:
+        raise ReharvestRefusal("act_keys JSON is not a safe SQL literal")
+    return payload
+
+
+def _one_row_update(table: str, new_key: str, row_id: str, expected_key: str, digest: str,
+                    act_keys: Optional[Sequence[str]] = None) -> str:
+    """One statement. It changes nothing unless the id, key, and text md5 match one row."""
+    column = KEY_COLUMN[table]
+    text_column = TEXT_COLUMN[table]
+    assignment = column + " = " + _quote(new_key)
+    if act_keys is not None:
+        assignment += (
+            ", parsing_metadata = jsonb_set(COALESCE(parsing_metadata, '{}'::jsonb), "
+            "'{act_keys}', '" + _json_array(act_keys) + "'::jsonb, true)"
+        )
+    return (
+        "WITH updated AS (UPDATE " + table + " SET " + assignment
+        + " WHERE id = " + _quote(row_id)
+        + " AND " + column + " = " + _quote(expected_key)
+        + " AND md5(convert_to(" + text_column + ", 'UTF8')) = " + _quote(digest)
+        + " RETURNING id) SELECT CASE WHEN (SELECT count(*) FROM updated) = 1 THEN 1 ELSE 1/0 END"
+    )
+
+
+def render_apply_sql(actions: Sequence[RekeyAction], siblings: Sequence[InventoryUpdate] = ()) -> str:
+    """One transaction. Keys move aside, then to the new key. No deletes.
+
+    Each statement binds the text md5 and errors unless it updates one row.
+    ``act_keys`` is rewritten with the final key, on the re-keyed row and on
+    every sibling that carried the same list.
+    """
     lines = [
         "-- DATA-003-REHARVEST apply. Re-key only. Do not run until the dry-run report is accepted.",
         "BEGIN;",
     ]
     for action in actions:
-        column = KEY_COLUMN[action.table]
-        temp = TEMP_PREFIX + action.id
-        lines.append(
-            f"UPDATE {action.table} SET {column} = {_quote(temp)}"
-            f" WHERE id = {_quote(action.id)} AND {column} = {_quote(action.old_key)};"
-        )
+        lines.append(_one_row_update(
+            action.table, TEMP_PREFIX + action.id, action.id, action.old_key, action.text_md5,
+        ) + ";")
     for action in actions:
-        column = KEY_COLUMN[action.table]
-        temp = TEMP_PREFIX + action.id
-        lines.append(
-            f"UPDATE {action.table} SET {column} = {_quote(action.new_key)}"
-            f" WHERE id = {_quote(action.id)} AND {column} = {_quote(temp)};"
-        )
+        lines.append(_one_row_update(
+            action.table, action.new_key, action.id, TEMP_PREFIX + action.id, action.text_md5,
+            action.act_keys,
+        ) + ";")
+    for sibling in siblings:
+        lines.append(_one_row_update(
+            sibling.table, sibling.key, sibling.id, sibling.key, sibling.text_md5, sibling.act_keys,
+        ) + ";")
     lines.append("COMMIT;")
     sql = "\n".join(lines) + "\n"
     _refuse_forbidden_sql(sql, "apply")
     return sql
 
 
-def render_rollback_sql(actions: Sequence[RekeyAction]) -> str:
-    """Restore the keys this apply wrote. Text is not mentioned because it was not changed."""
+def render_rollback_sql(actions: Sequence[RekeyAction], siblings: Sequence[InventoryUpdate] = ()) -> str:
+    """Restore keys through the same temporary keys the apply used.
+
+    A chain ``12`` to ``12A`` and ``12A`` to ``12B`` is parked on temporary keys
+    before any old key is written back.
+    """
     lines = [
         "-- DATA-003-REHARVEST rollback. Restores the section keys this apply wrote.",
         "BEGIN;",
     ]
     for action in actions:
-        column = KEY_COLUMN[action.table]
-        lines.append(
-            f"UPDATE {action.table} SET {column} = {_quote(action.old_key)}"
-            f" WHERE id = {_quote(action.id)} AND {column} = {_quote(action.new_key)};"
-        )
+        lines.append(_one_row_update(
+            action.table, TEMP_PREFIX + action.id, action.id, action.new_key, action.text_md5,
+        ) + ";")
+    for action in actions:
+        lines.append(_one_row_update(
+            action.table, action.old_key, action.id, TEMP_PREFIX + action.id, action.text_md5,
+            action.prior_act_keys,
+        ) + ";")
+    for sibling in siblings:
+        lines.append(_one_row_update(
+            sibling.table, sibling.key, sibling.id, sibling.key, sibling.text_md5, sibling.prior_act_keys,
+        ) + ";")
     lines.append("COMMIT;")
     sql = "\n".join(lines) + "\n"
     _refuse_forbidden_sql(sql, "rollback")
@@ -816,23 +1069,29 @@ class MemoryStore:
             raise ReharvestRefusal("update outside a transaction")
         return self._snapshot
 
-    def update_key(self, table: str, row_id: str, expected: str, new_key: str) -> None:
+    def update_key(self, table: str, row_id: str, expected: str, new_key: str, expected_md5: str,
+                   act_keys: Optional[Sequence[str]] = None) -> None:
         if new_key is None or str(new_key).strip() == "":
             raise ReharvestRefusal("refusing an empty key")
         live = self._live()
         row = live.get(row_id)
-        if row is None or row["table"] != table:
-            raise ReharvestRefusal(f"row {row_id} is not in the transaction")
-        if row["section_number"] != expected:
-            raise ReharvestRefusal(f"row {row_id} key is {row['section_number']}, not {expected}")
+        if row is None or row["table"] != table or row["section_number"] != expected:
+            raise ReharvestRefusal("expected 1 row")
+        if text_md5(row["section_text"]) != expected_md5:
+            raise ReharvestRefusal("expected 1 row")
         act = _act_of(row)
+        wanted = collision_identity(new_key)
         for other in live.values():
             if other["id"] == row_id:
                 continue
-            if other["table"] == table and _act_of(other) == act and other["section_number"] == new_key:
+            if other["table"] == table and _act_of(other) == act and collision_identity(other["section_number"]) == wanted:
                 raise ReharvestRefusal(f"collision on {new_key} in {act}")
         other_text = row["section_text"]
         row["section_number"] = new_key
+        if act_keys is not None:
+            metadata = dict(row.get("parsing_metadata") or {})
+            metadata["act_keys"] = list(act_keys)
+            row["parsing_metadata"] = metadata
         if row["section_text"] != other_text:
             raise ReharvestRefusal("text changed during a re-key")
 
@@ -854,19 +1113,25 @@ class MemoryStore:
     def _execute_update(self, statement: str) -> None:
         if re.search(r"\b(DELETE|INSERT|DROP|ALTER|TRUNCATE)\b", statement, re.IGNORECASE):
             raise ReharvestRefusal("refusing a statement that is not a re-key")
-        matched = re.fullmatch(
-            r"UPDATE\s+(statutes_master|statutes_staging)\s+SET\s+"
-            r"(section_number|extracted_section_number)\s+=\s+'([^']*)'\s+"
-            r"WHERE\s+id\s+=\s+'([^']*)'\s+AND\s+\2\s+=\s+'([^']*)'",
-            statement.strip(),
-            re.IGNORECASE | re.DOTALL,
-        )
+        if "1/0" not in statement or "count(*)" not in statement:
+            raise ReharvestRefusal("re-key statement does not require exactly one row")
+        matched = _REKEY_SQL.fullmatch(statement.strip())
         if matched is None:
             raise ReharvestRefusal("refusing an update that is not a section re-key")
-        table, column, new_key, row_id, expected = matched.groups()
-        if KEY_COLUMN[table] != column:
+        table = matched.group("table")
+        column = matched.group("column")
+        text_column = matched.group("text")
+        if KEY_COLUMN[table] != column or TEXT_COLUMN[table] != text_column:
             raise ReharvestRefusal("update names the wrong key column")
-        self.update_key(table, row_id, expected, new_key)
+        act_keys = None
+        if matched.group("keys") is not None:
+            act_keys = json.loads(matched.group("keys"))
+            if not isinstance(act_keys, list):
+                raise ReharvestRefusal("act_keys JSON is not a list")
+        self.update_key(
+            table, matched.group("id"), matched.group("expected"), matched.group("new"),
+            matched.group("md5"), act_keys,
+        )
 
 
 def _statements(sql: str) -> list:
@@ -880,17 +1145,33 @@ def _statements(sql: str) -> list:
     return [part for part in parts if part]
 
 
-def apply_transaction(store: MemoryStore, raw_rows: Sequence[Mapping], *, expect_count: int,
-                      ids: Sequence[str]) -> dict:
+_REKEY_SQL = re.compile(
+    r"^WITH updated AS \(UPDATE (?P<table>statutes_master|statutes_staging) SET "
+    r"(?P<column>section_number|extracted_section_number) = '(?P<new>[^']*)'"
+    r"(?:, parsing_metadata = jsonb_set\(COALESCE\(parsing_metadata, '\{\}'::jsonb\), "
+    r"'\{act_keys\}', '(?P<keys>\[[^']*\])'::jsonb, true\))? "
+    r"WHERE id = '(?P<id>[^']*)' AND (?P=column) = '(?P<expected>[^']*)' "
+    r"AND md5\(convert_to\((?P<text>section_text|extracted_section_text), 'UTF8'\)\) = '(?P<md5>[0-9a-f]{32})' "
+    r"RETURNING id\) SELECT CASE WHEN \(SELECT count\(\*\) FROM updated\) = 1 THEN 1 ELSE 1/0 END$"
+)
+
+
+def apply_transaction(store: MemoryStore, export_rows: Sequence[Mapping], *, expect_count: int,
+                      ids: Sequence[str], live_rows: Optional[Sequence[Mapping]] = None) -> dict:
     """Re-key inside one transaction. Files are the caller's concern.
 
-    On refusal the store is rolled back and this function raises. Text md5 is
-    checked before any update and again after commit.
+    The plan is taken from ``export_rows``. ``live_rows``, or the store when
+    that argument is omitted, is planned again and must match. On refusal the
+    store is rolled back and this function raises.
     """
-    _plans, actions = guard_apply(raw_rows, expect_count=expect_count, ids=ids)
+    if live_rows is None:
+        live_rows = [dict(row) for row in store.rows.values()]
+    _plans, actions, siblings = guard_apply(
+        export_rows, live_rows, expect_count=expect_count, ids=ids,
+    )
     before = {action.id: (action.text_md5, action.section_text, action.old_key) for action in actions}
-    script = render_apply_sql(actions)
-    rollback_sql = render_rollback_sql(actions)
+    script = render_apply_sql(actions, siblings)
+    rollback_sql = render_rollback_sql(actions, siblings)
     backup = backup_jsonl(actions)
     store.execute_script(script)
     if not store.committed:

@@ -49,6 +49,38 @@ def _write_json(path: Path, body: dict) -> None:
     path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _path_identity(path: Path):
+    """Resolved path, plus the inode when the path already exists.
+
+    ``resolve`` follows symlinks. The inode catches a hard link whose path
+    differs after resolution.
+    """
+    resolved = path.expanduser().resolve()
+    if resolved.exists():
+        stat = resolved.stat()
+        return resolved, (stat.st_dev, stat.st_ino)
+    return resolved, None
+
+
+def _refuse_aliased_paths(source: Path, outputs: list) -> None:
+    """Refuse an output that is the input, or another output, by path or inode."""
+    seen_path = {}
+    seen_inode = {}
+    labelled = [("input", source)] + [(label, path) for label, path in outputs if path is not None]
+    for label, path in labelled:
+        resolved, inode = _path_identity(path)
+        previous = seen_path.get(resolved)
+        if previous is not None:
+            raise SystemExit(f"{label} aliases {previous}")
+        seen_path[resolved] = label
+        if inode is None:
+            continue
+        previous_inode = seen_inode.get(inode)
+        if previous_inode is not None:
+            raise SystemExit(f"{label} aliases {previous_inode}")
+        seen_inode[inode] = label
+
+
 def main(argv: list | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _refuse_live(argv)
@@ -74,6 +106,13 @@ def main(argv: list | None = None) -> int:
             raise SystemExit("apply requires --backup, --rollback and --apply-sql")
     elif any(apply_flags):
         raise SystemExit("expect-count, ids, backup, rollback and apply-sql require --apply")
+    _refuse_aliased_paths(args.input, [
+        ("output", args.output),
+        ("backup", args.backup),
+        ("rollback", args.rollback),
+        ("apply-sql", args.apply_sql),
+        ("rows-out", args.rows_out),
+    ])
     rows = _load(args.input)
     before = args.input.read_bytes()
     if not args.apply:
