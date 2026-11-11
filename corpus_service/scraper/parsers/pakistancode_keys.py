@@ -141,7 +141,16 @@ Walk ``div.section`` texts in document order.
    ``<sha8>`` is the first 8 hex characters of SHA-256 of the stored text (capped at
    20_000 characters). Sibling insert, reorder, or deletion of a *different* text does
    not change these keys. Amending a unique numbered section keeps ``N`` and records
-   another version. Amending a content-addressed div changes that div's key only.
+   another version. A body ``N`` / ``N-<sha8>`` key, or a schedule ``schedule:L:N`` /
+   ``schedule:L:N-<sha8>`` key, succeeds to the other form of the same base when the
+   text matches one prior row in both directions, or when exactly one unpaired prior
+   row and one unpaired new key remain in that base. The same row moves to the new
+   key and is not retired. A text change appends a version. Every other case, including
+   two or more changed members, a count mismatch, or a cross-base match, retires the
+   old key and inserts the new one. Keys with ``~n``, and keys that start ``unscoped:``,
+   ``ambiguous-``, ``preamble-``, ``explanation-``, ``div-``, ``unresolved-schedule``
+   or ``schedule-heading:``, never succeed. Amending one of those content-addressed
+   divs changes that div's key only.
 
 6. Lookup by a real section number is equality on the unique body key ``N``. A schedule
    item is not that key. An ``unscoped`` div is not that key. A retired key is not returned.
@@ -2150,6 +2159,9 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     ``label_mode="roman"`` is the sibling proof that lets a stored ``i``/``v``/``x``/``l``
     share the roman value. Without it those letters stay letters, and ``l`` never
     shares the First Schedule.
+    A paired renumber (``pair_renumbered_identities``) moves the stored object onto
+    the new key before insert. The old key is not retired. A text change appends a
+    version on that same object.
     """
     delta = HarvestDelta()
     staged = _materialise_act_keys(sections)
@@ -2162,6 +2174,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
             conflicts.add(ident)
         else:
             by_identity[ident] = key
+    _move_paired_identities(store, staged, by_identity, conflicts, fold, label_mode)
     seen_raw = set()
     seen_identities = set()
     blocked = any(section_kind_is_ambiguous(section.kind) for section in staged)
@@ -2220,6 +2233,164 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
 # ``12-Fees`` does not match. The fold is lookup only: keying still stores ``12a``.
 _BARE_BODY_KEY = re.compile(r"^(\d+)([A-Za-z]{0,4})$")
 _NO_BODY_ROW = object()
+# Q03-DUP-ID-001. An exact content-token suffix, and a ``~n`` copy anywhere in the key.
+_CONTENT_TOKEN_SUFFIX = re.compile(rf"-([0-9a-f]{{{SHA_CHARS}}})$")
+_COPY_MARKER = re.compile(r"~\d+")
+_NEVER_PAIR_PREFIXES = (
+    "unscoped:",
+    "ambiguous-",
+    "preamble-",
+    "explanation-",
+    "div-",
+    "unresolved-schedule",
+    "schedule-heading:",
+)
+_PAIR_CONFLICT = object()
+
+
+def pairing_base(key: str, *, label_mode: Optional[str] = None) -> Optional[str]:
+    """The succession base of a pairable key, or None when the key never pairs.
+
+    Body ``N`` and ``N-<sha8>`` share ``N``. ``schedule:L:N`` and
+    ``schedule:L:N-<sha8>`` share ``schedule_key_identity`` of the key with the
+    content token removed, so ``schedule:first:4`` and ``schedule:1:4-<sha8>``
+    are one base. ``~n``, ``unscoped:``, ``ambiguous-``, ``preamble-``,
+    ``explanation-``, ``div-``, ``unresolved-schedule`` and ``schedule-heading:``
+    are not bases.
+    """
+    if not isinstance(key, str) or key == "":
+        return None
+    if _COPY_MARKER.search(key) is not None or key.startswith(_NEVER_PAIR_PREFIXES):
+        return None
+    stripped = key
+    token = _CONTENT_TOKEN_SUFFIX.search(key)
+    if token is not None:
+        stripped = key[:token.start()]
+        if stripped == "":
+            return None
+    if _BARE_BODY_KEY.fullmatch(stripped):
+        return stripped
+    if not stripped.startswith("schedule:"):
+        return None
+    item = stripped[len("schedule:"):]
+    if _SCHEDULE_ITEM_BODY.fullmatch(item) is None:
+        return None
+    # The sha is already gone, so the item pattern's optional token does not fire.
+    if _CONTENT_TOKEN_SUFFIX.search(stripped) is not None:
+        return None
+    return schedule_key_identity(stripped, mode=label_mode)
+
+
+def pair_renumbered_identities(
+    prior: Mapping[str, str],
+    live: Sequence[tuple],
+    *,
+    label_mode: Optional[str] = None,
+) -> dict:
+    """Map each new key to the stored key it continues. The result is a set of pairs.
+
+    ``prior`` is stored keys absent from the new inventory, keyed to their text.
+    ``live`` is ``(new key, text)`` pairs for keys that are not already stored.
+    Order does not change the result. Within one base, a text that occurs once
+    on each side pairs those two keys. After that, exactly one unpaired prior
+    and exactly one unpaired new key pair as a single amendment. Every other
+    shape, including a tie, a count mismatch, and two or more changed members,
+    pairs nothing. Keys that ``pairing_base`` rejects are ignored.
+    """
+    prior_groups: dict = {}
+    for key, text in prior.items():
+        base = pairing_base(key, label_mode=label_mode)
+        if base is None:
+            continue
+        bucket = prior_groups.setdefault(base, {})
+        stored = "" if text is None else str(text)
+        if key in bucket and bucket[key] != stored:
+            bucket[key] = _PAIR_CONFLICT
+        else:
+            bucket.setdefault(key, stored)
+    live_groups: dict = {}
+    for pair in live:
+        if not isinstance(pair, tuple) or len(pair) != 2 or not isinstance(pair[0], str):
+            continue
+        key, text = pair
+        base = pairing_base(key, label_mode=label_mode)
+        if base is None:
+            continue
+        bucket = live_groups.setdefault(base, {})
+        stored = "" if text is None else str(text)
+        if key in bucket and bucket[key] != stored:
+            bucket[key] = _PAIR_CONFLICT
+        else:
+            bucket.setdefault(key, stored)
+    result: dict = {}
+    for base in set(prior_groups) | set(live_groups):
+        pmap = prior_groups.get(base, {})
+        nmap = live_groups.get(base, {})
+        if any(value is _PAIR_CONFLICT for value in pmap.values()):
+            continue
+        if any(value is _PAIR_CONFLICT for value in nmap.values()):
+            continue
+        prior_by_text: dict = {}
+        new_by_text: dict = {}
+        for key, text in pmap.items():
+            prior_by_text.setdefault(text, []).append(key)
+        for key, text in nmap.items():
+            new_by_text.setdefault(text, []).append(key)
+        paired_prior = set()
+        paired_new = set()
+        for text, prior_keys in prior_by_text.items():
+            new_keys = new_by_text.get(text, [])
+            if len(prior_keys) == 1 and len(new_keys) == 1:
+                result[new_keys[0]] = prior_keys[0]
+                paired_prior.add(prior_keys[0])
+                paired_new.add(new_keys[0])
+        left_prior = [key for key in pmap if key not in paired_prior]
+        left_new = [key for key in nmap if key not in paired_new]
+        if len(left_prior) == 1 and len(left_new) == 1:
+            result[left_new[0]] = left_prior[0]
+    return result
+
+
+def _move_paired_identities(store, staged, by_identity, conflicts, fold, label_mode) -> None:
+    """Move paired rows onto their new keys. The main loop then amends or keeps them.
+
+    A stored schedule identity that this harvest already names is not an input:
+    that row keeps its stored key. Retired rows are not paired.
+    """
+    incoming = [section for section in staged if not section_kind_is_ambiguous(section.kind)]
+    incoming_keys = {section.key for section in incoming}
+    incoming_idents = {schedule_key_identity(section.key, mode=fold) for section in incoming}
+    prior = {}
+    for key, row in store.items():
+        if row.retired or not isinstance(key, str):
+            continue
+        ident = schedule_key_identity(key, mode=fold)
+        if ident in conflicts or ident in incoming_idents or key in incoming_keys:
+            continue
+        prior[key] = row.text or ""
+    stored_idents = {schedule_key_identity(key, mode=fold) for key in store if isinstance(key, str)}
+    live = []
+    for section in incoming:
+        ident = schedule_key_identity(section.key, mode=fold)
+        if section.key in store or ident in stored_idents or ident in conflicts:
+            continue
+        live.append((section.key, section.text or ""))
+    for new_key, old_key in pair_renumbered_identities(prior, live, label_mode=label_mode).items():
+        if new_key == old_key or new_key in store:
+            continue
+        row = store.get(old_key)
+        if row is None or row.retired:
+            continue
+        new_ident = schedule_key_identity(new_key, mode=fold)
+        if new_ident in conflicts:
+            continue
+        del store[old_key]
+        row.key = new_key
+        store[new_key] = row
+        old_ident = schedule_key_identity(old_key, mode=fold)
+        if by_identity.get(old_ident) == old_key:
+            del by_identity[old_ident]
+        by_identity[new_ident] = new_key
 
 
 def lookup_section_key(number: str) -> str:
@@ -2332,21 +2503,34 @@ def section_by_key(
     return hits[0]
 
 
-def note_section_version(metadata: Optional[Mapping], prior_text: str, new_text: str) -> dict:
+def note_section_version(
+    metadata: Optional[Mapping], prior_text: str, new_text: str, *, prior_version: Optional[int] = None,
+) -> dict:
     """Metadata for a staging row that amends an existing section.
 
     The same text leaves the metadata unchanged. A different text records the prior
     text's SHA-256 and bumps ``section_version`` (the first stored amendment is 2).
+    When ``prior_version`` is omitted, the bump starts from this row's own
+    ``section_version`` or 1, which is the historical behaviour. Publish passes the
+    highest version already stored for the master row so the counter keeps climbing.
     """
     meta = dict(metadata or {})
     if (prior_text or "") == (new_text or ""):
         return meta
     meta["prior_section_text_sha256"] = hashlib.sha256((prior_text or "").encode("utf-8")).hexdigest()
-    current = meta.get("section_version")
-    try:
-        version = int(current) if current is not None else 1
-    except (TypeError, ValueError):
-        version = 1
+    if prior_version is None:
+        current = meta.get("section_version")
+        try:
+            version = int(current) if current is not None else 1
+        except (TypeError, ValueError):
+            version = 1
+    else:
+        try:
+            version = int(prior_version)
+        except (TypeError, ValueError):
+            version = 1
+        if isinstance(prior_version, bool) or version < 1:
+            version = 1
     meta["section_version"] = version + 1
     return meta
 
