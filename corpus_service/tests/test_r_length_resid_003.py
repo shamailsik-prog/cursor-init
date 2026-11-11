@@ -621,3 +621,98 @@ def test_lookup_folds_suffix_case_and_does_not_rekey_glued_12a():
     )
     assert lookup_real_section({"12a": omitted}, "12A") is None
     assert section_by_key({"12a": omitted}, "12a") is None
+
+
+LONG_12B = (
+    "12-B Inserted rates apply to every instrument presented for registration "
+    "after the amendment and this sentence has no early stop so it is not a title"
+)
+PHANTOM_13I = (
+    "13-I Pakistan source income of a resident person continues in this "
+    "provision and the wrapped line is not a heading of its own at all"
+)
+ITEM_1 = (
+    "1. Description of the stamp duty in this schedule is long enough to remain an item."
+)
+ITEM_2 = (
+    "2. Description of the instrument in this schedule is long enough to stay the item."
+)
+SUBS_NOTE = "1. Subs. by Act II of 2001, s. 3."
+SHORT_TITLE = (
+    "1. Short title. This Act may be called the Fixture Act and it extends "
+    "to the whole of Pakistan."
+)
+
+
+def test_space_heading_fold_keeps_schedule_scope_and_accepted_hosts():
+    """A schedule item is not a body neighbour, and a kept suffix heading is a host.
+
+    Using item 1 as the next section rejects ``12-A`` and merges it into
+    section 12. Skipping every space-form heading merges ``12-B`` into
+    section 11 and merges ``13-I`` into section 12. A footnote host publishes
+    live section 1. A leading refusal that keeps ``section_number`` 12I is a
+    live section. Each of those is asserted the other way.
+    """
+    assert is_amendment_footnote(SUBS_NOTE) is True
+    with_schedule = key_div_texts([REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1])
+    assert [section.key for section in with_schedule.sections] == [
+        "12", "12A", "schedule-heading:1", "schedule:1:1",
+    ]
+    assert "Inserted rates apply" not in with_schedule.sections[0].text
+    assert "Inserted rates apply" in with_schedule.sections[1].text
+    absent = key_div_texts([REAL_12, LONG_12A])
+    assert [section.key for section in absent.sections] == ["12", "12A"]
+    inside = key_div_texts([S11, "Schedule 1", ITEM_2, LONG_12A])
+    assert [section.key for section in inside.sections] == [
+        "11", "schedule-heading:1", "schedule:1:2", "schedule:1:12A",
+    ]
+    assert "Inserted rates apply" not in inside.sections[2].text
+    assert inside.sections[2].text == ITEM_2
+    hosts = key_div_texts([REAL_12, REAL_12A_SPACE, PHANTOM_13I, S13])
+    assert [section.key for section in hosts.sections] == ["12", "12A", "13"]
+    assert PHANTOM_13I in hosts.sections[1].text
+    assert PHANTOM_13I not in hosts.sections[0].text
+    suffix = key_div_texts([S11, TITLE_12A, LONG_12B, S13])
+    assert [section.key for section in suffix.sections] == ["11", "12A", "12B", "13"]
+    assert "12-B Inserted rates" not in suffix.sections[0].text
+    noted = key_div_texts([S11, SUBS_NOTE, PHANTOM_PAKISTAN, REAL_12])
+    assert [section.key for section in noted.sections] == ["11", "12"]
+    assert PHANTOM_PAKISTAN in noted.sections[0].text
+    assert "Subs. by Act II" not in noted.sections[0].text
+    orphan = key_div_texts([PHANTOM_PAKISTAN, SHORT_TITLE])
+    assert [section.key for section in orphan.sections if section.kind == "section"] == ["1"]
+    assert any(
+        section.kind == "div" and "Pakistan source income" in section.text
+        for section in orphan.sections
+    )
+    assert all(not section.key.startswith("12I") for section in orphan.sections)
+    plain_hosts = "\n".join([REAL_12, REAL_12A_SPACE, PHANTOM_13I, S13])
+    assert _numbers(plain_hosts) == ["12", "12A", "13"]
+    host_rows = split_into_sections(plain_hosts, "Fixture Act")
+    assert PHANTOM_13I not in host_rows[0]["section_text"]
+    assert "Pakistan source income" in host_rows[1]["section_text"]
+    plain_suffix = "\n".join([S11, TITLE_12A, LONG_12B, S13])
+    assert _numbers(plain_suffix) == ["11", "12A", "12B", "13"]
+    assert "12-B Inserted rates" not in split_into_sections(plain_suffix, "Fixture Act")[0]["section_text"]
+    plain_schedule = "\n".join([REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1])
+    scheduled = split_into_sections(plain_schedule, "Fixture Act")
+    assert [row["section_number"] for row in scheduled] == ["12", "12A", "1"]
+    assert "Inserted rates apply" not in scheduled[0]["section_text"]
+    assert "Inserted rates apply" in scheduled[1]["section_text"]
+    plain_orphan = PHANTOM_PAKISTAN + "\n" + SHORT_TITLE
+    opened = split_into_sections(plain_orphan, "Fixture Act")
+    assert all(row["section_number"] != "12I" for row in opened)
+    assert any(row["section_number"] == "1" for row in opened)
+    assert any(
+        row.get("section_kind") == "div" and "Pakistan source income" in row["section_text"]
+        for row in opened
+    )
+    from bs4 import BeautifulSoup
+
+    html = "".join(
+        f"<p>{line}</p>" for line in (REAL_12, LONG_12A, "FIRST SCHEDULE", ITEM_1)
+    )
+    html_rows = _strategy_3_p_filtered_digit_start(BeautifulSoup(html, "html.parser"), "Fixture Act")
+    assert [row["section_number"] for row in html_rows] == ["12", "12A", "1"]
+    assert "Inserted rates apply" not in html_rows[0]["section_text"]
+    assert all(row.get("section_kind") != "schedule-boundary" for row in html_rows)

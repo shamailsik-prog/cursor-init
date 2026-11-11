@@ -119,10 +119,16 @@ Walk ``div.section`` texts in document order.
      title ends in a period or a dash, or when the number sits with its
      neighbours: the previous body section, if there is one, has the same
      base, and the next body section, if there is one, is that base or the
-     next integer. ``12-A`` after 12 and before 13 is ``12A``. A wrapped
-     body line ``12-I Pakistan`` or ``12-I The Federal Government`` inside
-     section 11 stays in section 11. ``12-A.`` and ``12-I.`` keep the
-     punctuated form.
+     next integer. A space-form heading already accepted is itself a body
+     neighbour, so ``12-B`` after ``12-A`` and before 13 stays ``12B``, and a
+     refused wrap joins that heading rather than an earlier section. An
+     amendment footnote is not a neighbour. The search stops at a schedule
+     heading: a schedule item is not the next body section, and a space-form
+     inside that schedule is left for schedule identity. ``12-A`` after 12
+     and before 13 is ``12A``. A wrapped body line ``12-I Pakistan`` or
+     ``12-I The Federal Government`` inside section 11 stays in section 11.
+     A refused line with no body section before it is not published as that
+     suffix. ``12-A.`` and ``12-I.`` keep the punctuated form.
    * repeated body number ``N`` → ``N-<sha8>`` of the stored text
    * schedule item ``N`` under label ``L`` → ``schedule:L:N`` (or with ``-<sha8>`` when
      that schedule repeats ``N``)
@@ -1566,55 +1572,159 @@ def _without_colliding_footnotes(kept: list, skipped: int) -> tuple:
     return filtered, skipped
 
 
+class _FoldEntry:
+    """One div or splitter row, plus whether body-heading fold must ignore it."""
+
+    __slots__ = ("text", "blocked")
+
+    def __init__(self, text: str, blocked: bool = False) -> None:
+        self.text = text
+        self.blocked = blocked
+
+
+def _schedule_boundary(text: str) -> str:
+    """``whole`` when the text is only a schedule heading, ``embedded`` when a line is.
+
+    A flat schedule heading is its own div. The paragraph splitter leaves that
+    heading on a later line of the previous chunk. Either one ends body scope.
+    """
+    if parse_schedule_heading(normalise_div_text(text)) is not None:
+        return "whole"
+    for line in (text or "").splitlines():
+        if parse_schedule_heading(normalise_div_text(line)) is not None:
+            return "embedded"
+    return ""
+
+
+def space_heading_fold_plan(texts, blocked=None) -> dict:
+    """Host index for each space-form line that is not a heading, or None.
+
+    None means the line has no body section to join, so its suffix must not be
+    published. ``blocked`` marks rows fold must ignore, such as a container item
+    or a bare omission marker. A missing index is kept. Schedule scope matches
+    ``_classify``:
+    after a body section has been seen, a schedule heading closes the body.
+    Later numbered rows are schedule items and are not body neighbours, and a
+    space-form inside that scope is not folded into an item or a body section.
+    An amendment footnote is not a neighbour. A space-form heading that this
+    plan accepts is a neighbour, so a following wrap joins that heading and a
+    following suffix is judged from it.
+    """
+    flags = tuple(blocked or ())
+    entries = [
+        _FoldEntry(text, blocked=index < len(flags) and bool(flags[index]))
+        for index, text in enumerate(texts)
+    ]
+    count = len(entries)
+    normalised = [normalise_div_text(entry.text) for entry in entries]
+    boundary = [
+        "" if entry.blocked else _schedule_boundary(entry.text) for entry in entries
+    ]
+    in_schedule = [False] * count
+    scope = False
+    body_seen = False
+    for index, entry in enumerate(entries):
+        in_schedule[index] = scope
+        if entry.blocked or scope:
+            continue
+        if boundary[index] == "whole":
+            if body_seen:
+                scope = True
+            continue
+        numbered = (
+            parse_section_number(normalised[index]) is not None
+            and not is_amendment_footnote(normalised[index])
+        )
+        if numbered:
+            body_seen = True
+        if boundary[index] == "embedded" and (body_seen or numbered):
+            scope = True
+
+    def plain_anchor(index: int) -> bool:
+        if entries[index].blocked or in_schedule[index] or boundary[index] == "whole":
+            return False
+        if space_hyphen_suffix_key(normalised[index]) is not None:
+            return False
+        if is_amendment_footnote(normalised[index]):
+            return False
+        return parse_section_number(normalised[index]) is not None
+
+    def title_heading(index: int) -> bool:
+        if entries[index].blocked or in_schedule[index] or boundary[index] == "whole":
+            return False
+        if space_hyphen_suffix_key(normalised[index]) is None:
+            return False
+        return _space_hyphen_title(normalised[index])
+
+    confirmed = []
+    confirmed_set = set()
+    for index in range(count):
+        if plain_anchor(index) or title_heading(index):
+            confirmed.append(index)
+            confirmed_set.add(index)
+
+    def previous_host(index: int):
+        for host in reversed(confirmed):
+            if host < index:
+                return host
+        return None
+
+    def following_number(index: int):
+        if boundary[index] == "embedded":
+            return None
+        for cursor in range(index + 1, count):
+            if boundary[cursor] == "whole" or in_schedule[cursor]:
+                return None
+            if cursor in confirmed_set and (plain_anchor(cursor) or title_heading(cursor)):
+                return parse_section_number(normalised[cursor])
+        return None
+
+    plan = {}
+    for index in range(count):
+        if entries[index].blocked or in_schedule[index]:
+            continue
+        if space_hyphen_suffix_key(normalised[index]) is None or index in confirmed_set:
+            continue
+        host = previous_host(index)
+        previous = parse_section_number(normalised[host]) if host is not None else None
+        if space_hyphen_heading_ok(normalised[index], previous, following_number(index)):
+            confirmed.append(index)
+            confirmed.sort()
+            confirmed_set.add(index)
+            continue
+        plan[index] = host
+    return plan
+
+
 def _absorb_false_space_headings(texts, containers):
     """Join a wrapped space-form line to the body section it continues.
 
     ``12-I Pakistan`` and ``12-I The Federal Government`` inside section 11
     are not sections. Their text stays on section 11. A real ``12-A`` that
-    ``space_hyphen_heading_ok`` accepts stays its own div. A schedule heading
-    between the line and the previous section leaves the line alone, so a
-    schedule item is not pulled into the body. A line with no previous
-    section is marked for suppression and is not published as ``12I``.
+    ``space_hyphen_heading_ok`` accepts stays its own div, and a later wrap
+    joins that div rather than an earlier section. A schedule heading ends
+    the body search, so a schedule item is not the next section and a
+    space-form inside the schedule is not pulled into an item. An amendment
+    footnote is not a host. A line with no previous section is marked for
+    suppression and is not published as ``12I``.
     """
     raw = tuple(texts)
     boxes = tuple(containers) if containers is not None else None
-    normalised = [normalise_div_text(text) for text in raw]
-
-    def is_anchor(index: int) -> bool:
-        if boxes is not None and boxes[index]:
-            return False
-        if parse_schedule_heading(normalised[index]) is not None:
-            return False
-        if space_hyphen_suffix_key(normalised[index]) is not None:
-            return False
-        return parse_section_number(normalised[index]) is not None
-
-    decision = {}
-    for index, text in enumerate(normalised):
-        if space_hyphen_suffix_key(text) is None:
-            continue
-        if boxes is not None and boxes[index]:
-            continue
-        prev = next((j for j in range(index - 1, -1, -1) if is_anchor(j)), None)
-        nxt = next((j for j in range(index + 1, len(normalised)) if is_anchor(j)), None)
-        between = range((prev + 1) if prev is not None else 0, index)
-        if any(parse_schedule_heading(normalised[j]) is not None for j in between):
-            continue
-        prev_num = parse_section_number(normalised[prev]) if prev is not None else None
-        next_num = parse_section_number(normalised[nxt]) if nxt is not None else None
-        if space_hyphen_heading_ok(text, prev_num, next_num):
-            continue
-        decision[index] = prev
-    if not decision:
+    plan = space_heading_fold_plan(
+        raw,
+        blocked=[boxes is not None and bool(boxes[index]) for index in range(len(raw))],
+    )
+    if not plan:
         return raw, boxes, set()
+    normalised = [normalise_div_text(text) for text in raw]
     pieces = {index: [normalised[index]] for index in range(len(normalised))}
     drop = set()
     suppress_at = set()
-    for index, prev in decision.items():
-        if prev is None:
+    for index, host in plan.items():
+        if host is None:
             suppress_at.add(index)
             continue
-        pieces[prev].append(normalised[index])
+        pieces[host].append(normalised[index])
         drop.add(index)
     new_texts = []
     new_boxes = [] if boxes is not None else None
