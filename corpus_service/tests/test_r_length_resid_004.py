@@ -727,3 +727,47 @@ def test_policy_note_records_the_citation_footnote_rule():
     assert "(w.e.f. ...)" in note
     assert "Omitted by Act II of 2000, see s. 2" in note
     assert "50-div cap" in note
+    assert "RESID-004-SEE-002" in note
+
+
+SEE_6 = "6. Omitted by Act II of 2000, see s. 2."
+REAL_6_SAVINGS = (
+    "6. Savings of the omitted entries are recorded by the registrar "
+    "when a court so directs and not otherwise."
+)
+
+
+def test_two_non_live_section_6_placeholders_share_one_bare_key():
+    """RESID-004-SEE-002. A see-omission and a Finance omission are one row.
+
+    Leaving both staged publishes two ``6-<sha>`` keys. The kept text is the
+    lexicographically earliest normalised text, in either order. Marking that
+    row live makes lookup serve it. A real section 6 still keeps the bare key.
+    ``3. [Omitted.]`` twice stays content-addressed: it is not a footnote.
+    """
+    finance = OMITTED_BY
+    assert SEE_6 < finance
+    for ordered in ([SEE_6, finance], [finance, SEE_6]):
+        result = key_div_texts(ordered)
+        assert [section.key for section in result.sections] == ["6"]
+        assert result.sections[0].text == SEE_6
+        assert result.sections[0].provision_status == "omitted"
+        assert result.skipped_short == 1
+        assert "-" not in result.sections[0].key
+        store: dict = {}
+        apply_harvest(store, result.sections)
+        assert lookup_real_section(store, "6") is None
+        assert store["6"].provision_status == "omitted"
+        assert store["6"].text == SEE_6
+        split = split_into_sections("\n".join(ordered), "Fixture Act")
+        assert [section["section_number"] for section in split] == ["6"]
+        assert split[0]["section_text"] == SEE_6
+        assert split[0].get("provision_status") == "omitted"
+    beside = key_div_texts([SEE_6, finance, REAL_6_SAVINGS])
+    assert [section.key for section in beside.sections] == ["6"]
+    assert beside.sections[0].text == REAL_6_SAVINGS
+    assert beside.sections[0].provision_status is None
+    paired: dict = {}
+    apply_harvest(paired, beside.sections)
+    found = lookup_real_section(paired, "6")
+    assert found is not None and found.text == REAL_6_SAVINGS

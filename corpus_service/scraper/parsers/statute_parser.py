@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 from scraper.parsers.pakistancode_keys import (
     HYPHEN_LETTER_SUFFIX,
     HYPHEN_SUFFIX_SPACE_OR_END,
+    NON_LIVE_PROVISION_STATUSES,
     PROSE_HYPHEN_CONTINUATION,
     SECTION_NUMBER_TOKEN,
     SHORT_DIV_MAX_EXCLUSIVE,
@@ -31,6 +32,8 @@ from scraper.parsers.pakistancode_keys import (
     normalise_div_text,
     omission_placeholder_status,
     short_div_disposition,
+    space_hyphen_heading_ok,
+    space_hyphen_suffix_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -472,6 +475,80 @@ def _drop_footnote_section(section: Dict[str, str], real_numbers: set) -> bool:
     return bool(number) and number in real_numbers
 
 
+def _fold_space_heading_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Put a wrapped ``12-I Pakistan`` line back into the section it continues.
+
+    A space-form suffix is its own section only when ``space_hyphen_heading_ok``
+    says so (RESID-003-CAP-001). Otherwise its text is appended to the previous
+    body section. ``12-A Inserted rates.`` between 12 and 13 stays ``12A``.
+    """
+    def is_anchor(section: Dict[str, str]) -> bool:
+        if section.get("section_kind") == "short-ambiguous":
+            return False
+        text = section.get("section_text", "")
+        if space_hyphen_suffix_key(text) is not None:
+            return False
+        return bool(_section_number_token(section))
+
+    anchors = [index for index, section in enumerate(sections) if is_anchor(section)]
+    drop = set()
+    for index, section in enumerate(sections):
+        if section.get("section_kind") == "short-ambiguous":
+            continue
+        text = section.get("section_text", "")
+        if space_hyphen_suffix_key(text) is None:
+            continue
+        prev = next((item for item in reversed(anchors) if item < index), None)
+        nxt = next((item for item in anchors if item > index), None)
+        prev_num = _section_number_token(sections[prev]) if prev is not None else None
+        next_num = _section_number_token(sections[nxt]) if nxt is not None else None
+        if space_hyphen_heading_ok(text, prev_num, next_num):
+            continue
+        if prev is None:
+            continue
+        host = sections[prev]
+        host["section_text"] = (host.get("section_text", "").rstrip() + "\n" + text.strip()).strip()
+        drop.add(index)
+    if not drop:
+        return sections
+    return [section for index, section in enumerate(sections) if index not in drop]
+
+
+def _collapse_splitter_placeholders(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """One bare key when every row for a number is a non-live footnote.
+
+    The lexicographically earliest normalised text is kept (RESID-004-SEE-002).
+    A repeated non-footnote ``3. [Omitted.]`` is not collapsed.
+    """
+    groups: Dict[str, List[int]] = {}
+    for index, section in enumerate(sections):
+        if section.get("section_kind") == "short-ambiguous":
+            continue
+        number = _section_number_token(section)
+        text = section.get("section_text", "")
+        if not number or not is_amendment_footnote(text):
+            continue
+        if omission_placeholder_status(text) not in NON_LIVE_PROVISION_STATUSES:
+            continue
+        groups.setdefault(number, []).append(index)
+    drop = set()
+    for number, indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        if any(
+            _section_number_token(section) == number
+            and section.get("section_kind") != "short-ambiguous"
+            and not is_amendment_footnote(section.get("section_text", ""))
+            for section in sections
+        ):
+            continue
+        winner = min(indexes, key=lambda item: normalise_div_text(sections[item].get("section_text", "")))
+        drop.update(item for item in indexes if item != winner)
+    if not drop:
+        return sections
+    return [section for index, section in enumerate(sections) if index not in drop]
+
+
 def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Keep every recognised section. A shared number is disambiguated, not dropped.
 
@@ -484,6 +561,8 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     or ``~2`` for a second copy) and is not numbered. Numbers above 5000 are
     still omitted.
     """
+    sections = _fold_space_heading_sections(sections)
+    sections = _collapse_splitter_placeholders(sections)
     real_numbers = _real_section_numbers(sections)
     provisions = []
     for section in sections:
