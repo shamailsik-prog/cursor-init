@@ -250,15 +250,18 @@ _SCHEDULE_ITEM_BODY = re.compile(
 )
 # R-LENGTH-RESID-003. The stored key is the glued form ``12A`` already used for
 # ``12A.``. A hyphen, en dash or em dash plus the same kind of suffix is that
-# key: one letter (``12-A``) or the same capital two to four times (``12-AA``).
+# key: one letter (``12-A``, ``12-a``) or the same capital two to four times
+# (``12-AA``). Hyphen letters are upper-cased, so ``12-a`` is ``12A``. A glued
+# ``12a.`` stays ``12a``: that token was already stored in its own case.
 # A heading word (``12-Fees``, ``12-Tax``) and an amendment lead (``12-Ins.``)
 # stay behind the hyphen, which remains the delimiter. A digit after the hyphen
-# is still a range or a date (``12-15``, ``1-7-2001``). One glued letter matches
-# the old token. Repeated capitals are listed before that single letter so
-# ``12AA`` is not read as ``12A`` when the trailing punctuation may be empty.
-# ``(?-i:...)`` stays capitals under IGNORECASE. Punctuation after a hyphen
-# suffix may be absent when whitespace or the end of the text follows. It is
-# required for a bare number. No nested quantifier.
+# is still a range or a date (``12-15``, ``1-7-2001``). A space-terminated
+# suffix is a heading only when a capitalised title follows (``12-A Title``)
+# or the text ends. ``12-I shall`` and ``12-A of the`` are prose, not headings.
+# One glued letter matches the old token. Repeated capitals are listed before
+# that single letter so ``12AA`` is not read as ``12A`` when the trailing
+# punctuation may be empty. ``(?-i:...)`` stays capitals under IGNORECASE.
+# No nested quantifier.
 _SECTION_PUNCT = r"[\.\)\:\u2013\u2014\-]"
 # The same capital two to four times (``AA``, not ``AB`` or ``ST``). No
 # capturing group: callers put this token in group 1 and read group 2 as the rest.
@@ -266,14 +269,18 @@ _REPEATED_CAPITAL = "(?-i:" + "|".join(f"{letter}{{2,4}}" for letter in "ABCDEFG
 _GLUED_SUFFIX = "(?:" + _REPEATED_CAPITAL + r"|[A-Za-z])"
 # Dash plus one letter, or the same capital repeated. Not an English word.
 HYPHEN_LETTER_SUFFIX = r"[\u2013\u2014-]" + _GLUED_SUFFIX
-# The suffix is only taken when a delimiter, whitespace, or the end follows,
-# so ``12-Fees`` does not become the token ``12-F``.
-_SUFFIX_BOUNDARY = r"(?=[\.\)\:\u2013\u2014\-\]\s]|$)"
+# Punctuation, a capitalised title, or the end of the text. Not a lowercase word.
+_SUFFIX_BOUNDARY = r"(?=[\.\)\:\u2013\u2014\-\]]|\s+(?-i:[A-Z])|\s*$)"
+# Space or end only. The punctuated form is the other branch of the splitter.
+HYPHEN_SUFFIX_SPACE_OR_END = r"(?=\s+(?-i:[A-Z])|\s*$)"
+# After a hyphen this is prose (``I shall``, ``A of``), so the hyphen is not a
+# section delimiter and the letter is not a suffix. Bounded; no nested repeat.
+PROSE_HYPHEN_CONTINUATION = r"(?-i:(?:[A-Z]{2,4}|[A-Za-z])\s+[a-z])"
 SECTION_NUMBER_TOKEN = (
     r"\d+(?:" + HYPHEN_LETTER_SUFFIX + _SUFFIX_BOUNDARY + r"|" + _GLUED_SUFFIX + r")?"
 )
 _NUMBER_RE = re.compile(
-    r"^(?:(?:section|sec\.|s\.)\s+)?"
+    r"^(?:(?:section|sec\.|s\.|article|art\.)\s+)?"
     r"(?P<digits>\d+)"
     r"(?:"
     r"(?P<glued>[A-Za-z])(?P<punct_glued>" + _SECTION_PUNCT + r")"
@@ -282,8 +289,10 @@ _NUMBER_RE = re.compile(
     r"(?P<letters_many>" + _REPEATED_CAPITAL + r")"
     r"|(?P<letters>[A-Za-z])"
     r")"
-    r"(?:(?P<punct_letters>" + _SECTION_PUNCT + r")|(?=\s|$))"
-    r"|(?P<punct_bare>" + _SECTION_PUNCT + r")"
+    r"(?:(?P<punct_letters>" + _SECTION_PUNCT + r")"
+    r"|(?=\s+(?-i:[A-Z]))"
+    r"|(?=\s*$))"
+    r"|(?P<punct_bare>" + _SECTION_PUNCT + r")(?!" + PROSE_HYPHEN_CONTINUATION + r")"
     r")"
     r"\s*",
     re.IGNORECASE,
@@ -708,20 +717,23 @@ def schedule_container_token(node) -> Optional[str]:
 def canonical_section_number(token: str) -> str:
     """Glued key for a hyphenated letter suffix. Any other token is unchanged.
 
-    ``12-A`` and ``12–A`` are ``12A``, the key ``12A.`` already produced.
-    ``12-AA`` is ``12AA``. ``12``, ``12A``, ``12-15`` and ``12-Fees`` are unchanged.
+    ``12-A``, ``12-a`` and ``12–A`` are ``12A``, the key ``12A.`` already produced.
+    ``12-AA`` is ``12AA``. ``12``, ``12A``, ``12a``, ``12-15`` and ``12-Fees`` are
+    unchanged. Glued ``12a`` keeps its case because that key was already stored.
     """
     matched = _CANONICAL_HYPHEN_SUFFIX.fullmatch(token or "")
     if matched is None:
         return token
-    return matched.group(1) + matched.group(2)
+    return matched.group(1) + matched.group(2).upper()
 
 
 def parse_section_number(text: str) -> Optional[str]:
     """The section or item number at the start of ``text``, without the punctuation.
 
-    ``12A.`` and ``12-A.`` are both ``12A``. ``12AA.`` and ``12-AA.`` are both
-    ``12AA``. A hyphen before a digit is the delimiter it already was.
+    ``12A.`` and ``12-A.`` and ``12-a.`` are ``12A``. ``12AA.`` and ``12-AA.`` are
+    ``12AA``. ``Article 12AA.`` is ``12AA``. A glued ``12a.`` stays ``12a``.
+    A hyphen before a digit is the delimiter it already was. ``12-I shall`` and
+    ``12-A of`` are not section numbers.
     """
     matched = _NUMBER_RE.match(text or "")
     if matched is None:
@@ -732,6 +744,8 @@ def parse_section_number(text: str) -> Optional[str]:
         or matched.group("letters_many")
         or matched.group("letters")
     )
+    if letters and matched.group("dash"):
+        letters = letters.upper()
     if letters:
         return matched.group("digits") + letters
     return matched.group("digits")

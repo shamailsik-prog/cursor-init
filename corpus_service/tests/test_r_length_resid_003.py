@@ -8,8 +8,11 @@ both are retrievable. A hyphen before a digit stays the delimiter it was
 (``12-Fees``, ``12-Tax``), and ``12-Ins. by Act ...`` stays the footnote it
 was for section 12. ``Act No. XII-A`` is not a section. A citation footnote
 for 12-A beside the real 12-A drops; the real section keeps bare ``12A``.
-The same footnote does not take section 12. ``Section 12AA`` is ``12AA``,
-including when no stop follows the suffix.
+The same footnote does not take section 12. ``Section 12AA`` is ``12AA``.
+``Article 12AA. x`` is ``12AA`` in the keyer and ``Article 12AA`` in the
+splitter. ``12-a.`` is ``12A``. A glued ``12a.`` stays ``12a``. ``12-I shall``
+and ``12-A of the Act`` are not headings. ``12-I. Heading`` is ``12I``, and
+``12-A Title`` is ``12A``.
 
 The omitted-note collision is mutation-sensitive: forcing the hyphen to be a
 delimiter again keys the note as ``12``, and the note beside a real section 12
@@ -114,6 +117,16 @@ def test_hyphen_suffix_uses_the_glued_key_already_used_for_12A():
     assert parse_section_number(NOTE_12_INS) == "12"
     assert canonical_section_number("12-Fees") == "12-Fees"
     assert canonical_section_number("12-AA") == "12AA"
+    assert parse_section_number("12-a. Title") == "12A"
+    assert parse_section_number("12-a") == "12A"
+    assert canonical_section_number("12-a") == "12A"
+    assert canonical_section_number("12\u2013a") == "12A"
+    assert parse_section_number("Article 12AA. x") == "12AA"
+    assert parse_section_number("Art. 12AA. x") == "12AA"
+    assert parse_section_number("12-I shall continue") is None
+    assert parse_section_number("12-A of the Act") is None
+    assert parse_section_number("12-I. Heading") == "12I"
+    assert parse_section_number("12-A Title") == "12A"
     alone = key_div_texts([REAL_12A])
     assert alone.sections[0].key == "12A"
     assert alone.sections[0].title == "Inserted rates."
@@ -151,6 +164,11 @@ def test_real_12_and_12A_stay_separate_in_both_orders_and_are_retrievable():
     assert lookup_real_section(store, "12").text == REAL_12
     assert lookup_real_section(store, "12A").text == REAL_12A
     assert lookup_real_section(store, "12") is not lookup_real_section(store, "12A")
+    assert lookup_real_section(store, "12-a") is store["12A"]
+    assert lookup_real_section(store, "12-A") is store["12A"]
+    assert section_by_key(store, "12-a") is store["12A"]
+    lowered = key_div_texts(["12-a. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment."])
+    assert lowered.sections[0].key == "12A"
 
 
 def test_insertion_footnote_drops_beside_real_12A_and_does_not_hide_section_12():
@@ -198,6 +216,78 @@ def test_omitted_12A_collides_only_with_12A_not_with_section_12():
     period_letter = key_div_texts(["12. A. [Omitted.]"])
     assert period_letter.sections[0].key == "12"
     assert period_letter.sections[0].provision_status == "omitted"
+
+
+def test_lowercase_continuation_is_not_a_hyphen_suffix_and_a_real_12I_is():
+    """Space then a lowercase word is prose. A stop or a capital title is a heading.
+
+    Accepting every space-terminated letter keys ``12-I shall`` as live ``12I``.
+    """
+    prose_i = "12-I shall continue"
+    prose_a = "12-A of the Act"
+    assert key_div_texts([prose_i]).sections == ()
+    assert key_div_texts([prose_a]).sections == ()
+    long_i = (
+        "12-I shall continue the account of this instrument until the div "
+        "is past the short-text gate and would otherwise be published."
+    )
+    long_a = (
+        "12-A of the Act is the phrase in this sentence, and the div is "
+        "long enough that a false suffix would be published as its own section."
+    )
+    assert [section.key for section in key_div_texts([long_i]).sections] != ["12I"]
+    assert all(
+        section.key != "12I" and not section.key.startswith("12I-")
+        for section in key_div_texts([long_i]).sections
+    )
+    assert all(
+        section.key != "12A" and not section.key.startswith("12A-")
+        for section in key_div_texts([long_a]).sections
+    )
+    real = key_div_texts(["12-I. Heading"])
+    assert real.sections[0].key == "12I"
+    assert real.sections[0].provision_status is None
+    titled = key_div_texts([
+        "12-A Title. The title case heading applies to every instrument "
+        "presented for registration under this Act.",
+    ])
+    assert titled.sections[0].key == "12A"
+    assert titled.sections[0].title.startswith("Title")
+    beside = _keys([long_i, "12-I. Heading"])
+    assert [item for item in beside if item[0] == "12I"] == [("12I", "12-I. Heading", None)]
+    alone_i = [
+        section["section_number"] for section in split_into_sections(long_i, "Fixture Act")
+    ]
+    alone_a = [
+        section["section_number"] for section in split_into_sections(long_a, "Fixture Act")
+    ]
+    assert "12I" not in alone_i
+    assert "12A" not in alone_a
+    with_real = [
+        section["section_number"]
+        for section in split_into_sections("\n".join([long_i, REAL_12, REAL_12A]), "Fixture Act")
+    ]
+    assert with_real == ["12", "12A"]
+    with_of = [
+        section["section_number"]
+        for section in split_into_sections("\n".join([long_a, REAL_12, REAL_10]), "Fixture Act")
+    ]
+    assert with_of == ["12", "10"]
+
+
+def test_article_12AA_x_is_keyed_and_split():
+    """The exact probe ``Article 12AA. x``. The keyer stores ``12AA``.
+
+    The splitter keeps the Article label it already uses for article headings.
+    Dropping ``article`` from the keyer makes this short div noise.
+    """
+    exact = "Article 12AA. x"
+    assert parse_section_number(exact) == "12AA"
+    keyed = key_div_texts([exact])
+    assert [section.key for section in keyed.sections] == ["12AA"]
+    assert keyed.sections[0].provision_status is None
+    sections = split_into_sections(exact, "Fixture Act")
+    assert [section["section_number"] for section in sections] == ["Article 12AA"]
 
 
 def test_heading_words_and_hyphenated_amendment_notes_stay_section_12():
@@ -382,9 +472,12 @@ def test_hyphen_suffix_match_stays_linear_past_ten_thousand_characters():
     assert len(failure) >= 10000
     assert len(storm) >= 10000
     assert len(hit) >= 10000
+    prose = "12-I " + ("shall " * 2000)
+    assert len(prose) >= 10000
     started = time.perf_counter()
     assert parse_section_number(failure) is None
     assert parse_section_number(storm) == "12"
     assert parse_section_number(hit) == "12A"
+    assert parse_section_number(prose) is None
     assert key_div_texts([hit]).sections[0].key == "12A"
     assert time.perf_counter() - started < 1.0

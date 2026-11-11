@@ -19,6 +19,8 @@ from bs4 import BeautifulSoup
 
 from scraper.parsers.pakistancode_keys import (
     HYPHEN_LETTER_SUFFIX,
+    HYPHEN_SUFFIX_SPACE_OR_END,
+    PROSE_HYPHEN_CONTINUATION,
     SECTION_NUMBER_TOKEN,
     SHORT_DIV_MAX_EXCLUSIVE,
     TEXT_CAP,
@@ -95,12 +97,14 @@ ACT_WITH_YEAR_PATTERN = re.compile(
 # The token is the keyer's. ``12-A`` and ``12A`` canonicalise to ``12A``.
 # ``12AA`` is tried before ``12A``. A hyphen before a word or a digit stays a
 # delimiter (``12-Fees``, ``12-15``, ``1-7-2001``). After a finished hyphen
-# suffix, whitespace or the end of the text is enough; the atomic group keeps
-# that hyphen from being read as the delimiter. No nested quantifier.
-_HYPHEN_SUFFIX_AT_END = rf"(?>\d+{HYPHEN_LETTER_SUFFIX})(?=\s|$)"
+# suffix, a capitalised title or the end of the text is enough; the atomic
+# group keeps that hyphen from being read as the delimiter. ``12-I shall``
+# is not a heading. No nested quantifier.
+_HYPHEN_SUFFIX_AT_END = rf"(?>\d+{HYPHEN_LETTER_SUFFIX}){HYPHEN_SUFFIX_SPACE_OR_END}"
+_NOT_PROSE_HYPHEN = rf"(?!\d+[\u2013\u2014-]{PROSE_HYPHEN_CONTINUATION})"
 SECTION_DIGIT_START_RE = re.compile(
-    rf'^\s*(?:'
-    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX}))(?=\s|$)\s*'
+    rf'^\s*{_NOT_PROSE_HYPHEN}(?:'
+    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX})){HYPHEN_SUFFIX_SPACE_OR_END}\s*'
     rf'|(?P<plain_num>{SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]+'
     rf')\s*(?P<rest>.*)',
     re.DOTALL,
@@ -110,20 +114,20 @@ SECTION_KEYWORD_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _LINE_SECTION_RE = re.compile(
-    rf'(?:^|\n)\s*(?:'
+    rf'(?:^|\n)\s*{_NOT_PROSE_HYPHEN}(?:'
     rf'{_HYPHEN_SUFFIX_AT_END}\s*'
     rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:\]]\s*'
     rf')',
     re.MULTILINE,
 )
 _DIGIT_START_LINE = re.compile(
-    rf'^\s*(?:'
-    rf'(?>\d+{HYPHEN_LETTER_SUFFIX})\s+'
+    rf'^\s*{_NOT_PROSE_HYPHEN}(?:'
+    rf'(?>\d+{HYPHEN_LETTER_SUFFIX})\s+(?-i:[A-Z])'
     rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]\s+'
     rf')'
 )
 _DIGIT_CONTINUE = re.compile(
-    rf'^\s*(?:'
+    rf'^\s*{_NOT_PROSE_HYPHEN}(?:'
     rf'{_HYPHEN_SUFFIX_AT_END}'
     rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)]'
     rf')'
@@ -132,8 +136,8 @@ _TITLE_PREFIX_RE = re.compile(
     rf'^\s*(?:Section\s+)?{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]*\s*', re.IGNORECASE,
 )
 _INNER_SECTION_RE = re.compile(
-    rf'(?:Section\s+)?(?:'
-    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX}))(?=\s|$)'
+    rf'(?:Section\s+)?{_NOT_PROSE_HYPHEN}(?:'
+    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX})){HYPHEN_SUFFIX_SPACE_OR_END}'
     rf'|(?P<plain_num>{SECTION_NUMBER_TOKEN})\s*[\.\-\)]'
     rf')',
     re.IGNORECASE,
