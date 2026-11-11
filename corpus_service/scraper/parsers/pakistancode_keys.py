@@ -12,9 +12,31 @@ Walk ``div.section`` texts in document order.
 
 1. A div whose whole text is a schedule heading (``THE FIRST SCHEDULE``, ``SCHEDULE``,
    ``SCHEDULE II``, ``2ND SCHEDULE``, and the same shape) is a heading. Headings are
-   recognised before the short-div skip, so an 18-character heading is kept.
-2. Any other div of 20 characters or fewer is skipped. It is not staged and it does not
-   consume the 50-div cap. A div of 21 characters is kept. ``len`` is Unicode characters.
+   recognised before the short-div test, so an 18-character heading is kept.
+2. Length does not drop a real section (R-LENGTH-GATE). ``len`` is Unicode characters.
+
+   * A numbered provision (``1. Short title.``, ``2. Repeal.``, ``1.``, a heading-only
+     item) is kept even when it is 20 characters or fewer. Identity is rule 5. It is
+     not merged into a neighbour. An ``unscoped`` short item is quarantined, not skipped.
+   * A short numbered amendment footnote is noise (R-LENGTH-RESID-002,
+     R-LENGTH-RESID-005). The ``by`` formula (``Subs. by``, ``Ins. by``, ``Added by``,
+     ``Omitted by``, ``Rep. by``, ``Am. by``, and the unabbreviated verbs) is noise.
+     So is a bare abbreviation whose whole body is ``Ins.``, ``Subs.``, ``Am.``,
+     ``Amd.`` or ``Amdt.``, and an abbreviation followed by ``of`` (``Rep. of X.``,
+     ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions:
+     the full word, and ``Rep.`` with nothing after it, are section text. A footnote
+     longer than 20 characters is unchanged: that collision predates this gate.
+   * RESID-005-POLICY. A page that contains only these short footnotes stages no
+     rows. The notes are noise, so the page is not quarantined and ``act_keys`` is
+     omitted. An omitted set retires nothing.
+   * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
+     (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
+     numbered provision, is not given a number. It is staged as ``short-ambiguous``
+     and quarantined as ``ambiguous_section_identity``. The page omits ``act_keys``.
+   * Any other div of 20 characters or fewer is noise: blank divs, page chrome, stray
+     markers, a repeated letter, a failed heading such as ``Schedule ll``. Noise is
+     skipped, not staged, and it does not consume the 50-div cap.
+   * A div of 21 characters is content, as before.
 3. At most 50 kept divs are staged, in document order. Further kept divs are dropped by
    the cap.
 4. Schedule scope (FA-F21-018). The live PakistanCode document was not fetched: the
@@ -40,6 +62,7 @@ Walk ``div.section`` texts in document order.
      that schedule repeats ``N``)
    * schedule heading → ``schedule-heading:L``
    * numbered div under an unopened flat heading → ``unscoped:N-<sha8>``
+   * bare omission marker → ``ambiguous-<sha8>`` (quarantined, never a guessed ``N``)
    * preamble / explanation / other numberless div → ``<kind>-<sha8>``
    * a second kept div that would otherwise reuse a key → ``<key>~2``, ``~3``, …
 
@@ -95,24 +118,33 @@ Walk ``div.section`` texts in document order.
    is refused. No migration rewrites a database. Equality on the raw stored key
    does not follow an alias.
 
-The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
-number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
-``act_keys`` when it parsed those sections. It omits the set for an ``unscoped`` div,
-a page of only schedule headings, and an unparsed single chunk. A ``schedule-item``
-does not reach that path: kept schedule items suppress the splitter and are staged
-on the div path, which includes them in ``act_keys`` when the inventory is complete.
+The paragraph splitter is outside this div walk (FA-F21-019). It uses the same
+three-way test at its ``< 15`` and ``< 20`` gates: a short numbered provision is kept,
+a short numbered amendment footnote is rejected with the other noise, a bare omission
+marker is its own ``short-ambiguous`` item and is not swallowed into the previous
+section, and other noise under those gates is still rejected. A repeated paragraph
+number is kept as ``N-<sha8>`` of each stored text, not dropped. That
+harvest stamps ``act_keys`` when it parsed those sections. It omits the set for an
+``unscoped`` div, a ``short-ambiguous`` div, a page of only schedule headings, and an
+unparsed single chunk. A ``schedule-item`` does not reach that path: kept schedule
+items suppress the splitter and are staged on the div path, which includes them in
+``act_keys`` when the inventory is complete.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Mapping, Optional, Sequence
 
-# A div longer than this is content. Length == 20 is still short and is skipped
-# unless rule 1 recognised a heading. FA-F21-010 / FA-F21-011.
+logger = logging.getLogger(__name__)
+
+# Noise at or below this length is not staged and does not consume the cap.
+# A numbered provision or a bare omission marker is not noise (R-LENGTH-GATE).
+# A div of 21 characters is content. FA-F21-010 / FA-F21-011.
 SHORT_DIV_MAX_EXCLUSIVE = 20
 MAX_STAGED_DIVS = 50
 TEXT_CAP = 20000
@@ -159,8 +191,28 @@ _NAMED_SCHEDULE = re.compile(
 )
 _SCHEDULE_COPY = re.compile(r"~\d+$")
 _SCHEDULE_ITEM_BODY = re.compile(r"^(?P<label>.+):(?P<item>\d+[A-Za-z]?(?:-[0-9a-f]{8})?)$")
+# ``12-A.`` and ``10-B.`` parse as ``12`` and ``10`` (R-LENGTH-RESID-003). The hyphen
+# is a delimiter, so the letter suffix is not part of the key. Extending this
+# pattern would rekey any stored row that was read from that shape. Left unchanged.
 _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
+    re.IGNORECASE,
+)
+# Marginal amendment notes, and only at or under 20 characters.
+# ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
+# (R-LENGTH-RESID-001). The ``by`` formula is R-LENGTH-RESID-002. A bare abbreviation
+# (``Ins.``, ``Subs.``, ``Am.``, ``Amd.``, ``Amdt.``) and an abbreviation followed by
+# ``of`` (``Rep. of X.``) are R-LENGTH-RESID-005. Bare ``Rep.`` is not in that list.
+_AMENDMENT_NOTE_RE = re.compile(
+    r"^(?:subs(?:tituted)?|ins(?:erted)?|added|omitted|rep(?:ealed)?|am(?:ended)?)\.?\s+by\b",
+    re.IGNORECASE,
+)
+_BARE_AMENDMENT_ABBREV_RE = re.compile(
+    r"^[\[\(]*\s*(?:ins|subs|amdt|amd|am)\.?\s*[\]\)]*$",
+    re.IGNORECASE,
+)
+_AMENDMENT_OF_RE = re.compile(
+    r"^[\[\(]*\s*(?:ins|subs|rep|amdt|amd|am)\.?\s*[\]\)]*\s+of\b",
     re.IGNORECASE,
 )
 _STRUCTURAL_KIND = re.compile(r"^(preamble|explanation)\b", re.IGNORECASE)
@@ -169,6 +221,10 @@ _WS = re.compile(r"\s+")
 # are letters only: a one-character roman is not read from them.
 _AMBIGUOUS_SINGLE = frozenset({"i", "v", "x", "l"})
 _ROMAN_SINGLE_VALUE = {"i": "1", "v": "5", "x": "10", "l": "50"}
+# Whole-div omission markers. The letters, and nothing else, decide. A numbered
+# provision is classified first, so ``2. Repeal.`` is section 2 and not a marker.
+_OMISSION_WORDS = frozenset({"omitted", "repealed", "repeal", "rep"})
+_LETTERS = re.compile(r"[^A-Za-z]+")
 
 
 def normalise_div_text(text: str) -> str:
@@ -518,6 +574,55 @@ def parse_section_number(text: str) -> Optional[str]:
     return matched.group("num")
 
 
+def is_short_amendment_footnote(text: str) -> bool:
+    """True for a numbered marginal note of at most 20 characters.
+
+    Three shapes are notes, and nothing else. ``1. Subs. by Act`` (and ``Ins.``,
+    ``Added``, ``Omitted``, ``Rep.``, ``Am.``, and the unabbreviated verbs, each
+    followed by ``by``). A body that is only the abbreviation ``Ins.``, ``Subs.``,
+    ``Am.``, ``Amd.`` or ``Amdt.``. An abbreviation followed by ``of``, as in
+    ``7. Rep. of X.``. They are noise, so they cannot take ``N`` or ``schedule:L:N``.
+
+    ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` are provisions. A longer note
+    is not decided here.
+    """
+    normalised = normalise_div_text(text)
+    if not normalised or len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
+        return False
+    if parse_section_number(normalised) is None:
+        return False
+    body = _NUMBER_RE.sub("", normalised, count=1).strip()
+    return (
+        _AMENDMENT_NOTE_RE.match(body) is not None
+        or _BARE_AMENDMENT_ABBREV_RE.match(body) is not None
+        or _AMENDMENT_OF_RE.match(body) is not None
+    )
+
+
+def short_div_disposition(text: str) -> str:
+    """How one div or paragraph is treated when a length gate used to drop it.
+
+    ``provision`` — the text parses as a numbered section or schedule item. Length
+    does not drop it, and it is not merged into a neighbour.
+    ``ambiguous`` — the letters are only an omission or repeal marker, and there is
+    no section number to publish. Fail closed: quarantine, do not invent ``N``.
+    ``noise`` — 20 characters or fewer and neither of the above, including a short
+    numbered amendment footnote. Skip it.
+    ``content`` — longer than the noise gate. The caller uses the ordinary rules.
+    """
+    normalised = normalise_div_text(text)
+    if is_short_amendment_footnote(normalised):
+        return "noise"
+    if parse_section_number(normalised) is not None:
+        return "provision"
+    if len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
+        return "content"
+    letters = _LETTERS.sub("", normalised).lower()
+    if letters in _OMISSION_WORDS:
+        return "ambiguous"
+    return "noise"
+
+
 def _structural_kind(text: str) -> Optional[str]:
     matched = _STRUCTURAL_KIND.match(text or "")
     if matched is None:
@@ -628,8 +733,13 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
                 heading_before_body = True
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
-            skipped += 1
-            continue
+            disposition = short_div_disposition(text)
+            if disposition == "ambiguous":
+                kept.append(_Classified(text=text, kind="short-ambiguous", number=None, label=None))
+                continue
+            if disposition != "provision":
+                skipped += 1
+                continue
         number = parse_section_number(text)
         chosen = _resolve_heading(container, mode) if container is not None else scope
         if number is not None and chosen is not None and chosen[0] == "unresolved":
@@ -672,6 +782,8 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
         if item.label:
             return f"unresolved-schedule-heading:{item.label}"
         return f"unresolved-schedule-{content_token(item.text)}"
+    if item.kind == "short-ambiguous":
+        return f"ambiguous-{content_token(item.text)}"
     if item.kind == "unscoped" and item.number is not None:
         return f"unscoped:{item.number}-{content_token(item.text)}"
     if item.kind == "preamble":
@@ -682,7 +794,8 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
 
 
 _FALLBACK_SUPPRESSED_KINDS = frozenset({
-    "section", "schedule-item", "preamble", "explanation", "div", "unscoped", "schedule-unresolved",
+    "section", "schedule-item", "preamble", "explanation", "div", "unscoped",
+    "schedule-unresolved", "short-ambiguous",
 })
 # ``unscoped`` is a numbered div with no proven parent: a flat heading before any body
 # section, and no ancestor heading. It stays withheld (FA-17). A schedule item already
@@ -692,7 +805,7 @@ _FALLBACK_SUPPRESSED_KINDS = frozenset({
 PUBLISHABLE_SECTION_KINDS = frozenset({
     "section", "preamble", "explanation", "div", "schedule-heading", "schedule-item",
 })
-AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-unresolved"})
+AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-unresolved", "short-ambiguous"})
 REASON_AMBIGUOUS_SECTION = "ambiguous_section_identity"
 REASON_SCHEDULE_LETTER_ROMAN = "schedule_letter_roman_ambiguous"
 _SCHEDULE_KEY_PREFIXES = ("schedule:", "schedule-heading:")
@@ -712,10 +825,11 @@ def is_schedule_publication_key(key: str) -> bool:
 def ambiguous_section_reason(kind: Optional[str]) -> Optional[str]:
     """Quarantine reason for a kind that must not be published, else None.
 
-    ``unscoped`` keeps ``ambiguous_section_identity``. An unresolved schedule letter
-    uses ``schedule_letter_roman_ambiguous`` so the two holds stay distinct.
+    ``unscoped`` and ``short-ambiguous`` keep ``ambiguous_section_identity``. An
+    unresolved schedule letter uses ``schedule_letter_roman_ambiguous`` so the two
+    holds stay distinct.
     """
-    if kind == "unscoped":
+    if kind in ("unscoped", "short-ambiguous"):
         return REASON_AMBIGUOUS_SECTION
     if kind == "schedule-unresolved":
         return REASON_SCHEDULE_LETTER_ROMAN
@@ -871,6 +985,43 @@ class HarvestDelta:
     retired: list = field(default_factory=list)
 
 
+def _refuse_act_keys(reason: str) -> None:
+    """Retire nothing. The caller sees the refusal; the store is left untouched."""
+    message = f"act_keys refused ({reason}); retiring nothing"
+    logger.error(message)
+    raise ValueError(message)
+
+
+def _materialise_act_keys(sections) -> list:
+    """One concrete list of sections, or a refusal.
+
+    Retirement runs only for a non-empty collection of sections whose keys are
+    non-empty strings. ``None``, ``str``, ``bytes``, a mapping, an empty or
+    exhausted iterator, and a collection with a non-string or empty element are
+    refused. A generator is read once here and is not read again.
+    """
+    if sections is None:
+        _refuse_act_keys("None")
+    if isinstance(sections, (str, bytes, bytearray)):
+        _refuse_act_keys(type(sections).__name__)
+    if isinstance(sections, Mapping):
+        _refuse_act_keys("mapping")
+    if isinstance(sections, (list, tuple)):
+        staged = list(sections)
+    else:
+        try:
+            staged = list(sections)
+        except TypeError:
+            _refuse_act_keys(type(sections).__name__)
+    if not staged:
+        _refuse_act_keys("empty")
+    for item in staged:
+        key = item.key if isinstance(item, KeyedDiv) else None
+        if not isinstance(key, str) or key == "":
+            _refuse_act_keys("element is not a section with a non-empty str key")
+    return staged
+
+
 def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Optional[str] = None) -> HarvestDelta:
     """Publish ``sections`` onto ``store``.
 
@@ -878,7 +1029,12 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     identity, and the same text is unchanged. New text appends a version and keeps the
     stored key. The stored schedule key is not rewritten. A retired row with that
     identity is revived on the stored key, versions included. A live key whose identity is
-    absent from this harvest is retired. A harvest whose keys are all schedule keys
+    absent from this harvest is retired. The inventory is materialised once. Retirement
+    runs only when that list is a non-empty collection of sections with non-empty str
+    keys. Every other shape raises ``ValueError`` and retires nothing. Publish uses
+    ``keys_to_retire``, which already returns nothing for a missing or empty set.
+    A non-empty list still retires keys it does not contain.
+    A harvest whose keys are all schedule keys
     does not retire a body section: adding a schedule is not an inventory that repeals
     the act. Two rows that already share one schedule identity are left as they
     are: this harvest does not pick one, insert a third, or retire them. No second row
@@ -888,6 +1044,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     shares the First Schedule.
     """
     delta = HarvestDelta()
+    staged = _materialise_act_keys(sections)
     fold = label_mode if label_mode == "roman" else None
     by_identity: dict = {}
     conflicts = set()
@@ -899,8 +1056,8 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
             by_identity[ident] = key
     seen_raw = set()
     seen_identities = set()
-    blocked = any(section_kind_is_ambiguous(section.kind) for section in sections)
-    for section in sections:
+    blocked = any(section_kind_is_ambiguous(section.kind) for section in staged)
+    for section in staged:
         if section_kind_is_ambiguous(section.kind):
             continue
         ident = schedule_key_identity(section.key, mode=fold)

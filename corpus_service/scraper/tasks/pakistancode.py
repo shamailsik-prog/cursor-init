@@ -7,6 +7,7 @@ from scraper.parsers.pakistancode_keys import (
     key_div_texts,
     normalise_div_text,
     page_has_text_besides_schedule_headings,
+    ambiguous_section_reason,
     parse_section_number,
     schedule_container_token,
     suppresses_plain_text_fallback,
@@ -73,7 +74,7 @@ async def scrape_pakistancode(source, db):
                 title = soup2.find("h1")
                 act_name = title.get_text(strip=True) if title else slug
                 # FA-F21-017: identity is the locked key in pakistancode_keys, not the first 20
-                # characters of the div. Headings are decided before the short-div skip.
+                # characters of the div. Headings are decided before the short-div test.
                 div_nodes = soup2.find_all("div", class_=re.compile("section"))
                 harvest_at = datetime.now(timezone.utc).isoformat()
                 keyed = key_div_texts(
@@ -107,7 +108,7 @@ async def scrape_pakistancode(source, db):
                         ))
                         rows += 1
                 else:
-                    # No section divs, only short non-heading noise, or only schedule headings.
+                    # No section divs, only short noise, or only schedule headings.
                     # Headings are staged. They do not by themselves retire the act. A page whose
                     # text is only those headings (and the act title) does not run the splitter,
                     # so the title is not staged as a spurious section. Paragraph sections that
@@ -143,8 +144,10 @@ async def scrape_pakistancode(source, db):
                         if heading_texts and not page_has_text_besides_schedule_headings(body, heading_texts, act_name):
                             continue
                         title = (p.get("section_title") or "")[:500]
+                        parsed_kind = p.get("section_kind")
+                        kind = parsed_kind if ambiguous_section_reason(parsed_kind) else "fallback"
                         pending.append((p["section_number"], body, title, {
-                            "section_kind": "fallback",
+                            "section_kind": kind,
                             "keying": "fa-f21-017",
                             "harvest_at": harvest_at,
                         }))
