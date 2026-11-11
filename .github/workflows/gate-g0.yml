@@ -68,7 +68,7 @@ jobs:
           # - mutation-documents: `npm run mutation:documents` (Stryker on platform/documents with the F03 unit
           #   suites in vitest.stryker.documents.config.ts; those suites drive the documents route and uploadDocument).
           # All of them also depend on this workflow file.
-          postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
+          postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|tests/fa-data-002\.classification-coverage\.pg\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
           corpus_service_re='^(corpus_service/|postgres/|tests/fixtures/corpus/|\.github/workflows/gate-g0\.yml$)'
           documents_re='^(platform/documents/|platform/http/validation\.ts$|app/api/d1/documents/|services/d1-6/|tests/f03-document-|tests/helpers/s3-document-vault\.ts$|tests/setup/|stryker\.config\.mjs$|stryker\.documents\.config\.mjs$|vitest\.config\.ts$|vitest\.stryker\.documents\.config\.ts$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
           if [ "$EVENT_NAME" != "pull_request" ]; then
