@@ -23,6 +23,7 @@ from scraper.parsers.pakistancode_keys import (
     content_token,
     is_short_amendment_footnote,
     normalise_div_text,
+    omission_placeholder_status,
     short_div_disposition,
 )
 
@@ -349,6 +350,9 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
             continue
         kept = dict(section)
         kept["section_number"] = _identity_key(number, text, counts[number] > 1, seen)
+        status = omission_placeholder_status(text)
+        if status:
+            kept["provision_status"] = status
         out.append(kept)
     return out
 

@@ -22,7 +22,14 @@ allowlists it), so the repoint can drop the projection here.
   row). When the staging row carries a non-empty PakistanCode ``act_keys`` set, master rows of that
   short name whose keys are absent from the set are marked ``is_repealed``. An empty set retires
   nothing. The survivor of a legacy duplicate key is the earliest ``created_at``, then ``id``.
-  FA-F21-021: a PakistanCode row stamped ``harvest_at`` does not overwrite text, clear ``is_repealed``,
+  R-LENGTH-RESID-001: a numbered omission, repeal or deletion placeholder is published
+  on its own key with ``is_repealed`` set, so the public list and section lookup do
+  not serve it as current law. The text stays. A later harvest whose body is
+  operative clears ``is_repealed``. RESID-001-EMBED-001: ``enqueue_embedding`` does
+  not queue a non-live statute, and it removes that row's vectors. Semantic
+  retrieval uses ``live_statute_semantic_stmt``, which also requires ``is_repealed``
+  to be false. FA-F21-021: a PakistanCode row stamped
+  ``harvest_at`` does not overwrite text, clear ``is_repealed``,
   insert a missing key, or retire keys when an older ``harvest_at`` is already stored for that
   short name, and a missing incoming clock is the same refusal when any clock is stored. The
   comparison is the harvest clock, not ``updated_at``. Rows whose ``harvest_at`` is NULL have
@@ -37,8 +44,10 @@ allowlists it), so the repoint can drop the projection here.
   attaches to it and does not rewrite ``section_number``, insert a second row, or
   retire the stored key. Two stored rows that already share the identity are not
   merged; that publish returns ``alias_conflict`` and retires nothing.
-* ``enqueue_embedding``: F23's outbox statement (ruling 9), unchanged: one ``embedding_queue`` row per
-  ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set.
+* ``enqueue_embedding``: F23's outbox statement (ruling 9): one ``embedding_queue`` row per
+  ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set. A statute
+  with ``is_repealed`` is not queued. Its master vector, chunk vectors and any
+  held attempt vector are cleared, and a queue row that is not mid-claim is removed.
 
 Every write runs in the caller's transaction (the publish consumer's per-record transaction).
 """
@@ -49,11 +58,17 @@ import json
 import uuid
 from typing import Any, Final, NamedTuple, Optional, Tuple
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm.attributes import flag_modified
 
-from scraper.models import CaseLawMaster, EmbeddingQueue, StatutesMaster
+from scraper.models import (
+    CaseLawMaster,
+    EmbeddingAttempt,
+    EmbeddingQueue,
+    RecordEmbeddingChunk,
+    StatutesMaster,
+)
 from scraper.parsers.pakistancode_keys import (
     PAKISTANCODE_SOURCE,
     act_keys_from_metadata,
@@ -62,6 +77,7 @@ from scraper.parsers.pakistancode_keys import (
     is_schedule_publication_key,
     keys_to_retire,
     note_section_version,
+    omission_placeholder_status,
     schedule_key_identity,
     section_kind_is_ambiguous,
     snapshot_is_incomplete,
@@ -70,6 +86,8 @@ from scraper.tasks.promotion import citation_lock_key
 
 CASE_MASTER: Final = "case_law_master"
 STATUTE_MASTER: Final = "statutes_master"
+# Queue rows and lifecycle details use this when a statute is kept but not embedded.
+EMBEDDING_WITHHELD_NON_LIVE: Final = "non_live"
 PUBLICATION_NAMESPACE: Final = uuid.NAMESPACE_URL
 # F23's namespace for "publishing this citation into case_law_master" (scraper.routers.quarantine
 # CITATION_LOCK_NAMESPACE; a rules test pins that the two agree).
@@ -116,8 +134,86 @@ def statute_publication_id(key: str) -> uuid.UUID:
     return uuid.uuid5(PUBLICATION_NAMESPACE, f"corpus-service:{STATUTE_MASTER}:{key}")
 
 
-async def enqueue_embedding(db: Any, table_name: str, record_id: uuid.UUID) -> uuid.UUID:
-    """The outbox row for a published record (F23 ruling 9): exactly once by (table_name, record_id)."""
+def live_statute_semantic_stmt():
+    """Statute rows a semantic search or RAG reader may rank.
+
+    A stored vector is not enough. ``is_repealed`` excludes omission and repeal
+    placeholders and every other non-live section, including one whose vector
+    has not been cleared yet.
+    """
+    return select(
+        StatutesMaster.id,
+        StatutesMaster.short_name,
+        StatutesMaster.section_number,
+        StatutesMaster.section_text,
+        StatutesMaster.embedding,
+    ).where(
+        StatutesMaster.is_repealed.is_(False),
+        StatutesMaster.embedding.is_not(None),
+    )
+
+
+async def statute_is_non_live(db: Any, record_id: uuid.UUID) -> bool:
+    """True when this statutes_master row is marked non-live. A missing row is not."""
+    flag = (await db.execute(
+        select(StatutesMaster.is_repealed).where(StatutesMaster.id == record_id)
+    )).scalar()
+    return flag is True
+
+
+async def withdraw_statute_embeddings(db: Any, record_id: uuid.UUID) -> None:
+    """Drop vectors for a statute that is no longer live law.
+
+    The master vector and chunk vectors go. A receipt that still holds a vector,
+    or an open attempt, is closed so a later claim cannot store it. A queue row
+    a batch is currently processing is left for that batch to finish; every
+    other queue row is removed so it cannot be claimed.
+    """
+    await db.execute(
+        update(StatutesMaster)
+        .where(StatutesMaster.id == record_id)
+        .values(embedding=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(
+        delete(RecordEmbeddingChunk)
+        .where(
+            RecordEmbeddingChunk.table_name == STATUTE_MASTER,
+            RecordEmbeddingChunk.record_id == record_id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(
+        update(EmbeddingAttempt)
+        .where(
+            EmbeddingAttempt.table_name == STATUTE_MASTER,
+            EmbeddingAttempt.record_id == record_id,
+            EmbeddingAttempt.outcome.in_(("started", "answered")),
+        )
+        .values(embedding=None, outcome="superseded", finished_at=func.now())
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(
+        delete(EmbeddingQueue)
+        .where(
+            EmbeddingQueue.table_name == STATUTE_MASTER,
+            EmbeddingQueue.record_id == record_id,
+            EmbeddingQueue.status != "processing",
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def enqueue_embedding(db: Any, table_name: str, record_id: uuid.UUID) -> Optional[uuid.UUID]:
+    """The outbox row for a published record (F23 ruling 9): exactly once by (table_name, record_id).
+
+    A non-live statute is not queued. ``None`` means the vectors were withdrawn
+    instead. A queue row previously closed because the statute was non-live is
+    opened again when the statute is live.
+    """
+    if table_name == STATUTE_MASTER and await statute_is_non_live(db, record_id):
+        await withdraw_statute_embeddings(db, record_id)
+        return None
     inserted = (await db.execute(
         pg_insert(EmbeddingQueue)
         .values(id=uuid.uuid4(), record_id=record_id, table_name=table_name, status="pending")
@@ -126,8 +222,20 @@ async def enqueue_embedding(db: Any, table_name: str, record_id: uuid.UUID) -> u
     )).scalar()
     if inserted is not None:
         return inserted
-    return (await db.execute(select(EmbeddingQueue.id).where(
+    row = (await db.execute(select(EmbeddingQueue).where(
         EmbeddingQueue.table_name == table_name, EmbeddingQueue.record_id == record_id))).scalar_one()
+    if (
+        table_name == STATUTE_MASTER
+        and row.status == "completed"
+        and row.error_message == EMBEDDING_WITHHELD_NON_LIVE
+    ):
+        row.status = "pending"
+        row.error_message = None
+        row.error_type = None
+        row.lease_owner = None
+        row.lease_expires_at = None
+        row.next_attempt_at = None
+    return row.id
 
 
 async def outbox_row(db: Any, table_name: str, record_id: uuid.UUID) -> Optional[uuid.UUID]:
@@ -272,9 +380,13 @@ async def _unknown_history_row(db: Any, existing, body: str, incoming, stored_ma
     if existing.harvest_at is None and same_text:
         if incoming is not None:
             existing.harvest_at = incoming
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
         await db.flush()
         return StatutePublication(existing.id, True, False, False, False, False, False, False)
     if same_text:
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
         await db.flush()
         return StatutePublication(existing.id, True, False, False, False, False, False, False)
     return _baseline_refusal(incoming, stored_max)
@@ -350,7 +462,11 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
             existing.section_text = body
             if st.extracted_section_title:
                 existing.section_title = st.extracted_section_title
-        if existing.is_repealed:
+        # A placeholder stays non-live. Operative text of a key that is in this
+        # harvest is current law again, including a key that had been retired.
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
+        elif existing.is_repealed:
             existing.is_repealed = False
         if incoming is not None:
             existing.harvest_at = incoming
@@ -369,6 +485,7 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         source_url=st.source_url,
         confidence_score=st.confidence_score,
         harvest_at=incoming,
+        is_repealed=omission_placeholder_status(body) is not None,
     ))
     await db.flush()
     await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)

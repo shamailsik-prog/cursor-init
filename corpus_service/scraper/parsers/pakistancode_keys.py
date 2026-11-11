@@ -23,9 +23,20 @@ Walk ``div.section`` texts in document order.
      ``Omitted by``, ``Rep. by``, ``Am. by``, and the unabbreviated verbs) is noise.
      So is a bare abbreviation whose whole body is ``Ins.``, ``Subs.``, ``Am.``,
      ``Amd.`` or ``Amdt.``, and an abbreviation followed by ``of`` (``Rep. of X.``,
-     ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions:
-     the full word, and ``Rep.`` with nothing after it, are section text. A footnote
-     longer than 20 characters is unchanged: that collision predates this gate.
+     ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions
+     for identity: the full word, and ``Rep.`` with nothing after it, are section
+     text, not noise. ``1. Omitted.`` and ``2. Rep.`` are non-live placeholders
+     (R-LENGTH-RESID-001). ``2. Repeal.`` is a section heading and stays live. A
+     footnote longer than 20 characters is still staged: that collision predates
+     this gate. When the whole body after the number is only an omission, repeal
+     or deletion placeholder, the key is unchanged and ``provision_status`` is
+     ``omitted``, ``repealed`` or ``deleted``. Publish sets ``is_repealed``. The
+     public statute list and ``lookup_real_section`` do not serve that row as
+     current law. The row, the key, the number and the raw text stay. A longer
+     section that only mentions those words stays live.
+   * RESID-001-POLICY-001. ``1. Omitted.`` and a bare ``2. Rep.`` are non-live
+     on purpose. They keep the section key and the number. They are not noise,
+     and they are not served as current law. ``2. Repeal.`` stays live.
    * RESID-005-POLICY. A page that contains only these short footnotes stages no
      rows. The notes are noise, so the page is not quarantined and ``act_keys`` is
      omitted. An omitted set retires nothing.
@@ -122,8 +133,9 @@ The paragraph splitter is outside this div walk (FA-F21-019). It uses the same
 three-way test at its ``< 15`` and ``< 20`` gates: a short numbered provision is kept,
 a short numbered amendment footnote is rejected with the other noise, a bare omission
 marker is its own ``short-ambiguous`` item and is not swallowed into the previous
-section, and other noise under those gates is still rejected. A repeated paragraph
-number is kept as ``N-<sha8>`` of each stored text, not dropped. That
+section, and other noise under those gates is still rejected. A numbered placeholder
+keeps its number and receives the same ``provision_status`` as a div. A repeated
+paragraph number is kept as ``N-<sha8>`` of each stored text, not dropped. That
 harvest stamps ``act_keys`` when it parsed those sections. It omits the set for an
 ``unscoped`` div, a ``short-ambiguous`` div, a page of only schedule headings, and an
 unparsed single chunk. A ``schedule-item`` does not reach that path: kept schedule
@@ -200,9 +212,11 @@ _NUMBER_RE = re.compile(
 )
 # Marginal amendment notes, and only at or under 20 characters.
 # ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
-# (R-LENGTH-RESID-001). The ``by`` formula is R-LENGTH-RESID-002. A bare abbreviation
-# (``Ins.``, ``Subs.``, ``Am.``, ``Amd.``, ``Amdt.``) and an abbreviation followed by
-# ``of`` (``Rep. of X.``) are R-LENGTH-RESID-005. Bare ``Rep.`` is not in that list.
+# for identity (R-LENGTH-RESID-001). ``1. Omitted.`` and ``2. Rep.`` are non-live
+# placeholders; ``2. Repeal.`` stays live. The ``by`` formula is R-LENGTH-RESID-002.
+# A bare abbreviation (``Ins.``, ``Subs.``, ``Am.``, ``Amd.``, ``Amdt.``) and an
+# abbreviation followed by ``of`` (``Rep. of X.``) are R-LENGTH-RESID-005. Bare
+# ``Rep.`` is not in that list.
 _AMENDMENT_NOTE_RE = re.compile(
     r"^(?:subs(?:tituted)?|ins(?:erted)?|added|omitted|rep(?:ealed)?|am(?:ended)?)\.?\s+by\b",
     re.IGNORECASE,
@@ -225,6 +239,48 @@ _ROMAN_SINGLE_VALUE = {"i": "1", "v": "5", "x": "10", "l": "50"}
 # provision is classified first, so ``2. Repeal.`` is section 2 and not a marker.
 _OMISSION_WORDS = frozenset({"omitted", "repealed", "repeal", "rep"})
 _LETTERS = re.compile(r"[^A-Za-z]+")
+# R-LENGTH-RESID-001. The whole body after the number is a placeholder, or it is live.
+# ``is_repealed`` on the master row is the existing live-law flag. These values say which
+# placeholder it was. A bare unnumbered marker is not decided here.
+NON_LIVE_PROVISION_STATUSES = frozenset({"omitted", "repealed", "deleted"})
+_OPERATIVE_CLAUSE = re.compile(
+    r"\b(?:hereby|shall|deemed|provided|whereas|notwithstanding)\b",
+    re.IGNORECASE,
+)
+# Three or more asterisks, spaces allowed, optional brackets and a trailing stop.
+_STAR_PLACEHOLDER_RE = re.compile(
+    r"^(?:[\[\(]\s*)?(?:\*(?:\s+|(?=\*))){2,}\*(?:\s*[\]\)\.])*\s*$"
+)
+_STATUS_PLACEHOLDER_RE = re.compile(
+    r"""
+    ^
+    (?:[\[\(]\s*)?
+    (?:(?:\d{1,3}|[*†‡])\s*)?
+    (?:[\[\(]\s*)?
+    (?P<word>omitted|omit|repealed|deleted|rep\.)
+    \.?
+    (?:
+        \s+(?P<rel>by|of)\b
+        (?P<tail>.*)?
+    )?
+    \s*
+    (?:[\]\)]\s*){0,3}
+    \.?
+    \s*
+    $
+    """,
+    re.IGNORECASE | re.VERBOSE | re.DOTALL,
+)
+# ``12-A.`` is keyed as ``12`` (R-LENGTH-RESID-003). The letter stays in the body.
+# Status may read past that one letter. The key does not change.
+_LETTER_SUFFIX_RE = re.compile(
+    r"^[A-Za-z][\.\)\:\-\u2013\u2014]\s*(?P<rest>\S.*)$"
+)
+_CITATION_ABBREV = frozenset({
+    "ord", "s", "ss", "sec", "sch", "sched", "no", "nos", "art", "arts",
+    "cl", "cls", "pt", "para", "paras", "vol", "ch", "chap", "sub", "subs",
+    "ins", "am", "amd", "p", "pp",
+})
 
 
 def normalise_div_text(text: str) -> str:
@@ -584,7 +640,8 @@ def is_short_amendment_footnote(text: str) -> bool:
     ``7. Rep. of X.``. They are noise, so they cannot take ``N`` or ``schedule:L:N``.
 
     ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` are provisions. A longer note
-    is not decided here.
+    is not decided here. R-LENGTH-RESID-001 marks a staged placeholder non-live
+    without changing this noise test.
     """
     normalised = normalise_div_text(text)
     if not normalised or len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
@@ -597,6 +654,76 @@ def is_short_amendment_footnote(text: str) -> bool:
         or _BARE_AMENDMENT_ABBREV_RE.match(body) is not None
         or _AMENDMENT_OF_RE.match(body) is not None
     )
+
+
+def _status_for_word(word: str) -> str:
+    token = word.lower().rstrip(".")
+    if token in {"omitted", "omit"}:
+        return "omitted"
+    if token in {"repealed", "rep"}:
+        return "repealed"
+    return "deleted"
+
+
+def _citation_tail_ok(tail: str) -> bool:
+    """True when text after ``by`` or ``of`` is a citation, not a second sentence.
+
+    ``Ord. X`` and ``s. 3`` are citations. ``mistake. The proviso`` is a sentence.
+    """
+    text = (tail or "").strip()
+    if not text:
+        return True
+    if _OPERATIVE_CLAUSE.search(text):
+        return False
+    if ";" in text or "?" in text:
+        return False
+    if re.search(r"\d\.\s+[A-Z]", text):
+        return False
+    for match in re.finditer(r"([A-Za-z]+)\.\s+", text):
+        if match.group(1).lower() not in _CITATION_ABBREV:
+            return False
+    return True
+
+
+def _placeholder_body(body: str) -> Optional[str]:
+    """``omitted``, ``repealed`` or ``deleted`` when ``body`` is only a placeholder."""
+    text = (body or "").strip()
+    if not text or _OPERATIVE_CLAUSE.search(text):
+        return None
+    if text.count("*") >= 3 and _STAR_PLACEHOLDER_RE.fullmatch(text) and not _LETTERS.sub("", text):
+        return "omitted"
+    matched = _STATUS_PLACEHOLDER_RE.fullmatch(text)
+    if matched is None:
+        return None
+    relation = (matched.group("rel") or "").lower()
+    word = matched.group("word")
+    if relation == "of" and not word.lower().startswith("rep"):
+        return None
+    if not _citation_tail_ok(matched.group("tail") or ""):
+        return None
+    return _status_for_word(word)
+
+
+def omission_placeholder_status(text: str) -> Optional[str]:
+    """Non-live status when the whole body after the number is a placeholder.
+
+    Returns ``omitted``, ``repealed`` or ``deleted``. Returns None when there is
+    no section number, when the body is operative, and when a repeal or omission
+    word only occurs inside a longer provision. This does not choose the key.
+    ``2. Repeal.`` is a heading and returns None. ``12-A. [Omitted.]`` is read
+    past the letter the keyer leaves in the body; the key stays ``12``.
+    """
+    normalised = normalise_div_text(text)
+    if parse_section_number(normalised) is None:
+        return None
+    body = _NUMBER_RE.sub("", normalised, count=1).strip()
+    status = _placeholder_body(body)
+    if status:
+        return status
+    suffix = _LETTER_SUFFIX_RE.match(body)
+    if suffix is None:
+        return None
+    return _placeholder_body(suffix.group("rest").strip())
 
 
 def short_div_disposition(text: str) -> str:
@@ -640,6 +767,8 @@ class KeyedDiv:
     kind: str
     lookup_number: Optional[str]
     schedule_label: Optional[str]
+    # R-LENGTH-RESID-001. None is live law. A value is kept with the key and the text.
+    provision_status: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -957,6 +1086,7 @@ def key_div_texts(texts: Sequence[str], containers: Optional[Sequence[Optional[s
             kind=item.kind,
             lookup_number=lookup,
             schedule_label=item.label if item.kind in ("schedule-heading", "schedule-item") else None,
+            provision_status=omission_placeholder_status(item.text) if item.number else None,
         ))
     return DivKeyingResult(
         sections=tuple(sections), skipped_short=skipped, dropped_by_cap=dropped,
@@ -975,6 +1105,12 @@ class PublishedSection:
     versions: list
     retired: bool = False
     title: Optional[str] = None
+    provision_status: Optional[str] = None
+
+
+def _non_live(row: PublishedSection) -> bool:
+    """True when the row is an omission, repeal or deletion placeholder."""
+    return row.provision_status in NON_LIVE_PROVISION_STATUSES
 
 
 @dataclass
@@ -1076,6 +1212,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
                 versions=[section.text],
                 retired=False,
                 title=section.title,
+                provision_status=section.provision_status,
             )
             by_identity[ident] = section.key
             delta.inserted.append(section.key)
@@ -1084,6 +1221,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
         current.kind = section.kind
         current.lookup_number = section.lookup_number
         current.title = section.title
+        current.provision_status = section.provision_status
         if current.text != section.text:
             current.versions.append(section.text)
             current.text = section.text
@@ -1109,16 +1247,17 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
 def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> Optional[PublishedSection]:
     """The live body section whose key is the real number ``number``.
 
-    A schedule item, a content-addressed div, and a retired row are not returned.
-    Two live rows with the same key cannot occur; zero or many matches return None
-    so a tie is never broken by publish order.
+    A schedule item, a content-addressed div, a retired row, and a numbered
+    omission or repeal placeholder are not returned. The placeholder stays in
+    the store. Two live rows with the same key cannot occur; zero or many
+    matches return None so a tie is never broken by publish order.
     """
     wanted = (number or "").strip()
     if not wanted:
         return None
     hits = [
         row for row in store.values()
-        if not row.retired and row.kind == "section" and row.key == wanted
+        if not row.retired and not _non_live(row) and row.kind == "section" and row.key == wanted
     ]
     if len(hits) != 1:
         return None
@@ -1134,17 +1273,20 @@ def section_by_key(
     identity is that row. Zero or several matches return None, so two stored
     spellings are not collapsed by lookup order. A single letter ``i``/``v``/``x``/``l``
     matches a number only when ``label_mode`` is ``roman``, and ``l`` then matches 50.
+    A numbered placeholder is not current law and is not returned. The row stays
+    in the store.
     """
     row = store.get(key)
     if row is not None:
-        if row.retired:
+        if row.retired or _non_live(row):
             return None
         return row
     fold = label_mode if label_mode == "roman" else None
     ident = schedule_key_identity(key, mode=fold)
     hits = [
         candidate for stored, candidate in store.items()
-        if not candidate.retired and schedule_key_identity(stored, mode=fold) == ident
+        if not candidate.retired and not _non_live(candidate)
+        and schedule_key_identity(stored, mode=fold) == ident
     ]
     if len(hits) != 1:
         return None
