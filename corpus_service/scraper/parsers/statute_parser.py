@@ -17,7 +17,13 @@ from typing import List, Dict, Optional, Tuple
 from urllib.parse import urlparse, unquote
 from bs4 import BeautifulSoup
 
-from scraper.parsers.pakistancode_keys import TEXT_CAP, content_token
+from scraper.parsers.pakistancode_keys import (
+    SHORT_DIV_MAX_EXCLUSIVE,
+    TEXT_CAP,
+    content_token,
+    normalise_div_text,
+    short_div_disposition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -211,28 +217,116 @@ def _identity_key(number: str, text: str, repeated: bool, seen: Dict[str, int]) 
     return f"{base}~{seen[base]}"
 
 
+def _rejected_by_length(text: str, limit: int) -> bool:
+    """True when an old length gate still rejects this fragment.
+
+    A numbered provision and a bare omission marker are never rejected for length.
+    Noise shorter than ``limit`` still is. ``limit`` is the gate that was already
+    there (10, 15, or 20), so this does not start rejecting longer noise.
+    """
+    if not text or len(text) >= limit:
+        return False
+    return short_div_disposition(text) == "noise"
+
+
+def _ambiguous_section(text: str) -> Dict[str, str]:
+    """One bare omission marker. The number is assigned in ``_deduplicate_sections``."""
+    marker = normalise_div_text(text)
+    return {
+        "section_number": "",
+        "section_title": marker[:500],
+        "section_text": marker,
+        "section_kind": "short-ambiguous",
+    }
+
+
+def _line_segments(plain: str):
+    """Split plain text so a whole-line omission marker is not part of a numbered neighbour.
+
+    A page with no numbered line is left as one run, so an unparsed paragraph is not
+    reduced to the marker. A page that is only markers is those markers, in order.
+    """
+    lines = (plain or "").split("\n")
+    meaningful = [line for line in lines if line.strip()]
+    if meaningful and all(short_div_disposition(line) == "ambiguous" for line in meaningful):
+        return [("ambiguous", normalise_div_text(line)) for line in meaningful]
+    if not any(short_div_disposition(line) == "provision" for line in lines):
+        text = (plain or "").strip()
+        return [("text", text)] if text else []
+    segments = []
+    buffer: List[str] = []
+
+    def flush() -> None:
+        text = "\n".join(buffer).strip()
+        buffer.clear()
+        if text:
+            segments.append(("text", text))
+
+    for line in lines:
+        if short_div_disposition(line) == "ambiguous":
+            flush()
+            segments.append(("ambiguous", normalise_div_text(line)))
+        else:
+            buffer.append(line)
+    flush()
+    return segments
+
+
+def _short_result_wins(result: List[Dict[str, str]]) -> bool:
+    """One short numbered provision is the answer. Do not parse it again and count it twice.
+
+    A marker-only list does not win here: a later strategy may still find the sections
+    around it. A list that already has a provision and a marker wins by length.
+    """
+    if len(result) != 1:
+        return False
+    if result[0].get("section_kind") == "short-ambiguous":
+        return False
+    text = result[0].get("section_text", "")
+    return len(text) <= SHORT_DIV_MAX_EXCLUSIVE and short_div_disposition(text) == "provision"
+
+
 def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Keep every recognised section. A shared number is disambiguated, not dropped.
 
-    A unique section shorter than 20 characters is still omitted: that gate predates
-    FA-F21-019 and is how the strategies reject a fragment. A section that shares its
-    number with another recognised section is kept even when it is that short, and its
-    text is not replaced by the other copy. Numbers above 5000 are still omitted.
+    A unique numbered provision is kept even when it is shorter than 20 characters.
+    Noise that is unique and shorter than 20 is still omitted. A section that shares
+    its number with another recognised section is kept even when it is that short, and
+    its text is not replaced by the other copy. A bare omission marker stays its own
+    row (``ambiguous-<sha8>``, or ``~2`` for a second copy) and is not numbered.
+    Numbers above 5000 are still omitted.
     """
-    candidates = []
+    provisions = []
     for section in sections:
+        if section.get("section_kind") == "short-ambiguous":
+            continue
         number = _section_number_token(section)
         if not number or _rejected_section_number(section, number):
             continue
-        candidates.append((section, number))
+        provisions.append((section, number))
     counts: Dict[str, int] = {}
-    for _section, number in candidates:
+    for _section, number in provisions:
         counts[number] = counts.get(number, 0) + 1
     seen: Dict[str, int] = {}
+    ambiguous_seen: Dict[str, int] = {}
     out = []
-    for section, number in candidates:
+    for section in sections:
+        if section.get("section_kind") == "short-ambiguous":
+            text = normalise_div_text(section.get("section_text", ""))
+            base = f"ambiguous-{content_token(text)}"
+            ambiguous_seen[base] = ambiguous_seen.get(base, 0) + 1
+            kept = dict(section)
+            kept["section_text"] = text
+            kept["section_title"] = text[:500]
+            kept["section_kind"] = "short-ambiguous"
+            kept["section_number"] = base if ambiguous_seen[base] == 1 else f"{base}~{ambiguous_seen[base]}"
+            out.append(kept)
+            continue
+        number = _section_number_token(section)
+        if not number or number not in counts or _rejected_section_number(section, number):
+            continue
         text = section.get("section_text", "")
-        if counts[number] == 1 and len(text) < 20:
+        if counts[number] == 1 and len(text) < 20 and short_div_disposition(text) == "noise":
             continue
         kept = dict(section)
         kept["section_number"] = _identity_key(number, text, counts[number] > 1, seen)
@@ -264,7 +358,10 @@ def _strategy_1_p_class_section(soup: BeautifulSoup, statute_name: str) -> List[
         sections = []
         for p in candidates:
             txt = p.get_text(separator="\n", strip=True)
-            if not txt or len(txt) < 10:
+            if not txt or _rejected_by_length(txt, 10):
+                continue
+            if short_div_disposition(txt) == "ambiguous":
+                sections.append(_ambiguous_section(txt))
                 continue
             num, title, body = _extract_number_title_from_chunk(txt)
             if num:
@@ -294,7 +391,10 @@ def _strategy_2_div_section_body(soup: BeautifulSoup, statute_name: str) -> List
         sections = []
         for div in divs:
             txt = div.get_text(separator="\n", strip=True)
-            if not txt or len(txt) < 15:
+            if not txt or _rejected_by_length(txt, 15):
+                continue
+            if short_div_disposition(txt) == "ambiguous":
+                sections.append(_ambiguous_section(txt))
                 continue
             # div may contain multiple sections internally, try to split inside
             # If div itself looks like single section
@@ -326,22 +426,27 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
     """
     try:
         all_p = soup.find_all("p")
-        filtered = []
+        sections = []
         for p in all_p:
-            txt = p.get_text(separator=" ", strip=True)
+            txt = p.get_text(separator="\n", strip=True)
             if not txt:
                 continue
-            if re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)\:]\s+', txt):
-                filtered.append(p)
-        sections = []
-        for p in filtered:
-            txt = p.get_text(separator="\n", strip=True)
+            if short_div_disposition(txt) == "ambiguous":
+                sections.append(_ambiguous_section(txt))
+                continue
+            if not re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)\:]\s+', p.get_text(separator=" ", strip=True)):
+                continue
             # include next sibling p if it looks like continuation (doesn't start with digit)
             next_p = p.find_next_sibling("p")
             full_text = txt
             if next_p:
                 next_text = next_p.get_text(strip=True)
-                if next_text and not re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)]', next_text) and len(next_text) > 30:
+                if (
+                    next_text
+                    and short_div_disposition(next_text) != "ambiguous"
+                    and not re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)]', next_text)
+                    and len(next_text) > 30
+                ):
                     # append as continuation but not too long
                     if len(full_text) < 1000:
                         full_text = full_text + "\n\n" + next_text
@@ -354,6 +459,37 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
         logger.warning(f"Strategy3 failed: {e}")
         return []
 
+def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
+    """Numbered chunks inside one plain-text run. Noise under 15 characters is skipped."""
+    matches = list(re.finditer(r'(?:^|\n)\s*(\d+[A-Z]?)\s*[\.\-\)\:\]]\s*', plain, re.MULTILINE))
+    if len(matches) < 2:
+        matches = list(re.finditer(r'(\d+[A-Z]?)\s*[\.\-\)]\s+(?=[A-Z][a-z])', plain))
+    sections = []
+    if len(matches) >= 2:
+        for i, m in enumerate(matches):
+            start = m.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
+            chunk = plain[start:end].strip()
+            if _rejected_by_length(chunk, 15):
+                continue
+            if short_div_disposition(chunk) == "ambiguous":
+                sections.append(_ambiguous_section(chunk))
+                continue
+            num, title, body = _extract_number_title_from_chunk(chunk)
+            if num:
+                sections.append(_make_section_dict(num, title, chunk, statute_name))
+        return sections
+    chunks = re.split(r'\n{2,}', plain)
+    for chunk in chunks:
+        if short_div_disposition(chunk) == "ambiguous":
+            sections.append(_ambiguous_section(chunk))
+            continue
+        num, title, body = _extract_number_title_from_chunk(chunk)
+        if num:
+            sections.append(_make_section_dict(num, title, chunk, statute_name))
+    return sections
+
+
 def _strategy_4_resplit_digit(text: str, statute_name: str) -> List[Dict[str, str]]:
     """
     Strategy 4: re.split digit
@@ -363,38 +499,40 @@ def _strategy_4_resplit_digit(text: str, statute_name: str) -> List[Dict[str, st
     try:
         plain = BeautifulSoup(text, "html.parser").get_text(separator="\n") if _is_html(text) else text
         plain = _normalize_whitespace(plain)
-        # Pattern: line start with number + delimiter, ensure lookahead for content
-        split_pattern = re.compile(r'(?:\n|^)\s*(?=\d+[A-Z]?\s*[\.\-\)\:\]]\s+[A-Za-z])', re.MULTILINE)
-        # Instead of split losing delimiter, use finditer to slice
-        matches = list(re.finditer(r'(?:^|\n)\s*(\d+[A-Z]?)\s*[\.\-\)\:\]]\s*', plain, re.MULTILINE))
-        if len(matches) < 2:
-            # try alternative without newline requirement
-            matches = list(re.finditer(r'(\d+[A-Z]?)\s*[\.\-\)]\s+(?=[A-Z][a-z])', plain))
         sections = []
-        if len(matches) >= 2:
-            for i, m in enumerate(matches):
-                start = m.start()
-                end = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
-                chunk = plain[start:end].strip()
-                if len(chunk) < 15:
-                    continue
-                num, title, body = _extract_number_title_from_chunk(chunk)
-                if num:
-                    sections.append(_make_section_dict(num, title, chunk, statute_name))
-            logger.debug(f"Strategy4 re.split digit found {len(sections)}")
-            return _deduplicate_sections(sections)
-        else:
-            # fallback naive split by double newline and filter
-            chunks = re.split(r'\n{2,}', plain)
-            for chunk in chunks:
-                num, title, body = _extract_number_title_from_chunk(chunk)
-                if num:
-                    sections.append(_make_section_dict(num, title, chunk, statute_name))
-            logger.debug(f"Strategy4 fallback chunks found {len(sections)}")
-            return _deduplicate_sections(sections)
+        for kind, payload in _line_segments(plain):
+            if kind == "ambiguous":
+                sections.append(_ambiguous_section(payload))
+            else:
+                sections.extend(_digit_sections_in(payload, statute_name))
+        logger.debug(f"Strategy4 re.split digit found {len(sections)}")
+        return _deduplicate_sections(sections)
     except Exception as e:
         logger.warning(f"Strategy4 failed: {e}")
         return []
+
+def _keyword_sections(plain: str, statute_name: str, pattern: re.Pattern, article: bool) -> List[Dict[str, str]]:
+    matches = list(pattern.finditer(plain))
+    sections = []
+    for i, m in enumerate(matches):
+        sec_num = m.group(1)
+        start_content = m.end()
+        end_content = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
+        chunk = plain[m.start():end_content].strip()
+        if _rejected_by_length(chunk, 15):
+            continue
+        if short_div_disposition(chunk) == "ambiguous":
+            sections.append(_ambiguous_section(chunk))
+            continue
+        content_after = plain[start_content:end_content].strip()
+        title = _derive_title(content_after)
+        if article:
+            number = sec_num if sec_num.lower().startswith("article") else f"Article {sec_num}"
+        else:
+            number = sec_num
+        sections.append(_make_section_dict(number, title, chunk, statute_name))
+    return sections
+
 
 def _strategy_5_resplit_section_keyword(text: str, statute_name: str) -> List[Dict[str, str]]:
     """
@@ -404,41 +542,26 @@ def _strategy_5_resplit_section_keyword(text: str, statute_name: str) -> List[Di
     try:
         plain = BeautifulSoup(text, "html.parser").get_text(separator="\n") if _is_html(text) else text
         plain = _normalize_whitespace(plain)
-        # Pattern that matches Section 2, Sec. 2, S. 2 etc.
-        pattern = re.compile(r'(?:\n|^)\s*(?:Section|Sec\.|S\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*', re.IGNORECASE | re.MULTILINE)
-        matches = list(pattern.finditer(plain))
+        segments = _line_segments(plain)
+        section_pattern = re.compile(
+            r'(?:\n|^)\s*(?:Section|Sec\.|S\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        article_pattern = re.compile(
+            r'(?:\n|^)\s*(?:Article|Art\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        text_parts = [payload for kind, payload in segments if kind == "text"]
+        use_section = any(section_pattern.search(part) for part in text_parts)
+        pattern = section_pattern if use_section else article_pattern
         sections = []
-        if len(matches) >= 1:
-            for i, m in enumerate(matches):
-                sec_num = m.group(1)
-                start_content = m.end()
-                end_content = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
-                chunk = plain[m.start():end_content].strip()
-                if len(chunk) < 15:
-                    continue
-                # Derive title from content after marker
-                content_after = plain[start_content:end_content].strip()
-                title = _derive_title(content_after)
-                sections.append(_make_section_dict(sec_num, title, chunk, statute_name))
+        for kind, payload in segments:
+            if kind == "ambiguous":
+                sections.append(_ambiguous_section(payload))
+            else:
+                sections.extend(_keyword_sections(payload, statute_name, pattern, article=not use_section))
         if sections:
             logger.debug(f"Strategy5 re.split Section found {len(sections)}")
-            return _deduplicate_sections(sections)
-        # If no "Section" keyword, try Article for Constitution
-        article_pattern = re.compile(r'(?:\n|^)\s*(?:Article|Art\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*', re.IGNORECASE | re.MULTILINE)
-        matches = list(article_pattern.finditer(plain))
-        if matches:
-            for i, m in enumerate(matches):
-                sec_num = m.group(1)
-                start_content = m.end()
-                end_content = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
-                chunk = plain[m.start():end_content].strip()
-                if len(chunk) < 15:
-                    continue
-                content_after = plain[start_content:end_content].strip()
-                title = _derive_title(content_after)
-                # For constitution, keep Article prefix in number
-                sections.append(_make_section_dict(f"Article {sec_num}" if not sec_num.lower().startswith("article") else sec_num, title, chunk, statute_name))
-            logger.debug(f"Strategy5 Article fallback found {len(sections)}")
             return _deduplicate_sections(sections)
         return []
     except Exception as e:
@@ -474,8 +597,14 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     if not text or not isinstance(text, str):
         logger.warning("split_into_sections received empty/non-str input")
         return []
-    if len(text.strip()) < 10:
+    stripped = text.strip()
+    if not stripped:
         return []
+    opening = short_div_disposition(stripped)
+    if len(stripped) < 10 and opening == "noise":
+        return []
+    if opening == "ambiguous":
+        return _deduplicate_sections([_ambiguous_section(stripped)])
 
     statute_name = (statute_name or "Unidentified Statute").strip()
     soup = None
@@ -489,7 +618,7 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     # Strategy 1
     if soup is not None:
         result = _strategy_1_p_class_section(soup, statute_name)
-        if len(result) >= 2:
+        if len(result) >= 2 or _short_result_wins(result):
             logger.info(f"split_into_sections: Strategy1 succeeded with {len(result)} sections for {statute_name}")
             return result
         if len(result) == 1 and len(result[0].get("section_text", "")) > 500:
@@ -500,26 +629,26 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     # Strategy 2
     if soup is not None:
         result = _strategy_2_div_section_body(soup, statute_name)
-        if len(result) >= 2:
+        if len(result) >= 2 or _short_result_wins(result):
             logger.info(f"split_into_sections: Strategy2 succeeded with {len(result)} sections for {statute_name}")
             return result
 
     # Strategy 3
     if soup is not None:
         result = _strategy_3_p_filtered_digit_start(soup, statute_name)
-        if len(result) >= 2:
+        if len(result) >= 2 or _short_result_wins(result):
             logger.info(f"split_into_sections: Strategy3 succeeded with {len(result)} sections for {statute_name}")
             return result
 
     # Strategy 4 - works on both HTML and plain
     result = _strategy_4_resplit_digit(text, statute_name)
-    if len(result) >= 2:
+    if len(result) >= 2 or _short_result_wins(result):
         logger.info(f"split_into_sections: Strategy4 succeeded with {len(result)} sections for {statute_name}")
         return result
 
     # Strategy 5 - keyword based
     result = _strategy_5_resplit_section_keyword(text, statute_name)
-    if len(result) >= 2:
+    if len(result) >= 2 or _short_result_wins(result):
         logger.info(f"split_into_sections: Strategy5 succeeded with {len(result)} sections for {statute_name}")
         return result
     if len(result) == 1:

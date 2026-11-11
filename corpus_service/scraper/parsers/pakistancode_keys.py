@@ -12,9 +12,20 @@ Walk ``div.section`` texts in document order.
 
 1. A div whose whole text is a schedule heading (``THE FIRST SCHEDULE``, ``SCHEDULE``,
    ``SCHEDULE II``, ``2ND SCHEDULE``, and the same shape) is a heading. Headings are
-   recognised before the short-div skip, so an 18-character heading is kept.
-2. Any other div of 20 characters or fewer is skipped. It is not staged and it does not
-   consume the 50-div cap. A div of 21 characters is kept. ``len`` is Unicode characters.
+   recognised before the short-div test, so an 18-character heading is kept.
+2. Length does not drop a real section (R-LENGTH-GATE). ``len`` is Unicode characters.
+
+   * A numbered provision (``1. Short title.``, ``2. Repeal.``, ``1.``, a heading-only
+     item) is kept even when it is 20 characters or fewer. Identity is rule 5. It is
+     not merged into a neighbour. An ``unscoped`` short item is quarantined, not skipped.
+   * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
+     (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
+     numbered provision, is not given a number. It is staged as ``short-ambiguous``
+     and quarantined as ``ambiguous_section_identity``. The page omits ``act_keys``.
+   * Any other div of 20 characters or fewer is noise: blank divs, page chrome, stray
+     markers, a repeated letter, a failed heading such as ``Schedule ll``. Noise is
+     skipped, not staged, and it does not consume the 50-div cap.
+   * A div of 21 characters is content, as before.
 3. At most 50 kept divs are staged, in document order. Further kept divs are dropped by
    the cap.
 4. Schedule scope (FA-F21-018). The live PakistanCode document was not fetched: the
@@ -40,6 +51,7 @@ Walk ``div.section`` texts in document order.
      that schedule repeats ``N``)
    * schedule heading → ``schedule-heading:L``
    * numbered div under an unopened flat heading → ``unscoped:N-<sha8>``
+   * bare omission marker → ``ambiguous-<sha8>`` (quarantined, never a guessed ``N``)
    * preamble / explanation / other numberless div → ``<kind>-<sha8>``
    * a second kept div that would otherwise reuse a key → ``<key>~2``, ``~3``, …
 
@@ -95,12 +107,16 @@ Walk ``div.section`` texts in document order.
    is refused. No migration rewrites a database. Equality on the raw stored key
    does not follow an alias.
 
-The paragraph splitter is outside this div walk (FA-F21-019). A repeated paragraph
-number is kept as ``N-<sha8>`` of each stored text, not dropped. That harvest stamps
-``act_keys`` when it parsed those sections. It omits the set for an ``unscoped`` div,
-a page of only schedule headings, and an unparsed single chunk. A ``schedule-item``
-does not reach that path: kept schedule items suppress the splitter and are staged
-on the div path, which includes them in ``act_keys`` when the inventory is complete.
+The paragraph splitter is outside this div walk (FA-F21-019). It uses the same
+three-way test at its ``< 15`` and ``< 20`` gates: a short numbered provision is kept,
+a bare omission marker is its own ``short-ambiguous`` item and is not swallowed into
+the previous section, and noise under those gates is still rejected. A repeated
+paragraph number is kept as ``N-<sha8>`` of each stored text, not dropped. That
+harvest stamps ``act_keys`` when it parsed those sections. It omits the set for an
+``unscoped`` div, a ``short-ambiguous`` div, a page of only schedule headings, and an
+unparsed single chunk. A ``schedule-item`` does not reach that path: kept schedule
+items suppress the splitter and are staged on the div path, which includes them in
+``act_keys`` when the inventory is complete.
 """
 
 from __future__ import annotations
@@ -111,8 +127,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Mapping, Optional, Sequence
 
-# A div longer than this is content. Length == 20 is still short and is skipped
-# unless rule 1 recognised a heading. FA-F21-010 / FA-F21-011.
+# Noise at or below this length is not staged and does not consume the cap.
+# A numbered provision or a bare omission marker is not noise (R-LENGTH-GATE).
+# A div of 21 characters is content. FA-F21-010 / FA-F21-011.
 SHORT_DIV_MAX_EXCLUSIVE = 20
 MAX_STAGED_DIVS = 50
 TEXT_CAP = 20000
@@ -169,6 +186,10 @@ _WS = re.compile(r"\s+")
 # are letters only: a one-character roman is not read from them.
 _AMBIGUOUS_SINGLE = frozenset({"i", "v", "x", "l"})
 _ROMAN_SINGLE_VALUE = {"i": "1", "v": "5", "x": "10", "l": "50"}
+# Whole-div omission markers. The letters, and nothing else, decide. A numbered
+# provision is classified first, so ``2. Repeal.`` is section 2 and not a marker.
+_OMISSION_WORDS = frozenset({"omitted", "repealed", "repeal", "rep"})
+_LETTERS = re.compile(r"[^A-Za-z]+")
 
 
 def normalise_div_text(text: str) -> str:
@@ -518,6 +539,27 @@ def parse_section_number(text: str) -> Optional[str]:
     return matched.group("num")
 
 
+def short_div_disposition(text: str) -> str:
+    """How one div or paragraph is treated when a length gate used to drop it.
+
+    ``provision`` — the text parses as a numbered section or schedule item. Length
+    does not drop it, and it is not merged into a neighbour.
+    ``ambiguous`` — the letters are only an omission or repeal marker, and there is
+    no section number to publish. Fail closed: quarantine, do not invent ``N``.
+    ``noise`` — 20 characters or fewer and neither of the above. Skip it.
+    ``content`` — longer than the noise gate. The caller uses the ordinary rules.
+    """
+    normalised = normalise_div_text(text)
+    if parse_section_number(normalised) is not None:
+        return "provision"
+    if len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
+        return "content"
+    letters = _LETTERS.sub("", normalised).lower()
+    if letters in _OMISSION_WORDS:
+        return "ambiguous"
+    return "noise"
+
+
 def _structural_kind(text: str) -> Optional[str]:
     matched = _STRUCTURAL_KIND.match(text or "")
     if matched is None:
@@ -628,8 +670,13 @@ def _classify(texts: Sequence[str], containers: Optional[Sequence[Optional[str]]
                 heading_before_body = True
             continue
         if len(text) <= SHORT_DIV_MAX_EXCLUSIVE and _structural_kind(text) is None:
-            skipped += 1
-            continue
+            disposition = short_div_disposition(text)
+            if disposition == "ambiguous":
+                kept.append(_Classified(text=text, kind="short-ambiguous", number=None, label=None))
+                continue
+            if disposition != "provision":
+                skipped += 1
+                continue
         number = parse_section_number(text)
         chosen = _resolve_heading(container, mode) if container is not None else scope
         if number is not None and chosen is not None and chosen[0] == "unresolved":
@@ -672,6 +719,8 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
         if item.label:
             return f"unresolved-schedule-heading:{item.label}"
         return f"unresolved-schedule-{content_token(item.text)}"
+    if item.kind == "short-ambiguous":
+        return f"ambiguous-{content_token(item.text)}"
     if item.kind == "unscoped" and item.number is not None:
         return f"unscoped:{item.number}-{content_token(item.text)}"
     if item.kind == "preamble":
@@ -682,7 +731,8 @@ def _base_key(item: _Classified, body_counts: Mapping[str, int], schedule_counts
 
 
 _FALLBACK_SUPPRESSED_KINDS = frozenset({
-    "section", "schedule-item", "preamble", "explanation", "div", "unscoped", "schedule-unresolved",
+    "section", "schedule-item", "preamble", "explanation", "div", "unscoped",
+    "schedule-unresolved", "short-ambiguous",
 })
 # ``unscoped`` is a numbered div with no proven parent: a flat heading before any body
 # section, and no ancestor heading. It stays withheld (FA-17). A schedule item already
@@ -692,7 +742,7 @@ _FALLBACK_SUPPRESSED_KINDS = frozenset({
 PUBLISHABLE_SECTION_KINDS = frozenset({
     "section", "preamble", "explanation", "div", "schedule-heading", "schedule-item",
 })
-AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-unresolved"})
+AMBIGUOUS_SECTION_KINDS = frozenset({"unscoped", "schedule-unresolved", "short-ambiguous"})
 REASON_AMBIGUOUS_SECTION = "ambiguous_section_identity"
 REASON_SCHEDULE_LETTER_ROMAN = "schedule_letter_roman_ambiguous"
 _SCHEDULE_KEY_PREFIXES = ("schedule:", "schedule-heading:")
@@ -712,10 +762,11 @@ def is_schedule_publication_key(key: str) -> bool:
 def ambiguous_section_reason(kind: Optional[str]) -> Optional[str]:
     """Quarantine reason for a kind that must not be published, else None.
 
-    ``unscoped`` keeps ``ambiguous_section_identity``. An unresolved schedule letter
-    uses ``schedule_letter_roman_ambiguous`` so the two holds stay distinct.
+    ``unscoped`` and ``short-ambiguous`` keep ``ambiguous_section_identity``. An
+    unresolved schedule letter uses ``schedule_letter_roman_ambiguous`` so the two
+    holds stay distinct.
     """
-    if kind == "unscoped":
+    if kind in ("unscoped", "short-ambiguous"):
         return REASON_AMBIGUOUS_SECTION
     if kind == "schedule-unresolved":
         return REASON_SCHEDULE_LETTER_ROMAN
