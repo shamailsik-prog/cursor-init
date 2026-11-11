@@ -94,6 +94,10 @@ def test_selector_sql_is_read_only_and_counts_by_act():
     assert "source_ordinal" in export and "page_offset" in export and "act_keys" in export
     assert "ORDER BY a.act, ordinal" in export
     assert "created_at" not in export
+    assert "ORDER BY m.id" not in export and "ORDER BY s.id" not in export
+    assert "NULL::integer AS ordinal" not in export
+    assert "FROM statutes_staging AS s" in export
+    assert "= '12'" in counts and "stale_12" in counts
     for row in _rows():
         if row["short_name"] == "fees":
             assert is_candidate(row) is False
@@ -198,7 +202,10 @@ def test_apply_rekeys_in_a_transaction_and_keeps_text():
     assert "DELETE" not in result["rollback_sql"].upper()
     assert "extracted_section_number" in result["apply_sql"]
     assert "SET section_text" not in result["apply_sql"]
-    assert "md5(convert_to(" in result["apply_sql"] and "1/0" in result["apply_sql"]
+    assert "md5(convert_to(" in result["apply_sql"]
+    assert "GET DIAGNOSTICS n = ROW_COUNT" in result["apply_sql"]
+    assert "RAISE EXCEPTION" in result["apply_sql"]
+    assert "1/0" not in result["apply_sql"] and "1/0" not in result["rollback_sql"]
     assert result["apply_sql"].count(TEMP_PREFIX) >= len(REKEY_IDS) * 2
     assert result["rollback_sql"].count(TEMP_PREFIX) >= len(REKEY_IDS) * 2
     backup = [json.loads(line) for line in result["backup_jsonl"].splitlines()]
@@ -369,7 +376,7 @@ def test_document_order_is_the_source_ordinal_in_either_input_order():
         missing.append(stripped)
     refused = plan_rows(missing)[0]
     assert refused.apply_allowed is False
-    assert refused.refusal == "no source ordinal"
+    assert refused.refusal == "no trustworthy source ordinal"
     assert all(row.action == "unordered" and row.new_key is None for row in refused.rows)
     assert "12I" not in json.dumps(refused.as_dict())
 
@@ -507,10 +514,11 @@ def test_rollback_uses_temporary_keys_for_a_12_12A_12B_chain():
     )
     assert store.rows[first["id"]]["section_number"] == "12A"
     assert store.rows[second["id"]]["section_number"] == "12B"
-    statements = [line for line in result["rollback_sql"].splitlines() if line.startswith("WITH updated")]
+    statements = [part for part in result["rollback_sql"].split("DO $data003$") if "GET DIAGNOSTICS" in part]
     assert len(statements) == 4
     assert all(TEMP_PREFIX in line for line in statements[:2])
-    assert "1/0" in statements[0]
+    assert "GET DIAGNOSTICS n = ROW_COUNT" in statements[0]
+    assert "1/0" not in result["rollback_sql"]
     assert text_md5(text_12a) in statements[0]
     assert "= '12'" in statements[2] or "= '12A'" in statements[2]
     assert "= '12'" in statements[3] or "= '12A'" in statements[3]

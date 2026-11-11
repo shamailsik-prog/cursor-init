@@ -230,16 +230,31 @@ def _act_expr(short_column: str, name_column: str) -> str:
     )
 
 
+def _stale_twelve_predicate(text_column: str, title_column: str, key_column: str) -> str:
+    """A stored key ``12`` whose heading is ``12-A`` / ``12-B`` / ``12-I.``."""
+    opening = r"12[—–-][A-Za-z]"
+    return (
+        "btrim(coalesce(" + key_column + ", '')) = '12'\n"
+        "  AND (coalesce(" + text_column + ", '') ~ '^[[:space:]]*" + opening + "'"
+        " OR coalesce(" + title_column + ", '') ~ '^[[:space:]]*" + opening + "')"
+    )
+
+
 def count_sql() -> str:
     """Per-act counts of stored rows the selector still matches.
 
     Run it before the apply and again after. A re-keyed ``12A`` drops out.
-    A wrapped line that was not re-keyed stays in the count.
+    A wrapped line that was not re-keyed stays in the count. The last two
+    statements count the stale bare key ``12`` on its own.
     """
     master_act = _act_expr("short_name", "statute_name")
     master_where = _candidate_predicate("section_text", "section_title", "section_number")
     staging_act = _act_expr("extracted_short_name", "extracted_act_name")
     staging_where = _candidate_predicate(
+        "extracted_section_text", "extracted_section_title", "extracted_section_number",
+    )
+    stale_master = _stale_twelve_predicate("section_text", "section_title", "section_number")
+    stale_staging = _stale_twelve_predicate(
         "extracted_section_text", "extracted_section_title", "extracted_section_number",
     )
     return (
@@ -255,19 +270,62 @@ def count_sql() -> str:
         "WHERE " + staging_where + "\n"
         "GROUP BY 1\n"
         "ORDER BY 1;\n"
+        "\n"
+        "-- Stale stored key 12. Read only. Not an apply.\n"
+        "SELECT " + master_act + " AS act, count(*) AS stale_12\n"
+        "FROM statutes_master\n"
+        "WHERE " + stale_master + "\n"
+        "GROUP BY 1\n"
+        "ORDER BY 1;\n"
+        "\n"
+        "SELECT " + staging_act + " AS act, count(*) AS stale_12\n"
+        "FROM statutes_staging\n"
+        "WHERE " + stale_staging + "\n"
+        "GROUP BY 1\n"
+        "ORDER BY 1;\n"
     )
+
+
+def _json_ordinal(meta: str, key: str) -> str:
+    """An integer stored as text. A missing or non-numeric value is null, not an error."""
+    raw = meta + "->>'" + key + "'"
+    return "CASE WHEN " + raw + " ~ '^[0-9]+$' THEN (" + raw + ")::integer ELSE NULL END"
+
+
+def _metadata_ordinal(meta: str, key_column: str) -> str:
+    """``source_ordinal``, then ``page_offset``, then the 1-based ``act_keys`` position."""
+    position = (
+        "CASE WHEN jsonb_typeof(" + meta + "->'act_keys') = 'array' THEN "
+        "array_position(ARRAY(SELECT jsonb_array_elements_text(" + meta + "->'act_keys')), "
+        + key_column + ") ELSE NULL END"
+    )
+    return "COALESCE(" + _json_ordinal(meta, "source_ordinal") + ", " + _json_ordinal(meta, "page_offset") + ", " + position + ")"
 
 
 def _staging_ordinal_expr(alias: str) -> str:
     """Page offset, or the harvest's own ``act_keys`` position. Not ``created_at``."""
-    meta = alias + ".parsing_metadata"
+    return _metadata_ordinal(alias + ".parsing_metadata", alias + ".extracted_section_number")
+
+
+def _master_ordinal_expr() -> str:
+    """The staging row's ordinal for this master text. Never ``id`` or ``created_at``.
+
+    One distinct ordinal is kept. None, or two that disagree, is null, and the
+    planner then refuses the act.
+    """
+    master_act = _act_expr("m.short_name", "m.statute_name")
+    staging_act = _act_expr("s.extracted_short_name", "s.extracted_act_name")
+    ordinal = _metadata_ordinal("s.parsing_metadata", "s.extracted_section_number")
     return (
-        "COALESCE("
-        "NULLIF(" + meta + "->>'source_ordinal', '')::integer, "
-        "NULLIF(" + meta + "->>'page_offset', '')::integer, "
-        "array_position(ARRAY(SELECT jsonb_array_elements_text(" + meta + "->'act_keys')), "
-        + alias + ".extracted_section_number)"
-        ")"
+        "(SELECT CASE WHEN count(DISTINCT sourced.ord) = 1 THEN min(sourced.ord) ELSE NULL END\n"
+        "          FROM (\n"
+        "            SELECT " + ordinal + " AS ord\n"
+        "            FROM statutes_staging AS s\n"
+        "            WHERE " + staging_act + " = " + master_act + "\n"
+        "              AND s.extracted_section_text IS NOT DISTINCT FROM m.section_text\n"
+        "              AND m.section_text IS NOT NULL\n"
+        "          ) AS sourced\n"
+        "          WHERE sourced.ord IS NOT NULL)"
     )
 
 
@@ -275,10 +333,11 @@ def select_act_sql() -> str:
     """Every stored section of an act that has a candidate row.
 
     Keying a wrapped ``12-I`` line without the rest of the act publishes ``12I``.
-    The export carries a source ordinal. ``statutes_master`` has no page ordinal,
-    so that column is null and the planner refuses the act. Staging uses
-    ``source_ordinal``, ``page_offset``, or the position in ``act_keys``.
-    ``created_at`` and ``id`` are not the document order.
+    Document order is a staging ordinal: ``source_ordinal``, ``page_offset``, or
+    the position of the staging key in ``act_keys``. A master row takes that
+    ordinal from the staging row with the same act and the same section text.
+    ``id`` and ``created_at`` are not that order. A null or disagreeing ordinal
+    is refused by the planner.
     """
     master_act = _act_expr("m.short_name", "m.statute_name")
     master_where = _candidate_predicate("section_text", "section_title", "section_number")
@@ -286,10 +345,9 @@ def select_act_sql() -> str:
     staging_where = _candidate_predicate(
         "extracted_section_text", "extracted_section_title", "extracted_section_number",
     )
-    staging_ordinal = _staging_ordinal_expr("s")
     return (
         "-- DATA-003-REHARVEST export. Read only. No writes.\n"
-        "-- statutes_master has no stored page ordinal. A null ordinal is refused.\n"
+        "-- Master ordinal is the matching staging source_ordinal, page_offset, or act_keys position.\n"
         "WITH affected AS (\n"
         "  SELECT DISTINCT " + _act_expr("short_name", "statute_name") + " AS act\n"
         "  FROM statutes_master\n"
@@ -304,7 +362,7 @@ def select_act_sql() -> str:
         "       m.section_text,\n"
         "       NULL::text AS raw_text,\n"
         "       NULL::jsonb AS parsing_metadata,\n"
-        "       NULL::integer AS ordinal\n"
+        "       " + _master_ordinal_expr() + " AS ordinal\n"
         "FROM statutes_master AS m\n"
         "JOIN affected AS a ON a.act = " + master_act + "\n"
         "ORDER BY a.act, ordinal;\n"
@@ -323,7 +381,7 @@ def select_act_sql() -> str:
         "       s.extracted_section_text AS section_text,\n"
         "       s.raw_text,\n"
         "       s.parsing_metadata,\n"
-        "       " + staging_ordinal + " AS ordinal\n"
+        "       " + _staging_ordinal_expr("s") + " AS ordinal\n"
         "FROM statutes_staging AS s\n"
         "JOIN affected AS a ON a.act = " + staging_act + "\n"
         "ORDER BY a.act, ordinal;\n"
@@ -490,7 +548,7 @@ def _order_act(rows: Sequence[dict]) -> tuple:
     """Sort by source ordinal. Missing or repeated ordinals are not an order."""
     numbers = [_ordinal_number(row) for row in rows]
     if any(number is None for number in numbers):
-        return None, "no source ordinal"
+        return None, "no trustworthy source ordinal"
     if len(set(numbers)) != len(numbers):
         return None, "source ordinals are not unique"
     ordered = [row for _number, row in sorted(zip(numbers, rows), key=lambda pair: pair[0])]
@@ -929,6 +987,36 @@ def _json_array(keys: Sequence[str]) -> str:
     return payload
 
 
+def render_rowcount_guard(update_sql: str) -> str:
+    """Wrap one UPDATE so Postgres raises unless the row count is exactly 1.
+
+    ``CASE WHEN ... ELSE 1/0`` is planned as a constant and raises even when the
+    row matches. ``GET DIAGNOSTICS`` reads the count after the UPDATE runs.
+    """
+    body = update_sql.strip()
+    if body.endswith(";"):
+        body = body[:-1].rstrip()
+    if ";" in body or "$" in body:
+        raise ReharvestRefusal("a guarded update is one statement")
+    if re.match(r"UPDATE\s+(statutes_master|statutes_staging)\s+SET\s+", body, re.IGNORECASE) is None:
+        raise ReharvestRefusal("a guarded update must re-key statutes_master or statutes_staging")
+    if re.search(r"\b(DELETE|INSERT|DROP|ALTER|TRUNCATE)\b", body, re.IGNORECASE):
+        raise ReharvestRefusal("a guarded update contained a forbidden statement")
+    return (
+        "DO $data003$\n"
+        "DECLARE\n"
+        "  n integer;\n"
+        "BEGIN\n"
+        "  " + body + ";\n"
+        "  GET DIAGNOSTICS n = ROW_COUNT;\n"
+        "  IF n IS DISTINCT FROM 1 THEN\n"
+        "    RAISE EXCEPTION 'DATA-003-REHARVEST expected 1 row, updated %', n;\n"
+        "  END IF;\n"
+        "END\n"
+        "$data003$"
+    )
+
+
 def _one_row_update(table: str, new_key: str, row_id: str, expected_key: str, digest: str,
                     act_keys: Optional[Sequence[str]] = None) -> str:
     """One statement. It changes nothing unless the id, key, and text md5 match one row."""
@@ -940,13 +1028,13 @@ def _one_row_update(table: str, new_key: str, row_id: str, expected_key: str, di
             ", parsing_metadata = jsonb_set(COALESCE(parsing_metadata, '{}'::jsonb), "
             "'{act_keys}', '" + _json_array(act_keys) + "'::jsonb, true)"
         )
-    return (
-        "WITH updated AS (UPDATE " + table + " SET " + assignment
+    update = (
+        "UPDATE " + table + " SET " + assignment
         + " WHERE id = " + _quote(row_id)
         + " AND " + column + " = " + _quote(expected_key)
         + " AND md5(convert_to(" + text_column + ", 'UTF8')) = " + _quote(digest)
-        + " RETURNING id) SELECT CASE WHEN (SELECT count(*) FROM updated) = 1 THEN 1 ELSE 1/0 END"
     )
+    return render_rowcount_guard(update)
 
 
 def render_apply_sql(actions: Sequence[RekeyAction], siblings: Sequence[InventoryUpdate] = ()) -> str:
@@ -1113,7 +1201,7 @@ class MemoryStore:
     def _execute_update(self, statement: str) -> None:
         if re.search(r"\b(DELETE|INSERT|DROP|ALTER|TRUNCATE)\b", statement, re.IGNORECASE):
             raise ReharvestRefusal("refusing a statement that is not a re-key")
-        if "1/0" not in statement or "count(*)" not in statement:
+        if "GET DIAGNOSTICS" not in statement or "RAISE EXCEPTION" not in statement:
             raise ReharvestRefusal("re-key statement does not require exactly one row")
         matched = _REKEY_SQL.fullmatch(statement.strip())
         if matched is None:
@@ -1135,24 +1223,55 @@ class MemoryStore:
 
 
 def _statements(sql: str) -> list:
-    body = []
-    for line in sql.splitlines():
-        if line.strip().startswith("--"):
+    """Split on semicolons that are outside dollar quotes and line comments."""
+    parts = []
+    buf = []
+    i = 0
+    n = len(sql)
+    dollar = None
+    while i < n:
+        if dollar is None and sql.startswith("--", i):
+            newline = sql.find("\n", i)
+            if newline < 0:
+                break
+            i = newline + 1
             continue
-        body.append(line)
-    text = "\n".join(body)
-    parts = [part.strip() for part in text.split(";")]
-    return [part for part in parts if part]
+        if sql[i] == "$":
+            tag = re.match(r"\$[A-Za-z0-9_]*\$", sql[i:])
+            if tag and (dollar is None or tag.group(0) == dollar):
+                token = tag.group(0)
+                buf.append(token)
+                i += len(token)
+                dollar = None if dollar == token else token
+                continue
+        if dollar is None and sql[i] == ";":
+            part = "".join(buf).strip()
+            if part:
+                parts.append(part)
+            buf = []
+            i += 1
+            continue
+        buf.append(sql[i])
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 _REKEY_SQL = re.compile(
-    r"^WITH updated AS \(UPDATE (?P<table>statutes_master|statutes_staging) SET "
+    r"^DO \$data003\$\s*DECLARE\s+n integer;\s*BEGIN\s+"
+    r"UPDATE (?P<table>statutes_master|statutes_staging) SET "
     r"(?P<column>section_number|extracted_section_number) = '(?P<new>[^']*)'"
     r"(?:, parsing_metadata = jsonb_set\(COALESCE\(parsing_metadata, '\{\}'::jsonb\), "
     r"'\{act_keys\}', '(?P<keys>\[[^']*\])'::jsonb, true\))? "
     r"WHERE id = '(?P<id>[^']*)' AND (?P=column) = '(?P<expected>[^']*)' "
-    r"AND md5\(convert_to\((?P<text>section_text|extracted_section_text), 'UTF8'\)\) = '(?P<md5>[0-9a-f]{32})' "
-    r"RETURNING id\) SELECT CASE WHEN \(SELECT count\(\*\) FROM updated\) = 1 THEN 1 ELSE 1/0 END$"
+    r"AND md5\(convert_to\((?P<text>section_text|extracted_section_text), 'UTF8'\)\) = '(?P<md5>[0-9a-f]{32})';\s*"
+    r"GET DIAGNOSTICS n = ROW_COUNT;\s*"
+    r"IF n IS DISTINCT FROM 1 THEN\s*"
+    r"RAISE EXCEPTION 'DATA-003-REHARVEST expected 1 row, updated %', n;\s*"
+    r"END IF;\s*END\s*\$data003\$\Z",
+    re.DOTALL,
 )
 
 
