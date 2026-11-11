@@ -101,7 +101,12 @@ Walk ``div.section`` texts in document order.
    scope and does not rename later sections.
 5. Keys, all deterministic, none positional, none a uuid:
 
-   * unique body section number ``N`` → ``N`` (stable when the text is amended)
+   * unique body section number ``N`` → ``N`` (stable when the text is amended).
+     A letter inserted by amendment is part of that number (R-LENGTH-RESID-003).
+     ``12A`` and ``12-A`` are ``12A``. ``12AA`` and ``12-AA`` are ``12AA``.
+     An en dash or em dash is the same mark as the hyphen. ``12-15`` and
+     ``1-7-2001`` keep the bare number the hyphen already delimited. They are
+     not letter suffixes. ``Act No. XII-A`` is not a section number.
    * repeated body number ``N`` → ``N-<sha8>`` of the stored text
    * schedule item ``N`` under label ``L`` → ``schedule:L:N`` (or with ``-<sha8>`` when
      that schedule repeats ``N``)
@@ -239,13 +244,61 @@ _NAMED_SCHEDULE = re.compile(
     re.IGNORECASE,
 )
 _SCHEDULE_COPY = re.compile(r"~\d+$")
-_SCHEDULE_ITEM_BODY = re.compile(r"^(?P<label>.+):(?P<item>\d+[A-Za-z]?(?:-[0-9a-f]{8})?)$")
-# ``12-A.`` and ``10-B.`` parse as ``12`` and ``10`` (R-LENGTH-RESID-003). The hyphen
-# is a delimiter, so the letter suffix is not part of the key. Extending this
-# pattern would rekey any stored row that was read from that shape. Left unchanged.
+# Item numbers keep a glued or hyphen-canonical letter suffix (``12A``, ``12AA``).
+_SCHEDULE_ITEM_BODY = re.compile(
+    r"^(?P<label>.+):(?P<item>\d+[A-Za-z]{0,4}(?:-[0-9a-f]{8})?)$"
+)
+# R-LENGTH-RESID-003. The stored key is the glued form ``12A`` already used for
+# ``12A.``. A hyphen, en dash or em dash plus the same kind of suffix is that
+# key: one letter (``12-A``, ``12-a``) or the same capital two to four times
+# (``12-AA``). Hyphen letters are upper-cased, so ``12-a`` is ``12A``. A glued
+# ``12a.`` stays ``12a``: that token was already stored in its own case.
+# A heading word (``12-Fees``, ``12-Tax``) and an amendment lead (``12-Ins.``)
+# stay behind the hyphen, which remains the delimiter. A digit after the hyphen
+# is still a range or a date (``12-15``, ``1-7-2001``). A space-terminated
+# suffix is a heading only when a capitalised title follows (``12-A Title``)
+# or the text ends. ``12-I shall`` and ``12-A of the`` are prose, not headings.
+# One glued letter matches the old token. Repeated capitals are listed before
+# that single letter so ``12AA`` is not read as ``12A`` when the trailing
+# punctuation may be empty. ``(?-i:...)`` stays capitals under IGNORECASE.
+# No nested quantifier.
+_SECTION_PUNCT = r"[\.\)\:\u2013\u2014\-]"
+# The same capital two to four times (``AA``, not ``AB`` or ``ST``). No
+# capturing group: callers put this token in group 1 and read group 2 as the rest.
+_REPEATED_CAPITAL = "(?-i:" + "|".join(f"{letter}{{2,4}}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ")"
+_GLUED_SUFFIX = "(?:" + _REPEATED_CAPITAL + r"|[A-Za-z])"
+# Dash plus one letter, or the same capital repeated. Not an English word.
+HYPHEN_LETTER_SUFFIX = r"[\u2013\u2014-]" + _GLUED_SUFFIX
+# Punctuation, a capitalised title, or the end of the text. Not a lowercase word.
+_SUFFIX_BOUNDARY = r"(?=[\.\)\:\u2013\u2014\-\]]|\s+(?-i:[A-Z])|\s*$)"
+# Space or end only. The punctuated form is the other branch of the splitter.
+HYPHEN_SUFFIX_SPACE_OR_END = r"(?=\s+(?-i:[A-Z])|\s*$)"
+# After a hyphen this is prose (``I shall``, ``A of``), so the hyphen is not a
+# section delimiter and the letter is not a suffix. Bounded; no nested repeat.
+PROSE_HYPHEN_CONTINUATION = r"(?-i:(?:[A-Z]{2,4}|[A-Za-z])\s+[a-z])"
+SECTION_NUMBER_TOKEN = (
+    r"\d+(?:" + HYPHEN_LETTER_SUFFIX + _SUFFIX_BOUNDARY + r"|" + _GLUED_SUFFIX + r")?"
+)
 _NUMBER_RE = re.compile(
-    r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
+    r"^(?:(?:section|sec\.|s\.|article|art\.)\s+)?"
+    r"(?P<digits>\d+)"
+    r"(?:"
+    r"(?P<glued>[A-Za-z])(?P<punct_glued>" + _SECTION_PUNCT + r")"
+    r"|(?P<glued_many>(?-i:(?P<rep>[A-Z])(?P=rep){1,3}))(?P<punct_many>" + _SECTION_PUNCT + r")"
+    r"|(?P<dash>[\u2013\u2014\-])(?:"
+    r"(?P<letters_many>" + _REPEATED_CAPITAL + r")"
+    r"|(?P<letters>[A-Za-z])"
+    r")"
+    r"(?:(?P<punct_letters>" + _SECTION_PUNCT + r")"
+    r"|(?=\s+(?-i:[A-Z]))"
+    r"|(?=\s*$))"
+    r"|(?P<punct_bare>" + _SECTION_PUNCT + r")(?!" + PROSE_HYPHEN_CONTINUATION + r")"
+    r")"
+    r"\s*",
     re.IGNORECASE,
+)
+_CANONICAL_HYPHEN_SUFFIX = re.compile(
+    r"^(\d+)[\u2013\u2014-](" + _REPEATED_CAPITAL + r"|[A-Za-z])$"
 )
 # Marginal amendment notes of at most 20 characters (R-LENGTH-RESID-002 / 005).
 # ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
@@ -309,8 +362,9 @@ _STATUS_PLACEHOLDER_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE | re.DOTALL,
 )
-# ``12-A.`` is keyed as ``12`` (R-LENGTH-RESID-003). The letter stays in the body.
-# Status may read past that one letter. The key does not change.
+# A letter the number pattern left in the body (``12. A. [Omitted.]``). A
+# hyphenated suffix is already in the key (R-LENGTH-RESID-003), so this does
+# not see ``12-A``.
 _LETTER_SUFFIX_RE = re.compile(
     r"^[A-Za-z][\.\)\:\-\u2013\u2014]\s*(?P<rest>\S.*)$"
 )
@@ -660,12 +714,41 @@ def schedule_container_token(node) -> Optional[str]:
     return None
 
 
+def canonical_section_number(token: str) -> str:
+    """Glued key for a hyphenated letter suffix. Any other token is unchanged.
+
+    ``12-A``, ``12-a`` and ``12–A`` are ``12A``, the key ``12A.`` already produced.
+    ``12-AA`` is ``12AA``. ``12``, ``12A``, ``12a``, ``12-15`` and ``12-Fees`` are
+    unchanged. Glued ``12a`` keeps its case because that key was already stored.
+    """
+    matched = _CANONICAL_HYPHEN_SUFFIX.fullmatch(token or "")
+    if matched is None:
+        return token
+    return matched.group(1) + matched.group(2).upper()
+
+
 def parse_section_number(text: str) -> Optional[str]:
-    """The section or item number at the start of ``text``, without the punctuation."""
+    """The section or item number at the start of ``text``, without the punctuation.
+
+    ``12A.`` and ``12-A.`` and ``12-a.`` are ``12A``. ``12AA.`` and ``12-AA.`` are
+    ``12AA``. ``Article 12AA.`` is ``12AA``. A glued ``12a.`` stays ``12a``.
+    A hyphen before a digit is the delimiter it already was. ``12-I shall`` and
+    ``12-A of`` are not section numbers.
+    """
     matched = _NUMBER_RE.match(text or "")
     if matched is None:
         return None
-    return matched.group("num")
+    letters = (
+        matched.group("glued")
+        or matched.group("glued_many")
+        or matched.group("letters_many")
+        or matched.group("letters")
+    )
+    if letters and matched.group("dash"):
+        letters = letters.upper()
+    if letters:
+        return matched.group("digits") + letters
+    return matched.group("digits")
 
 
 def is_short_amendment_footnote(text: str) -> bool:
@@ -1044,9 +1127,9 @@ def _whole_body_is_citation_footnote(body: str) -> bool:
 def _citation_footnote_bodies(text: str) -> list:
     """Bodies to test: the text after the number, and the text after one letter suffix.
 
-    ``12-A.`` is keyed as ``12`` (R-LENGTH-RESID-003). The letter stays in the
-    body. A footnote written after that letter is still a footnote. The key
-    does not change, because a footnote is not staged.
+    ``12-A.`` is keyed as ``12A`` (R-LENGTH-RESID-003), so the letter is not
+    left in that body. A letter the number pattern did leave (``12. A. Subs.``)
+    is still tried. A footnote is not staged.
     """
     normalised = normalise_div_text(text)
     if parse_section_number(normalised) is None:
@@ -1197,8 +1280,9 @@ def omission_placeholder_status(text: str) -> Optional[str]:
     Returns ``omitted``, ``repealed`` or ``deleted``. Returns None when there is
     no section number, when the body is operative, and when a repeal or omission
     word only occurs inside a longer provision. This does not choose the key.
-    ``2. Repeal.`` is a heading and returns None. ``12-A. [Omitted.]`` is read
-    past the letter the keyer leaves in the body; the key stays ``12``.
+    ``2. Repeal.`` is a heading and returns None. ``12-A. [Omitted.]`` is
+    section ``12A`` (R-LENGTH-RESID-003). The placeholder is the body after
+    that number.
     """
     normalised = normalise_div_text(text)
     if parse_section_number(normalised) is None:
@@ -1787,9 +1871,10 @@ def lookup_real_section(store: Mapping[str, PublishedSection], number: str) -> O
     A schedule item, a content-addressed div, a retired row, and a numbered
     omission or repeal placeholder are not returned. The placeholder stays in
     the store. Two live rows with the same key cannot occur; zero or many
-    matches return None so a tie is never broken by publish order.
+    matches return None so a tie is never broken by publish order. ``12-A`` is
+    the same body key as ``12A``.
     """
-    wanted = (number or "").strip()
+    wanted = canonical_section_number((number or "").strip())
     if not wanted:
         return None
     hits = [
@@ -1806,13 +1891,15 @@ def section_by_key(
 ) -> Optional[PublishedSection]:
     """The live row for ``key``.
 
-    An exact key wins. Otherwise one live schedule row with the same canonical
-    identity is that row. Zero or several matches return None, so two stored
-    spellings are not collapsed by lookup order. A single letter ``i``/``v``/``x``/``l``
+    An exact key wins. ``12-A`` is the same body key as ``12A``. Otherwise one
+    live schedule row with the same canonical identity is that row. Zero or
+    several matches return None, so two stored spellings are not collapsed by
+    lookup order. A single letter ``i``/``v``/``x``/``l``
     matches a number only when ``label_mode`` is ``roman``, and ``l`` then matches 50.
     A numbered placeholder is not current law and is not returned. The row stays
     in the store.
     """
+    key = canonical_section_number(key) if isinstance(key, str) else key
     row = store.get(key)
     if row is not None:
         if row.retired or _non_live(row):
