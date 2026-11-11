@@ -45,10 +45,14 @@ Walk ``div.section`` texts in document order.
      ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
      ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, then one or
      more Act, Ord., P.O. or Regulation citations joined by a comma or
-     ``and``. ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
+     ``and``. ``and`` may also start another verb, so ``Subs.`` / ``Ins.`` /
+     ``Omitted`` / ``Added`` / ``Rep.`` / ``Amended`` can mix on one line:
+     ``Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3`` is
+     one note. ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
      same lead. After the section reference the note may add ``for "..."``,
      ``for the words "..."``, or ``w.e.f.`` a date. A title word such as
-     ``Civil`` is not an instrument number.
+     ``Civil`` is not an instrument number. ``Substitution of section 5 and
+     insertion of section 5A`` stays live.
      It takes no key (``N``, ``N-<sha8>``, ``schedule:L:N`` or ``~n``), it does
      not use the 50-div cap, and a page of only those notes is not quarantined
      and omits ``act_keys``. When a note and a real section share a number, the
@@ -706,6 +710,8 @@ _NEXT_SECTION_REF = re.compile(
     re.IGNORECASE,
 )
 _CITE_JOIN = re.compile(r"(?:,\s*and\s+|,\s+|\s+and\s+)", re.IGNORECASE)
+# A new verb after ``and``. Fixed alternatives, not a repeated group.
+_VERB_CHAIN = re.compile(r"(?:,\s+and\s+|\s+and\s+)", re.IGNORECASE)
 _FOR_QUOTE = re.compile(
     r"""\s*,?\s*for\s+(?:the\s+(?:words|word|figures|figure)\s+)?"""
     r"""["\u201c][^"\u201d]{1,200}["\u201d]""",
@@ -913,6 +919,44 @@ def _unwrap_note(body: str) -> str:
     return text
 
 
+def _consume_verb_unit(text: str, pos: int) -> Optional[int]:
+    """One ``<verb> by <instrument>[, s. N][ for ...]`` unit, from ``pos``.
+
+    The verb is matched once. Citations, section references and trailing
+    clauses are the same forward scan as a single note. Returns None when
+    the verb is missing or the instrument does not follow.
+    """
+    lead = _LONG_FOOTNOTE_LEAD.match(text, pos)
+    if lead is None:
+        return None
+    cursor = lead.end()
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    as_ref = _AS_SECTION_REF.match(text, cursor)
+    if as_ref is not None:
+        cursor = as_ref.end()
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+    lead_text = lead.group(0).lower().rstrip(".")
+    if not lead_text.endswith("by") and not lead_text.startswith("see"):
+        by = re.match(r"(?i:by)\s+", text[cursor:])
+        if by is None:
+            return None
+        cursor += by.end()
+    elif lead_text.startswith("see"):
+        by = re.match(r"(?i:by)\s+", text[cursor:])
+        if by is not None:
+            cursor += by.end()
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    tail = text[cursor:]
+    end = _consume_citations(tail)
+    if end is None:
+        return None
+    end = _consume_trailing_clauses(tail, end)
+    return cursor + end
+
+
 def _whole_body_is_citation_footnote(body: str) -> bool:
     """True when ``body`` is only an amendment footnote, from the first word to the end.
 
@@ -920,33 +964,24 @@ def _whole_body_is_citation_footnote(body: str) -> bool:
     ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, optionally
     ``as sub-section (1)`` or ``as clause (x)``. Then one or more Act,
     Ordinance, P.O. or Regulation citations, an optional section reference,
-    and optional ``for "..."`` or ``w.e.f.`` clauses. Anything left over,
-    including an operative sentence, does not match. ``Substitution``,
-    ``Insertion`` and ``Amendment of`` do not match the lead.
+    and optional ``for "..."`` or ``w.e.f.`` clauses. ``and`` may repeat that
+    whole unit with a different verb. Anything left over, including an
+    operative sentence, does not match. ``Substitution``, ``Insertion`` and
+    ``Amendment of`` do not match the lead.
     """
     text = _unwrap_note(body)
-    lead = _LONG_FOOTNOTE_LEAD.match(text)
-    if lead is None:
+    pos = _consume_verb_unit(text, 0)
+    if pos is None:
         return False
-    rest = text[lead.end():].strip()
-    lead_text = lead.group(0).lower().rstrip(".")
-    as_ref = _AS_SECTION_REF.match(rest)
-    if as_ref is not None:
-        rest = rest[as_ref.end():].strip()
-    if not lead_text.endswith("by") and not lead_text.startswith("see"):
-        by = re.match(r"(?i:by)\s+", rest)
-        if by is None:
-            return False
-        rest = rest[by.end():].strip()
-    elif lead_text.startswith("see"):
-        by = re.match(r"(?i:by)\s+", rest)
-        if by is not None:
-            rest = rest[by.end():].strip()
-    end = _consume_citations(rest)
-    if end is None:
-        return False
-    end = _consume_trailing_clauses(rest, end)
-    return rest[end:].strip() == ""
+    while True:
+        join = _VERB_CHAIN.match(text, pos)
+        if join is None:
+            break
+        nxt = _consume_verb_unit(text, join.end())
+        if nxt is None:
+            break
+        pos = nxt
+    return text[pos:].strip() == ""
 
 
 def _citation_footnote_bodies(text: str) -> list:
@@ -1029,6 +1064,10 @@ def _citation_tail_ok(tail: str) -> bool:
         return False
     if re.search(r"\d\.\s+[A-Z]", text):
         return False
+    # ``Rep. by Act II and Amended by Act III`` is a mixed note, not one placeholder.
+    for match in re.finditer(r"(?i:\sand\s+)", text):
+        if _LONG_FOOTNOTE_LEAD.match(text, match.end()):
+            return False
     for match in re.finditer(r"([A-Za-z]+)\.\s+", text):
         if match.group(1).lower() not in _CITATION_ABBREV:
             return False

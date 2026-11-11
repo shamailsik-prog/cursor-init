@@ -66,6 +66,11 @@ SUBSTITUTED_THEN_OPERATIVE = (
     "following shall be substituted, namely: the rate of tax is five percent of the value."
 )
 REPEAL = "2. Repeal. The Earlier Fixture Act, 1908, is hereby repealed."
+MIXED_OPERATIVE = (
+    "5. Substitution of section 5 and insertion of section 5A.- For section 5 "
+    "the following shall be substituted, and after it the following shall be "
+    "inserted, namely: the registrar shall keep the roll of instruments."
+)
 OMITTED_BY = "6. Omitted by the Finance Act, 1990 (X of 1990), s. 3."
 REP_BY = "5. [Rep. by Ord. X of 1980]"
 DELETED_BY = "10. Deleted by Act V of 1976."
@@ -111,6 +116,10 @@ def test_citation_footnotes_of_any_length_are_recognised_and_unstaged():
         "4. Renumbered as clause (a) by Act II of 2001.",
         "1. Subs. by the Civil Courts Act, 1962, s. 3.",
         "1. Subs. by the Finance (Supplementary) Act, 1991, s. 3.",
+        "1. Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3",
+        "1. Added by Act II of 2000, s. 2 and Omitted by Act III of 2001, s. 3",
+        "1. Rep. by Act II of 2000, s. 2 and Amended by Act III of 2001, s. 4",
+        '1. Subs. by Act II of 2000, s. 2, for "tax" and Ins. by Act III of 2001, s. 3',
     )
     assert all(len(note) > 20 for note in notes)
     for note in notes:
@@ -126,7 +135,10 @@ def test_citation_footnotes_of_any_length_are_recognised_and_unstaged():
 
 def test_operative_amending_sections_stay_live():
     """The lead is the whole body. A real amending section is not a footnote."""
-    live = (SUBSTITUTION, INSERTION, AMENDMENT, SEE_OPERATIVE, ADDED_OPERATIVE, SUBSTITUTED_THEN_OPERATIVE, REPEAL)
+    live = (
+        SUBSTITUTION, INSERTION, AMENDMENT, SEE_OPERATIVE, ADDED_OPERATIVE,
+        SUBSTITUTED_THEN_OPERATIVE, REPEAL, MIXED_OPERATIVE,
+    )
     for text in live:
         assert is_amendment_footnote(text) is False
         assert is_unstaged_amendment_footnote(text) is False
@@ -176,8 +188,28 @@ def test_the_for_words_note_is_unstaged_without_a_colliding_section():
     assert len(key_div_texts([note, REAL_1]).sections) == 1
 
 
+def test_a_mixed_verb_chain_does_not_take_a_second_key():
+    """``Subs. ... and Ins. ...`` is one unstaged note. The real section keeps ``1``."""
+    note = "1. Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3"
+    assert is_long_amendment_footnote(note) is True
+    assert is_unstaged_amendment_footnote(note) is True
+    alone = key_div_texts([note])
+    assert alone.sections == ()
+    assert alone.skipped_short == 1
+    assert [section.key for section in key_div_texts([note, REAL_1]).sections] == ["1"]
+    assert [section.key for section in key_div_texts([REAL_1, note]).sections] == ["1"]
+    assert _pairs([note, REAL_1]) == [("1", REAL_1, None)]
+    assert _pairs([REAL_1, note]) == [("1", REAL_1, None)]
+    assert is_amendment_footnote(MIXED_OPERATIVE) is False
+    assert is_unstaged_amendment_footnote(MIXED_OPERATIVE) is False
+    kept = key_div_texts([MIXED_OPERATIVE])
+    assert [section.key for section in kept.sections] == ["5"]
+    assert kept.sections[0].text == MIXED_OPERATIVE
+    assert kept.sections[0].provision_status is None
+
+
 def test_a_long_ambiguous_tail_does_not_backtrack():
-    """The old trailing-reference regex was super-linear on comma and ``s`` tails."""
+    """Comma tails and mixed-verb chains stay linear. No nested quantifier."""
     import time
 
     note = "1. Subs. by the Finance Act, 1991, " + (", s" * 4000)
@@ -187,6 +219,23 @@ def test_a_long_ambiguous_tail_does_not_backtrack():
     assert recognised is False
     assert is_unstaged_amendment_footnote(note) is False
     assert elapsed < 1.0
+    units = (
+        " and Ins. by Act III of 2001, s. 3",
+        " and Added by Act IV of 2002, s. 4",
+        " and Omitted by Act V of 2003, s. 5",
+        " and Rep. by Act VI of 2004, s. 6",
+        " and Amended by Act VII of 2005, s. 7",
+    )
+    chain = "1. Subs. by Act II of 2000, s. 2"
+    index = 0
+    while len(chain) < 10000:
+        chain += units[index % len(units)]
+        index += 1
+    assert len(chain) >= 10000
+    started = time.perf_counter()
+    assert is_long_amendment_footnote(chain) is True
+    assert is_unstaged_amendment_footnote(chain) is True
+    assert time.perf_counter() - started < 1.0
 
 
 def test_a_real_section_keeps_its_key_whichever_side_the_footnote_is_on():
@@ -378,6 +427,8 @@ def test_policy_note_records_the_citation_footnote_rule():
     assert "RESID-004-POLICY" in note
     assert "Subs." in note and "Ord." in note
     assert "Substitution" in note and "Insertion of" in note
+    assert "Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3" in note
+    assert "insertion of section 5A" in note
     assert "Amendment of section X.-" in note
     assert "sub-section" in note and "w.e.f." in note
     assert "50-div cap" in note
