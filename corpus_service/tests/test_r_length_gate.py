@@ -162,9 +162,10 @@ def test_a_placeholder_blocks_retirement_and_does_not_publish_a_number():
     assert "ambiguous_section_identity" == ambiguous_section_reason("short-ambiguous")
 
 
-# A footnote longer than 20 characters still parses as a provision. That collision
-# existed before R-LENGTH-GATE, because the old gate kept every div of 21 characters
-# or more. R-LENGTH-RESID-002 does not extend past 20.
+# ``1. Substituted by Act`` is 21 characters and names no instrument year, so
+# R-LENGTH-RESID-004 does not treat it as a citation footnote. A full Act, Ord.,
+# P.O. or Regulation citation of any length is unstaged noise. The short ``by`` /
+# ``of`` grammar still stops at 20 characters.
 _LONG_FOOTNOTE = "1. Substituted by Act"
 
 
