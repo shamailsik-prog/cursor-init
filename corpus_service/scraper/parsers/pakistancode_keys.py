@@ -26,6 +26,9 @@ Walk ``div.section`` texts in document order.
      ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions:
      the full word, and ``Rep.`` with nothing after it, are section text. A footnote
      longer than 20 characters is unchanged: that collision predates this gate.
+   * RESID-005-POLICY. A page that contains only these short footnotes stages no
+     rows. The notes are noise, so the page is not quarantined and ``act_keys`` is
+     omitted. An omitted set retires nothing.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
      (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
      numbered provision, is not given a number. It is staged as ``short-ambiguous``
@@ -131,10 +134,13 @@ items suppress the splitter and are staged on the div path, which includes them 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Mapping, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 # Noise at or below this length is not staged and does not consume the cap.
 # A numbered provision or a bare omission marker is not noise (R-LENGTH-GATE).
@@ -979,6 +985,43 @@ class HarvestDelta:
     retired: list = field(default_factory=list)
 
 
+def _refuse_act_keys(reason: str) -> None:
+    """Retire nothing. The caller sees the refusal; the store is left untouched."""
+    message = f"act_keys refused ({reason}); retiring nothing"
+    logger.error(message)
+    raise ValueError(message)
+
+
+def _materialise_act_keys(sections) -> list:
+    """One concrete list of sections, or a refusal.
+
+    Retirement runs only for a non-empty collection of sections whose keys are
+    non-empty strings. ``None``, ``str``, ``bytes``, a mapping, an empty or
+    exhausted iterator, and a collection with a non-string or empty element are
+    refused. A generator is read once here and is not read again.
+    """
+    if sections is None:
+        _refuse_act_keys("None")
+    if isinstance(sections, (str, bytes, bytearray)):
+        _refuse_act_keys(type(sections).__name__)
+    if isinstance(sections, Mapping):
+        _refuse_act_keys("mapping")
+    if isinstance(sections, (list, tuple)):
+        staged = list(sections)
+    else:
+        try:
+            staged = list(sections)
+        except TypeError:
+            _refuse_act_keys(type(sections).__name__)
+    if not staged:
+        _refuse_act_keys("empty")
+    for item in staged:
+        key = item.key if isinstance(item, KeyedDiv) else None
+        if not isinstance(key, str) or key == "":
+            _refuse_act_keys("element is not a section with a non-empty str key")
+    return staged
+
+
 def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Optional[str] = None) -> HarvestDelta:
     """Publish ``sections`` onto ``store``.
 
@@ -986,10 +1029,11 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     identity, and the same text is unchanged. New text appends a version and keeps the
     stored key. The stored schedule key is not rewritten. A retired row with that
     identity is revived on the stored key, versions included. A live key whose identity is
-    absent from this harvest is retired. ``sections`` of None, or an empty list,
-    tuple or set, retires nothing: an empty page is not an inventory. That is the
-    same rule as ``keys_to_retire`` on a missing or empty ``act_keys`` set, which is
-    what publish uses. A non-empty list still retires keys it does not contain.
+    absent from this harvest is retired. The inventory is materialised once. Retirement
+    runs only when that list is a non-empty collection of sections with non-empty str
+    keys. Every other shape raises ``ValueError`` and retires nothing. Publish uses
+    ``keys_to_retire``, which already returns nothing for a missing or empty set.
+    A non-empty list still retires keys it does not contain.
     A harvest whose keys are all schedule keys
     does not retire a body section: adding a schedule is not an inventory that repeals
     the act. Two rows that already share one schedule identity are left as they
@@ -1000,10 +1044,7 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     shares the First Schedule.
     """
     delta = HarvestDelta()
-    if sections is None:
-        return delta
-    if isinstance(sections, (list, tuple, set, frozenset)) and len(sections) == 0:
-        return delta
+    staged = _materialise_act_keys(sections)
     fold = label_mode if label_mode == "roman" else None
     by_identity: dict = {}
     conflicts = set()
@@ -1015,8 +1056,8 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
             by_identity[ident] = key
     seen_raw = set()
     seen_identities = set()
-    blocked = any(section_kind_is_ambiguous(section.kind) for section in sections)
-    for section in sections:
+    blocked = any(section_kind_is_ambiguous(section.kind) for section in staged)
+    for section in staged:
         if section_kind_is_ambiguous(section.kind):
             continue
         ident = schedule_key_identity(section.key, mode=fold)

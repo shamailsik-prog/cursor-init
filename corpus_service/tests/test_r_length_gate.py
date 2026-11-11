@@ -393,3 +393,14 @@ def test_bare_abbreviation_footnotes_do_not_take_a_section_or_schedule_key():
     assert sections[1]["section_text"] == "2. Repeal."
     assert split_into_sections("6. Ins.", "Fixture Act") == []
     assert split_into_sections("7. Rep. of X.", "Fixture Act") == []
+
+
+def test_footnote_only_page_stages_nothing_and_is_not_quarantined():
+    """RESID-005-POLICY: notes are noise. The page has no rows and no quarantine."""
+    page = key_div_texts(["6. Ins.", "7. Rep. of X.", "1. Subs. by Act"])
+    assert page.sections == ()
+    assert page.skipped_short == 3
+    assert act_inventory_is_complete(page) is False
+    assert suppresses_plain_text_fallback(page) is False
+    assert fallback_act_keys(page, []) is None
+    assert split_into_sections("6. Ins.\n7. Rep. of X.", "Fixture Act") == []

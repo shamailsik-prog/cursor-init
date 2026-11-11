@@ -134,26 +134,63 @@ def test_acceptance_3_delete_retires_only_that_key():
     assert keys_to_retire(["3"], ["1"], "3") == []
 
 
-def test_empty_harvest_retires_nothing_and_a_non_empty_list_still_retires():
-    """None, an empty tuple, and an empty set are not an inventory. A list still is.
+def _live_texts(store):
+    return {key: (row.text, row.retired) for key, row in store.items()}
 
-    Publish retires through ``keys_to_retire`` and ``act_keys_from_metadata``. Those
-    already refuse a missing or empty set. ``apply_harvest`` follows the same rule.
-    The harvester stamps a non-empty list only when ``act_inventory_is_complete``
-    is true, and otherwise omits ``act_keys``.
+
+def test_apply_harvest_refuses_a_bad_inventory_and_a_partial_list_still_retires():
+    """Retirement runs only for a non-empty collection of sections with str keys.
+
+    A generator is read once. A bad shape raises and leaves the store as it was.
+    Publish still retires through ``keys_to_retire``, which returns nothing for a
+    missing or empty set. The harvester omits ``act_keys`` unless the inventory
+    may retire absences.
     """
     store = _store([SECTION_1, SECTION_2])
-    for empty in (None, (), set(), frozenset(), []):
-        delta = apply_harvest(store, empty)
-        assert delta.retired == [] and delta.inserted == [] and delta.amended == []
-        assert store["1"].retired is False and store["1"].text == SECTION_1
-        assert store["2"].retired is False and store["2"].text == SECTION_2
+    before = _live_texts(store)
+    empty_gen = (item for item in ())
+    with pytest.raises(ValueError, match="empty"):
+        apply_harvest(store, empty_gen)
+    assert list(empty_gen) == []
+    assert _live_texts(store) == before
+    exhausted = iter(key_div_texts([SECTION_1]).sections)
+    assert list(exhausted) != []
+    with pytest.raises(ValueError, match="empty"):
+        apply_harvest(store, exhausted)
+    assert _live_texts(store) == before
+    for bad, reason in (
+        (None, "None"),
+        ("", "str"),
+        (b"", "bytes"),
+        ({}, "mapping"),
+        (["1", ""], "element"),
+        (["1"], "element"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            apply_harvest(store, bad)
+        assert _live_texts(store) == before
     kept = list(key_div_texts([SECTION_1]).sections)
     assert len(kept) == 1
-    delta = apply_harvest(store, kept)
+    yields = {"n": 0}
+
+    def once():
+        for item in kept:
+            yields["n"] += 1
+            yield item
+
+    source = once()
+    delta = apply_harvest(store, source)
+    assert yields["n"] == 1
+    assert list(source) == []
     assert delta.retired == ["2"]
-    assert store["2"].retired is True
     assert store["1"].retired is False and store["1"].text == SECTION_1
+    assert store["2"].retired is True
+    again = _store([SECTION_1, SECTION_2, SECTION_3])
+    partial = list(key_div_texts([SECTION_1, SECTION_3]).sections)
+    listed = apply_harvest(again, partial)
+    assert listed.retired == ["2"]
+    assert again["1"].retired is False and again["3"].retired is False
+    assert again["2"].retired is True
     assert keys_to_retire(["1", "2"], None, "1") == []
     assert keys_to_retire(["1", "2"], (), "1") == []
     assert keys_to_retire(["1", "2"], set(), "1") == []
@@ -162,7 +199,7 @@ def test_empty_harvest_retires_nothing_and_a_non_empty_list_still_retires():
     assert act_keys_from_metadata({"act_keys": set()}) is None
     assert act_keys_from_metadata({"act_keys": []}) is None
     assert act_keys_from_metadata({"act_keys": ["1", "2"]}) == frozenset({"1", "2"})
-    empty_page = key_div_texts(["q" * 20])
+    empty_page = key_div_texts(["q" * 20, "6. Ins."])
     assert empty_page.sections == ()
     assert act_inventory_is_complete(empty_page) is False
     assert fallback_act_keys(empty_page, []) is None

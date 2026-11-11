@@ -218,6 +218,16 @@ def _identity_key(number: str, text: str, repeated: bool, seen: Dict[str, int]) 
     return f"{base}~{seen[base]}"
 
 
+def _only_short_footnotes(text: str) -> bool:
+    """True when every non-blank line is a short amendment footnote.
+
+    A page of only those notes is not a section. The single-chunk fallback must
+    not publish it as section 1 (RESID-005-POLICY).
+    """
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return bool(lines) and all(is_short_amendment_footnote(line) for line in lines)
+
+
 def _rejected_by_length(text: str, limit: int) -> bool:
     """True when an old length gate still rejects this fragment.
 
@@ -618,7 +628,7 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     if not stripped:
         return []
     opening = short_div_disposition(stripped)
-    if is_short_amendment_footnote(stripped):
+    if is_short_amendment_footnote(stripped) or _only_short_footnotes(stripped):
         return []
     if len(stripped) < 10 and opening == "noise":
         return []
@@ -703,7 +713,7 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     # Ultimate fallback: whole text as one section
     plain_text = BeautifulSoup(text, "html.parser").get_text(separator="\n") if _is_html(text) else text
     plain_text = _clean_section_text(plain_text)
-    if plain_text and not is_short_amendment_footnote(plain_text):
+    if plain_text and not is_short_amendment_footnote(plain_text) and not _only_short_footnotes(plain_text):
         logger.warning(f"split_into_sections: All strategies failed for {statute_name}, returning single chunk fallback")
         return [
             {
