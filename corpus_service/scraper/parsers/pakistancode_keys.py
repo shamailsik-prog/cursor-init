@@ -43,8 +43,12 @@ Walk ``div.section`` texts in document order.
    * RESID-004-POLICY. A citation footnote of any length is unstaged noise, the
      same as a short note. The whole body after the number, and nothing else, is
      ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
-     ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, then an Act,
-     Ord., P.O. or Regulation citation, and an optional section reference.
+     ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, then one or
+     more Act, Ord., P.O. or Regulation citations joined by a comma or
+     ``and``. ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
+     same lead. After the section reference the note may add ``for "..."``,
+     ``for the words "..."``, or ``w.e.f.`` a date. A title word such as
+     ``Civil`` is not an instrument number.
      It takes no key (``N``, ``N-<sha8>``, ``schedule:L:N`` or ``~n``), it does
      not use the 50-div cap, and a page of only those notes is not quarantined
      and omits ``act_keys``. When a note and a real section share a number, the
@@ -685,24 +689,46 @@ _LONG_FOOTNOTE_LEAD = re.compile(
     r"rep\.\s+by|re-?numbered|amended\s+by|amdt\.\s+by|amd\.\s+by|am\.\s+by|"
     r"see(?:\s+also)?)(?!\w)"
 )
+# One ``as`` target, then whitespace. No repeated group: ``sub-section`` and
+# ``clause`` are fixed words, and the parenthesis holds at most six characters.
 _AS_SECTION_REF = re.compile(
-    r"(?i:as)\s+(?i:sections|section|secs|sec|ss|s)\.?\s*\d+[A-Za-z]?\s+"
+    r"(?i:as)\s+"
+    r"(?:sub-section|subsection|clause|sections|section|secs|sec|ss|s)\.?\s*"
+    r"(?:\(\s*[0-9A-Za-z]{1,6}\s*\)|\d+[A-Za-z]?)\s+"
 )
-_TRAILING_SECTION_REF = re.compile(
-    r"(?:,|\s)\s*(?:(?i:for)\s+)?(?:sections|section|secs|sec|ss|s)\.?\s*"
-    r"\d+[A-Za-z]?"
-    r"(?:\s*(?:,\s*|\s+(?i:and)\s+|\s*&\s*)"
-    r"(?:(?:sections|section|secs|sec|ss|s)\.?\s*)?"
-    r"\d+[A-Za-z]?)*$",
+_SECTION_WORD = r"(?:sections|section|secs|sec|ss|s)"
+_FIRST_SECTION_REF = re.compile(
+    rf"\s*(?:,\s*)?(?:for\s+)?{_SECTION_WORD}\.?\s*\d+[A-Za-z]?",
     re.IGNORECASE,
 )
+_NEXT_SECTION_REF = re.compile(
+    rf"\s*(?:,\s*|\s+and\s+|\s*&\s+)(?:{_SECTION_WORD}\.?\s*)?\d+[A-Za-z]?",
+    re.IGNORECASE,
+)
+_CITE_JOIN = re.compile(r"(?:,\s*and\s+|,\s+|\s+and\s+)", re.IGNORECASE)
+_FOR_QUOTE = re.compile(
+    r"""\s*,?\s*for\s+(?:the\s+(?:words|word|figures|figure)\s+)?"""
+    r"""["\u201c][^"\u201d]{1,200}["\u201d]""",
+    re.IGNORECASE,
+)
+_QUOTE_REPLACEMENT = re.compile(
+    r"""\s+the\s+(?:words|word|figures|figure)\s+["\u201c][^"\u201d]{1,200}["\u201d]""",
+    re.IGNORECASE,
+)
+_WEF_LEAD = re.compile(r"\s*,?\s*(?:w\.e\.f\.|with\s+effect\s+from)\s+", re.IGNORECASE)
+_DATE_GLUE = frozenset({"the", "day", "of"})
+_MONTHS = frozenset({
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "jan", "feb", "mar", "apr",
+    "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+})
 # A title word starts with a capital. ``of``, ``and`` and ``the`` may sit between
 # title words. ``court under the Finance Act`` does not match: ``court`` is not
 # a title word. The instrument keyword is case-insensitive so ``ACT`` matches.
 _NAMED_INSTRUMENT = (
     r"(?:(?i:the)\s+)?"
     r"[A-Z][A-Za-z'.-]*"
-    r"(?:\s+(?:[A-Z][A-Za-z'.-]*|(?i:of|and|the)))*"
+    r"(?:\s+(?:[A-Z][A-Za-z'.-]*|(?i:of|and|the)|\([A-Z][A-Za-z'.-]{1,40}\)))*"
     r"\s+(?i:Act|Ordinance|Regulation)(?!\w),?\s+\d{4}"
     r"(?:\s*\(\s*(?:[IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}\s*\))?"
 )
@@ -724,6 +750,15 @@ _NUMBERED_REG = (
 _CITATION = re.compile(
     rf"(?:{_NAMED_INSTRUMENT}|{_NUMBERED_ACT}|{_NUMBERED_ORD}|{_NUMBERED_PO}|{_NUMBERED_REG})"
 )
+# Instrument numbers only. A title word such as ``Civil`` is not one of these.
+_INSTRUMENT_NUMBER = re.compile(
+    r"(?i:Act|Ordinance|Regulation)(?!\w)\s+(?:(?i:No)\.\s+)?"
+    r"([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|(?i:Ord)\.\s+(?:(?i:No)\.\s+)?([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|(?i:P)\.\s*(?i:O)\.\s*(?:(?i:No)\.\s+)?"
+    r"([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}"
+    r"|\(\s*([IVXLCDMivxlcdm]+|\d+)\s+(?i:of)\s+\d{4}\s*\)"
+)
 
 
 def _roman_ok(token: str) -> bool:
@@ -739,16 +774,128 @@ def _roman_ok(token: str) -> bool:
     return _roman_to_int(letters) is not None
 
 
+def _instrument_numbers(cite: str) -> list:
+    """Roman or arabic tokens that stand in an instrument-number slot.
+
+    ``Act V of 1976`` and ``(XII of 1991)`` contribute a token. ``Civil`` in
+    ``the Civil Courts Act, 1962`` does not: it is a title word, not ``Act
+    CIVIL of``.
+    """
+    found = []
+    for match in _INSTRUMENT_NUMBER.finditer(cite or ""):
+        found.extend(group for group in match.groups() if group)
+    return found
+
+
 def _citation_ok(cite: str) -> bool:
-    """True when ``cite`` is one instrument and every roman token in it is real.
+    """True when ``cite`` is one instrument and each instrument number is real.
 
     ``Act CIVIL of 2001`` matches the shape and fails here: ``CIVIL`` is not a
-    roman numeral. ``Act V`` and ``Act II`` pass. A four-digit year is not a
-    roman token.
+    roman numeral. ``Act V`` and ``Act II`` pass. A four-digit year is not an
+    instrument number, and neither is a title word.
     """
     if _CITATION.fullmatch(cite or "") is None:
         return False
-    return all(_roman_ok(token) for token in re.findall(r"\b[IVXLCDMivxlcdm]+\b", cite or ""))
+    return all(_roman_ok(token) for token in _instrument_numbers(cite))
+
+
+def _date_token(token: str) -> bool:
+    low = token.lower().rstrip(".")
+    if low in _DATE_GLUE or low in _MONTHS:
+        return True
+    if re.fullmatch(r"\d{1,2}(?:st|nd|rd|th)?", low):
+        return True
+    if re.fullmatch(r"\d{4}", low):
+        return True
+    return re.fullmatch(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}", low) is not None
+
+
+def _consume_section_refs(text: str, pos: int) -> int:
+    """Advance past ``s. 2``, ``s. 2 and s. 3`` or ``ss. 2 & 3``. No nested repeat."""
+    first = _FIRST_SECTION_REF.match(text, pos)
+    if first is None:
+        return pos
+    pos = first.end()
+    while True:
+        nxt = _NEXT_SECTION_REF.match(text, pos)
+        if nxt is None:
+            return pos
+        pos = nxt.end()
+
+
+def _consume_citations(text: str) -> Optional[int]:
+    """End offset after one or more citations joined by a comma or ``and``.
+
+    Returns None when the text does not open with a citation. A join that is
+    not followed by another citation is left for the trailing-clause scan.
+    """
+    pos = 0
+    count = 0
+    while pos < len(text):
+        if count:
+            join = _CITE_JOIN.match(text, pos)
+            if join is None:
+                break
+            cite = _CITATION.match(text, join.end())
+            if cite is None or not _citation_ok(text[join.end():cite.end()]):
+                break
+            pos = cite.end()
+        else:
+            cite = _CITATION.match(text, pos)
+            if cite is None or not _citation_ok(text[pos:cite.end()]):
+                return None
+            pos = cite.end()
+        count += 1
+        pos = _consume_section_refs(text, pos)
+    if count < 1:
+        return None
+    return pos
+
+
+def _consume_wef(text: str, pos: int) -> Optional[int]:
+    """End offset after ``w.e.f.`` or ``with effect from`` and one date.
+
+    At most eight date tokens. A lead with no numeric token does not advance.
+    """
+    lead = _WEF_LEAD.match(text, pos)
+    if lead is None:
+        return None
+    cursor = lead.end()
+    numbers = 0
+    tokens = 0
+    while tokens < 8 and cursor < len(text):
+        if tokens:
+            gap = re.match(r"[\s,]+", text[cursor:])
+            if gap is None:
+                break
+            cursor += gap.end()
+        word = re.match(r"[A-Za-z0-9./-]+", text[cursor:])
+        if word is None or not _date_token(word.group(0)):
+            break
+        if any(ch.isdigit() for ch in word.group(0)):
+            numbers += 1
+        cursor += word.end()
+        tokens += 1
+    if numbers < 1:
+        return None
+    return cursor
+
+
+def _consume_trailing_clauses(text: str, pos: int) -> int:
+    """Advance past ``for "..."`` and ``w.e.f. <date>`` clauses. Each step grows."""
+    while pos < len(text):
+        quoted = _FOR_QUOTE.match(text, pos)
+        if quoted is not None:
+            pos = quoted.end()
+            replacement = _QUOTE_REPLACEMENT.match(text, pos)
+            if replacement is not None:
+                pos = replacement.end()
+            continue
+        wef = _consume_wef(text, pos)
+        if wef is None:
+            return pos
+        pos = wef
+    return pos
 
 
 def _unwrap_note(body: str) -> str:
@@ -770,9 +917,11 @@ def _whole_body_is_citation_footnote(body: str) -> bool:
     """True when ``body`` is only an amendment footnote, from the first word to the end.
 
     The lead is ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
-    ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``. Then one Act,
-    Ordinance, P.O. or Regulation citation, and an optional section reference.
-    Operative text after that citation does not match. ``Substitution``,
+    ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, optionally
+    ``as sub-section (1)`` or ``as clause (x)``. Then one or more Act,
+    Ordinance, P.O. or Regulation citations, an optional section reference,
+    and optional ``for "..."`` or ``w.e.f.`` clauses. Anything left over,
+    including an operative sentence, does not match. ``Substitution``,
     ``Insertion`` and ``Amendment of`` do not match the lead.
     """
     text = _unwrap_note(body)
@@ -793,12 +942,11 @@ def _whole_body_is_citation_footnote(body: str) -> bool:
         by = re.match(r"(?i:by)\s+", rest)
         if by is not None:
             rest = rest[by.end():].strip()
-    ref = _TRAILING_SECTION_REF.search(rest)
-    if ref is not None and ref.end() == len(rest):
-        cite = rest[:ref.start()].strip().rstrip(",").strip()
-    else:
-        cite = rest.strip()
-    return bool(cite) and _citation_ok(cite)
+    end = _consume_citations(rest)
+    if end is None:
+        return False
+    end = _consume_trailing_clauses(rest, end)
+    return rest[end:].strip() == ""
 
 
 def _citation_footnote_bodies(text: str) -> list:

@@ -98,6 +98,19 @@ def test_citation_footnotes_of_any_length_are_recognised_and_unstaged():
         "9. See the Finance Act, 1991.",
         "1. Am. by the Finance Act, 1991 (XII of 1991), s. 3.",
         "12-A. Subs. by Act II of 2001, s. 4.",
+        '1. Subs. by Ord. No. XXV of 2001, s. 2, for "words"',
+        '1. Subs. by the Finance Act, 1991 (XII of 1991), s. 3, for the words "tax" the words "duty"',
+        "1. Subs. by the Finance Act, 1991, s. 3, w.e.f. 1st July, 1991.",
+        "2. Ins. by Act II of 2001, s. 4, w.e.f. the 15th day of June, 2001.",
+        "1. Subs. by Act II of 2001, s. 2, with effect from 1st July, 2001.",
+        "1. Subs. by the Finance Act, 1991, s. 3, and the Finance Act, 1992, s. 4.",
+        "1. Subs. by Act II of 2001, s. 2 and Act III of 2002, s. 3.",
+        "1. Subs. by the Finance Act, 1990, s. 2, the Finance Act, 1991, s. 3 and Ord. No. V of 1992, s. 4.",
+        "3. Renumbered as sub-section (1) by Act V of 1976.",
+        "4. Re-numbered as clause (x) by the Finance Act, 1991, s. 2.",
+        "4. Renumbered as clause (a) by Act II of 2001.",
+        "1. Subs. by the Civil Courts Act, 1962, s. 3.",
+        "1. Subs. by the Finance (Supplementary) Act, 1991, s. 3.",
     )
     assert all(len(note) > 20 for note in notes)
     for note in notes:
@@ -132,9 +145,48 @@ def test_operative_amending_sections_stay_live():
     assert short_div_disposition(BARE_LONG) == "provision"
     assert len(BARE_LONG) > 20
     assert is_amendment_footnote("1. Subs. by Act CIVIL of 2001, s. 3.") is False
+    assert is_amendment_footnote(
+        '1. Subs. by Ord. No. XXV of 2001, s. 2. The registrar shall keep the roll.'
+    ) is False
+    assert is_amendment_footnote(
+        "3. Renumbered as sub-section (1) by order of the court and the registrar shall record it."
+    ) is False
     assert is_short_amendment_footnote("1. Subs. by Act") is True
     assert is_amendment_footnote("2. Repeal.") is False
     assert is_amendment_footnote("6. Inserted.") is False
+
+
+def test_the_for_words_note_is_unstaged_without_a_colliding_section():
+    """The note itself is unstaged. A collision is not what makes that true.
+
+    ``_without_colliding_footnotes`` also drops a recognised footnote, so a
+    test that only keys the note beside a real section still passes when
+    ``is_unstaged_amendment_footnote`` is false. This calls that predicate on
+    the note alone, then checks the real section keeps ``1``.
+    """
+    note = '1. Subs. by Ord. No. XXV of 2001, s. 2, for "words"'
+    assert is_long_amendment_footnote(note) is True
+    assert is_unstaged_amendment_footnote(note) is True
+    assert omission_placeholder_status(note) is None
+    alone = key_div_texts([note])
+    assert alone.sections == ()
+    assert alone.skipped_short == 1
+    assert _pairs([note, REAL_1]) == [("1", REAL_1, None)]
+    assert _pairs([REAL_1, note]) == [("1", REAL_1, None)]
+    assert len(key_div_texts([note, REAL_1]).sections) == 1
+
+
+def test_a_long_ambiguous_tail_does_not_backtrack():
+    """The old trailing-reference regex was super-linear on comma and ``s`` tails."""
+    import time
+
+    note = "1. Subs. by the Finance Act, 1991, " + (", s" * 4000)
+    started = time.perf_counter()
+    recognised = is_long_amendment_footnote(note)
+    elapsed = time.perf_counter() - started
+    assert recognised is False
+    assert is_unstaged_amendment_footnote(note) is False
+    assert elapsed < 1.0
 
 
 def test_a_real_section_keeps_its_key_whichever_side_the_footnote_is_on():
@@ -327,4 +379,5 @@ def test_policy_note_records_the_citation_footnote_rule():
     assert "Subs." in note and "Ord." in note
     assert "Substitution" in note and "Insertion of" in note
     assert "Amendment of section X.-" in note
+    assert "sub-section" in note and "w.e.f." in note
     assert "50-div cap" in note

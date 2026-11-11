@@ -38,10 +38,11 @@ REAL_6 = (
     "a copy on payment of the prescribed fee."
 )
 ADDED = "6. Added by Act II of 2001."
-DIVS = (REAL_1, SUBS, INS, REAL_3, AMEND, OMITTED_BY, REAL_6, ADDED)
+FOR_WORDS = '1. Subs. by Ord. No. XXV of 2001, s. 2, for "words"'
+DIVS = (REAL_1, SUBS, INS, REAL_3, AMEND, OMITTED_BY, REAL_6, ADDED, FOR_WORDS)
 KEPT = (REAL_1, REAL_3, AMEND, OMITTED_BY, REAL_6)
 LIVE = {"1": REAL_1, "3": REAL_3, "4": AMEND, "6": REAL_6}
-FOOTNOTES = (SUBS, INS, ADDED)
+FOOTNOTES = (SUBS, INS, ADDED, FOR_WORDS)
 
 
 def _page(title, divs) -> str:
@@ -155,7 +156,7 @@ def test_a_long_footnote_is_not_served_and_the_real_section_is(corpus_db, monkey
         needle="%Subs. by the Finance Act%",
     ))
     assert leaked[0][0] == 0
-    for needle in ("%Ins. by Ord. XXV%", "%Added by Act II of 2001%"):
+    for needle in ("%Ins. by Ord. XXV%", "%Added by Act II of 2001%", "%Ord. No. XXV of 2001%", '%for "words"%'):
         hit = run(fetch(
             "SELECT count(*) FROM statutes_staging "
             "WHERE extracted_section_text LIKE :needle OR raw_text LIKE :needle",
