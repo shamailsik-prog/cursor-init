@@ -83,9 +83,10 @@ suite("FA-DATA-002 classification coverage", () => {
        REVOKE ALL ON judgment_declassify_grant FROM app_writer;
        REVOKE ALL ON FUNCTION declassify(UUID, TEXT, TEXT, TEXT) FROM app_writer;`,
     );
-    // 007's app_writer revoke runs only when the role already exists. Re-apply so a role
+    // 007's app_writer revoke runs only when the role already exists. Re-apply 007 then 008 so a role
     // created above loses EXECUTE, then record standing embedding DML before the temporary grant.
     await admin.query(fs.readFileSync(path.join(DDL_DIR, "007_classification_coverage.sql"), "utf8"));
+    await admin.query(fs.readFileSync(path.join(DDL_DIR, "008_classification_inventory.sql"), "utf8"));
     for (const role of ["corpus_writer", "app_writer"] as const) {
       const priv = await admin.query(
         `SELECT has_table_privilege($1, 'public.corpus_embeddings', 'INSERT') AS ins,
@@ -332,10 +333,13 @@ suite("FA-DATA-002 classification coverage", () => {
     expect(await rankOf(id)).toBe(3);
   });
 
-  it("applies 007 twice, keeps the trigger invoker-only, and leaves the Annex A inventory counts unchanged", async () => {
+  it("applies 007 twice then 008, keeps the trigger invoker-only, and lists 15 routines including the guard", async () => {
     const sql = fs.readFileSync(path.join(DDL_DIR, "007_classification_coverage.sql"), "utf8");
+    const inventory = fs.readFileSync(path.join(DDL_DIR, "008_classification_inventory.sql"), "utf8");
     await admin.query(sql);
     await admin.query(sql);
+    await admin.query(inventory);
+    await admin.query(inventory);
     const fn = await admin.query(
       `SELECT p.prosecdef, p.proconfig
          FROM pg_proc p
@@ -363,8 +367,8 @@ suite("FA-DATA-002 classification coverage", () => {
         WHERE r.routine::text LIKE '%enforce_embedding_classification%'`,
     );
     expect(relations.rows[0].n).toBe(37);
-    expect(routines.rows[0].n).toBe(14);
-    expect(listed.rows[0].n).toBe(0);
+    expect(routines.rows[0].n).toBe(15);
+    expect(listed.rows[0].n).toBe(1);
     for (const role of ["public", ...APP_ROLES]) {
       const exec = await admin.query(
         `SELECT has_function_privilege($1, 'public.enforce_embedding_classification()', 'EXECUTE') AS ok`,

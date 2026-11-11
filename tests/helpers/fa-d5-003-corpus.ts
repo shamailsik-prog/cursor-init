@@ -23,13 +23,15 @@ export const CORPUS_FIXTURES = path.join(REPO_ROOT, "tests", "fixtures", "corpus
 export const FA_D5_003_BATCH = path.join(CORPUS_FIXTURES, "curated-batch.fa-d5-003.json")
 const CORPUS_SERVICE = path.join(REPO_ROOT, "corpus_service")
 
-/** The Annex A DDL in order: 004 re-defines 003's inventory, 005 re-defines 004's (spec R4). */
+/** The Annex A DDL in order: 004 re-defines 003's inventory, 005 re-defines 004's (spec R4), 008 follows 007. */
 export const ANNEX_A_DDL: readonly string[] = [
   "001_corpus_contract.sql",
   "003_corpus_publication.sql",
   "004_authority_read_views.sql",
   "005_research_reader.sql",
   "006_research_terms.sql",
+  "007_classification_coverage.sql",
+  "008_classification_inventory.sql",
 ]
 
 export const LIVE_MODEL = "text-embedding-3-small"
@@ -318,9 +320,17 @@ export async function bulkInsertVisibleJudgments(admin: pg.Client, count: number
 export async function insertEmbeddings(admin: pg.Client, ids: readonly string[], model = LIVE_MODEL, rank = 0): Promise<void> {
   let i = 0
   for (const id of ids) {
+    // 007's judgment floor rejects a stored rank below the source judgment. A fixture that reclassified
+    // a judgment above public (privileged, internal) still gets a vector; the stored rank is the higher
+    // of the requested rank and the judgment's rank, so v_research_embedding (rank 0 only) stays unchanged.
     await admin.query(
       `INSERT INTO corpus_embeddings (entity_type, entity_id, model, classification_rank, embedding)
-       VALUES ('judgment', $1, $2, $3, $4::vector) ON CONFLICT (entity_type, entity_id, model) DO NOTHING`,
+       VALUES ('judgment', $1, $2, GREATEST($3::smallint, (
+         SELECT cr.rank FROM judgment j
+         JOIN classification_rank cr ON cr.label = j.classification
+         WHERE j.id = $1::uuid
+       )), $4::vector)
+       ON CONFLICT (entity_type, entity_id, model) DO NOTHING`,
       [id, model, rank, oneHot(i)]
     )
     i += 1

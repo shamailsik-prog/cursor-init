@@ -1644,7 +1644,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
       [section],
     )).rows);
 
-  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (35 with 005's two) while corpus_contract_routines() still lists 12", async () => {
+  it("PG-DDL-26 004: four security_barrier views, SELECT for corpus_authority_reader only, no provenance column, and corpus_contract_relations() lists them (35 with 005's two) while corpus_contract_routines() lists 15", async () => {
     const views = await admin.query(
       `SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname LIKE 'v\\_authority\\_%' ORDER BY 1`,
@@ -1716,7 +1716,7 @@ suite("Postgres DDL integration (FA-CI-002 / FA-DATA-001)", () => {
     // 37 since 006 (two term tables plus 005's two v_research_* views); still four v_authority_* views.
     expect(inventory.rows[0]).toEqual({ n: 37, views: 4 });
     const routines = await admin.query("SELECT count(*)::int AS n FROM corpus_contract_routines()");
-    expect(routines.rows[0].n).toBe(14);
+    expect(routines.rows[0].n).toBe(15);
   });
 
   it("PG-DDL-27 004: a published citation is visible with its judgment's bench; under a quarantined, bench-less or non-public judgment it is not (requirement 3, ruling 8)", async () => {
