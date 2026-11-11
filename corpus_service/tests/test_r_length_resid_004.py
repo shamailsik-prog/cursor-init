@@ -300,6 +300,23 @@ def test_the_splitter_serves_the_real_body_and_drops_the_footnote():
     fallback = split_into_sections(prose, "Example Act")
     assert len(fallback) == 1 and fallback[0]["section_number"] == "1"
     assert prose in fallback[0]["section_text"]
+    with_note = prose + "\n" + SUBS
+    kept = split_into_sections(with_note, "Example Act")
+    assert len(kept) == 1 and kept[0]["section_number"] == "1"
+    assert prose in kept[0]["section_text"]
+    assert "Subs. by" not in kept[0]["section_text"]
+    assert "Finance Act" not in kept[0]["section_text"]
+    html_prose = (
+        "<html><body><p>" + prose + "</p>"
+        "<p class=\"section\">" + SUBS + "</p></body></html>"
+    )
+    html_kept = split_into_sections(html_prose, "Example Act")
+    assert len(html_kept) == 1 and html_kept[0]["section_number"] == "1"
+    assert prose in html_kept[0]["section_text"]
+    assert "Subs. by" not in html_kept[0]["section_text"]
+    assert split_into_sections("Page 12\n" + SUBS, "Example Act") == []
+    titled = "\n".join(["Resid004 Notes Only Act 2099", SUBS, INS, ADDED])
+    assert split_into_sections(titled, "Resid004 Notes Only Act 2099") == []
 
 
 def test_policy_note_records_the_citation_footnote_rule():

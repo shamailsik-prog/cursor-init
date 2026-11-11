@@ -232,12 +232,55 @@ def _only_unstaged_footnotes(text: str) -> bool:
     return bool(lines) and all(is_unstaged_amendment_footnote(line) for line in lines)
 
 
-def _footnotes_and_chrome_only(text: str) -> bool:
-    """True when the page is citation footnotes plus lines that are not provisions.
+_HEADING_SMALL_WORDS = frozenset({"a", "an", "and", "for", "of", "the"})
 
-    The ultimate fallback must not publish that page as section 1. A title line
-    above the notes is chrome. A numbered provision, including a RESID-001
-    placeholder, is not chrome.
+
+def _heading_line(line: str) -> bool:
+    """True for an unnumbered title, not a sentence.
+
+    ``Resid004 Notes Only Act 2099`` is a heading. ``This Act may be cited as
+    the Example and it applies throughout Pakistan.`` is a sentence: it has a
+    stop, and words that do not start a title.
+    """
+    text = (line or "").strip().rstrip(".")
+    if not text or re.search(r"[.?;!]", text):
+        return False
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'’.-]*", text)
+    if not words:
+        return False
+    for word in words:
+        if word.isdigit() or re.fullmatch(r"[IVXLCDM]+", word, re.IGNORECASE):
+            continue
+        if word.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if not word[0].isupper():
+            return False
+    return True
+
+
+def _page_chrome_line(line: str) -> bool:
+    """True for a line that is not statute text.
+
+    Page numbers, rules and a short title are the noise the length gate already
+    skips. A title-case heading of any length is the same chrome. A numbered
+    provision is not chrome. A longer unnumbered sentence is not chrome either.
+    """
+    text = (line or "").strip()
+    if not text:
+        return True
+    if short_div_disposition(text) == "noise":
+        return True
+    return _heading_line(text)
+
+
+def _footnotes_and_chrome_only(text: str) -> bool:
+    """True when the page is citation footnotes plus short page chrome.
+
+    The ultimate fallback must not publish that page as section 1. A short title
+    and a longer title-case heading above the notes are chrome. A numbered
+    provision, including a RESID-001 placeholder, is not chrome. A longer
+    unnumbered sentence is the statute: the footnote line is removed and the
+    sentence stays (R-LENGTH-RESID-004).
     """
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
     if not any(is_unstaged_amendment_footnote(line) for line in lines):
@@ -245,9 +288,19 @@ def _footnotes_and_chrome_only(text: str) -> bool:
     for line in lines:
         if is_unstaged_amendment_footnote(line):
             continue
-        if short_div_disposition(line) == "provision":
+        if not _page_chrome_line(line):
             return False
     return True
+
+
+def _without_unstaged_footnote_lines(text: str) -> str:
+    """The same text with whole-line amendment footnotes removed."""
+    kept = [
+        line
+        for line in (text or "").splitlines()
+        if not (line.strip() and is_unstaged_amendment_footnote(line))
+    ]
+    return _clean_section_text("\n".join(kept))
 
 
 def _rejected_by_length(text: str, limit: int) -> bool:
@@ -782,12 +835,18 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
         and not _only_unstaged_footnotes(plain_text)
         and not _footnotes_and_chrome_only(plain_text)
     ):
+        body = plain_text
+        if any(line.strip() and is_unstaged_amendment_footnote(line) for line in plain_text.splitlines()):
+            body = _without_unstaged_footnote_lines(plain_text)
+            remaining = [line.strip() for line in body.splitlines() if line.strip()]
+            if not body or not remaining or all(_page_chrome_line(line) for line in remaining):
+                return []
         logger.warning(f"split_into_sections: All strategies failed for {statute_name}, returning single chunk fallback")
         return [
             {
                 "section_number": "1",
                 "section_title": statute_name[:500],
-                "section_text": plain_text[:50000],  # cap to avoid massive embedding payload
+                "section_text": body[:50000],  # cap to avoid massive embedding payload
             }
         ]
     return []
