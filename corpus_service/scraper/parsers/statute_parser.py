@@ -18,8 +18,10 @@ from urllib.parse import urlparse, unquote
 from bs4 import BeautifulSoup
 
 from scraper.parsers.pakistancode_keys import (
+    SECTION_NUMBER_TOKEN,
     SHORT_DIV_MAX_EXCLUSIVE,
     TEXT_CAP,
+    canonical_section_number,
     content_token,
     is_amendment_footnote,
     is_unstaged_amendment_footnote,
@@ -89,8 +91,23 @@ GENERIC_ACT_PATTERN = re.compile(
 ACT_WITH_YEAR_PATTERN = re.compile(
     r'\b([A-Z][A-Za-z0-9\s\-\&\']+\s+(?:Act|Ordinance|Order),?\s+\d{4})\b'
 )
-SECTION_DIGIT_START_RE = re.compile(r'^\s*(\d+[A-Z]?)\s*[\.\-\)\:\]]+\s*(.*)', re.DOTALL)
-SECTION_KEYWORD_RE = re.compile(r'^\s*(?:Section|Sec\.|S\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*(.*)', re.IGNORECASE | re.DOTALL)
+# The token is the keyer's. ``12-A`` and ``12A`` canonicalise to ``12A``.
+# A hyphen before a digit stays a delimiter (``12-15``, ``1-7-2001``).
+SECTION_DIGIT_START_RE = re.compile(
+    rf'^\s*({SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]+\s*(.*)', re.DOTALL,
+)
+SECTION_KEYWORD_RE = re.compile(
+    rf'^\s*(?:Section|Sec\.|S\.)\s+({SECTION_NUMBER_TOKEN})\s*[:\.\-\)]*\s*(.*)',
+    re.IGNORECASE | re.DOTALL,
+)
+_LINE_SECTION_RE = re.compile(
+    rf'(?:^|\n)\s*({SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]\s*', re.MULTILINE,
+)
+_DIGIT_START_LINE = re.compile(rf'^\s*{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]\s+')
+_DIGIT_CONTINUE = re.compile(rf'^\s*{SECTION_NUMBER_TOKEN}\s*[\.\-\)]')
+_TITLE_PREFIX_RE = re.compile(
+    rf'^\s*(?:Section\s+)?{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]*\s*', re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -128,7 +145,7 @@ def _extract_number_title_from_chunk(chunk: str) -> Tuple[Optional[str], str, st
     # Try keyword form first: Section 3 ...
     m = SECTION_KEYWORD_RE.match(chunk_clean)
     if m:
-        num = m.group(1).strip()
+        num = canonical_section_number(m.group(1).strip())
         rest = m.group(2).strip() if m.group(2) else ""
         title = _derive_title(rest)
         return num, title, chunk_clean
@@ -136,7 +153,7 @@ def _extract_number_title_from_chunk(chunk: str) -> Tuple[Optional[str], str, st
     # Try digit start form: 3. Title ...
     m2 = SECTION_DIGIT_START_RE.match(chunk_clean)
     if m2:
-        num = m2.group(1).strip()
+        num = canonical_section_number(m2.group(1).strip())
         rest = m2.group(2).strip() if m2.group(2) else ""
         title = _derive_title(rest)
         return num, title, chunk_clean
@@ -173,7 +190,7 @@ def _make_section_dict(number: str, title: str, text: str, statute_name: str) ->
         snippet = text[:200].split("\n")[0]
         if snippet and len(snippet) > 10:
             # remove number prefix for title snippet
-            snippet = re.sub(r'^\s*(?:Section\s+)?\d+[A-Z]?\s*[\.\-\)\:]*\s*', '', snippet, flags=re.I)
+            snippet = _TITLE_PREFIX_RE.sub('', snippet, count=1)
             if snippet:
                 title = snippet[:200]
     return {
@@ -506,9 +523,13 @@ def _strategy_1_p_class_section(soup: BeautifulSoup, statute_name: str) -> List[
             else:
                 # if p class section but text doesn't start with digit, still consider if it contains digit elsewhere leading
                 # Search inside text for Section 2 pattern
-                inner_m = re.search(r'(?:Section\s+)?(\d+[A-Z]?)\s*[\.\-\)]', txt[:120], re.I)
+                inner_m = re.search(
+                    rf'(?:Section\s+)?({SECTION_NUMBER_TOKEN})\s*[\.\-\)]', txt[:120], re.I,
+                )
                 if inner_m:
-                    sections.append(_make_section_dict(inner_m.group(1), _derive_title(txt), txt, statute_name))
+                    sections.append(_make_section_dict(
+                        canonical_section_number(inner_m.group(1)), _derive_title(txt), txt, statute_name,
+                    ))
         logger.debug(f"Strategy1 p.class=section found {len(sections)}")
         return _deduplicate_sections(sections)
     except Exception as e:
@@ -575,7 +596,7 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
                 continue
-            if not re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)\:]\s+', p.get_text(separator=" ", strip=True)):
+            if _DIGIT_START_LINE.match(p.get_text(separator=" ", strip=True)) is None:
                 continue
             # include next sibling p if it looks like continuation (doesn't start with digit)
             next_p = p.find_next_sibling("p")
@@ -585,7 +606,7 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
                 if (
                     next_text
                     and short_div_disposition(next_text) != "ambiguous"
-                    and not re.match(r'^\s*\d+[A-Z]?\s*[\.\-\)]', next_text)
+                    and _DIGIT_CONTINUE.match(next_text) is None
                     and len(next_text) > 30
                 ):
                     # append as continuation but not too long
@@ -602,8 +623,10 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
 
 def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
     """Numbered chunks inside one plain-text run. Noise under 15 characters is skipped."""
-    matches = list(re.finditer(r'(?:^|\n)\s*(\d+[A-Z]?)\s*[\.\-\)\:\]]\s*', plain, re.MULTILINE))
+    matches = list(_LINE_SECTION_RE.finditer(plain))
     if len(matches) < 2:
+        # Not line-anchored. A hyphen letter suffix is not added here: a
+        # mid-paragraph ``12-A. The`` is a cross-reference, not a new section.
         matches = list(re.finditer(r'(\d+[A-Z]?)\s*[\.\-\)]\s+(?=[A-Z][a-z])', plain))
     sections = []
     if len(matches) >= 2:
@@ -670,9 +693,11 @@ def _keyword_sections(plain: str, statute_name: str, pattern: re.Pattern, articl
         content_after = plain[start_content:end_content].strip()
         title = _derive_title(content_after)
         if article:
-            number = sec_num if sec_num.lower().startswith("article") else f"Article {sec_num}"
+            number = sec_num if sec_num.lower().startswith("article") else (
+                f"Article {canonical_section_number(sec_num)}"
+            )
         else:
-            number = sec_num
+            number = canonical_section_number(sec_num)
         sections.append(_make_section_dict(number, title, chunk, statute_name))
     return sections
 
@@ -687,11 +712,11 @@ def _strategy_5_resplit_section_keyword(text: str, statute_name: str) -> List[Di
         plain = _normalize_whitespace(plain)
         segments = _line_segments(plain)
         section_pattern = re.compile(
-            r'(?:\n|^)\s*(?:Section|Sec\.|S\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*',
+            rf'(?:\n|^)\s*(?:Section|Sec\.|S\.)\s+({SECTION_NUMBER_TOKEN})\s*[:\.\-\)]*\s*',
             re.IGNORECASE | re.MULTILINE,
         )
         article_pattern = re.compile(
-            r'(?:\n|^)\s*(?:Article|Art\.)\s+(\d+[A-Z]?)\s*[:\.\-\)]*\s*',
+            rf'(?:\n|^)\s*(?:Article|Art\.)\s+({SECTION_NUMBER_TOKEN})\s*[:\.\-\)]*\s*',
             re.IGNORECASE | re.MULTILINE,
         )
         text_parts = [payload for kind, payload in segments if kind == "text"]
