@@ -4,9 +4,12 @@
 that same key. ``10-B`` is ``10B``. ``12-AA`` and ``12AA`` are ``12AA``. A real
 section 12 beside a real section 12-A keeps both keys, in either order, and
 both are retrievable. A hyphen before a digit stays the delimiter it was
-(``12-15``, ``1-7-2001``). ``Act No. XII-A`` is not a section. A citation
-footnote for 12-A beside the real 12-A drops; the real section keeps bare
-``12A``. The same footnote does not take section 12.
+(``12-15``, ``1-7-2001``). A hyphen before a heading word does too
+(``12-Fees``, ``12-Tax``), and ``12-Ins. by Act ...`` stays the footnote it
+was for section 12. ``Act No. XII-A`` is not a section. A citation footnote
+for 12-A beside the real 12-A drops; the real section keeps bare ``12A``.
+The same footnote does not take section 12. ``Section 12AA`` is ``12AA``,
+including when no stop follows the suffix.
 
 The omitted-note collision is mutation-sensitive: forcing the hyphen to be a
 delimiter again keys the note as ``12``, and the note beside a real section 12
@@ -68,6 +71,19 @@ REAL_12AA_GLUED = (
     "12AA. Double insertion. This section applies to every instrument "
     "presented for registration under this Act."
 )
+REAL_12A_SPACE = (
+    "12-A Inserted rates. The inserted rates in this section apply to "
+    "instruments presented after the amendment."
+)
+FEES_12 = (
+    "12-Fees. The fees specified in this section shall be paid on every "
+    "instrument submitted for registration."
+)
+TAX_12 = (
+    "12-Tax on property. The tax in this section applies to every instrument "
+    "presented for registration under this Act."
+)
+NOTE_12_INS = "12-Ins. by Act II of 2001, s. 3."
 
 
 def _keys(texts):
@@ -92,6 +108,12 @@ def test_hyphen_suffix_uses_the_glued_key_already_used_for_12A():
     assert canonical_section_number("12-15") == "12-15"
     assert parse_section_number("2nd. Title") is None
     assert parse_section_number("1ST. Title") is None
+    assert parse_section_number("Section 12AA. Rates.") == "12AA"
+    assert parse_section_number("12-Fees. The fees.") == "12"
+    assert parse_section_number("12-Tax on property.") == "12"
+    assert parse_section_number(NOTE_12_INS) == "12"
+    assert canonical_section_number("12-Fees") == "12-Fees"
+    assert canonical_section_number("12-AA") == "12AA"
     alone = key_div_texts([REAL_12A])
     assert alone.sections[0].key == "12A"
     assert alone.sections[0].title == "Inserted rates."
@@ -178,6 +200,31 @@ def test_omitted_12A_collides_only_with_12A_not_with_section_12():
     assert period_letter.sections[0].provision_status == "omitted"
 
 
+def test_heading_words_and_hyphenated_amendment_notes_stay_section_12():
+    """``12-Fees`` and ``12-Ins.`` are not suffixes. Widening the suffix eats them.
+
+    ``12-Fees`` would be keyed ``12Fees`` and the title word would disappear.
+    ``12-Ins. by Act ...`` would be published as live section ``12Ins``.
+    """
+    fees = key_div_texts([FEES_12])
+    assert fees.sections[0].key == "12"
+    assert fees.sections[0].title == "Fees."
+    assert fees.sections[0].text == FEES_12
+    tax = key_div_texts([TAX_12])
+    assert tax.sections[0].key == "12"
+    assert tax.sections[0].title == "Tax on property."
+    assert is_unstaged_amendment_footnote(NOTE_12_INS) is True
+    assert is_amendment_footnote(NOTE_12_INS) is True
+    assert is_long_amendment_footnote(NOTE_12_INS) is True
+    assert key_div_texts([NOTE_12_INS]).sections == ()
+    assert _keys([NOTE_12_INS, REAL_12]) == [("12", REAL_12, None)]
+    assert _keys([REAL_12, NOTE_12_INS]) == [("12", REAL_12, None)]
+    assert _keys([FEES_12, REAL_12A]) == [
+        ("12", FEES_12, None),
+        ("12A", REAL_12A, None),
+    ]
+
+
 def test_ranges_dates_roman_act_numbers_and_mid_body_refs_are_not_letter_suffixes():
     assert parse_section_number("12-15") == "12"
     assert parse_section_number("12-15. The years twelve to fifteen are a range.") == "12"
@@ -258,6 +305,57 @@ def test_splitter_agrees_with_the_glued_key_and_does_not_split_mid_body_refs():
     roman_numbers = [section["section_number"] for section in split_into_sections(roman, "Example Act")]
     assert "12A" not in roman_numbers
     assert "12" not in roman_numbers
+    spaced = "\n".join([REAL_12, REAL_12A_SPACE])
+    spaced_back = "\n".join([REAL_12A_SPACE, REAL_12])
+    assert [section["section_number"] for section in split_into_sections(spaced, "Fixture Act")] == ["12", "12A"]
+    assert [section["section_number"] for section in split_into_sections(spaced_back, "Fixture Act")] == ["12A", "12"]
+    alone = split_into_sections(REAL_12A_SPACE, "Fixture Act")
+    assert [section["section_number"] for section in alone] == ["12A"]
+    html_space = (
+        "<p>12. Rates. The rates in this section apply to every instrument "
+        "presented for registration under this Act.</p>"
+        "<p>12-A Inserted rates. The inserted rates in this section apply "
+        "to instruments presented after the amendment.</p>"
+    )
+    space_sections = _strategy_3_p_filtered_digit_start(
+        BeautifulSoup(html_space, "html.parser"), "Fixture Act",
+    )
+    assert [section["section_number"] for section in space_sections] == ["12", "12A"]
+    fees_split = "\n".join([
+        FEES_12,
+        "13. Other. This other section applies to every instrument presented for registration under this Act.",
+    ])
+    assert [section["section_number"] for section in split_into_sections(fees_split, "Fixture Act")] == ["12", "13"]
+    ins_split = "\n".join([NOTE_12_INS, REAL_12])
+    assert [section["section_number"] for section in split_into_sections(ins_split, "Fixture Act")] == ["12"]
+    repeated = "\n".join([
+        "Section 12A. Single letter. This section applies to every instrument under this Act.",
+        "Section 12AA. Repeated letters. This section applies to every instrument under this Act.",
+    ])
+    repeated_hyphen = "\n".join([
+        "Section 12A. Single letter. This section applies to every instrument under this Act.",
+        "Section 12-AA. Repeated letters. This section applies to every instrument under this Act.",
+    ])
+    assert [section["section_number"] for section in split_into_sections(repeated, "Fixture Act")] == ["12A", "12AA"]
+    assert [section["section_number"] for section in split_into_sections(repeated_hyphen, "Fixture Act")] == ["12A", "12AA"]
+    keyword_space = "\n".join([
+        "Section 12. Rates. The rates in this section apply to every instrument under this Act.",
+        "Section 12-A Inserted rates. The inserted rates apply to every instrument under this Act.",
+    ])
+    keyword_fees = "\n".join([
+        "Section 12-Fees. The fees specified in this section shall be paid on every instrument submitted for registration.",
+        "Section 13. Other. This other section applies to every instrument presented for registration under this Act.",
+    ])
+    assert [section["section_number"] for section in split_into_sections(keyword_space, "Fixture Act")] == ["12", "12A"]
+    assert [section["section_number"] for section in split_into_sections(keyword_fees, "Fixture Act")] == ["12", "13"]
+    articles = "\n".join([
+        "Article 12A. Single letter. This article applies to every instrument under this Act.",
+        "Article 12AA. Repeated letters. This article applies to every instrument under this Act.",
+    ])
+    assert [section["section_number"] for section in split_into_sections(articles, "Fixture Act")] == [
+        "Article 12A",
+        "Article 12AA",
+    ]
 
 
 def test_a_schedule_item_12A_is_not_body_section_12():

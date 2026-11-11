@@ -18,6 +18,7 @@ from urllib.parse import urlparse, unquote
 from bs4 import BeautifulSoup
 
 from scraper.parsers.pakistancode_keys import (
+    HYPHEN_LETTER_SUFFIX,
     SECTION_NUMBER_TOKEN,
     SHORT_DIV_MAX_EXCLUSIVE,
     TEXT_CAP,
@@ -92,21 +93,50 @@ ACT_WITH_YEAR_PATTERN = re.compile(
     r'\b([A-Z][A-Za-z0-9\s\-\&\']+\s+(?:Act|Ordinance|Order),?\s+\d{4})\b'
 )
 # The token is the keyer's. ``12-A`` and ``12A`` canonicalise to ``12A``.
-# A hyphen before a digit stays a delimiter (``12-15``, ``1-7-2001``).
+# ``12AA`` is tried before ``12A``. A hyphen before a word or a digit stays a
+# delimiter (``12-Fees``, ``12-15``, ``1-7-2001``). After a finished hyphen
+# suffix, whitespace or the end of the text is enough; the atomic group keeps
+# that hyphen from being read as the delimiter. No nested quantifier.
+_HYPHEN_SUFFIX_AT_END = rf"(?>\d+{HYPHEN_LETTER_SUFFIX})(?=\s|$)"
 SECTION_DIGIT_START_RE = re.compile(
-    rf'^\s*({SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]+\s*(.*)', re.DOTALL,
+    rf'^\s*(?:'
+    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX}))(?=\s|$)\s*'
+    rf'|(?P<plain_num>{SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]+'
+    rf')\s*(?P<rest>.*)',
+    re.DOTALL,
 )
 SECTION_KEYWORD_RE = re.compile(
-    rf'^\s*(?:Section|Sec\.|S\.)\s+({SECTION_NUMBER_TOKEN})\s*[:\.\-\)]*\s*(.*)',
+    rf'^\s*(?:Section|Sec\.|S\.)\s+(?P<num>{SECTION_NUMBER_TOKEN})\s*[:\.\-\)]*\s*(?P<rest>.*)',
     re.IGNORECASE | re.DOTALL,
 )
 _LINE_SECTION_RE = re.compile(
-    rf'(?:^|\n)\s*({SECTION_NUMBER_TOKEN})\s*[\.\-\)\:\]]\s*', re.MULTILINE,
+    rf'(?:^|\n)\s*(?:'
+    rf'{_HYPHEN_SUFFIX_AT_END}\s*'
+    rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:\]]\s*'
+    rf')',
+    re.MULTILINE,
 )
-_DIGIT_START_LINE = re.compile(rf'^\s*{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]\s+')
-_DIGIT_CONTINUE = re.compile(rf'^\s*{SECTION_NUMBER_TOKEN}\s*[\.\-\)]')
+_DIGIT_START_LINE = re.compile(
+    rf'^\s*(?:'
+    rf'(?>\d+{HYPHEN_LETTER_SUFFIX})\s+'
+    rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]\s+'
+    rf')'
+)
+_DIGIT_CONTINUE = re.compile(
+    rf'^\s*(?:'
+    rf'{_HYPHEN_SUFFIX_AT_END}'
+    rf'|{SECTION_NUMBER_TOKEN}\s*[\.\-\)]'
+    rf')'
+)
 _TITLE_PREFIX_RE = re.compile(
     rf'^\s*(?:Section\s+)?{SECTION_NUMBER_TOKEN}\s*[\.\-\)\:]*\s*', re.IGNORECASE,
+)
+_INNER_SECTION_RE = re.compile(
+    rf'(?:Section\s+)?(?:'
+    rf'(?>(?P<hyphen_num>\d+{HYPHEN_LETTER_SUFFIX}))(?=\s|$)'
+    rf'|(?P<plain_num>{SECTION_NUMBER_TOKEN})\s*[\.\-\)]'
+    rf')',
+    re.IGNORECASE,
 )
 
 # ---------------------------------------------------------------------------
@@ -133,6 +163,16 @@ def _clean_section_text(raw: str) -> str:
     raw = raw.replace("—", "-").replace("–", "-")
     return raw.strip()
 
+def _matched_section_number(match: re.Match) -> str:
+    """The number from a pattern that keeps the hyphen suffix in its own group."""
+    found = match.groupdict()
+    for name in ("num", "hyphen_num", "plain_num"):
+        value = found.get(name)
+        if value:
+            return value
+    return ""
+
+
 def _extract_number_title_from_chunk(chunk: str) -> Tuple[Optional[str], str, str]:
     """
     Returns (section_number, section_title, section_text_body)
@@ -145,16 +185,16 @@ def _extract_number_title_from_chunk(chunk: str) -> Tuple[Optional[str], str, st
     # Try keyword form first: Section 3 ...
     m = SECTION_KEYWORD_RE.match(chunk_clean)
     if m:
-        num = canonical_section_number(m.group(1).strip())
-        rest = m.group(2).strip() if m.group(2) else ""
+        num = canonical_section_number(_matched_section_number(m).strip())
+        rest = m.group("rest").strip() if m.group("rest") else ""
         title = _derive_title(rest)
         return num, title, chunk_clean
 
     # Try digit start form: 3. Title ...
     m2 = SECTION_DIGIT_START_RE.match(chunk_clean)
     if m2:
-        num = canonical_section_number(m2.group(1).strip())
-        rest = m2.group(2).strip() if m2.group(2) else ""
+        num = canonical_section_number(_matched_section_number(m2).strip())
+        rest = m2.group("rest").strip() if m2.group("rest") else ""
         title = _derive_title(rest)
         return num, title, chunk_clean
 
@@ -523,12 +563,10 @@ def _strategy_1_p_class_section(soup: BeautifulSoup, statute_name: str) -> List[
             else:
                 # if p class section but text doesn't start with digit, still consider if it contains digit elsewhere leading
                 # Search inside text for Section 2 pattern
-                inner_m = re.search(
-                    rf'(?:Section\s+)?({SECTION_NUMBER_TOKEN})\s*[\.\-\)]', txt[:120], re.I,
-                )
+                inner_m = _INNER_SECTION_RE.search(txt[:120])
                 if inner_m:
                     sections.append(_make_section_dict(
-                        canonical_section_number(inner_m.group(1)), _derive_title(txt), txt, statute_name,
+                        canonical_section_number(_matched_section_number(inner_m)), _derive_title(txt), txt, statute_name,
                     ))
         logger.debug(f"Strategy1 p.class=section found {len(sections)}")
         return _deduplicate_sections(sections)

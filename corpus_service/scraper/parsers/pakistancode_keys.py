@@ -249,19 +249,28 @@ _SCHEDULE_ITEM_BODY = re.compile(
     r"^(?P<label>.+):(?P<item>\d+[A-Za-z]{0,4}(?:-[0-9a-f]{8})?)$"
 )
 # R-LENGTH-RESID-003. The stored key is the glued form ``12A`` already used for
-# ``12A.``. A hyphen, en dash or em dash plus one to four letters is that same
-# suffix (``12-A``, ``12–AA``). The hyphen stays a delimiter when a digit follows
-# (``12-15``, ``1-7-2001``). One glued letter matches the old token. Two to four
-# copies of the same capital match ``12AA`` and not ``1ST`` or ``2nd``.
+# ``12A.``. A hyphen, en dash or em dash plus the same kind of suffix is that
+# key: one letter (``12-A``) or the same capital two to four times (``12-AA``).
+# A heading word (``12-Fees``, ``12-Tax``) and an amendment lead (``12-Ins.``)
+# stay behind the hyphen, which remains the delimiter. A digit after the hyphen
+# is still a range or a date (``12-15``, ``1-7-2001``). One glued letter matches
+# the old token. Repeated capitals are listed before that single letter so
+# ``12AA`` is not read as ``12A`` when the trailing punctuation may be empty.
 # ``(?-i:...)`` stays capitals under IGNORECASE. Punctuation after a hyphen
-# suffix may be absent at the end of the line. It is required for a bare
-# number. No nested quantifier.
+# suffix may be absent when whitespace or the end of the text follows. It is
+# required for a bare number. No nested quantifier.
 _SECTION_PUNCT = r"[\.\)\:\u2013\u2014\-]"
 # The same capital two to four times (``AA``, not ``AB`` or ``ST``). No
 # capturing group: callers put this token in group 1 and read group 2 as the rest.
 _REPEATED_CAPITAL = "(?-i:" + "|".join(f"{letter}{{2,4}}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ")"
+_GLUED_SUFFIX = "(?:" + _REPEATED_CAPITAL + r"|[A-Za-z])"
+# Dash plus one letter, or the same capital repeated. Not an English word.
+HYPHEN_LETTER_SUFFIX = r"[\u2013\u2014-]" + _GLUED_SUFFIX
+# The suffix is only taken when a delimiter, whitespace, or the end follows,
+# so ``12-Fees`` does not become the token ``12-F``.
+_SUFFIX_BOUNDARY = r"(?=[\.\)\:\u2013\u2014\-\]\s]|$)"
 SECTION_NUMBER_TOKEN = (
-    r"\d+(?:[A-Za-z]|" + _REPEATED_CAPITAL + r"|[\u2013\u2014-][A-Za-z]{1,4})?"
+    r"\d+(?:" + HYPHEN_LETTER_SUFFIX + _SUFFIX_BOUNDARY + r"|" + _GLUED_SUFFIX + r")?"
 )
 _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?"
@@ -269,14 +278,19 @@ _NUMBER_RE = re.compile(
     r"(?:"
     r"(?P<glued>[A-Za-z])(?P<punct_glued>" + _SECTION_PUNCT + r")"
     r"|(?P<glued_many>(?-i:(?P<rep>[A-Z])(?P=rep){1,3}))(?P<punct_many>" + _SECTION_PUNCT + r")"
-    r"|(?P<dash>[\u2013\u2014\-])(?P<letters>[A-Za-z]{1,4})"
+    r"|(?P<dash>[\u2013\u2014\-])(?:"
+    r"(?P<letters_many>" + _REPEATED_CAPITAL + r")"
+    r"|(?P<letters>[A-Za-z])"
+    r")"
     r"(?:(?P<punct_letters>" + _SECTION_PUNCT + r")|(?=\s|$))"
     r"|(?P<punct_bare>" + _SECTION_PUNCT + r")"
     r")"
     r"\s*",
     re.IGNORECASE,
 )
-_CANONICAL_HYPHEN_SUFFIX = re.compile(r"^(\d+)[\u2013\u2014-]([A-Za-z]{1,4})$")
+_CANONICAL_HYPHEN_SUFFIX = re.compile(
+    r"^(\d+)[\u2013\u2014-](" + _REPEATED_CAPITAL + r"|[A-Za-z])$"
+)
 # Marginal amendment notes of at most 20 characters (R-LENGTH-RESID-002 / 005).
 # ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
 # for identity (R-LENGTH-RESID-001). ``1. Omitted.`` and ``2. Rep.`` are non-live
@@ -695,7 +709,7 @@ def canonical_section_number(token: str) -> str:
     """Glued key for a hyphenated letter suffix. Any other token is unchanged.
 
     ``12-A`` and ``12–A`` are ``12A``, the key ``12A.`` already produced.
-    ``12-AA`` is ``12AA``. ``12``, ``12A`` and ``12-15`` are unchanged.
+    ``12-AA`` is ``12AA``. ``12``, ``12A``, ``12-15`` and ``12-Fees`` are unchanged.
     """
     matched = _CANONICAL_HYPHEN_SUFFIX.fullmatch(token or "")
     if matched is None:
@@ -712,7 +726,12 @@ def parse_section_number(text: str) -> Optional[str]:
     matched = _NUMBER_RE.match(text or "")
     if matched is None:
         return None
-    letters = matched.group("glued") or matched.group("glued_many") or matched.group("letters")
+    letters = (
+        matched.group("glued")
+        or matched.group("glued_many")
+        or matched.group("letters_many")
+        or matched.group("letters")
+    )
     if letters:
         return matched.group("digits") + letters
     return matched.group("digits")
