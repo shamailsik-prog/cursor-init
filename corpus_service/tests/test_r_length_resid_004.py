@@ -120,6 +120,19 @@ def test_citation_footnotes_of_any_length_are_recognised_and_unstaged():
         "1. Added by Act II of 2000, s. 2 and Omitted by Act III of 2001, s. 3",
         "1. Rep. by Act II of 2000, s. 2 and Amended by Act III of 2001, s. 4",
         '1. Subs. by Act II of 2000, s. 2, for "tax" and Ins. by Act III of 2001, s. 3',
+        "1. Subs. by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3 and Omitted by Ord. IV of 2002, s. 5",
+        "1. Subs. by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3",
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001)",
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1st July, 2001)",
+        "1. Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001 and Ins. by Act III of 2001, s. 3",
+        "1. Subs. by Act II of 2000, s. 2, w.e.f. 1st July, 2001 and Ins. by Act III of 2001, s. 3",
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001) and Ins. by Act III of 2001, s. 3",
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001), Ins. by Act III of 2001, s. 3",
+        '1. Subs. by Act II of 2000, s. 2, for "tax", Ins. by Act III of 2001, s. 3',
+        "1. Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001, Ins. by Act III of 2001, s. 3 (w.e.f. 2-8-2002)",
+        "1. Subs. by the Finance Act, 1991, s. 3, Ins. by Act III of 2001, s. 4",
+        "1. Subs. by Act II of 2000, s. 2, with effect from 1st July, 2001 and Ins. by Act III of 2001, s. 3",
+        "6. Omitted by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3",
     )
     assert all(len(note) > 20 for note in notes)
     for note in notes:
@@ -235,6 +248,151 @@ def test_a_long_ambiguous_tail_does_not_backtrack():
     started = time.perf_counter()
     assert is_long_amendment_footnote(chain) is True
     assert is_unstaged_amendment_footnote(chain) is True
+    assert time.perf_counter() - started < 1.0
+
+
+GRAM_011 = (
+    "1. Subs. by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3 "
+    "and Omitted by Ord. IV of 2002, s. 5"
+)
+GRAM_012 = "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001)"
+GRAM_013 = (
+    "1. Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001 and Ins. by Act III of 2001, s. 3"
+)
+FINANCE_AMENDMENT = (
+    "4. Amendment of the Finance Act, 1991.- In the Finance Act, 1991, "
+    "in section 3, for the word tax the word duty shall be substituted."
+)
+PROSE_TAIL = (
+    "1. Subs. by Act II of 2000, s. 2, the registrar shall keep the roll "
+    "of instruments filed under this Act."
+)
+URDU_TAIL = "1. Subs. by Act II of 2000, s. 2, یہ دفعہ نافذ العمل رہے گی۔"
+NON_INSTRUMENT = "1. Subs. by Act CIVIL of 2001, s. 3."
+
+
+def _assert_unstaged_note_yields(note, real, number):
+    """The note is noise on its own, and the real section keeps bare ``number``.
+
+    Both orders. A collision-only check is not enough: ``is_unstaged`` is
+    called on the note with no neighbour, then the note is keyed alone.
+    """
+    assert is_long_amendment_footnote(note) is True
+    assert is_amendment_footnote(note) is True
+    assert is_unstaged_amendment_footnote(note) is True
+    assert omission_placeholder_status(note) is None
+    assert short_div_disposition(note) == "noise"
+    alone = key_div_texts([note])
+    assert alone.sections == ()
+    assert alone.skipped_short == 1
+    assert split_into_sections(note, "Fixture Act") == []
+    assert _pairs([note, real]) == [(number, real, None)]
+    assert _pairs([real, note]) == [(number, real, None)]
+    for ordered in (f"{note}\n{real}", f"{real}\n{note}"):
+        sections = split_into_sections(ordered, "Fixture Act")
+        assert [section["section_number"] for section in sections] == [number]
+        assert sections[0]["section_text"] == real
+        assert note not in sections[0]["section_text"]
+
+
+def test_gram_011_comma_joined_verb_stack_is_one_unstaged_note():
+    """``s. 2, Ins. by`` is the same chain as ``s. 2 and Ins. by``."""
+    _assert_unstaged_note_yields(GRAM_011, REAL_1, "1")
+
+
+def test_gram_012_parenthetical_wef_is_one_unstaged_note():
+    """``(w.e.f. 1-7-2001)`` is a date clause, not a second section."""
+    _assert_unstaged_note_yields(GRAM_012, REAL_1, "1")
+
+
+def test_gram_013_wef_mid_chain_is_one_unstaged_note():
+    """A date on the first unit does not eat the separator before the next verb."""
+    _assert_unstaged_note_yields(GRAM_013, REAL_1, "1")
+    mid = (
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001), "
+        "Ins. by Act III of 2001, s. 3"
+    )
+    _assert_unstaged_note_yields(mid, REAL_1, "1")
+
+
+def test_comma_and_wef_notes_leave_live_text_on_its_bare_key():
+    """These stay provisions. A comma or ``w.e.f.`` shape must not swallow them."""
+    live = (
+        MIXED_OPERATIVE,
+        FINANCE_AMENDMENT,
+        PROSE_TAIL,
+        URDU_TAIL,
+        NON_INSTRUMENT,
+        "1. Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001",
+        "1. Subs. by Act II of 2000, s. 2. The registrar shall keep the roll.",
+    )
+    for text in live:
+        assert is_amendment_footnote(text) is False
+        assert is_unstaged_amendment_footnote(text) is False
+        result = key_div_texts([text])
+        assert len(result.sections) == 1
+        assert result.sections[0].text == text
+        assert result.sections[0].provision_status is None
+        assert result.sections[0].key == text.split(".", 1)[0]
+        assert "-" not in result.sections[0].key
+
+
+def test_forcing_unstaged_false_cannot_hide_behind_a_collision():
+    """MUT-001. Forcing ``is_unstaged_amendment_footnote`` false stages the note.
+
+    ``_without_colliding_footnotes`` also drops a recognised footnote, so a
+    test that only keys the note beside a real section still passes when that
+    predicate is false. These asserts call it on the note alone, then key the
+    note with no real section.
+    """
+    for note in (GRAM_011, GRAM_012, GRAM_013):
+        assert is_unstaged_amendment_footnote(note) is True
+        alone = key_div_texts([note])
+        assert alone.sections == ()
+        assert alone.skipped_short == 1
+        assert split_into_sections(note, "Fixture Act") == []
+        assert _pairs([note, REAL_1]) == [("1", REAL_1, None)]
+
+
+def test_comma_and_wef_chains_stay_linear():
+    """Comma and ``and`` mixed chains, and near-misses, stay one forward pass."""
+    import time
+
+    units = (
+        ", Ins. by Act III of 2001, s. 3",
+        " and Added by Act IV of 2002, s. 4, w.e.f. 1-7-2002",
+        ", Omitted by Ord. V of 2003, s. 5 (w.e.f. 1-7-2003)",
+        " and Rep. by Act VI of 2004, s. 6",
+        ", Amended by Act VII of 2005, s. 7, w.e.f. 1st July, 2005",
+    )
+    chain = "1. Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001"
+    index = 0
+    while len(chain) < 10000:
+        chain += units[index % len(units)]
+        index += 1
+    assert len(chain) >= 10000
+    assert "," in chain and " and " in chain
+    started = time.perf_counter()
+    assert is_long_amendment_footnote(chain) is True
+    assert is_unstaged_amendment_footnote(chain) is True
+    assert time.perf_counter() - started < 1.0
+
+    near_miss = chain + ", the registrar shall keep the roll of every instrument filed under this Act."
+    assert len(near_miss) >= 10000
+    started = time.perf_counter()
+    assert is_long_amendment_footnote(near_miss) is False
+    assert is_unstaged_amendment_footnote(near_miss) is False
+    assert time.perf_counter() - started < 1.0
+
+    comma_tail = "1. Subs. by Act II of 2000, s. 2" + (", s" * 5000)
+    assert len(comma_tail) >= 10000
+    paren_tail = "1. Subs. by Act II of 2000, s. 2 (w.e.f. " + ("1-7-2001 " * 1200)
+    assert len(paren_tail) >= 10000
+    started = time.perf_counter()
+    assert is_long_amendment_footnote(comma_tail) is False
+    assert is_unstaged_amendment_footnote(comma_tail) is False
+    assert is_long_amendment_footnote(paren_tail) is False
+    assert is_unstaged_amendment_footnote(paren_tail) is False
     assert time.perf_counter() - started < 1.0
 
 
@@ -428,7 +586,11 @@ def test_policy_note_records_the_citation_footnote_rule():
     assert "Subs." in note and "Ord." in note
     assert "Substitution" in note and "Insertion of" in note
     assert "Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3" in note
+    assert "Subs. by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3 and Omitted by Ord. IV of 2002, s. 5" in note
+    assert "Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001)" in note
+    assert "Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001 and Ins. by Act III of 2001, s. 3" in note
     assert "insertion of section 5A" in note
     assert "Amendment of section X.-" in note
     assert "sub-section" in note and "w.e.f." in note
+    assert "(w.e.f. ...)" in note
     assert "50-div cap" in note
