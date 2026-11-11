@@ -18,6 +18,11 @@ Walk ``div.section`` texts in document order.
    * A numbered provision (``1. Short title.``, ``2. Repeal.``, ``1.``, a heading-only
      item) is kept even when it is 20 characters or fewer. Identity is rule 5. It is
      not merged into a neighbour. An ``unscoped`` short item is quarantined, not skipped.
+   * A short numbered amendment footnote (``1. Subs. by Act``, and ``Ins. by``,
+     ``Added by``, ``Omitted by``, ``Rep. by``, with the unabbreviated and ``Am.``
+     forms) is noise (R-LENGTH-RESID-002). It is not a section and not a schedule
+     item, so it cannot take ``N`` or ``schedule:L:N``. A footnote longer than 20
+     characters is unchanged: that collision predates this gate.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
      (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
      numbered provision, is not given a number. It is staged as ``short-ambiguous``
@@ -109,9 +114,10 @@ Walk ``div.section`` texts in document order.
 
 The paragraph splitter is outside this div walk (FA-F21-019). It uses the same
 three-way test at its ``< 15`` and ``< 20`` gates: a short numbered provision is kept,
-a bare omission marker is its own ``short-ambiguous`` item and is not swallowed into
-the previous section, and noise under those gates is still rejected. A repeated
-paragraph number is kept as ``N-<sha8>`` of each stored text, not dropped. That
+a short numbered amendment footnote is rejected with the other noise, a bare omission
+marker is its own ``short-ambiguous`` item and is not swallowed into the previous
+section, and other noise under those gates is still rejected. A repeated paragraph
+number is kept as ``N-<sha8>`` of each stored text, not dropped. That
 harvest stamps ``act_keys`` when it parsed those sections. It omits the set for an
 ``unscoped`` div, a ``short-ambiguous`` div, a page of only schedule headings, and an
 unparsed single chunk. A ``schedule-item`` does not reach that path: kept schedule
@@ -176,8 +182,18 @@ _NAMED_SCHEDULE = re.compile(
 )
 _SCHEDULE_COPY = re.compile(r"~\d+$")
 _SCHEDULE_ITEM_BODY = re.compile(r"^(?P<label>.+):(?P<item>\d+[A-Za-z]?(?:-[0-9a-f]{8})?)$")
+# ``12-A.`` and ``10-B.`` parse as ``12`` and ``10`` (R-LENGTH-RESID-003). The hyphen
+# is a delimiter, so the letter suffix is not part of the key. Extending this
+# pattern would rekey any stored row that was read from that shape. Left unchanged.
 _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
+    re.IGNORECASE,
+)
+# Marginal amendment notes. ``2. Repeal.`` and ``1. [Omitted]`` do not match: those
+# are provisions. Only the "by ..." footnote formula is noise, and only at or under
+# 20 characters (R-LENGTH-RESID-002).
+_AMENDMENT_NOTE_RE = re.compile(
+    r"^(?:subs(?:tituted)?|ins(?:erted)?|added|omitted|rep(?:ealed)?|am(?:ended)?)\.?\s+by\b",
     re.IGNORECASE,
 )
 _STRUCTURAL_KIND = re.compile(r"^(preamble|explanation)\b", re.IGNORECASE)
@@ -539,6 +555,23 @@ def parse_section_number(text: str) -> Optional[str]:
     return matched.group("num")
 
 
+def is_short_amendment_footnote(text: str) -> bool:
+    """True for a numbered marginal note of at most 20 characters.
+
+    ``1. Subs. by Act`` and the same formula (``Ins.``, ``Added``, ``Omitted``,
+    ``Rep.``, ``Am.``, and the unabbreviated verbs, each followed by ``by``) are
+    not the section they cite. They are noise, so they cannot take ``N`` or
+    ``schedule:L:N``. A longer note is not decided here.
+    """
+    normalised = normalise_div_text(text)
+    if not normalised or len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
+        return False
+    if parse_section_number(normalised) is None:
+        return False
+    body = _NUMBER_RE.sub("", normalised, count=1).strip()
+    return _AMENDMENT_NOTE_RE.match(body) is not None
+
+
 def short_div_disposition(text: str) -> str:
     """How one div or paragraph is treated when a length gate used to drop it.
 
@@ -546,10 +579,13 @@ def short_div_disposition(text: str) -> str:
     does not drop it, and it is not merged into a neighbour.
     ``ambiguous`` — the letters are only an omission or repeal marker, and there is
     no section number to publish. Fail closed: quarantine, do not invent ``N``.
-    ``noise`` — 20 characters or fewer and neither of the above. Skip it.
+    ``noise`` — 20 characters or fewer and neither of the above, including a short
+    numbered amendment footnote. Skip it.
     ``content`` — longer than the noise gate. The caller uses the ordinary rules.
     """
     normalised = normalise_div_text(text)
+    if is_short_amendment_footnote(normalised):
+        return "noise"
     if parse_section_number(normalised) is not None:
         return "provision"
     if len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:

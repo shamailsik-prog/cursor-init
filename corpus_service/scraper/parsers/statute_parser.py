@@ -21,6 +21,7 @@ from scraper.parsers.pakistancode_keys import (
     SHORT_DIV_MAX_EXCLUSIVE,
     TEXT_CAP,
     content_token,
+    is_short_amendment_footnote,
     normalise_div_text,
     short_div_disposition,
 )
@@ -221,9 +222,13 @@ def _rejected_by_length(text: str, limit: int) -> bool:
     """True when an old length gate still rejects this fragment.
 
     A numbered provision and a bare omission marker are never rejected for length.
-    Noise shorter than ``limit`` still is. ``limit`` is the gate that was already
-    there (10, 15, or 20), so this does not start rejecting longer noise.
+    A short numbered amendment footnote is rejected at every gate: it is noise, and
+    a 15-to-20-character note used to pass the ``< 15`` gate and take ``N``.
+    Other noise shorter than ``limit`` is still rejected. ``limit`` is the gate that
+    was already there (10, 15, or 20), so this does not start rejecting longer noise.
     """
+    if is_short_amendment_footnote(text):
+        return True
     if not text or len(text) >= limit:
         return False
     return short_div_disposition(text) == "noise"
@@ -298,6 +303,8 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     """
     provisions = []
     for section in sections:
+        if is_short_amendment_footnote(section.get("section_text", "")):
+            continue
         if section.get("section_kind") == "short-ambiguous":
             continue
         number = _section_number_token(section)
@@ -311,6 +318,8 @@ def _deduplicate_sections(sections: List[Dict[str, str]]) -> List[Dict[str, str]
     ambiguous_seen: Dict[str, int] = {}
     out = []
     for section in sections:
+        if is_short_amendment_footnote(section.get("section_text", "")):
+            continue
         if section.get("section_kind") == "short-ambiguous":
             text = normalise_div_text(section.get("section_text", ""))
             base = f"ambiguous-{content_token(text)}"
@@ -360,6 +369,8 @@ def _strategy_1_p_class_section(soup: BeautifulSoup, statute_name: str) -> List[
             txt = p.get_text(separator="\n", strip=True)
             if not txt or _rejected_by_length(txt, 10):
                 continue
+            if is_short_amendment_footnote(txt):
+                continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
                 continue
@@ -393,6 +404,8 @@ def _strategy_2_div_section_body(soup: BeautifulSoup, statute_name: str) -> List
             txt = div.get_text(separator="\n", strip=True)
             if not txt or _rejected_by_length(txt, 15):
                 continue
+            if is_short_amendment_footnote(txt):
+                continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
                 continue
@@ -410,6 +423,8 @@ def _strategy_2_div_section_body(soup: BeautifulSoup, statute_name: str) -> List
                 inner_ps = div.find_all("p")
                 for p in inner_ps[:10]:  # limit
                     pt = p.get_text(strip=True)
+                    if is_short_amendment_footnote(pt):
+                        continue
                     n, t, b = _extract_number_title_from_chunk(pt)
                     if n:
                         sections.append(_make_section_dict(n, t, b, statute_name))
@@ -429,7 +444,7 @@ def _strategy_3_p_filtered_digit_start(soup: BeautifulSoup, statute_name: str) -
         sections = []
         for p in all_p:
             txt = p.get_text(separator="\n", strip=True)
-            if not txt:
+            if not txt or is_short_amendment_footnote(txt):
                 continue
             if short_div_disposition(txt) == "ambiguous":
                 sections.append(_ambiguous_section(txt))
@@ -470,7 +485,7 @@ def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
             start = m.start()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
             chunk = plain[start:end].strip()
-            if _rejected_by_length(chunk, 15):
+            if _rejected_by_length(chunk, 15) or is_short_amendment_footnote(chunk):
                 continue
             if short_div_disposition(chunk) == "ambiguous":
                 sections.append(_ambiguous_section(chunk))
@@ -481,6 +496,8 @@ def _digit_sections_in(plain: str, statute_name: str) -> List[Dict[str, str]]:
         return sections
     chunks = re.split(r'\n{2,}', plain)
     for chunk in chunks:
+        if is_short_amendment_footnote(chunk):
+            continue
         if short_div_disposition(chunk) == "ambiguous":
             sections.append(_ambiguous_section(chunk))
             continue
@@ -519,7 +536,7 @@ def _keyword_sections(plain: str, statute_name: str, pattern: re.Pattern, articl
         start_content = m.end()
         end_content = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
         chunk = plain[m.start():end_content].strip()
-        if _rejected_by_length(chunk, 15):
+        if _rejected_by_length(chunk, 15) or is_short_amendment_footnote(chunk):
             continue
         if short_div_disposition(chunk) == "ambiguous":
             sections.append(_ambiguous_section(chunk))
@@ -601,6 +618,8 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     if not stripped:
         return []
     opening = short_div_disposition(stripped)
+    if is_short_amendment_footnote(stripped):
+        return []
     if len(stripped) < 10 and opening == "noise":
         return []
     if opening == "ambiguous":
@@ -684,7 +703,7 @@ def split_into_sections(text: str, statute_name: Optional[str] = None) -> List[D
     # Ultimate fallback: whole text as one section
     plain_text = BeautifulSoup(text, "html.parser").get_text(separator="\n") if _is_html(text) else text
     plain_text = _clean_section_text(plain_text)
-    if plain_text:
+    if plain_text and not is_short_amendment_footnote(plain_text):
         logger.warning(f"split_into_sections: All strategies failed for {statute_name}, returning single chunk fallback")
         return [
             {

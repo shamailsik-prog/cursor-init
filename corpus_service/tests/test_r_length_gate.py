@@ -15,6 +15,7 @@ from scraper.parsers.pakistancode_keys import (
     apply_harvest,
     content_token,
     fallback_act_keys,
+    is_short_amendment_footnote,
     key_div_texts,
     short_div_disposition,
     suppresses_plain_text_fallback,
@@ -161,6 +162,73 @@ def test_a_placeholder_blocks_retirement_and_does_not_publish_a_number():
     assert "ambiguous_section_identity" == ambiguous_section_reason("short-ambiguous")
 
 
+# A footnote longer than 20 characters still parses as a provision. That collision
+# existed before R-LENGTH-GATE, because the old gate kept every div of 21 characters
+# or more. R-LENGTH-RESID-002 does not extend past 20.
+_LONG_FOOTNOTE = "1. Substituted by Act"
+
+
+def test_short_amendment_footnote_does_not_take_section_1():
+    """``1. Subs. by Act`` is noise. The real section 1 keeps key ``1`` and its text."""
+    notes = (
+        "1. Subs. by Act",
+        "1. Ins. by Act",
+        "1. Added by Act",
+        "1. Omitted by X",
+        "1. Rep. by Act",
+        "1. Am. by Act",
+        "1. Substituted by X",
+        "1. Inserted by Act",
+        "1. Repealed by Act",
+        "1. Amended by Act",
+        "1. Subs. by Act 1908",
+        "1.  SUBS.  BY  ACT",
+    )
+    assert all(len(note) <= 20 for note in notes)
+    assert len("1. Subs. by Act 1908") == 20
+    assert short_div_disposition("2. Repeal.") == "provision"
+    assert short_div_disposition("1. Short title.") == "provision"
+    assert short_div_disposition("1. [Omitted]") == "provision"
+    assert short_div_disposition("1. Omitted.") == "provision"
+    assert is_short_amendment_footnote("2. Repeal.") is False
+    for note in notes:
+        assert is_short_amendment_footnote(note) is True
+        assert short_div_disposition(note) == "noise"
+        result = key_div_texts([BODY, note])
+        assert [section.key for section in result.sections] == ["1"]
+        assert result.sections[0].text == BODY
+        assert note not in result.sections[0].text
+        assert result.skipped_short == 1 and result.dropped_by_cap == 0
+        assert act_inventory_is_complete(result) is True
+    alone = key_div_texts(["1. Subs. by Act", LONG_2])
+    assert [section.key for section in alone.sections] == ["2"]
+    assert alone.sections[0].text == LONG_2
+    assert is_short_amendment_footnote(_LONG_FOOTNOTE) is False
+    assert len(_LONG_FOOTNOTE) > 20
+    assert short_div_disposition(_LONG_FOOTNOTE) == "provision"
+
+
+def test_short_amendment_footnote_does_not_take_a_schedule_item_key():
+    item = "1. Stamp on an instrument in this schedule is long enough to stay the item."
+    note = "1. Subs. by Act"
+    result = key_div_texts([LONG_2, "Schedule 1", note, item])
+    by_kind = {section.kind: section for section in result.sections}
+    assert [section.kind for section in result.sections] == [
+        "section", "schedule-heading", "schedule-item",
+    ]
+    assert by_kind["section"].key == "2" and by_kind["section"].text == LONG_2
+    assert by_kind["schedule-item"].key == "schedule:1:1"
+    assert by_kind["schedule-item"].text == item
+    assert note not in by_kind["schedule-item"].text
+    assert result.skipped_short == 1
+    assert act_inventory_is_complete(result) is True
+    same_page = key_div_texts([BODY, note, "Schedule 1", item, "1. Ins. by Act"])
+    assert same_page.sections[0].key == "1" and same_page.sections[0].text == BODY
+    assert same_page.sections[2].key == "schedule:1:1" and same_page.sections[2].text == item
+    assert same_page.skipped_short == 2
+    assert all("Subs. by" not in section.text and "Ins. by" not in section.text for section in same_page.sections)
+
+
 def test_noise_only_page_does_not_suppress_the_splitter():
     noise = key_div_texts(["x" * 14, "Page 3", "----"])
     assert noise.sections == () and noise.skipped_short == 3
@@ -231,3 +299,32 @@ def test_a_single_short_section_and_a_single_marker_are_not_replaced():
     assert marker[0]["section_number"] == f"ambiguous-{content_token('[Omitted]')}"
     assert split_into_sections("----", "Fixture Act") == []
     assert split_into_sections("Page 12", "Fixture Act") == []
+
+
+def test_splitter_drops_a_short_amendment_footnote_beside_the_real_section():
+    text = "\n".join([
+        "1. Short title.",
+        "1. Subs. by Act",
+        "2. Repeal.",
+        "1. Ins. by Act",
+        "1. Added by Act",
+        "1. Omitted by X",
+        "1. Rep. by Act",
+    ])
+    sections = split_into_sections(text, "Fixture Act")
+    assert [section["section_number"] for section in sections] == ["1", "2"]
+    assert sections[0]["section_text"] == "1. Short title."
+    assert sections[1]["section_text"] == "2. Repeal."
+    assert all(" by " not in section["section_text"] for section in sections)
+    html = """
+    <html><body>
+    <p class="section">1. Short title.</p>
+    <p class="section">1. Subs. by Act</p>
+    </body></html>
+    """
+    html_sections = split_into_sections(html, "Fixture Act")
+    assert len(html_sections) == 1
+    assert html_sections[0]["section_number"] == "1"
+    assert html_sections[0]["section_text"] == "1. Short title."
+    assert split_into_sections("1. Subs. by Act", "Fixture Act") == []
+    assert split_into_sections("<p class=\"section\">1. Subs. by Act 1908</p>", "Fixture Act") == []
