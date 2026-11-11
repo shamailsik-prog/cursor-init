@@ -30,6 +30,7 @@ export default defineConfig({
         : [
             "tests/postgres.ddl.integration.test.ts",
             "tests/probe-fa-data-001.regression.test.ts",
+            "tests/fa-data-002.classification-coverage.pg.test.ts",
           ]),
       // FA-D5-003: the research corpus e2e (Auth and Firestore emulators + real Postgres + the F19 publication CLI) and
       // its Postgres suite run through `npm run test:fa-d5-003`, which sets FA_D5_003_SUITE=1; then a missing
