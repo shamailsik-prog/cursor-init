@@ -8,6 +8,7 @@ from scraper.parsers.pakistancode_keys import (
     normalise_div_text,
     page_has_text_besides_schedule_headings,
     ambiguous_section_reason,
+    omission_placeholder_status,
     parse_section_number,
     schedule_container_token,
     suppresses_plain_text_fallback,
@@ -101,6 +102,8 @@ async def scrape_pakistancode(source, db):
                         }
                         if act_keys is not None:
                             extra["act_keys"] = act_keys
+                        if item.provision_status:
+                            extra["provision_status"] = item.provision_status
                         db.add(_staged(
                             source, url, act_name, slug[:10], item.key, item.text,
                             section_title=item.title,
@@ -146,11 +149,15 @@ async def scrape_pakistancode(source, db):
                         title = (p.get("section_title") or "")[:500]
                         parsed_kind = p.get("section_kind")
                         kind = parsed_kind if ambiguous_section_reason(parsed_kind) else "fallback"
-                        pending.append((p["section_number"], body, title, {
+                        parsed_extra = {
                             "section_kind": kind,
                             "keying": "fa-f21-017",
                             "harvest_at": harvest_at,
-                        }))
+                        }
+                        status = p.get("provision_status") or omission_placeholder_status(body)
+                        if status:
+                            parsed_extra["provision_status"] = status
+                        pending.append((p["section_number"], body, title, parsed_extra))
                     # An unparsed single chunk is not an inventory of the act. Staging it keeps
                     # the text, and omitting act_keys means it cannot retire real sections.
                     body_rows = [item for item in pending if item[3]["section_kind"] == "fallback"]

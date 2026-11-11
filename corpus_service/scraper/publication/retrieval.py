@@ -22,7 +22,11 @@ allowlists it), so the repoint can drop the projection here.
   row). When the staging row carries a non-empty PakistanCode ``act_keys`` set, master rows of that
   short name whose keys are absent from the set are marked ``is_repealed``. An empty set retires
   nothing. The survivor of a legacy duplicate key is the earliest ``created_at``, then ``id``.
-  FA-F21-021: a PakistanCode row stamped ``harvest_at`` does not overwrite text, clear ``is_repealed``,
+  R-LENGTH-RESID-001: a numbered omission, repeal or deletion placeholder is published
+  on its own key with ``is_repealed`` set, so the public list and section lookup do
+  not serve it as current law. The text stays. A later harvest whose body is
+  operative clears ``is_repealed``. FA-F21-021: a PakistanCode row stamped
+  ``harvest_at`` does not overwrite text, clear ``is_repealed``,
   insert a missing key, or retire keys when an older ``harvest_at`` is already stored for that
   short name, and a missing incoming clock is the same refusal when any clock is stored. The
   comparison is the harvest clock, not ``updated_at``. Rows whose ``harvest_at`` is NULL have
@@ -62,6 +66,7 @@ from scraper.parsers.pakistancode_keys import (
     is_schedule_publication_key,
     keys_to_retire,
     note_section_version,
+    omission_placeholder_status,
     schedule_key_identity,
     section_kind_is_ambiguous,
     snapshot_is_incomplete,
@@ -272,9 +277,13 @@ async def _unknown_history_row(db: Any, existing, body: str, incoming, stored_ma
     if existing.harvest_at is None and same_text:
         if incoming is not None:
             existing.harvest_at = incoming
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
         await db.flush()
         return StatutePublication(existing.id, True, False, False, False, False, False, False)
     if same_text:
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
         await db.flush()
         return StatutePublication(existing.id, True, False, False, False, False, False, False)
     return _baseline_refusal(incoming, stored_max)
@@ -350,7 +359,11 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
             existing.section_text = body
             if st.extracted_section_title:
                 existing.section_title = st.extracted_section_title
-        if existing.is_repealed:
+        # A placeholder stays non-live. Operative text of a key that is in this
+        # harvest is current law again, including a key that had been retired.
+        if omission_placeholder_status(body):
+            existing.is_repealed = True
+        elif existing.is_repealed:
             existing.is_repealed = False
         if incoming is not None:
             existing.harvest_at = incoming
@@ -369,6 +382,7 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         source_url=st.source_url,
         confidence_score=st.confidence_score,
         harvest_at=incoming,
+        is_repealed=omission_placeholder_status(body) is not None,
     ))
     await db.flush()
     await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)
