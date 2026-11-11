@@ -1,0 +1,3715 @@
+{
+  "base": "bb8fcc3f02b0fc0a6bcc1c705bcbc270ad3c7961",
+  "inventoryCount": 279,
+  "uniqueLiveActionCount": 50,
+  "literalCount": 261,
+  "parameterCount": 18,
+  "genericActions": [
+    "research",
+    "draft",
+    "read",
+    "read_matter",
+    "read_firm",
+    "list_matters",
+    "normalise_case_number",
+    "committee_brain",
+    "committee_brain_read"
+  ],
+  "accountsRegisterActionsAlsoOnGenericPath": [
+    "intimation_register",
+    "record_accounts_entry"
+  ],
+  "tableActionsWithNoLiveCaller": [
+    "intimation_register",
+    "record_accounts_entry"
+  ],
+  "genericActionsWithNoLiveCaller": [
+    "read",
+    "read_matter",
+    "read_firm"
+  ],
+  "searchedWithNoCaller": [
+    "ops",
+    "scripts",
+    "functions/src/cli"
+  ],
+  "whatsApp": [
+    "services/d2-1/whatsapp.ts:71 list_matters",
+    "services/d2-1/whatsapp.ts:81 research"
+  ],
+  "uniqueLiveActions": [
+    "ai.budget.set",
+    "ai.call",
+    "ai.kill_switch.set",
+    "ai.usage.read",
+    "alert.ack",
+    "alert.read",
+    "client.read",
+    "client.register",
+    "committee_brain",
+    "committee_brain_read",
+    "conflict.read_trail",
+    "conflict.resolve_review",
+    "conflict.run",
+    "conflict.waive",
+    "doctype.read",
+    "draft",
+    "draft.approve",
+    "draft.create",
+    "draft.edit",
+    "draft.gate",
+    "draft.override",
+    "draft.read",
+    "entity.confirm",
+    "entity.dispute",
+    "entity.reject",
+    "entity.review",
+    "entity.unmerge",
+    "firm.set_numbering",
+    "identity.attest_independent_partner",
+    "identity.deactivate",
+    "identity.manage_users",
+    "identity.set_claims",
+    "job.cancel",
+    "job.queue",
+    "job.read",
+    "job.retry",
+    "list_matters",
+    "matter.advance_stage",
+    "matter.close",
+    "matter.open",
+    "matter.read",
+    "mfa.approve_disable",
+    "mfa.enforce",
+    "normalise_case_number",
+    "research",
+    "retention.approve_deletion",
+    "retention.hold.place",
+    "retention.hold.release",
+    "retention.read",
+    "retention.request_deletion"
+  ],
+  "callers": [
+    {
+      "file": "app/api/d1/matters/route.ts",
+      "line": 110,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "list_matters",
+      "actions": [
+        "list_matters"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12560,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12605,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12637,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12662,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12687,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12712,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12737,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12762,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12789,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12814,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12839,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12864,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12889,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12914,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12939,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12970,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 12999,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13033,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13064,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13100,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13134,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13172,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13207,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13246,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13281,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13319,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13356,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13395,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13433,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13472,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13512,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13552,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13593,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13633,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13673,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13713,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13754,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13794,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13835,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13875,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13916,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13956,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 13996,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14036,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14076,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14113,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14154,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14194,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14235,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14275,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14315,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14355,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14392,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14429,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14467,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14504,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14541,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14577,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14613,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14649,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14685,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14722,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14756,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14789,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14822,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14855,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14888,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14921,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14953,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 14986,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15020,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15053,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15086,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15119,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15153,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15186,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15220,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15253,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15286,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15319,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15355,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15391,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15427,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15463,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15499,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15535,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15571,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15607,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15644,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15680,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15716,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15749,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15782,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15816,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15850,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15884,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15918,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15952,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 15984,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16016,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16048,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16080,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16113,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16146,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16181,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16214,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16247,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16279,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16311,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16350,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16382,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16417,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16450,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16483,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16519,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16555,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16587,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16621,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16655,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16690,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16723,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16756,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16792,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16827,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16863,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16898,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16933,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 16969,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 17005,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 17041,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 17073,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d2/ops-reporting/route.ts",
+      "line": 17108,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/drafts/route.ts",
+      "line": 257,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 3754,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 3794,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 3827,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 3909,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4031,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4065,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4149,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4231,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4296,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 4716,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6316,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6463,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6505,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6585,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6668,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6714,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6745,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6832,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6866,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 6966,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7060,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7081,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7353,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7467,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7612,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7776,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7899,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 7968,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8059,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8126,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8200,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8329,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8458,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8590,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8673,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8751,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8852,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 8946,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9027,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9092,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9162,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9252,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9365,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9466,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9527,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9658,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9814,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 9972,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 10078,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 10170,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 10255,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 10345,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 10457,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 18608,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 18689,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 18764,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/d4/filings/route.ts",
+      "line": 18852,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/g0/normalise/route.ts",
+      "line": 39,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "normalise_case_number",
+      "actions": [
+        "normalise_case_number"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/p1/committee-brain/route.ts",
+      "line": 135,
+      "via": "canAccessMatter",
+      "binding": "literal",
+      "action": "committee_brain_read",
+      "actions": [
+        "committee_brain_read"
+      ],
+      "note": null
+    },
+    {
+      "file": "app/api/p1/committee-brain/route.ts",
+      "line": 279,
+      "via": "resolveCommitteeScope",
+      "binding": "parameter",
+      "action": "committee_brain",
+      "actions": [
+        "committee_brain"
+      ],
+      "note": "resolveCommitteeScope, which uses canAccessMatter's default \"committee_brain\"."
+    },
+    {
+      "file": "functions/src/alerts/ops.ts",
+      "line": 107,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "alert.read",
+      "actions": [
+        "alert.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/alerts/ops.ts",
+      "line": 171,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "alert.ack",
+      "actions": [
+        "alert.ack"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/client/numberingOp.ts",
+      "line": 26,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "firm.set_numbering",
+      "actions": [
+        "firm.set_numbering"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/client/ops.ts",
+      "line": 102,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "client.register",
+      "actions": [
+        "client.register"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/client/ops.ts",
+      "line": 252,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "client.read",
+      "actions": [
+        "client.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/client/ops.ts",
+      "line": 280,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "client.read",
+      "actions": [
+        "client.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/conflict/ops.ts",
+      "line": 125,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "conflict.run",
+      "actions": [
+        "conflict.run"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/conflict/ops.ts",
+      "line": 199,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "conflict.run",
+      "actions": [
+        "conflict.run"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/conflict/ops.ts",
+      "line": 278,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "conflict.resolve_review",
+      "actions": [
+        "conflict.resolve_review"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/conflict/ops.ts",
+      "line": 344,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "conflict.waive",
+      "actions": [
+        "conflict.waive"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/conflict/ops.ts",
+      "line": 401,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "conflict.read_trail",
+      "actions": [
+        "conflict.read_trail"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/entity/ops.ts",
+      "line": 65,
+      "via": "gate",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "entity.confirm",
+        "entity.dispute",
+        "entity.reject"
+      ],
+      "note": "runDecision's action parameter. Sources: ops.ts:121 entity.confirm, :184 entity.dispute, :204 entity.reject."
+    },
+    {
+      "file": "functions/src/d1/entity/ops.ts",
+      "line": 121,
+      "via": "runDecision",
+      "binding": "literal",
+      "action": "entity.confirm",
+      "actions": [
+        "entity.confirm"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/entity/ops.ts",
+      "line": 184,
+      "via": "runDecision",
+      "binding": "literal",
+      "action": "entity.dispute",
+      "actions": [
+        "entity.dispute"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/entity/ops.ts",
+      "line": 204,
+      "via": "runDecision",
+      "binding": "literal",
+      "action": "entity.reject",
+      "actions": [
+        "entity.reject"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/entity/read.ts",
+      "line": 73,
+      "via": "requirePermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "entity.review",
+        "entity.confirm",
+        "entity.dispute",
+        "entity.reject",
+        "entity.unmerge"
+      ],
+      "note": "gate() requirePermission. Default \"entity.review\" (read.ts:72), used at :161, :338, :379. entity/ops.ts:65 passes the runDecision action (entity.confirm :121, entity.dispute :184, entity.reject :204). entity/unmerge.ts:40 passes \"entity.unmerge\"."
+    },
+    {
+      "file": "functions/src/d1/entity/read.ts",
+      "line": 161,
+      "via": "gate",
+      "binding": "parameter",
+      "action": "entity.review",
+      "actions": [
+        "entity.review"
+      ],
+      "note": "gate(caller) with the default \"entity.review\"."
+    },
+    {
+      "file": "functions/src/d1/entity/read.ts",
+      "line": 338,
+      "via": "gate",
+      "binding": "parameter",
+      "action": "entity.review",
+      "actions": [
+        "entity.review"
+      ],
+      "note": "gate(caller) with the default \"entity.review\"."
+    },
+    {
+      "file": "functions/src/d1/entity/read.ts",
+      "line": 379,
+      "via": "gate",
+      "binding": "parameter",
+      "action": "entity.review",
+      "actions": [
+        "entity.review"
+      ],
+      "note": "gate(caller) with the default \"entity.review\"."
+    },
+    {
+      "file": "functions/src/d1/entity/unmerge.ts",
+      "line": 40,
+      "via": "gate",
+      "binding": "literal",
+      "action": "entity.unmerge",
+      "actions": [
+        "entity.unmerge"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 256,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "matter.open",
+      "actions": [
+        "matter.open"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 443,
+      "via": "checkPermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "matter.read",
+        "matter.advance_stage",
+        "matter.close"
+      ],
+      "note": "gateMatter's action parameter. Sources: matter/ops.ts:466 matter.read, :565 matter.advance_stage, :612 matter.close."
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 466,
+      "via": "gateMatter",
+      "binding": "literal",
+      "action": "matter.read",
+      "actions": [
+        "matter.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 489,
+      "via": "decide",
+      "binding": "literal",
+      "action": "matter.read",
+      "actions": [
+        "matter.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 527,
+      "via": "decide",
+      "binding": "literal",
+      "action": "matter.read",
+      "actions": [
+        "matter.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 565,
+      "via": "gateMatter",
+      "binding": "literal",
+      "action": "matter.advance_stage",
+      "actions": [
+        "matter.advance_stage"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d1/matter/ops.ts",
+      "line": 612,
+      "via": "gateMatter",
+      "binding": "literal",
+      "action": "matter.close",
+      "actions": [
+        "matter.close"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/doctypeOps.ts",
+      "line": 48,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "doctype.read",
+      "actions": [
+        "doctype.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/doctypeOps.ts",
+      "line": 83,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "doctype.read",
+      "actions": [
+        "doctype.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 144,
+      "via": "requirePermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "draft.create",
+        "draft.edit",
+        "draft.gate",
+        "draft.read",
+        "draft.override",
+        "draft.approve"
+      ],
+      "note": "requireMatterAction(caller, action: DraftAction). Sources: drafts.ts:183 (loadDraftForCaller's action), :348 draft.create, :634 draft.read."
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 163,
+      "via": "decide",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "draft.create",
+        "draft.edit",
+        "draft.gate",
+        "draft.read",
+        "draft.override",
+        "draft.approve"
+      ],
+      "note": "requireStillPermitted calls decide() with action: DraftAction. Sources: drafts.ts:363 draft.create, :464 draft.edit; gateOps.ts:477 (rereadDraft's action), :750 draft.override."
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 183,
+      "via": "requireMatterAction",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "draft.create",
+        "draft.edit",
+        "draft.gate",
+        "draft.read",
+        "draft.override",
+        "draft.approve"
+      ],
+      "note": "loadDraftForCaller forwards `action`. Sources: drafts.ts:524 and :548 draft.edit, :583 and :696 draft.read; gateOps.ts:622 draft.gate, :677 draft.read, :738 draft.override, :855 draft.approve."
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 348,
+      "via": "requireMatterAction",
+      "binding": "literal",
+      "action": "draft.create",
+      "actions": [
+        "draft.create"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 363,
+      "via": "requireStillPermitted",
+      "binding": "literal",
+      "action": "draft.create",
+      "actions": [
+        "draft.create"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 464,
+      "via": "requireStillPermitted",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 524,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 548,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.edit",
+      "actions": [
+        "draft.edit"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 583,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.read",
+      "actions": [
+        "draft.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 634,
+      "via": "requireMatterAction",
+      "binding": "literal",
+      "action": "draft.read",
+      "actions": [
+        "draft.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/drafts.ts",
+      "line": 696,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.read",
+      "actions": [
+        "draft.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 477,
+      "via": "requireStillPermitted",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "draft.gate",
+        "draft.approve"
+      ],
+      "note": "rereadDraft forwards `action` to requireStillPermitted. Sources: gateOps.ts:639 draft.gate, :877 draft.approve."
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 622,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.gate",
+      "actions": [
+        "draft.gate"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 639,
+      "via": "rereadDraft",
+      "binding": "literal",
+      "action": "draft.gate",
+      "actions": [
+        "draft.gate"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 677,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.read",
+      "actions": [
+        "draft.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 738,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.override",
+      "actions": [
+        "draft.override"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 750,
+      "via": "requireStillPermitted",
+      "binding": "literal",
+      "action": "draft.override",
+      "actions": [
+        "draft.override"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 855,
+      "via": "loadDraftForCaller",
+      "binding": "literal",
+      "action": "draft.approve",
+      "actions": [
+        "draft.approve"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/d4/gateOps.ts",
+      "line": 877,
+      "via": "rereadDraft",
+      "binding": "literal",
+      "action": "draft.approve",
+      "actions": [
+        "draft.approve"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/http/f02NextAuthority.ts",
+      "line": 55,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "matter.read",
+      "actions": [
+        "matter.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p1/ops.ts",
+      "line": 224,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "ai.call",
+      "actions": [
+        "ai.call"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p1/ops.ts",
+      "line": 813,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "ai.usage.read",
+      "actions": [
+        "ai.usage.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p1/ops.ts",
+      "line": 887,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "ai.budget.set",
+      "actions": [
+        "ai.budget.set"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p1/ops.ts",
+      "line": 949,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "ai.kill_switch.set",
+      "actions": [
+        "ai.kill_switch.set"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 89,
+      "via": "decide",
+      "binding": "literal",
+      "action": "job.read",
+      "actions": [
+        "job.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 192,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "job.read",
+      "actions": [
+        "job.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 194,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "job.queue",
+      "actions": [
+        "job.queue"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 272,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "job.read",
+      "actions": [
+        "job.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 301,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "job.retry",
+      "actions": [
+        "job.retry"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p2/ops.ts",
+      "line": 361,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "job.cancel",
+      "actions": [
+        "job.cancel"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/common.ts",
+      "line": 184,
+      "via": "requirePermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "identity.manage_users",
+        "identity.set_claims",
+        "identity.deactivate",
+        "identity.attest_independent_partner",
+        "mfa.enforce",
+        "mfa.approve_disable"
+      ],
+      "note": "requirePartner(caller, action: FirmAdminAction). Sources: functions/src/p5/identity.ts:322, :391, :570, :643 and functions/src/p5/mfa.ts:108, :179."
+    },
+    {
+      "file": "functions/src/p5/identity.ts",
+      "line": 322,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "identity.manage_users",
+      "actions": [
+        "identity.manage_users"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/identity.ts",
+      "line": 391,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "identity.set_claims",
+      "actions": [
+        "identity.set_claims"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/identity.ts",
+      "line": 570,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "identity.attest_independent_partner",
+      "actions": [
+        "identity.attest_independent_partner"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/identity.ts",
+      "line": 643,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "identity.deactivate",
+      "actions": [
+        "identity.deactivate"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/mfa.ts",
+      "line": 108,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "mfa.enforce",
+      "actions": [
+        "mfa.enforce"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/mfa.ts",
+      "line": 179,
+      "via": "requirePartner",
+      "binding": "literal",
+      "action": "mfa.approve_disable",
+      "actions": [
+        "mfa.approve_disable"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/p5/permission.ts",
+      "line": 81,
+      "via": "checkPermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [],
+      "note": "Functions requirePermission forwards `action` to checkPermission. Callers are the requirePermission rows."
+    },
+    {
+      "file": "functions/src/p5/permission.ts",
+      "line": 122,
+      "via": "decide",
+      "binding": "parameter",
+      "action": null,
+      "actions": [],
+      "note": "Functions entry. evaluate() calls the shared decide(). No second table and no fall-through of its own."
+    },
+    {
+      "file": "functions/src/retention/ops.ts",
+      "line": 165,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "retention.request_deletion",
+      "actions": [
+        "retention.request_deletion"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/retention/ops.ts",
+      "line": 237,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "retention.approve_deletion",
+      "actions": [
+        "retention.approve_deletion"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/retention/ops.ts",
+      "line": 346,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "retention.read",
+      "actions": [
+        "retention.read"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/retention/ops.ts",
+      "line": 408,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "retention.hold.place",
+      "actions": [
+        "retention.hold.place"
+      ],
+      "note": null
+    },
+    {
+      "file": "functions/src/retention/ops.ts",
+      "line": 437,
+      "via": "requirePermission",
+      "binding": "literal",
+      "action": "retention.hold.release",
+      "actions": [
+        "retention.hold.release"
+      ],
+      "note": null
+    },
+    {
+      "file": "platform/p5/checkPermission.ts",
+      "line": 38,
+      "via": "decide",
+      "binding": "parameter",
+      "action": null,
+      "actions": [],
+      "note": "Platform entry. Forwards `action` to the local decide(), which calls decideFromTable."
+    },
+    {
+      "file": "platform/p5/checkPermission.ts",
+      "line": 86,
+      "via": "decideFromTable",
+      "binding": "parameter",
+      "action": null,
+      "actions": [],
+      "note": "Platform entry. decideFromTable is platform/p5/permissionDecision.ts decide()."
+    },
+    {
+      "file": "platform/p5/committeeScope.ts",
+      "line": 88,
+      "via": "checkPermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "committee_brain",
+        "committee_brain_read"
+      ],
+      "note": "Parameter `action`, default \"committee_brain\" (committeeScope.ts:79). resolveCommitteeScope (line 103) and app/api/p1/committee-brain/route.ts:279 leave the default. route.ts:135 passes \"committee_brain_read\"."
+    },
+    {
+      "file": "platform/p5/committeeScope.ts",
+      "line": 103,
+      "via": "canAccessMatter",
+      "binding": "parameter",
+      "action": "committee_brain",
+      "actions": [
+        "committee_brain"
+      ],
+      "note": "resolveCommitteeScope calls canAccessMatter with no action argument, so the default \"committee_brain\" is what reaches checkPermission."
+    },
+    {
+      "file": "services/d2-1/whatsapp.ts",
+      "line": 71,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "list_matters",
+      "actions": [
+        "list_matters"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-1/whatsapp.ts",
+      "line": 81,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d2-2/courtOps.ts",
+      "line": 23,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "research",
+      "actions": [
+        "research"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d4-1/drafts.ts",
+      "line": 229,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d4-3/closureVisibility.ts",
+      "line": 21,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d4-3/filingPackage.ts",
+      "line": 84,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d4-3/filingPackage.ts",
+      "line": 173,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    },
+    {
+      "file": "services/d4-3/filingPackage.ts",
+      "line": 289,
+      "via": "checkPermission",
+      "binding": "literal",
+      "action": "draft",
+      "actions": [
+        "draft"
+      ],
+      "note": null
+    }
+  ],
+  "testCallers": [
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 46,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 52,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 64,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 73,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 79,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 83,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 118,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 128,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 138,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 147,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.permission.test.ts",
+      "line": 162,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 74,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 93,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 96,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 107,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_firm",
+      "actions": [
+        "read_firm"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 115,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 124,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 131,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "functions/test/p5.security-gaps.emu.test.ts",
+      "line": 139,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 46,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 57,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 92,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 93,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 95,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 100,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 104,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 111,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 115,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 122,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 126,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.checkPermission.decision-table.test.ts",
+      "line": 130,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 44,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 45,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 46,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 47,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 48,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 49,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 50,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 52,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 58,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 60,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 61,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 62,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 141,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.permission-decision.parity.test.ts",
+      "line": 142,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_matter",
+      "actions": [
+        "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/security.accounts-role.test.ts",
+      "line": 58,
+      "via": "test",
+      "binding": "literal",
+      "action": "committee_brain",
+      "actions": [
+        "committee_brain"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/security.accounts-role.test.ts",
+      "line": 58,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/security.accounts-role.test.ts",
+      "line": 62,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    }
+  ]
+}

@@ -23,16 +23,22 @@
  *     own_matters -> client-denied; the draft actions are matter-level (cross-firm / not-member /
  *     clearance), doctype.read is firm-level; then the role table -> intern-channel-denied for an
  *     intern (as the legacy `draft` action), role-not-permitted otherwise
- *   - intern: no research / draft                -> deny intern-channel-denied
- *   - a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
- *                                                -> deny staff-only
- *   - client or own_matters scope: no research / draft; list_matters is own matters only
- *   - list_matters                               -> allow
- *   - a named matter: same firm (cross-firm), not tombstoned (matter-deleted, audit F42), a member
- *     (not-member), cleared for its classification (clearance; an unreadable classification is
- *     refused: fail closed). Every matter-level row above goes through the same gate.
- *   - client research                            -> deny client-research-denied
- *   - otherwise                                  -> allow ok
+ *   - a generic action (GENERIC_ACTIONS: the strings the caller inventory shows reaching this
+ *     function with no row of their own — research, draft, read, read_matter, read_firm,
+ *     list_matters, normalise_case_number, committee_brain, committee_brain_read). Exact match.
+ *     intern: no research / draft                 -> deny intern-channel-denied
+ *     a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
+ *                                                 -> deny staff-only
+ *     client or own_matters scope: no research / draft; list_matters is own matters only
+ *     list_matters                                -> allow
+ *     a named matter: same firm (cross-firm), not tombstoned (matter-deleted, audit F42), a member
+ *       (not-member), cleared for its classification (clearance; an unreadable classification is
+ *       refused: fail closed). Every matter-level row above goes through the same gate.
+ *     client research                             -> deny client-research-denied
+ *     otherwise                                   -> allow ok
+ *   - any other action string                     -> deny unknown-action
+ *     (exact match: no trim, no case-folding, no prefix or suffix match; before the matter gate,
+ *     so the reason does not say whether the matter exists)
  */
 import { CLASSIFICATION_RANKS, type Classification } from "@/platform/p1/types"
 
@@ -175,8 +181,8 @@ const JOB_ROLES: Record<JobAction, readonly string[]> = {
  * Operational alerts (audit F43): read the firm's alert worklist (`alert.read`) and acknowledge or resolve an alert
  * that has escalated to the firm's partners (`alert.ack`): partner only, firm-level (an alert carries references, never
  * matter text). Staff only; a client or an own_matters scope is denied (client-denied) and accounts hit
- * accounts-register-only before this table. Without these rows an unknown action would fall through to `allow ok`
- * for every staff role. The operator's own route is not a table action: it needs the `platformAdmin` claim.
+ * accounts-register-only before this table. Without these rows the actions would miss every table and be denied
+ * `unknown-action` for every role, including partner. The operator's own route is not a table action: it needs the `platformAdmin` claim.
  */
 export const ALERT_ACTIONS = ["alert.read", "alert.ack"] as const
 export type AlertAction = (typeof ALERT_ACTIONS)[number]
@@ -250,6 +256,60 @@ const DRAFT_ROLES: Record<DraftAction | DocTypeAction, readonly string[]> = {
   "doctype.read": ["partner", "associate", "clerk"],
 }
 
+/**
+ * Actions with no row of their own that the caller inventory (platform/p5/actionRegistry.json) shows
+ * reaching `decide`, plus `read`, `read_matter` and `read_firm`, which the decision-table, parity and
+ * functions permission suites call and which must keep today's results. Exact match (`Set.has`): no trim,
+ * no case-folding, no prefix or suffix match.
+ *
+ * The branch below is the old fall-through, unchanged:
+ *   - `research` / `draft`: an intern is `intern-channel-denied`; a client or an `own_matters` scope is
+ *     `client-channel-denied`; otherwise the matter gate when a matter is named, then allow `ok`.
+ *   - `read`, `read_matter`, `read_firm`, `committee_brain`, `committee_brain_read`: no extra role cut
+ *     (accounts already returned `accounts-register-only`). A named matter goes through the matter gate.
+ *   - `list_matters`: a client or an `own_matters` scope is allow `client-own-matters`; anyone else is
+ *     allow `ok`. The matter gate does not run.
+ *   - `normalise_case_number` is also `STAFF_ONLY_ACTIONS`: a client or an `own_matters` scope is
+ *     `staff-only`; staff, including an intern, are allow `ok` after the matter gate when a matter is named.
+ *
+ * `intimation_register` and `record_accounts_entry` are not in this list. The accounts role is answered
+ * by the accounts row above. Every other role has no row for them, so the branch below also accepts
+ * `ACCOUNTS_REGISTER_ACTIONS` and gives them the same fall-through result as before.
+ */
+export const GENERIC_ACTIONS = [
+  "research",
+  "draft",
+  "read",
+  "read_matter",
+  "read_firm",
+  "list_matters",
+  "normalise_case_number",
+  "committee_brain",
+  "committee_brain_read",
+] as const
+export type GenericAction = (typeof GENERIC_ACTIONS)[number]
+const GENERIC_ACTION_SET: ReadonlySet<string> = new Set(GENERIC_ACTIONS)
+
+export function isGenericAction(action: string): action is GenericAction {
+  return GENERIC_ACTION_SET.has(action)
+}
+
+/** Every action string that has a row. Anything else is `unknown-action`. */
+function isRegisteredAction(action: string): boolean {
+  return (
+    isFirmAdminAction(action) ||
+    isRetentionAction(action) ||
+    ACCOUNTS_REGISTER_ACTIONS.has(action) ||
+    isD1Action(action) ||
+    isJobAction(action) ||
+    isAlertAction(action) ||
+    isAiAction(action) ||
+    isDraftAction(action) ||
+    isDocTypeAction(action) ||
+    isGenericAction(action)
+  )
+}
+
 const deny = (reason: string): PermissionDecision => ({ allow: false, reason })
 const allow = (reason: string): PermissionDecision => ({ allow: true, reason })
 
@@ -285,8 +345,9 @@ export function decide(
   }
 
   // L17.6 #41: "The accounts role is defined in L4.7 with read access to the intimation
-  // register only — no matter documents." Membership does not widen it.
-  if (caller.role === "accounts") {
+  // register only — no matter documents." Membership does not widen it. An action that is not
+  // in any table is not this denial: it falls through to `unknown-action`, for accounts too.
+  if (caller.role === "accounts" && isRegisteredAction(action)) {
     if (!ACCOUNTS_REGISTER_ACTIONS.has(action)) return deny("accounts-register-only")
     if (matter !== undefined && (!matter || matter.firmId !== caller.firmId)) return deny("cross-firm")
     return allow("accounts-register")
@@ -338,24 +399,33 @@ export function decide(
     return deny(caller.role === "intern" ? "intern-channel-denied" : "role-not-permitted")
   }
 
-  if (caller.role === "intern" && (action === "research" || action === "draft")) {
-    return deny("intern-channel-denied")
+  // Accounts-register actions are a row only for the accounts role (handled above). Every other
+  // role has no row for them, so they stay on this path — the old fall-through — rather than
+  // becoming unknown-action.
+  if (isGenericAction(action) || ACCOUNTS_REGISTER_ACTIONS.has(action)) {
+    if (caller.role === "intern" && (action === "research" || action === "draft")) {
+      return deny("intern-channel-denied")
+    }
+
+    if (extra?.scope === "own_matters" || caller.role === "client") {
+      if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
+      if (action === "research" || action === "draft") return deny("client-channel-denied")
+      if (action === "list_matters") return allow("client-own-matters")
+    }
+
+    if (action === "list_matters") return allow("ok")
+
+    if (matter !== undefined) {
+      const refused = matterGate(caller, matter, isMember)
+      if (refused) return refused
+    }
+
+    // Unreachable for a client: the client branch above already returned client-channel-denied.
+    // Kept so this branch stays the old fall-through, byte for byte, for every known action.
+    if (action === "research" && caller.role === "client") return deny("client-research-denied")
+
+    return allow("ok")
   }
 
-  if (extra?.scope === "own_matters" || caller.role === "client") {
-    if (STAFF_ONLY_ACTIONS.has(action)) return deny("staff-only")
-    if (action === "research" || action === "draft") return deny("client-channel-denied")
-    if (action === "list_matters") return allow("client-own-matters")
-  }
-
-  if (action === "list_matters") return allow("ok")
-
-  if (matter !== undefined) {
-    const refused = matterGate(caller, matter, isMember)
-    if (refused) return refused
-  }
-
-  if (action === "research" && caller.role === "client") return deny("client-research-denied")
-
-  return allow("ok")
+  return deny("unknown-action")
 }
