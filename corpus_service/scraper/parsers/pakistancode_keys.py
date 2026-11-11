@@ -1114,14 +1114,25 @@ def _citation_tail_ok(tail: str) -> bool:
     if re.search(r"\d\.\s+[A-Z]", text):
         return False
     # ``Rep. by Act II and Amended by Act III`` and ``Omitted by Act II, Ins. by
-    # Act III`` are mixed notes, not one placeholder. The separator is the same
-    # one the citation footnote uses between verb units.
+    # Act III`` are mixed notes, not one placeholder. ``and`` plus a verb lead
+    # is enough. A bare comma starts another unit only when that unit names an
+    # instrument: ``, see s. 2`` is a section cross-reference and stays one
+    # omission or repeal.
     for match in _VERB_CHAIN.finditer(text):
-        if _LONG_FOOTNOTE_LEAD.match(text, match.end()):
-            return False
+        if _LONG_FOOTNOTE_LEAD.match(text, match.end()) is None:
+            continue
+        if match.group(0).strip() == "," and _consume_verb_unit(text, match.end()) is None:
+            continue
+        return False
     for match in re.finditer(r"([A-Za-z]+)\.\s+", text):
-        if match.group(1).lower() not in _CITATION_ABBREV:
-            return False
+        word = match.group(1).lower()
+        if word in _CITATION_ABBREV:
+            continue
+        # ``w.e.f.`` is one date lead. The closing ``f.`` is not a stray
+        # abbreviation, and a lone ``f.`` is still refused.
+        if word == "f" and text[max(0, match.start() - 4):match.start()].lower() == "w.e.":
+            continue
+        return False
     return True
 
 

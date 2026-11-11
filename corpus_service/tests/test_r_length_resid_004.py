@@ -337,6 +337,74 @@ def test_comma_and_wef_notes_leave_live_text_on_its_bare_key():
         assert "-" not in result.sections[0].key
 
 
+def test_a_see_cross_reference_stays_an_omission_placeholder():
+    """``, see s. 2`` names a section. It is not a second verb unit.
+
+    The row keeps key ``6`` and status ``omitted``. Lookup does not serve it
+    as current law.
+    """
+    note = "6. Omitted by Act II of 2000, see s. 2."
+    assert is_long_amendment_footnote(note) is False
+    assert is_unstaged_amendment_footnote(note) is False
+    assert omission_placeholder_status(note) == "omitted"
+    result = key_div_texts([note])
+    assert len(result.sections) == 1
+    assert result.sections[0].key == "6"
+    assert result.sections[0].text == note
+    assert result.sections[0].provision_status == "omitted"
+    store: dict = {}
+    apply_harvest(store, result.sections)
+    assert lookup_real_section(store, "6") is None
+    assert store["6"].text == note
+
+
+def test_a_wef_date_keeps_a_standalone_omission_or_repeal():
+    """``(w.e.f. ...)`` is a date on the placeholder, not a reason to drop it.
+
+    A lone ``f.`` is still not a citation abbreviation. A real section that
+    shares the number keeps the bare key.
+    """
+    omitted = "6. Omitted by Act II of 2000, s. 2 (w.e.f. 1-7-2001)"
+    repealed = "5. Rep. by Ord. IV of 2002, s. 5 (w.e.f. 1-7-2001)"
+    spelled = "6. Omitted by Act II of 2000, s. 2, with effect from 1-7-2001"
+    dated = "6. Omitted by Act II of 2000, s. 2, w.e.f. 1-7-2001"
+    for note, number, status in (
+        (omitted, "6", "omitted"),
+        (repealed, "5", "repealed"),
+        (spelled, "6", "omitted"),
+        (dated, "6", "omitted"),
+    ):
+        assert is_long_amendment_footnote(note) is True
+        assert omission_placeholder_status(note) == status
+        assert is_unstaged_amendment_footnote(note) is False
+        result = key_div_texts([note])
+        assert len(result.sections) == 1
+        assert result.sections[0].key == number
+        assert result.sections[0].text == note
+        assert result.sections[0].provision_status == status
+        store: dict = {}
+        apply_harvest(store, result.sections)
+        assert lookup_real_section(store, number) is None
+    bare_f = "6. Omitted by Act II of 2000, f. 3."
+    assert omission_placeholder_status(bare_f) is None
+    assert is_unstaged_amendment_footnote(bare_f) is False
+    live = key_div_texts([bare_f])
+    assert live.sections[0].key == "6"
+    assert live.sections[0].provision_status is None
+    real = (
+        "6. Savings of the omitted entries are recorded by the registrar "
+        "when a court so directs and not otherwise."
+    )
+    assert _pairs([omitted, real]) == [("6", real, None)]
+    assert _pairs([real, omitted]) == [("6", real, None)]
+    real_5 = (
+        "5. Definitions. Words used in this Act have the meanings given in "
+        "this section and in no other section."
+    )
+    assert _pairs([repealed, real_5]) == [("5", real_5, None)]
+    assert _pairs([real_5, repealed]) == [("5", real_5, None)]
+
+
 def test_forcing_unstaged_false_cannot_hide_behind_a_collision():
     """MUT-001. Forcing ``is_unstaged_amendment_footnote`` false stages the note.
 
