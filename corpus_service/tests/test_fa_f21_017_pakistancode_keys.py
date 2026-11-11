@@ -134,6 +134,43 @@ def test_acceptance_3_delete_retires_only_that_key():
     assert keys_to_retire(["3"], ["1"], "3") == []
 
 
+def test_empty_harvest_retires_nothing_and_a_non_empty_list_still_retires():
+    """None, an empty tuple, and an empty set are not an inventory. A list still is.
+
+    Publish retires through ``keys_to_retire`` and ``act_keys_from_metadata``. Those
+    already refuse a missing or empty set. ``apply_harvest`` follows the same rule.
+    The harvester stamps a non-empty list only when ``act_inventory_is_complete``
+    is true, and otherwise omits ``act_keys``.
+    """
+    store = _store([SECTION_1, SECTION_2])
+    for empty in (None, (), set(), frozenset(), []):
+        delta = apply_harvest(store, empty)
+        assert delta.retired == [] and delta.inserted == [] and delta.amended == []
+        assert store["1"].retired is False and store["1"].text == SECTION_1
+        assert store["2"].retired is False and store["2"].text == SECTION_2
+    kept = list(key_div_texts([SECTION_1]).sections)
+    assert len(kept) == 1
+    delta = apply_harvest(store, kept)
+    assert delta.retired == ["2"]
+    assert store["2"].retired is True
+    assert store["1"].retired is False and store["1"].text == SECTION_1
+    assert keys_to_retire(["1", "2"], None, "1") == []
+    assert keys_to_retire(["1", "2"], (), "1") == []
+    assert keys_to_retire(["1", "2"], set(), "1") == []
+    assert keys_to_retire(["1", "2"], ["1"], "1") == ["2"]
+    assert act_keys_from_metadata({"act_keys": ()}) is None
+    assert act_keys_from_metadata({"act_keys": set()}) is None
+    assert act_keys_from_metadata({"act_keys": []}) is None
+    assert act_keys_from_metadata({"act_keys": ["1", "2"]}) == frozenset({"1", "2"})
+    empty_page = key_div_texts(["q" * 20])
+    assert empty_page.sections == ()
+    assert act_inventory_is_complete(empty_page) is False
+    assert fallback_act_keys(empty_page, []) is None
+    live = key_div_texts([SECTION_1, SECTION_2])
+    assert act_inventory_is_complete(live) is True
+    assert [item.key for item in live.sections] == ["1", "2"]
+
+
 # ---------------------------------------------------------------------------------------------
 # 4. amend a numbered section: same key, new version, no second row
 # ---------------------------------------------------------------------------------------------

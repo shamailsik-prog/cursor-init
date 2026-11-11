@@ -18,11 +18,14 @@ Walk ``div.section`` texts in document order.
    * A numbered provision (``1. Short title.``, ``2. Repeal.``, ``1.``, a heading-only
      item) is kept even when it is 20 characters or fewer. Identity is rule 5. It is
      not merged into a neighbour. An ``unscoped`` short item is quarantined, not skipped.
-   * A short numbered amendment footnote (``1. Subs. by Act``, and ``Ins. by``,
-     ``Added by``, ``Omitted by``, ``Rep. by``, with the unabbreviated and ``Am.``
-     forms) is noise (R-LENGTH-RESID-002). It is not a section and not a schedule
-     item, so it cannot take ``N`` or ``schedule:L:N``. A footnote longer than 20
-     characters is unchanged: that collision predates this gate.
+   * A short numbered amendment footnote is noise (R-LENGTH-RESID-002,
+     R-LENGTH-RESID-005). The ``by`` formula (``Subs. by``, ``Ins. by``, ``Added by``,
+     ``Omitted by``, ``Rep. by``, ``Am. by``, and the unabbreviated verbs) is noise.
+     So is a bare abbreviation whose whole body is ``Ins.``, ``Subs.``, ``Am.``,
+     ``Amd.`` or ``Amdt.``, and an abbreviation followed by ``of`` (``Rep. of X.``,
+     ``Ins. of``). ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` stay provisions:
+     the full word, and ``Rep.`` with nothing after it, are section text. A footnote
+     longer than 20 characters is unchanged: that collision predates this gate.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
      (``[Omitted]``, ``Rep.``, brackets or a trailing stop), and which is not itself a
      numbered provision, is not given a number. It is staged as ``short-ambiguous``
@@ -189,11 +192,21 @@ _NUMBER_RE = re.compile(
     r"^(?:(?:section|sec\.|s\.)\s+)?(?P<num>\d+[A-Za-z]?)[\.\)\:\-\u2013\u2014]\s*",
     re.IGNORECASE,
 )
-# Marginal amendment notes. ``2. Repeal.`` and ``1. [Omitted]`` do not match: those
-# are provisions. Only the "by ..." footnote formula is noise, and only at or under
-# 20 characters (R-LENGTH-RESID-002).
+# Marginal amendment notes, and only at or under 20 characters.
+# ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` do not match: those are provisions
+# (R-LENGTH-RESID-001). The ``by`` formula is R-LENGTH-RESID-002. A bare abbreviation
+# (``Ins.``, ``Subs.``, ``Am.``, ``Amd.``, ``Amdt.``) and an abbreviation followed by
+# ``of`` (``Rep. of X.``) are R-LENGTH-RESID-005. Bare ``Rep.`` is not in that list.
 _AMENDMENT_NOTE_RE = re.compile(
     r"^(?:subs(?:tituted)?|ins(?:erted)?|added|omitted|rep(?:ealed)?|am(?:ended)?)\.?\s+by\b",
+    re.IGNORECASE,
+)
+_BARE_AMENDMENT_ABBREV_RE = re.compile(
+    r"^[\[\(]*\s*(?:ins|subs|amdt|amd|am)\.?\s*[\]\)]*$",
+    re.IGNORECASE,
+)
+_AMENDMENT_OF_RE = re.compile(
+    r"^[\[\(]*\s*(?:ins|subs|rep|amdt|amd|am)\.?\s*[\]\)]*\s+of\b",
     re.IGNORECASE,
 )
 _STRUCTURAL_KIND = re.compile(r"^(preamble|explanation)\b", re.IGNORECASE)
@@ -558,10 +571,14 @@ def parse_section_number(text: str) -> Optional[str]:
 def is_short_amendment_footnote(text: str) -> bool:
     """True for a numbered marginal note of at most 20 characters.
 
-    ``1. Subs. by Act`` and the same formula (``Ins.``, ``Added``, ``Omitted``,
-    ``Rep.``, ``Am.``, and the unabbreviated verbs, each followed by ``by``) are
-    not the section they cite. They are noise, so they cannot take ``N`` or
-    ``schedule:L:N``. A longer note is not decided here.
+    Three shapes are notes, and nothing else. ``1. Subs. by Act`` (and ``Ins.``,
+    ``Added``, ``Omitted``, ``Rep.``, ``Am.``, and the unabbreviated verbs, each
+    followed by ``by``). A body that is only the abbreviation ``Ins.``, ``Subs.``,
+    ``Am.``, ``Amd.`` or ``Amdt.``. An abbreviation followed by ``of``, as in
+    ``7. Rep. of X.``. They are noise, so they cannot take ``N`` or ``schedule:L:N``.
+
+    ``2. Repeal.``, ``1. Omitted.`` and ``2. Rep.`` are provisions. A longer note
+    is not decided here.
     """
     normalised = normalise_div_text(text)
     if not normalised or len(normalised) > SHORT_DIV_MAX_EXCLUSIVE:
@@ -569,7 +586,11 @@ def is_short_amendment_footnote(text: str) -> bool:
     if parse_section_number(normalised) is None:
         return False
     body = _NUMBER_RE.sub("", normalised, count=1).strip()
-    return _AMENDMENT_NOTE_RE.match(body) is not None
+    return (
+        _AMENDMENT_NOTE_RE.match(body) is not None
+        or _BARE_AMENDMENT_ABBREV_RE.match(body) is not None
+        or _AMENDMENT_OF_RE.match(body) is not None
+    )
 
 
 def short_div_disposition(text: str) -> str:
@@ -965,7 +986,11 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     identity, and the same text is unchanged. New text appends a version and keeps the
     stored key. The stored schedule key is not rewritten. A retired row with that
     identity is revived on the stored key, versions included. A live key whose identity is
-    absent from this harvest is retired. A harvest whose keys are all schedule keys
+    absent from this harvest is retired. ``sections`` of None, or an empty list,
+    tuple or set, retires nothing: an empty page is not an inventory. That is the
+    same rule as ``keys_to_retire`` on a missing or empty ``act_keys`` set, which is
+    what publish uses. A non-empty list still retires keys it does not contain.
+    A harvest whose keys are all schedule keys
     does not retire a body section: adding a schedule is not an inventory that repeals
     the act. Two rows that already share one schedule identity are left as they
     are: this harvest does not pick one, insert a third, or retire them. No second row
@@ -975,6 +1000,10 @@ def apply_harvest(store: dict, sections: Sequence[KeyedDiv], *, label_mode: Opti
     shares the First Schedule.
     """
     delta = HarvestDelta()
+    if sections is None:
+        return delta
+    if isinstance(sections, (list, tuple, set, frozenset)) and len(sections) == 0:
+        return delta
     fold = label_mode if label_mode == "roman" else None
     by_identity: dict = {}
     conflicts = set()

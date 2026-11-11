@@ -328,3 +328,68 @@ def test_splitter_drops_a_short_amendment_footnote_beside_the_real_section():
     assert html_sections[0]["section_text"] == "1. Short title."
     assert split_into_sections("1. Subs. by Act", "Fixture Act") == []
     assert split_into_sections("<p class=\"section\">1. Subs. by Act 1908</p>", "Fixture Act") == []
+
+
+def test_bare_abbreviation_footnotes_do_not_take_a_section_or_schedule_key():
+    """``6. Ins.`` and ``7. Rep. of X.`` are notes. Full words and bare ``Rep.`` are not."""
+    notes = (
+        "6. Ins.",
+        "6. Subs.",
+        "6. Am.",
+        "6. Amd.",
+        "6. Amdt.",
+        "6. [Ins.]",
+        "6. INS.",
+        "7. Rep. of X.",
+        "1. Ins. of s. 2",
+        "1. Subs. of s. 4",
+        "1. Ins. of section 2",
+    )
+    assert all(len(note) <= 20 for note in notes)
+    assert len("1. Ins. of section 2") == 20
+    for note in notes:
+        assert is_short_amendment_footnote(note) is True
+        assert short_div_disposition(note) == "noise"
+        result = key_div_texts([BODY, note])
+        assert [section.key for section in result.sections] == ["1"]
+        assert result.sections[0].text == BODY
+        assert result.skipped_short == 1
+        assert act_inventory_is_complete(result) is True
+    near = (
+        "2. Repeal.",
+        "1. Omitted.",
+        "2. Rep.",
+        "1. [Omitted]",
+        "1. Short title.",
+        "6. Inserted.",
+        "6. Substituted.",
+        "6. Added.",
+        "6. Amended.",
+        "6. Inspection.",
+        "6. Report.",
+        "7. Repeal of X.",
+        "7. Rep.of X.",
+    )
+    for note in near:
+        assert len(note) <= 20
+        assert is_short_amendment_footnote(note) is False
+        assert short_div_disposition(note) == "provision"
+    long_of = "7. Rep. of the Act XX"
+    assert len(long_of) > 20
+    assert is_short_amendment_footnote(long_of) is False
+    assert short_div_disposition(long_of) == "provision"
+    item = "1. Stamp on an instrument in this schedule is long enough to stay the item."
+    scheduled = key_div_texts([LONG_2, "Schedule 1", "1. Ins.", item])
+    assert [section.kind for section in scheduled.sections] == [
+        "section", "schedule-heading", "schedule-item",
+    ]
+    assert scheduled.sections[2].key == "schedule:1:1"
+    assert scheduled.sections[2].text == item
+    assert scheduled.skipped_short == 1
+    page = "\n".join(["1. Short title.", "6. Ins.", "7. Rep. of X.", "2. Repeal."])
+    sections = split_into_sections(page, "Fixture Act")
+    assert [section["section_number"] for section in sections] == ["1", "2"]
+    assert sections[0]["section_text"] == "1. Short title."
+    assert sections[1]["section_text"] == "2. Repeal."
+    assert split_into_sections("6. Ins.", "Fixture Act") == []
+    assert split_into_sections("7. Rep. of X.", "Fixture Act") == []
