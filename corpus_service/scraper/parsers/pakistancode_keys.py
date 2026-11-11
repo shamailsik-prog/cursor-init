@@ -45,12 +45,20 @@ Walk ``div.section`` texts in document order.
      ``Subs.`` / ``Ins.`` / ``Added`` / ``Omitted by`` / ``Rep. by`` /
      ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, then one or
      more Act, Ord., P.O. or Regulation citations joined by a comma or
-     ``and``. ``and`` may also start another verb, so ``Subs.`` / ``Ins.`` /
-     ``Omitted`` / ``Added`` / ``Rep.`` / ``Amended`` can mix on one line:
-     ``Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3`` is
-     one note. ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
+     ``and``. ``and`` or a comma may also start another verb, so ``Subs.`` /
+     ``Ins.`` / ``Omitted`` / ``Added`` / ``Rep.`` / ``Amended`` can mix on
+     one line:
+     ``Subs. by Act II of 2000, s. 2 and Ins. by Act III of 2001, s. 3``
+     is one note, and so is
+     ``Subs. by Act II of 2000, s. 2, Ins. by Act III of 2001, s. 3 and Omitted by Ord. IV of 2002, s. 5``.
+     ``Renumbered as sub-section (1)`` and ``as clause (x)`` are the
      same lead. After the section reference the note may add ``for "..."``,
-     ``for the words "..."``, or ``w.e.f.`` a date. A title word such as
+     ``for the words "..."``, or ``w.e.f.`` a date, including ``(w.e.f. ...)``.
+     That date clause may sit on a unit that is not last:
+     ``Subs. by Act II of 2000, s. 2, w.e.f. 1-7-2001 and Ins. by Act III of 2001, s. 3``
+     is one note, as is
+     ``Subs. by Act II of 2000, s. 2 (w.e.f. 1-7-2001)``.
+     A title word such as
      ``Civil`` is not an instrument number. ``Substitution of section 5 and
      insertion of section 5A`` stays live.
      It takes no key (``N``, ``N-<sha8>``, ``schedule:L:N`` or ``~n``), it does
@@ -60,7 +68,10 @@ Walk ``div.section`` texts in document order.
      ``Substitution``, ``Insertion of`` and ``Amendment of section X.-``
      followed by operative text stay live. A RESID-001 placeholder that is not
      this citation note keeps its key. A placeholder that is this note keeps
-     its key only when no real section has the number. A citation placeholder
+     its key only when no real section has the number.
+     ``Omitted by Act II of 2000, see s. 2`` is that placeholder: alone it
+     keeps the key and is not current law, and beside a real section it is
+     dropped so the real section keeps the bare key. A citation placeholder
      still counts as a body div for schedule scope; dropping it on a collision
      does not close a scope it already opened.
    * A div whose letters are only ``omitted``, ``repealed``, ``repeal`` or ``rep``
@@ -710,8 +721,16 @@ _NEXT_SECTION_REF = re.compile(
     re.IGNORECASE,
 )
 _CITE_JOIN = re.compile(r"(?:,\s*and\s+|,\s+|\s+and\s+)", re.IGNORECASE)
-# A new verb after ``and``. Fixed alternatives, not a repeated group.
-_VERB_CHAIN = re.compile(r"(?:,\s+and\s+|\s+and\s+)", re.IGNORECASE)
+# A new verb after ``and`` or a comma. Pakistan Code separates units both ways
+# (``s. 2 and Ins. by`` and ``s. 2, Ins. by``). ``, and`` stays one separator,
+# listed before the bare comma. Fixed alternatives, not a repeated group. A
+# comma that is not followed by a verb is left where it stands.
+_VERB_CHAIN = re.compile(r"(?:,\s+and\s+|\s+and\s+|,\s+)", re.IGNORECASE)
+# ``see s. 2`` after that comma. One section word, then a number. No repeat.
+_SEE_XREF = re.compile(
+    rf"\s*{_SECTION_WORD}\.?\s*\d+[A-Za-z]?",
+    re.IGNORECASE,
+)
 _FOR_QUOTE = re.compile(
     r"""\s*,?\s*for\s+(?:the\s+(?:words|word|figures|figure)\s+)?"""
     r"""["\u201c][^"\u201d]{1,200}["\u201d]""",
@@ -721,7 +740,9 @@ _QUOTE_REPLACEMENT = re.compile(
     r"""\s+the\s+(?:words|word|figures|figure)\s+["\u201c][^"\u201d]{1,200}["\u201d]""",
     re.IGNORECASE,
 )
-_WEF_LEAD = re.compile(r"\s*,?\s*(?:w\.e\.f\.|with\s+effect\s+from)\s+", re.IGNORECASE)
+# The words only. A comma, spaces and one opening parenthesis before them are
+# read in ``_consume_wef``, so this pattern has no nested quantifier.
+_WEF_WORD = re.compile(r"(?:w\.e\.f\.|with\s+effect\s+from)\s+", re.IGNORECASE)
 _DATE_GLUE = frozenset({"the", "day", "of"})
 _MONTHS = frozenset({
     "january", "february", "march", "april", "may", "june", "july", "august",
@@ -861,34 +882,69 @@ def _consume_citations(text: str) -> Optional[int]:
 def _consume_wef(text: str, pos: int) -> Optional[int]:
     """End offset after ``w.e.f.`` or ``with effect from`` and one date.
 
-    At most eight date tokens. A lead with no numeric token does not advance.
+    The clause may follow any verb unit, not only the last. A comma, spaces
+    and one opening parenthesis may precede the words, and a closing
+    parenthesis finishes ``(w.e.f. ...)``. At most eight date tokens. The gap
+    before a token is kept only when that token is a date, so ``and`` or a
+    comma after the date stays for the next unit. A lead with no numeric
+    token does not advance.
     """
-    lead = _WEF_LEAD.match(text, pos)
+    cursor = pos
+    length = len(text)
+    while cursor < length and text[cursor].isspace():
+        cursor += 1
+    if cursor < length and text[cursor] == ",":
+        cursor += 1
+        while cursor < length and text[cursor].isspace():
+            cursor += 1
+    opened = False
+    if cursor < length and text[cursor] == "(":
+        opened = True
+        cursor += 1
+        while cursor < length and text[cursor].isspace():
+            cursor += 1
+    lead = _WEF_WORD.match(text, cursor)
     if lead is None:
         return None
     cursor = lead.end()
     numbers = 0
     tokens = 0
-    while tokens < 8 and cursor < len(text):
+    while tokens < 8 and cursor < length:
+        gap_end = cursor
         if tokens:
-            gap = re.match(r"[\s,]+", text[cursor:])
-            if gap is None:
+            while gap_end < length and (text[gap_end].isspace() or text[gap_end] == ","):
+                gap_end += 1
+            if gap_end == cursor:
                 break
-            cursor += gap.end()
-        word = re.match(r"[A-Za-z0-9./-]+", text[cursor:])
-        if word is None or not _date_token(word.group(0)):
+        word_end = gap_end
+        while word_end < length and (text[word_end].isalnum() or text[word_end] in "./-"):
+            word_end += 1
+        if word_end == gap_end or not _date_token(text[gap_end:word_end]):
             break
-        if any(ch.isdigit() for ch in word.group(0)):
+        if any(ch.isdigit() for ch in text[gap_end:word_end]):
             numbers += 1
-        cursor += word.end()
+        cursor = word_end
         tokens += 1
-    if numbers < 1:
+    if numbers < 1 or cursor <= pos:
+        return None
+    if opened:
+        close = cursor
+        while close < length and text[close].isspace():
+            close += 1
+        if close >= length or text[close] != ")":
+            return None
+        cursor = close + 1
+    if cursor <= pos:
         return None
     return cursor
 
 
 def _consume_trailing_clauses(text: str, pos: int) -> int:
-    """Advance past ``for "..."`` and ``w.e.f. <date>`` clauses. Each step grows."""
+    """Advance past ``for "..."`` and ``w.e.f.`` clauses, including ``(w.e.f. ...)``.
+
+    Each step grows. A date clause that is not last leaves the following
+    separator for the next verb unit.
+    """
     while pos < len(text):
         quoted = _FOR_QUOTE.match(text, pos)
         if quoted is not None:
@@ -964,10 +1020,11 @@ def _whole_body_is_citation_footnote(body: str) -> bool:
     ``Renumbered`` / ``Re-numbered`` / ``Amended by`` / ``See``, optionally
     ``as sub-section (1)`` or ``as clause (x)``. Then one or more Act,
     Ordinance, P.O. or Regulation citations, an optional section reference,
-    and optional ``for "..."`` or ``w.e.f.`` clauses. ``and`` may repeat that
-    whole unit with a different verb. Anything left over, including an
-    operative sentence, does not match. ``Substitution``, ``Insertion`` and
-    ``Amendment of`` do not match the lead.
+    and optional ``for "..."`` or ``w.e.f.`` clauses, including ``(w.e.f. ...)``.
+    ``and`` or a comma may repeat that whole unit with a different verb. A
+    ``w.e.f.`` clause may sit on a unit that is not last. Anything left over,
+    including an operative sentence, does not match. ``Substitution``,
+    ``Insertion`` and ``Amendment of`` do not match the lead.
     """
     text = _unwrap_note(body)
     pos = _consume_verb_unit(text, 0)
@@ -1012,16 +1069,44 @@ def is_long_amendment_footnote(text: str) -> bool:
     return any(_whole_body_is_citation_footnote(body) for body in _citation_footnote_bodies(text))
 
 
+def _see_crossref_placeholder(text: str) -> bool:
+    """True for ``Omitted`` or ``Repealed by <instrument>, see s. N``.
+
+    ``see s. N`` names no instrument, so the long-note grammar does not take
+    the line. It is still an amendment footnote for collision. Alone, the
+    line stays a non-live placeholder on the bare key.
+    """
+    if omission_placeholder_status(text) not in {"omitted", "repealed"}:
+        return False
+    for match in _VERB_CHAIN.finditer(text):
+        if match.group(0).strip() != ",":
+            continue
+        lead = _LONG_FOOTNOTE_LEAD.match(text, match.end())
+        if lead is None or not lead.group(0).lower().startswith("see"):
+            continue
+        if _consume_verb_unit(text, match.end()) is not None:
+            continue
+        if _SEE_XREF.match(text, lead.end()) is not None:
+            return True
+    return False
+
+
 def is_amendment_footnote(text: str) -> bool:
     """True for a short marginal note or a citation footnote of any length.
 
     Short notes are R-LENGTH-RESID-002 and R-LENGTH-RESID-005, including a bare
     ``Ins.`` and ``Rep. of X.`` that name no instrument. Citation notes are
-    R-LENGTH-RESID-004. A real amending section (``Substitution``, ``Insertion
-    of``, ``Amendment of section X.-``) is neither.
+    R-LENGTH-RESID-004. ``Omitted by <instrument>, see s. N`` and the repealed
+    form are included so a real section with that number keeps the bare key.
+    A real amending section (``Substitution``, ``Insertion of``,
+    ``Amendment of section X.-``) is none of these.
     """
     normalised = normalise_div_text(text)
-    return is_short_amendment_footnote(normalised) or is_long_amendment_footnote(normalised)
+    return (
+        is_short_amendment_footnote(normalised)
+        or is_long_amendment_footnote(normalised)
+        or _see_crossref_placeholder(normalised)
+    )
 
 
 def is_unstaged_amendment_footnote(text: str) -> bool:
@@ -1064,13 +1149,26 @@ def _citation_tail_ok(tail: str) -> bool:
         return False
     if re.search(r"\d\.\s+[A-Z]", text):
         return False
-    # ``Rep. by Act II and Amended by Act III`` is a mixed note, not one placeholder.
-    for match in re.finditer(r"(?i:\sand\s+)", text):
-        if _LONG_FOOTNOTE_LEAD.match(text, match.end()):
-            return False
+    # ``Rep. by Act II and Amended by Act III`` and ``Omitted by Act II, Ins. by
+    # Act III`` are mixed notes, not one placeholder. ``and`` plus a verb lead
+    # is enough. A bare comma starts another unit only when that unit names an
+    # instrument: ``, see s. 2`` is a section cross-reference and stays one
+    # omission or repeal.
+    for match in _VERB_CHAIN.finditer(text):
+        if _LONG_FOOTNOTE_LEAD.match(text, match.end()) is None:
+            continue
+        if match.group(0).strip() == "," and _consume_verb_unit(text, match.end()) is None:
+            continue
+        return False
     for match in re.finditer(r"([A-Za-z]+)\.\s+", text):
-        if match.group(1).lower() not in _CITATION_ABBREV:
-            return False
+        word = match.group(1).lower()
+        if word in _CITATION_ABBREV:
+            continue
+        # ``w.e.f.`` is one date lead. The closing ``f.`` is not a stray
+        # abbreviation, and a lone ``f.`` is still refused.
+        if word == "f" and text[max(0, match.start() - 4):match.start()].lower() == "w.e.":
+            continue
+        return False
     return True
 
 
@@ -1245,7 +1343,10 @@ def _without_colliding_footnotes(kept: list, skipped: int) -> tuple:
 
     The real provision keeps ``N`` or ``schedule:L:N``. Order does not matter:
     the real set is collected before anything is dropped. A placeholder that is
-    the only text for that number stays. An unstaged note never reaches ``kept``.
+    the only text for that number stays, including ``Omitted by <instrument>,
+    see s. N``. That cross-reference is an amendment footnote here, so a real
+    section with the same number keeps the bare key. An unstaged note never
+    reaches ``kept``.
     """
     real = set()
     for item in kept:
