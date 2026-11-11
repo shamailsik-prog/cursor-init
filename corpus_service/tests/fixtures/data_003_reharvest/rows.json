@@ -1,0 +1,274 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "table": "statutes_master",
+    "short_name": "bare-12a",
+    "statute_name": "bare-12a",
+    "section_number": "12",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "12",
+    "section_title": "Rates.",
+    "section_text": "12. Rates. The rates in this section apply to every instrument presented for registration under this Act.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "12-aaaaaaaa",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 2
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "12-bbbbbbbb",
+    "section_title": "Beta rates.",
+    "section_text": "12-B. Beta rates. The beta rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 3
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000005",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "10",
+    "section_title": "Other.",
+    "section_text": "10. Other. This other section applies to every instrument presented for registration under this Act.",
+    "ordinal": 4
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000006",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "10-cccccccc",
+    "section_title": "Beta rates.",
+    "section_text": "10-B. Beta rates. The beta rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 5
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000007",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "12-dddddddd",
+    "section_title": "Double insertion.",
+    "section_text": "12-AA. Double insertion. This section applies to every instrument presented for registration under this Act.",
+    "ordinal": 6
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000008",
+    "table": "statutes_master",
+    "short_name": "suffixes",
+    "statute_name": "suffixes",
+    "section_number": "13",
+    "section_title": "Inserted rates.",
+    "section_text": "13–A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 7
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000009",
+    "table": "statutes_staging",
+    "short_name": "stage-12b",
+    "statute_name": "stage-12b",
+    "section_number": "12",
+    "section_title": "Beta rates.",
+    "section_text": "12-B. Beta rates. The beta rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1,
+    "raw_text": "12-B. Beta rates. The beta rates in this section apply to instruments presented after the amendment."
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000010",
+    "table": "statutes_master",
+    "short_name": "wrap",
+    "statute_name": "wrap",
+    "section_number": "11",
+    "section_title": "Charge of tax.",
+    "section_text": "11. Charge of tax. Tax shall be charged in accordance with this section for the tax year on the taxable income of every person who is resident.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000011",
+    "table": "statutes_master",
+    "short_name": "wrap",
+    "statute_name": "wrap",
+    "section_number": "12",
+    "section_title": "",
+    "section_text": "12-I Pakistan source income of a resident person is charged for the tax year under this section and the line is not a separate heading.",
+    "ordinal": 2
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000012",
+    "table": "statutes_master",
+    "short_name": "wrap",
+    "statute_name": "wrap",
+    "section_number": "12-eeeeeeee",
+    "section_title": "Rates.",
+    "section_text": "12. Rates. The rates in this section apply to every instrument presented for registration under this Act.",
+    "ordinal": 3
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000013",
+    "table": "statutes_master",
+    "short_name": "see-s",
+    "statute_name": "see-s",
+    "section_number": "12",
+    "section_title": "",
+    "section_text": "12-A. Omitted by Act II of 2000, see s. 2.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000014",
+    "table": "statutes_master",
+    "short_name": "see-s",
+    "statute_name": "see-s",
+    "section_number": "6-aaaaaaaa",
+    "section_title": "",
+    "section_text": "6. Omitted by Act II of 2000, see s. 2.",
+    "ordinal": 2
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000015",
+    "table": "statutes_master",
+    "short_name": "see-s",
+    "statute_name": "see-s",
+    "section_number": "6-bbbbbbbb",
+    "section_title": "",
+    "section_text": "6. Omitted by the Finance Act, 1990 (X of 1990), s. 3.",
+    "ordinal": 3
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000016",
+    "table": "statutes_master",
+    "short_name": "footnote",
+    "statute_name": "footnote",
+    "section_number": "12",
+    "section_title": "Rates.",
+    "section_text": "12. Rates. The rates in this section apply to every instrument presented for registration under this Act.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000017",
+    "table": "statutes_master",
+    "short_name": "footnote",
+    "statute_name": "footnote",
+    "section_number": "12-aaaaaaaa",
+    "section_title": "",
+    "section_text": "12-A. Ins. by Act II of 2001, s. 3.",
+    "ordinal": 2
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000018",
+    "table": "statutes_master",
+    "short_name": "footnote",
+    "statute_name": "footnote",
+    "section_number": "12A",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 3
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000019",
+    "table": "statutes_master",
+    "short_name": "glued-12a",
+    "statute_name": "glued-12a",
+    "section_number": "12a",
+    "section_title": "Inserted rates.",
+    "section_text": "12a. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000020",
+    "table": "statutes_master",
+    "short_name": "fees",
+    "statute_name": "fees",
+    "section_number": "12",
+    "section_title": "",
+    "section_text": "12-Fees. The fees specified in this section shall be paid on every instrument submitted for registration.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000021",
+    "table": "statutes_master",
+    "short_name": "real-12i",
+    "statute_name": "real-12i",
+    "section_number": "12",
+    "section_title": "Heading of a real inserted section.",
+    "section_text": "12-I. Heading of a real inserted section that is long enough to stay a provision in this Act.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000022",
+    "table": "statutes_master",
+    "short_name": "collision",
+    "statute_name": "collision",
+    "section_number": "12",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000023",
+    "table": "statutes_master",
+    "short_name": "collision",
+    "statute_name": "collision",
+    "section_number": "12-ffffffff",
+    "section_title": "Other rates.",
+    "section_text": "12-A. Other rates. The other rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 2
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000024",
+    "table": "statutes_master",
+    "short_name": "isolated-wrap",
+    "statute_name": "isolated-wrap",
+    "section_number": "12",
+    "section_title": "",
+    "section_text": "12-I Pakistan source income of a resident person is charged for the tax year under this section and the line is not a separate heading.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000025",
+    "table": "statutes_master",
+    "short_name": "pinned",
+    "statute_name": "pinned",
+    "section_number": "12",
+    "section_title": "Pinned rates.",
+    "section_text": "12-A. Pinned rates. The pinned rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1,
+    "raw_text": "pinned text differs"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000026",
+    "table": "statutes_master",
+    "short_name": "duplicate-text",
+    "statute_name": "duplicate-text",
+    "section_number": "12",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 1
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000027",
+    "table": "statutes_master",
+    "short_name": "duplicate-text",
+    "statute_name": "duplicate-text",
+    "section_number": "12-ffffffff",
+    "section_title": "Inserted rates.",
+    "section_text": "12-A. Inserted rates. The inserted rates in this section apply to instruments presented after the amendment.",
+    "ordinal": 2
+  }
+]

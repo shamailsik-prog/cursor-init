@@ -276,6 +276,11 @@ MASTER_UPDATER_ALLOWLIST = {
 MASTER_READ_ONLY_ALLOWLIST = {
     "scraper.main": "/health readiness and telemetry startup (F44)",
     "scraper.health_probe": "background telemetry refresh reads case_law_master count (F44)",
+    # DATA-003-REHARVEST names statutes_master only in COUNT/SELECT text. The apply
+    # DO block is concatenated at runtime, so this scan's write set stays empty.
+    # A literal master-table write in this module fails writing_readers below.
+    # The CLI does not open a connection. This is the only entry for that module.
+    "scraper.reharvest.data_003": "read-only section-key selector (DATA-003-REHARVEST)",
     # Audit F24: the public routes (scraper.routers.search) and the export (scraper.routers.export)
     # read the master tables only through this published-only helper, so neither router is listed
     # here: a direct CaseLawMaster / StatutesMaster reference in either fails this scan.
