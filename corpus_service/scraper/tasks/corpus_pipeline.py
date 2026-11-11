@@ -96,17 +96,19 @@ async def _published_step(db, row, *, job_id=None) -> str:
     """A published record without its outbox row (a pre-F21 record, or an outbox row an operator
     removed): enqueue it and move it on; a record whose retrieval row has gone is dead-lettered."""
     table = publish.table_of(row)
-    outbox = await retrieval.outbox_row(db, table, row.published_id)
-    requeued = False
-    if outbox is None:
-        if not await retrieval.retrieval_row_exists(db, table, row.published_id):
-            lifecycle.move(db, row, lifecycle.DEAD_LETTER, actor=lifecycle.ACTOR_RECONCILE, job_id=job_id,
-                           reason=publish.REASON_PUBLISHED_RECORD_MISSING,
-                           details=lifecycle.summary_details(published_table=table, published_id=row.published_id))
-            return lifecycle.DEAD_LETTER
-        outbox, requeued = await retrieval.enqueue_embedding(db, table, row.published_id), True
+    existed = await retrieval.outbox_row(db, table, row.published_id)
+    if existed is None and not await retrieval.retrieval_row_exists(db, table, row.published_id):
+        lifecycle.move(db, row, lifecycle.DEAD_LETTER, actor=lifecycle.ACTOR_RECONCILE, job_id=job_id,
+                       reason=publish.REASON_PUBLISHED_RECORD_MISSING,
+                       details=lifecycle.summary_details(published_table=table, published_id=row.published_id))
+        return lifecycle.DEAD_LETTER
+    outbox = await retrieval.enqueue_embedding(db, table, row.published_id)
     lifecycle.move(db, row, lifecycle.EMBEDDED, actor=lifecycle.ACTOR_RECONCILE, job_id=job_id,
-                   details=lifecycle.summary_details(embedding_outbox_id=outbox, requeued=requeued or None))
+                   details=lifecycle.summary_details(
+                       embedding_outbox_id=outbox,
+                       embedding_withheld=None if outbox is not None else retrieval.EMBEDDING_WITHHELD_NON_LIVE,
+                       requeued=(existed is None and outbox is not None) or None,
+                   ))
     return lifecycle.EMBEDDED
 
 

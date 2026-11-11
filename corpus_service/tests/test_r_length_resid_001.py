@@ -202,3 +202,25 @@ def test_splitter_marks_placeholders_and_keeps_operative_sections():
     assert omitted["section_kind"] == "short-ambiguous"
     assert omitted["section_number"].startswith("ambiguous-")
     assert "provision_status" not in omitted
+
+
+def test_policy_note_says_omitted_and_bare_rep_are_non_live_on_purpose():
+    import scraper.parsers.pakistancode_keys as keys
+
+    note = keys.__doc__ or ""
+    assert "RESID-001-POLICY-001" in note
+    assert "1. Omitted." in note and "2. Rep." in note
+    assert "non-live" in note
+
+
+def test_semantic_retrieval_sql_excludes_repealed_statutes():
+    from sqlalchemy.dialects.postgresql import asyncpg as pg_asyncpg
+
+    from scraper.publication.retrieval import live_statute_semantic_stmt
+
+    sql = str(live_statute_semantic_stmt().compile(
+        dialect=pg_asyncpg.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    where = sql.split("WHERE", 1)[1]
+    assert "is_repealed IS false" in where, where
+    assert "embedding IS NOT NULL" in where, where

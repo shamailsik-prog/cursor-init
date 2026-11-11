@@ -44,6 +44,7 @@ from sqlalchemy import func, select, text, update
 from scraper import p1_client
 from scraper.database import SessionLocal
 from scraper.models import CaseLawMaster, EmbeddingAttempt, StatutesMaster
+from scraper.publication import retrieval
 from scraper.tasks import embedding_chunks as ec
 from scraper.tasks import job_record, outcomes
 from scraper import harvest_control
@@ -331,6 +332,13 @@ UPDATE embedding_queue SET status = 'completed', operation_id = :op, stored_oper
        lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
  {_FENCE}"""
 
+# A non-live statute is not embedded. The row is closed without an operation id so a
+# later claim does not pay a provider for placeholder text.
+NON_LIVE_SQL = f"""
+UPDATE embedding_queue SET status = 'completed', error_message = :reason, error_type = NULL,
+       next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+ {_FENCE}"""
+
 MARK_OPERATION_SQL = f"UPDATE embedding_queue SET operation_id = :op, updated_at = now() {_FENCE}"
 
 START_RECEIPT_SQL = """
@@ -388,8 +396,10 @@ def _record_sql(table_name: str, lock: bool) -> str:
     cols = SOURCES[table_name]
     title, label, body = cols[0], cols[1], cols[2]
     language = cols[3] if len(cols) > 3 else "'en'"
+    # Statutes carry is_repealed. Case law has no such flag; the extra column stays false.
+    repealed = "is_repealed" if table_name == retrieval.STATUTE_MASTER else "false"
     return (
-        f"SELECT {title}, {label}, {body}, {language}, embedding IS NOT NULL "
+        f"SELECT {title}, {label}, {body}, {language}, embedding IS NOT NULL, {repealed} "
         f"FROM {table_name} WHERE id = :id" + (" FOR UPDATE" if lock else "")
     )
 
@@ -559,8 +569,8 @@ class _Batch:
         parsed = await self._read_record(row, lock=False)
         if parsed is None:
             return None
-        chunks, manifest, _ = parsed
-        if not chunks or text_problem(chunks[0].embed_text) is not None:
+        chunks, manifest, _, non_live = parsed
+        if non_live or not chunks or text_problem(chunks[0].embed_text) is not None:
             return None
         stored = await self._stored_chunks(row)
         pending = ec.first_incomplete_chunk(chunks, stored)
@@ -593,7 +603,9 @@ class _Batch:
         if parsed is None:
             self.counts.missing += 1
             return await self._dead_letter(row, RECORD_MISSING, f"{RECORD_MISSING}: no {row.table_name} row with this id")
-        chunks, manifest, has_vector = parsed
+        chunks, manifest, has_vector, non_live = parsed
+        if non_live:
+            return await self._withhold_non_live(row)
         problem = text_problem(chunks[0].embed_text) if chunks else EMPTY_TEXT
         if problem is not None:
             return await self._dead_letter(row, problem, f"{problem}: nothing to embed in this record")
@@ -645,16 +657,30 @@ class _Batch:
                 return paid_any
             await asyncio.sleep(PACE_SECONDS)
 
-    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[List[ec.EmbeddingChunk], str, bool]]:
+    async def _read_record(self, row, *, lock: bool) -> Optional[Tuple[List[ec.EmbeddingChunk], str, bool, bool]]:
         found = (await self.db.execute(text(_record_sql(row.table_name, lock)), {"id": row.record_id})).first()
         if found is None:
             return None
-        title, label, body, language, has_vector = found[0], found[1], found[2], found[3], found[4]
+        title, label, body, language, has_vector, non_live = found[0], found[1], found[2], found[3], found[4], found[5]
         chunks = ec.build_embedding_chunks(title, label, body, language=language or "en")
         manifest = ec.manifest_operation_id(
             row.table_name, row.record_id, row.embedding_model, row.embedding_dimensions, chunks,
         )
-        return chunks, manifest, bool(has_vector)
+        return chunks, manifest, bool(has_vector), bool(non_live)
+
+    async def _withhold_non_live(self, row) -> bool:
+        """Do not embed a non-live statute. Clear its vectors and close this claim without a provider call."""
+        if row.table_name == retrieval.STATUTE_MASTER:
+            await retrieval.withdraw_statute_embeddings(self.db, row.record_id)
+        _fenced(
+            await self.db.execute(
+                text(NON_LIVE_SQL),
+                self._params(row, reason=retrieval.EMBEDDING_WITHHELD_NON_LIVE),
+            ),
+            row,
+        )
+        await self.db.commit()
+        return False
 
     async def _stored_chunks(self, row) -> List[Tuple[int, str]]:
         rows = (await self.db.execute(text(CHUNK_STATE_SQL), {
@@ -786,7 +812,11 @@ class _Batch:
             self.counts.missing += 1
             await self._dead_letter(row, RECORD_MISSING, f"{RECORD_MISSING}: the record was deleted while it was embedded")
             return
-        live_chunks, live_manifest, _ = record
+        live_chunks, live_manifest, _, non_live = record
+        if non_live:
+            await self.db.execute(text(DROP_RECEIPT_SQL), {"id": receipt})
+            await self._withhold_non_live(row)
+            return
         expected = next((c for c in live_chunks if c.chunk_index == chunk.chunk_index), None)
         if (
             live_manifest != manifest

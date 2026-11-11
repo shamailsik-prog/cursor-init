@@ -34,6 +34,9 @@ Walk ``div.section`` texts in document order.
      public statute list and ``lookup_real_section`` do not serve that row as
      current law. The row, the key, the number and the raw text stay. A longer
      section that only mentions those words stays live.
+   * RESID-001-POLICY-001. ``1. Omitted.`` and a bare ``2. Rep.`` are non-live
+     on purpose. They keep the section key and the number. They are not noise,
+     and they are not served as current law. ``2. Repeal.`` stays live.
    * RESID-005-POLICY. A page that contains only these short footnotes stages no
      rows. The notes are noise, so the page is not quarantined and ``act_keys`` is
      omitted. An omitted set retires nothing.

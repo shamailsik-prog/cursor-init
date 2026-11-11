@@ -109,12 +109,10 @@ async def _record_review_publication(db, st, decision: QuarantineDecision, job_i
     lifecycle.move(db, st, lifecycle.PUBLISHED, actor=lifecycle.ACTOR_REVIEW_SYNC, job_id=job_id,
                    details=lifecycle.summary_details(published_table=table, published_id=decision.published_id,
                                                      publication_key=decision.publication_key, decision_id=decision.id))
-    outbox = await retrieval.outbox_row(db, table, decision.published_id)
-    requeued = outbox is None
-    if requeued:
-        outbox = await retrieval.enqueue_embedding(db, table, decision.published_id)
+    existed = await retrieval.outbox_row(db, table, decision.published_id)
+    outbox = await retrieval.enqueue_embedding(db, table, decision.published_id)
     lifecycle.move(db, st, lifecycle.EMBEDDED, actor=lifecycle.ACTOR_REVIEW_SYNC, job_id=job_id,
-                   details=lifecycle.summary_details(embedding_outbox_id=outbox, requeued=requeued or None))
+                   details=_embedding_details(outbox, requeued=(existed is None and outbox is not None) or None))
     return lifecycle.EMBEDDED
 
 
@@ -173,5 +171,14 @@ async def publish(db, st, *, job_id=None) -> str:
                                                      source=src.source_name))
     outbox = await retrieval.enqueue_embedding(db, table, published_id)
     lifecycle.move(db, st, lifecycle.EMBEDDED, actor=lifecycle.ACTOR_PUBLISH, job_id=job_id,
-                   details=lifecycle.summary_details(embedding_outbox_id=outbox))
+                   details=_embedding_details(outbox))
     return lifecycle.EMBEDDED
+
+
+def _embedding_details(outbox, **extra):
+    """Lifecycle details for the embedding hand-off. A non-live statute has no outbox row."""
+    return lifecycle.summary_details(
+        embedding_outbox_id=outbox,
+        embedding_withheld=None if outbox is not None else retrieval.EMBEDDING_WITHHELD_NON_LIVE,
+        **extra,
+    )
