@@ -396,3 +396,35 @@ def test_q03_statute_identity_sequence(corpus_db):
         pytest.fail(
             "Q03 steps that must pass after the identity fix failed:\n" + "\n".join(bag.errors)
         )
+
+
+def test_q03_reused_key_after_rename_inserts_a_new_row(corpus_db):
+    """A fail-closed collapse must insert the old key even though its id still belongs to the renamed row."""
+    migrated = corpus_db.migrate()
+    assert migrated.returncode == 0, migrated.stderr
+    source_id = uuid.UUID(str(run(fetch(
+        "SELECT id FROM scraper_sources WHERE source_name = 'PakistanCode'"
+    ))[0][0]))
+    short = "q03reuse"
+    act = "Q03 Synthetic Reused Key Act"
+    first = [_staging(short, "2", TEXT_2, _day(1), ["2"], source_id, act=act)]
+    _publish_many(first, ["2"])
+    original = next(row for row in _rows(short) if row[1] == "2")
+    sha_b = _sha("2", TEXT_2)
+    sha_c = _sha("2", TEXT_C)
+    repeated = [sha_b, sha_c]
+    second = [
+        _staging(short, sha_b, TEXT_2, _day(2), repeated, source_id, act=act),
+        _staging(short, sha_c, TEXT_C, _day(2), repeated, source_id, act=act),
+    ]
+    _publish_many(second, [sha_b, sha_c])
+    moved = {row[0]: row for row in _rows(short)}[original[0]]
+    assert moved[1] == sha_b and moved[3] is False
+    fresh = "2. Q03 synthetic collapse text D. This test text matches neither repeated member."
+    third = [_staging(short, "2", fresh, _day(3), ["2"], source_id, act=act)]
+    _publish_many(third, ["2"])
+    final = _rows(short)
+    by_id = {row[0]: row for row in final}
+    assert by_id[original[0]][1] == sha_b and by_id[original[0]][3] is True
+    inserted = [row for row in final if row[1] == "2" and row[3] is False]
+    assert len(inserted) == 1 and inserted[0][0] != original[0] and inserted[0][2] == fresh

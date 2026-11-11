@@ -44,11 +44,15 @@ allowlists it), so the repoint can drop the projection here.
   attaches to it and does not rewrite ``section_number``, insert a second row, or
   retire the stored key. Two stored rows that already share the identity are not
   merged; that publish returns ``alias_conflict`` and retires nothing.
-  Q03-DUP-ID-001: the first complete publish of a harvest may record
-  ``identity_successor_of`` on staging rows whose new key continues one live row
-  of the same base. Publishing that key renames the old row instead of retiring
-  it, when the old key is still absent, its clock is not newer, and nothing else
-  holds the new key. An ambiguous base records no pair and keeps retire-plus-insert.
+  Q03-DUP-ID-001: the first complete publish of a harvest decides the pairs
+  and stores them on the staging row it already owns. A later sibling of that
+  harvest copies its own pair onto itself. Publish does not update any other
+  staging row: the consumer claimed that row with ``FOR UPDATE SKIP LOCKED``
+  before taking this act lock, so writing a sibling here deadlocks. Publishing
+  a paired key renames the old row instead of retiring it, when the old key is
+  still absent, its clock is not newer, and nothing else holds the new key. An
+  ambiguous base records no pair and keeps retire-plus-insert. A renamed row
+  keeps the id of its former key, so an insert of that key uses a fresh id.
   Retirement withdraws that row's vectors. A live text change withdraws them too,
   so the publish consumer can queue a fresh embedding. An unchanged attach does not.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9): one ``embedding_queue`` row per
@@ -472,16 +476,85 @@ async def _stored_section_version(db: Any, master_id: uuid.UUID) -> int:
     return best
 
 
+def _pair_map(metadata: Any) -> dict:
+    """The harvest's new-key → old-row decision, or nothing when this row has none."""
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("identity_harvest_pairs")
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def _stamp_own_pair(st: Any, pairs: dict) -> None:
+    """Copy this row's pair onto itself. Other staging rows stay untouched."""
+    section = (getattr(st, "extracted_section_number", None) or "").strip()
+    entry = pairs.get(section)
+    meta = dict(st.parsing_metadata or {})
+    meta["identity_harvest_pairs"] = pairs
+    if isinstance(entry, dict):
+        successor = entry.get("identity_successor_of")
+        predecessor = entry.get("identity_predecessor_key")
+        if isinstance(successor, str) and successor and isinstance(predecessor, str) and predecessor:
+            meta["identity_successor_of"] = successor
+            meta["identity_predecessor_key"] = predecessor
+    st.parsing_metadata = meta
+    flag_modified(st, "parsing_metadata")
+
+
+async def _load_harvest_pairs(db: Any, st: Any, short_name: str, incoming) -> dict:
+    """Pairs already decided by a sibling of this harvest. Read-only."""
+    queried = (await db.execute(
+        select(
+            StatutesStaging.extracted_section_number,
+            StatutesStaging.source_site,
+            StatutesStaging.parsing_metadata,
+        ).where(StatutesStaging.extracted_short_name == short_name)
+    )).all()
+    metas = [st.parsing_metadata]
+    for number, source_site, metadata in queried:
+        if source_site != PAKISTANCODE_SOURCE and not (
+            isinstance(metadata, dict) and metadata.get("source_name") == PAKISTANCODE_SOURCE
+        ):
+            continue
+        if harvest_token_from_metadata(metadata) != incoming:
+            continue
+        metas.append(metadata)
+    found: dict = {}
+    conflicted = set()
+    for metadata in metas:
+        for key, entry in _pair_map(metadata).items():
+            if not isinstance(key, str) or not isinstance(entry, dict):
+                continue
+            if key in found and found[key] != entry:
+                conflicted.add(key)
+            else:
+                found.setdefault(key, entry)
+    for key in conflicted:
+        found.pop(key, None)
+    return found
+
+
 async def _record_identity_succession(
     db: Any, st: Any, short_name: str, incoming, stored_max, mode: Optional[str],
 ) -> None:
-    """Record new-key → old-row pairs once, on the first publish of this harvest.
+    """Decide new-key → old-row pairs once, on the first publish of this harvest.
 
-    A later section of the same harvest reads the pointer. A rolled-back publish
-    rolls the pointer back with it. An incomplete clock, a stale clock, and a
-    repeat of this harvest's clock do not decide again.
+    The decision is stored on ``st`` only. A later sibling copies its own entry
+    when it publishes. A rolled-back first publish rolls the decision back with
+    it. An incomplete clock and a stale clock do not decide.
     """
-    if incoming is None or stored_max is None or not (stored_max < incoming):
+    if incoming is None or stored_max is None:
+        return
+    if stored_max == incoming:
+        if _pair_map(getattr(st, "parsing_metadata", None)):
+            _stamp_own_pair(st, _pair_map(st.parsing_metadata))
+            return
+        recorded = await _load_harvest_pairs(db, st, short_name, incoming)
+        if recorded:
+            _stamp_own_pair(st, recorded)
+        return
+    if not (stored_max < incoming):
         return
     act_keys = act_keys_from_metadata(getattr(st, "parsing_metadata", None))
     if act_keys is None:
@@ -521,7 +594,6 @@ async def _record_identity_succession(
         siblings = list(siblings) + [st]
     texts: dict = {}
     blocked = set()
-    harvest_rows: dict = {}
     for row in siblings:
         if not _staging_is_pakistancode(row):
             continue
@@ -531,7 +603,6 @@ async def _record_identity_succession(
         if key not in new_keys:
             continue
         text = _staging_body(row)
-        harvest_rows.setdefault(key, []).append(row)
         if key in texts and texts[key] != text:
             base = pairing_base(key, label_mode=mode)
             if base is not None:
@@ -553,16 +624,16 @@ async def _record_identity_succession(
     if not live:
         return
     by_old = {row.section_number: row for row in live_rows}
+    pairs = {}
     for new_key, old_key in pair_renumbered_identities(prior, live, label_mode=mode).items():
         old = by_old.get(old_key)
         if old is None:
             continue
-        for row in harvest_rows.get(new_key, ()):
-            meta = dict(row.parsing_metadata or {})
-            meta["identity_successor_of"] = str(old.id)
-            meta["identity_predecessor_key"] = old_key
-            row.parsing_metadata = meta
-            flag_modified(row, "parsing_metadata")
+        pairs[new_key] = {
+            "identity_successor_of": str(old.id),
+            "identity_predecessor_key": old_key,
+        }
+    _stamp_own_pair(st, pairs)
 
 
 async def _identity_predecessor(db: Any, st: Any, short_name: str, section: str, incoming, mode):
@@ -696,6 +767,10 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
             await withdraw_statute_embeddings(db, existing.id)
         return StatutePublication(existing.id, True, changed, False)
     statute_id = statute_publication_id(key)
+    # A renamed row keeps the id of its former key. Inserting that key again
+    # must not reuse the occupied primary key.
+    if await retrieval_row_exists(db, STATUTE_MASTER, statute_id):
+        statute_id = uuid.uuid4()
     db.add(StatutesMaster(
         id=statute_id,
         statute_name=act,
