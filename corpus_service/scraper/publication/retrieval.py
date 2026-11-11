@@ -44,6 +44,17 @@ allowlists it), so the repoint can drop the projection here.
   attaches to it and does not rewrite ``section_number``, insert a second row, or
   retire the stored key. Two stored rows that already share the identity are not
   merged; that publish returns ``alias_conflict`` and retires nothing.
+  Q03-DUP-ID-001: the first complete publish of a harvest decides the pairs
+  and stores them on the staging row it already owns. A later sibling of that
+  harvest copies its own pair onto itself. Publish does not update any other
+  staging row: the consumer claimed that row with ``FOR UPDATE SKIP LOCKED``
+  before taking this act lock, so writing a sibling here deadlocks. Publishing
+  a paired key renames the old row instead of retiring it, when the old key is
+  still absent, its clock is not newer, and nothing else holds the new key. An
+  ambiguous base records no pair and keeps retire-plus-insert. A renamed row
+  keeps the id of its former key, so an insert of that key uses a fresh id.
+  Retirement withdraws that row's vectors. A live text change withdraws them too,
+  so the publish consumer can queue a fresh embedding. An unchanged attach does not.
 * ``enqueue_embedding``: F23's outbox statement (ruling 9): one ``embedding_queue`` row per
   ``(table_name, record_id)``, ``status = 'pending'``, no F27 column set. A statute
   with ``is_repealed`` is not queued. Its master vector, chunk vectors and any
@@ -68,6 +79,7 @@ from scraper.models import (
     EmbeddingQueue,
     RecordEmbeddingChunk,
     StatutesMaster,
+    StatutesStaging,
 )
 from scraper.parsers.pakistancode_keys import (
     PAKISTANCODE_SOURCE,
@@ -78,6 +90,8 @@ from scraper.parsers.pakistancode_keys import (
     keys_to_retire,
     note_section_version,
     omission_placeholder_status,
+    pair_renumbered_identities,
+    pairing_base,
     schedule_key_identity,
     section_kind_is_ambiguous,
     snapshot_is_incomplete,
@@ -345,6 +359,7 @@ async def _retire_absent_pakistancode_keys(db: Any, st: Any, source: Any, short_
         row.is_repealed = True
         if incoming is not None:
             row.harvest_at = incoming
+        await withdraw_statute_embeddings(db, row.id)
 
 
 def _baseline_refusal(incoming, stored_max) -> StatutePublication:
@@ -419,6 +434,269 @@ async def _schedule_identity_rows(db: Any, short_name: str, section: str, mode: 
     return [row for row in rows if schedule_key_identity(row.section_number or "", mode=mode) == ident]
 
 
+def _staging_body(row: Any) -> str:
+    return row.extracted_section_text or row.raw_text or ""
+
+
+def _staging_is_pakistancode(row: Any) -> bool:
+    if getattr(row, "source_site", None) == PAKISTANCODE_SOURCE:
+        return True
+    metadata = getattr(row, "parsing_metadata", None)
+    return isinstance(metadata, dict) and metadata.get("source_name") == PAKISTANCODE_SOURCE
+
+
+def _version_int(raw: Any) -> Optional[int]:
+    """A stored section_version, or None when the value is not a positive integer."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 1 else None
+    if isinstance(raw, str) and raw.strip().isdigit():
+        value = int(raw.strip())
+        return value if value >= 1 else None
+    return None
+
+
+async def _stored_section_version(db: Any, master_id: uuid.UUID) -> int:
+    """Highest ``section_version`` already promoted onto this master row, or 1."""
+    rows = (await db.execute(
+        select(StatutesStaging.parsing_metadata).where(StatutesStaging.promoted_to_id == master_id)
+    )).scalars().all()
+    best = 1
+    found = False
+    for meta in rows:
+        if not isinstance(meta, dict):
+            continue
+        value = _version_int(meta.get("section_version"))
+        if value is None:
+            continue
+        if not found or value > best:
+            best = value
+            found = True
+    return best
+
+
+def _pair_map(metadata: Any) -> dict:
+    """The harvest's new-key → old-row decision, or nothing when this row has none."""
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("identity_harvest_pairs")
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def _stamp_own_pair(st: Any, pairs: dict) -> None:
+    """Copy this row's pair onto itself. Other staging rows stay untouched."""
+    section = (getattr(st, "extracted_section_number", None) or "").strip()
+    entry = pairs.get(section)
+    meta = dict(st.parsing_metadata or {})
+    meta["identity_harvest_pairs"] = pairs
+    if isinstance(entry, dict):
+        successor = entry.get("identity_successor_of")
+        predecessor = entry.get("identity_predecessor_key")
+        if isinstance(successor, str) and successor and isinstance(predecessor, str) and predecessor:
+            meta["identity_successor_of"] = successor
+            meta["identity_predecessor_key"] = predecessor
+    st.parsing_metadata = meta
+    flag_modified(st, "parsing_metadata")
+
+
+async def _load_harvest_pairs(db: Any, st: Any, short_name: str, incoming) -> dict:
+    """Pairs already decided by a sibling of this harvest. Read-only."""
+    queried = (await db.execute(
+        select(
+            StatutesStaging.extracted_section_number,
+            StatutesStaging.source_site,
+            StatutesStaging.parsing_metadata,
+        ).where(StatutesStaging.extracted_short_name == short_name)
+    )).all()
+    metas = [st.parsing_metadata]
+    for number, source_site, metadata in queried:
+        if source_site != PAKISTANCODE_SOURCE and not (
+            isinstance(metadata, dict) and metadata.get("source_name") == PAKISTANCODE_SOURCE
+        ):
+            continue
+        if harvest_token_from_metadata(metadata) != incoming:
+            continue
+        metas.append(metadata)
+    found: dict = {}
+    conflicted = set()
+    for metadata in metas:
+        for key, entry in _pair_map(metadata).items():
+            if not isinstance(key, str) or not isinstance(entry, dict):
+                continue
+            if key in found and found[key] != entry:
+                conflicted.add(key)
+            else:
+                found.setdefault(key, entry)
+    for key in conflicted:
+        found.pop(key, None)
+    return found
+
+
+async def _record_identity_succession(
+    db: Any, st: Any, short_name: str, incoming, stored_max, mode: Optional[str],
+) -> None:
+    """Decide new-key → old-row pairs once, on the first publish of this harvest.
+
+    The decision is stored on ``st`` only. A later sibling copies its own entry
+    when it publishes. A rolled-back first publish rolls the decision back with
+    it. An incomplete clock and a stale clock do not decide.
+    """
+    if incoming is None or stored_max is None:
+        return
+    if stored_max == incoming:
+        if _pair_map(getattr(st, "parsing_metadata", None)):
+            _stamp_own_pair(st, _pair_map(st.parsing_metadata))
+            return
+        recorded = await _load_harvest_pairs(db, st, short_name, incoming)
+        if recorded:
+            _stamp_own_pair(st, recorded)
+        return
+    if not (stored_max < incoming):
+        return
+    act_keys = act_keys_from_metadata(getattr(st, "parsing_metadata", None))
+    if act_keys is None:
+        return
+    masters = (await db.execute(
+        select(StatutesMaster).where(
+            StatutesMaster.short_name == short_name,
+            StatutesMaster.source_site == PAKISTANCODE_SOURCE,
+        )
+    )).scalars().all()
+    stored_exact = {row.section_number for row in masters if isinstance(row.section_number, str) and row.section_number}
+    stored_idents = {schedule_key_identity(key, mode=mode) for key in stored_exact}
+    new_keys = []
+    for key in act_keys:
+        if key in stored_exact or schedule_key_identity(key, mode=mode) in stored_idents:
+            continue
+        new_keys.append(key)
+    if not new_keys:
+        return
+    live_rows = [
+        row for row in masters
+        if row.is_repealed is False and isinstance(row.section_number, str) and row.section_number
+    ]
+    absent = set(keys_to_retire(
+        (row.section_number for row in live_rows), act_keys, "", label_mode=mode,
+    ))
+    prior = {
+        row.section_number: row.section_text or ""
+        for row in live_rows if row.section_number in absent
+    }
+    if not prior:
+        return
+    siblings = (await db.execute(
+        select(StatutesStaging).where(StatutesStaging.extracted_short_name == short_name)
+    )).scalars().all()
+    if st not in siblings:
+        siblings = list(siblings) + [st]
+    texts: dict = {}
+    blocked = set()
+    for row in siblings:
+        if not _staging_is_pakistancode(row):
+            continue
+        if harvest_token_from_metadata(getattr(row, "parsing_metadata", None)) != incoming:
+            continue
+        key = (row.extracted_section_number or "").strip()
+        if key not in new_keys:
+            continue
+        text = _staging_body(row)
+        if key in texts and texts[key] != text:
+            base = pairing_base(key, label_mode=mode)
+            if base is not None:
+                blocked.add(base)
+        else:
+            texts[key] = text
+    for key in new_keys:
+        if key in texts:
+            continue
+        base = pairing_base(key, label_mode=mode)
+        if base is not None:
+            blocked.add(base)
+    live = []
+    for key, text in texts.items():
+        base = pairing_base(key, label_mode=mode)
+        if base is None or base in blocked:
+            continue
+        live.append((key, text))
+    if not live:
+        return
+    by_old = {row.section_number: row for row in live_rows}
+    pairs = {}
+    for new_key, old_key in pair_renumbered_identities(prior, live, label_mode=mode).items():
+        old = by_old.get(old_key)
+        if old is None:
+            continue
+        pairs[new_key] = {
+            "identity_successor_of": str(old.id),
+            "identity_predecessor_key": old_key,
+        }
+    _stamp_own_pair(st, pairs)
+
+
+async def _identity_predecessor(db: Any, st: Any, short_name: str, section: str, incoming, mode):
+    """The live-or-retired row this staging key continues, when every check holds."""
+    meta = getattr(st, "parsing_metadata", None)
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("identity_successor_of")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        old_id = uuid.UUID(raw)
+    except ValueError:
+        return None
+    old = (await db.execute(
+        select(StatutesMaster).where(StatutesMaster.id == old_id).with_for_update()
+    )).scalars().first()
+    if old is None or old.short_name != short_name or old.source_site != PAKISTANCODE_SOURCE:
+        return None
+    if not isinstance(old.section_number, str) or not old.section_number:
+        return None
+    act_keys = act_keys_from_metadata(meta)
+    if act_keys is None:
+        return None
+    absent = set(keys_to_retire([old.section_number], act_keys, "", label_mode=mode))
+    if old.section_number not in absent:
+        return None
+    if old.harvest_at is not None and (incoming is None or old.harvest_at > incoming):
+        return None
+    return old
+
+
+async def _attach_successor(
+    db: Any, st: Any, source: Any, existing, section: str, body: str, short_name: Optional[str], incoming,
+) -> StatutePublication:
+    """Rename the paired row onto ``section`` and amend it through the version note."""
+    changed = (existing.section_text or "") != (body or "")
+    meta = st.parsing_metadata if isinstance(st.parsing_metadata, dict) else {}
+    predecessor_key = meta.get("identity_predecessor_key")
+    if not isinstance(predecessor_key, str) or not predecessor_key:
+        predecessor_key = existing.section_number
+    if changed:
+        prior_version = await _stored_section_version(db, existing.id)
+        noted = note_section_version(
+            st.parsing_metadata, existing.section_text or "", body or "", prior_version=prior_version,
+        )
+        noted["identity_predecessor_key"] = predecessor_key
+        st.parsing_metadata = noted
+        flag_modified(st, "parsing_metadata")
+        existing.section_text = body
+        if st.extracted_section_title:
+            existing.section_title = st.extracted_section_title
+    existing.section_number = section
+    existing.is_repealed = omission_placeholder_status(body) is not None
+    if incoming is not None:
+        existing.harvest_at = incoming
+    await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)
+    await db.flush()
+    if changed:
+        await withdraw_statute_embeddings(db, existing.id)
+    return StatutePublication(existing.id, True, changed, False)
+
+
 async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
     """Project one statute staging row. ``stale`` means a newer harvest already won the act."""
     act = (st.extracted_act_name or "").strip()
@@ -454,10 +732,23 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
         existing = matches[0] if matches else None
     if pakistancode and snapshot_is_incomplete(null_rows):
         return await _unknown_history_row(db, existing, body, incoming, stored_max)
+    mode = _roman_label_mode(st) if pakistancode else None
+    if pakistancode:
+        await _record_identity_succession(db, st, short_name, incoming, stored_max, mode)
+    if existing is None and pakistancode:
+        predecessor = await _identity_predecessor(db, st, short_name, section, incoming, mode)
+        if predecessor is not None:
+            return await _attach_successor(
+                db, st, source, predecessor, section, body, short_name, incoming,
+            )
     if existing is not None:
         changed = (existing.section_text or "") != (body or "")
         if changed:
-            st.parsing_metadata = note_section_version(st.parsing_metadata, existing.section_text or "", body or "")
+            prior_version = await _stored_section_version(db, existing.id) if pakistancode else None
+            st.parsing_metadata = note_section_version(
+                st.parsing_metadata, existing.section_text or "", body or "",
+                prior_version=prior_version,
+            )
             flag_modified(st, "parsing_metadata")
             existing.section_text = body
             if st.extracted_section_title:
@@ -472,8 +763,14 @@ async def publish_statute(db: Any, st: Any, source: Any) -> StatutePublication:
             existing.harvest_at = incoming
         await _retire_absent_pakistancode_keys(db, st, source, short_name, section, incoming)
         await db.flush()
+        if changed and pakistancode:
+            await withdraw_statute_embeddings(db, existing.id)
         return StatutePublication(existing.id, True, changed, False)
     statute_id = statute_publication_id(key)
+    # A renamed row keeps the id of its former key. Inserting that key again
+    # must not reuse the occupied primary key.
+    if await retrieval_row_exists(db, STATUTE_MASTER, statute_id):
+        statute_id = uuid.uuid4()
     db.add(StatutesMaster(
         id=statute_id,
         statute_name=act,

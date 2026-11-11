@@ -663,14 +663,25 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
             return None
 
         async def execute(self, statement, params=None):
+            # Q03 reads sibling staging, the stored section_version, and every master
+            # row before it attaches, then withdraws embeddings for a retired row and
+            # for the amended text. The old mock answered by call number (five executes).
             self.calls += 1
-            if self.calls in (1, 2):
+            sql = str(statement).lower()
+            kind = type(statement).__name__.lower()
+            if "pg_advisory_xact_lock" in sql:
                 return _Result([])
-            if self.calls == 3:
+            if kind in {"update", "delete"} or sql.startswith("update") or sql.startswith("delete"):
+                return _Result([])
+            if "count(" in sql:
                 return _Result(scalar=(2, self.current.harvest_at, 0))
-            if self.calls == 4:
+            if "statutes_staging" in sql:
+                return _Result([])
+            if "limit" in sql:
                 return _Result([self.current])
-            return _Result([self.current, self.deleted])
+            if "statutes_master" in sql:
+                return _Result([self.current, self.deleted])
+            return _Result([])
 
     older = datetime(2026, 11, 1, tzinfo=timezone.utc)
     newer = datetime(2026, 11, 2, tzinfo=timezone.utc)
@@ -703,7 +714,11 @@ def test_publish_statute_amends_the_same_row_and_retires_only_absent_keys():
     assert deleted.is_repealed is True and deleted.harvest_at == newer and deleted.section_number == "9"
     assert staging.parsing_metadata["section_version"] == 2
     assert staging.parsing_metadata["act_keys"] == ["1", "2"]
-    assert db.calls == 5
+    assert "identity_successor_of" not in staging.parsing_metadata
+    # Was ``db.calls == 5``: that counted the pre-Q03 lock, clock, attach, and retire
+    # selects only. Pairing, the version read, and the two embedding withdrawals add
+    # eleven statements (16 in total).
+    assert db.calls == 16
 
 
 def test_publish_statute_refuses_a_stale_harvest_without_clearing_repeal():
