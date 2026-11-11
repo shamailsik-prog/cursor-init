@@ -216,6 +216,8 @@ ANNEX_A_ROUTINES = {
     "corpus_publication_finish(uuid,jsonb)": False,
     "corpus_research_term_clear()": False,
     "corpus_research_term_apply(integer,jsonb,jsonb)": False,
+    # 008 lists 007's trigger function. EXECUTE stays revoked from PUBLIC (public_execute false).
+    "enforce_embedding_classification()": False,
 }
 
 
@@ -237,7 +239,7 @@ def test_f19_contract_routines_list_every_annex_a_function_and_who_may_execute_i
     )
     assert len(listed) == len(ANNEX_A_ROUTINES)
     assert {name: public for name, public, _held in listed} == ANNEX_A_ROUTINES
-    assert defined == set(ANNEX_A_ROUTINES), "every routine 001 and 003 define is listed, and nothing else"
+    assert defined == set(ANNEX_A_ROUTINES), "every Annex A routine is listed, and nothing else"
     assert [name for name, public, held in listed if public != held] == [], "public_execute is the DDL's PUBLIC grant"
     grants = admin_fetch(
         corpus_db,

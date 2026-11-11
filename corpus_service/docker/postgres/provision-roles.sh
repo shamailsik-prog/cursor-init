@@ -139,6 +139,21 @@ BEGIN
      OR pg_catalog.to_regprocedure('public.corpus_contract_routines()') IS NULL THEN
     RAISE EXCEPTION 'Annex A is not applied: run 15-apply-annex-a.sh first';
   END IF;
+  -- FA-DATA-002-DEPLOY-001: without 007's function and an enabled corpus_embeddings_monotonic trigger,
+  -- the owner check and the EXECUTE reset below never see enforce_embedding_classification().
+  IF pg_catalog.to_regprocedure('public.enforce_embedding_classification()') IS NULL
+     OR NOT EXISTS (
+          SELECT 1
+            FROM pg_catalog.pg_trigger t
+            JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public'
+             AND c.relname = 'corpus_embeddings'
+             AND t.tgname = 'corpus_embeddings_monotonic'
+             AND NOT t.tgisinternal
+             AND t.tgenabled = 'O') THEN
+    RAISE EXCEPTION 'enforce_embedding_classification() or trigger corpus_embeddings_monotonic is absent or disabled: re-apply 007/008 with 15-apply-annex-a.sh';
+  END IF;
   -- 004 creates the draft gate's reader role (#51 R1 D-3); the schema grant below names it.
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'corpus_authority_reader') THEN
     RAISE EXCEPTION 'Annex A 004 is not applied (no corpus_authority_reader): run 15-apply-annex-a.sh first';

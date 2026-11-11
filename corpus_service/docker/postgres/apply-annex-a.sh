@@ -2,8 +2,10 @@
 # Annex A corpus contract (audit F19) for the corpus service's own database. Idempotent.
 #
 # Applies postgres/ddl/001_corpus_contract.sql, 003_corpus_publication.sql, 004_authority_read_views.sql
-# (audit F05: the reader's promoted-only authority views) and 005_research_reader.sql (audit FA-D5-003 and
-# FA-DATA-003: the research reader role and views, and corpus_reader's narrowed grants), in that order and in
+# (audit F05: the reader's promoted-only authority views), 005_research_reader.sql (audit FA-D5-003 and
+# FA-DATA-003: the research reader role and views, and corpus_reader's narrowed grants),
+# 006_research_terms.sql, 007_classification_coverage.sql (FA-DATA-002) and 008_classification_inventory.sql.
+# The order is 001, 003, 004, 005, 006, 007, 008. 008 must follow 007. Applied in that order and in
 # one transaction, as the bootstrap superuser over the container's local socket (peer, map
 # container_admin). The superuser therefore owns every Annex A relation and function; neither
 # application role can redefine, disable or bypass them (docker/postgres/provision-roles.sh keeps it
@@ -25,7 +27,7 @@ apply_annex_a() (
   set -euo pipefail
   : "${POSTGRES_USER:?POSTGRES_USER required}"
   ddl=/etc/postgresql/corpus/ddl
-  for f in 001_corpus_contract.sql 003_corpus_publication.sql 004_authority_read_views.sql 005_research_reader.sql 006_research_terms.sql; do
+  for f in 001_corpus_contract.sql 003_corpus_publication.sql 004_authority_read_views.sql 005_research_reader.sql 006_research_terms.sql 007_classification_coverage.sql 008_classification_inventory.sql; do
     [[ -r $ddl/$f ]] || { echo "apply-annex-a: $ddl/$f is not readable (is ../postgres/ddl mounted?)" >&2; exit 1; }
   done
   # A re-run's "already exists, skipping" NOTICEs are expected; warnings and errors still print.
@@ -33,8 +35,9 @@ apply_annex_a() (
     --username "$POSTGRES_USER" --dbname "${POSTGRES_DB:-legal_scraper}" \
     -c "SET client_min_messages = warning" \
     -f "$ddl/001_corpus_contract.sql" -f "$ddl/003_corpus_publication.sql" -f "$ddl/004_authority_read_views.sql" \
-    -f "$ddl/005_research_reader.sql" -f "$ddl/006_research_terms.sql"
-  echo "apply-annex-a: Annex A (001, 003, 004, 005, 006) applied to ${POSTGRES_DB:-legal_scraper}"
+    -f "$ddl/005_research_reader.sql" -f "$ddl/006_research_terms.sql" \
+    -f "$ddl/007_classification_coverage.sql" -f "$ddl/008_classification_inventory.sql"
+  echo "apply-annex-a: Annex A (001, 003, 004, 005, 006, 007, 008) applied to ${POSTGRES_DB:-legal_scraper}"
 )
 
 apply_annex_a
