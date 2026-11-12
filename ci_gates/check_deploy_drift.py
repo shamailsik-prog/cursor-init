@@ -25,6 +25,8 @@ CONTRACT_ENV_KEYS = (
 _MEM = re.compile(r"^([0-9]+)(MiB|Mi|M)$")
 _LOCATION = re.compile(r"/locations/([^/]+)/")
 _MISSING = object()
+# Missing file or a real JSON parse error. Distinct from json.loads("null"), which is None.
+_BAD_JSON = object()
 
 
 class Report:
@@ -94,12 +96,12 @@ def _read_bytes(snapshot: Path, rel: str, report: Report, hashes: list[tuple[str
     return data
 
 
-def _parse_json(data: bytes, rel: str, report: Report) -> object | None:
+def _parse_json(data: bytes, rel: str, report: Report) -> object:
     try:
         return json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         report.fail("parse", rel, "JSON parse error")
-        return None
+        return _BAD_JSON
 
 
 def _roles_for_member(policy: object, member: str, report: Report, check: str, subject: str) -> set[str] | None:
@@ -433,19 +435,19 @@ def compare(snapshot: Path, manifest: dict, profile: str, manifest_sha: str, pro
         report.fail("manifest", profile, "field missing: functions")
         return _emit(manifest_sha, profile, project_id, hashes, None, report)
     sa_email = runtime_service_account_email(manifest, profile)
-    parsed: dict[str, object | None] = {}
+    parsed: dict[str, object] = {}
     commit_line: str | None = None
     for rel in _expected_rels(functions, queues):
         data = _read_bytes(snapshot, rel, report, hashes)
         if data is None:
-            parsed[rel] = None
+            parsed[rel] = _BAD_JSON
             continue
         if rel == "provenance.txt":
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 report.fail("provenance", "provenance.txt", "unreadable")
-                parsed[rel] = None
+                parsed[rel] = _BAD_JSON
                 continue
             for line in text.splitlines():
                 if line.startswith("commit:"):
@@ -458,41 +460,41 @@ def compare(snapshot: Path, manifest: dict, profile: str, manifest_sha: str, pro
             parsed[rel] = text
             continue
         parsed[rel] = _parse_json(data, rel, report)
-    listing = parsed.get("functions-list.json")
-    if listing is not None:
+    listing = parsed["functions-list.json"]
+    if listing is not _BAD_JSON:
         _check_inventory(listing, functions, report)
     for fn in functions:
         if not isinstance(fn, dict) or not isinstance(fn.get("name"), str):
             report.fail("inventory", "function", "field missing: name")
             continue
         rel = f"functions/{fn['name']}.json"
-        doc = parsed.get(rel)
-        if doc is None:
+        doc = parsed[rel]
+        if doc is _BAD_JSON:
             if (snapshot / rel).is_file():
                 continue
             report.fail("inventory", fn["name"], f"file missing: {rel}")
             continue
         _check_function(doc, fn, manifest, profile, sa_email, report)
-    iam = parsed.get("iam-policy.json")
-    if iam is not None:
+    iam = parsed["iam-policy.json"]
+    if iam is not _BAD_JSON:
         _check_iam(iam, manifest, sa_email, report)
-    act = parsed.get("runtime-sa-iam-policy.json")
-    if act is not None:
+    act = parsed["runtime-sa-iam-policy.json"]
+    if act is not _BAD_JSON:
         _check_act_as(act, sa_email, report)
-    queues_list = parsed.get("queues-list.json")
-    if queues_list is not None and not isinstance(queues_list, list):
+    queues_list = parsed["queues-list.json"]
+    if queues_list is not _BAD_JSON and not isinstance(queues_list, list):
         report.fail("parse", "queues-list.json", "field wrong type: queues-list.json")
     for queue in queues:
         if not isinstance(queue, dict) or not isinstance(queue.get("function"), str):
             report.fail("queue", "queue", "field missing: function")
             continue
         rel = f"queue-{queue['function']}.json"
-        doc = parsed.get(rel)
-        if doc is None:
+        doc = parsed[rel]
+        if doc is _BAD_JSON:
             continue
         _check_queue(doc, queue, report)
-    services = parsed.get("services-enabled.json")
-    if services is not None:
+    services = parsed["services-enabled.json"]
+    if services is not _BAD_JSON:
         _check_apis(services, manifest, report)
     return _emit(manifest_sha, profile, project_id, hashes, commit_line, report)
 

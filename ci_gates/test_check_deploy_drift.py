@@ -296,6 +296,38 @@ class DriftCases(unittest.TestCase):
         (self.snap / "iam-policy.json").write_text("{", encoding="utf-8")
         self.assert_fail("FAIL parse iam-policy.json: JSON parse error")
 
+    def test_all_json_null(self) -> None:
+        json_files = [path for path in self.snap.rglob("*.json") if path.is_file()]
+        self.assertEqual(len(json_files), 28)
+        for path in json_files:
+            path.write_text("null\n", encoding="utf-8")
+        code, out, err = self.run_snap()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("RESULT: FAIL", out)
+        self.assertNotIn("RESULT: PASS", out)
+        fail_lines = [line for line in out.splitlines() if line.startswith("FAIL ")]
+        self.assertTrue(any("wrong type" in line for line in fail_lines), out)
+        self.assertGreater(len(fail_lines), 1, out)
+        for check in ("inventory", "iam", "queue", "apis"):
+            self.assertTrue(any(line.startswith(f"FAIL {check} ") for line in fail_lines), out)
+        self.assertNotIn(PLANTED, out)
+        self.assertNotIn(PLANTED, err)
+
+    def test_iam_policy_json_null(self) -> None:
+        (self.snap / "iam-policy.json").write_text("null\n", encoding="utf-8")
+        code, out, err = self.run_snap()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("RESULT: FAIL", out)
+        self.assertNotIn("RESULT: PASS", out)
+        self.assertTrue(
+            any(line.startswith("FAIL iam ") and "wrong type" in line for line in out.splitlines()),
+            out,
+        )
+        self.assertIn("PASS provenance provenance.txt:", out)
+        self.assertIn("PASS inventory ", out)
+        self.assertNotIn(PLANTED, out)
+        self.assertNotIn(PLANTED, err)
+
     def test_ingress_field_removed(self) -> None:
         doc = self.load_fn("health")
         del doc["serviceConfig"]["ingressSettings"]
