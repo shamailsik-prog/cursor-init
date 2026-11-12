@@ -102,6 +102,8 @@ function buildBaseTree(): string {
     "functions/package-lock.json",
     "playwright.config.ts",
     "tests/e2e",
+    // Check [20] runs ci_gates/test_check_deploy_drift.py, which reads these synthetic fixtures.
+    "tests/fixtures/deploy-drift",
     "scripts/e2e-console-auth.sh",
     // Check [16] compares the runner, this ledger and the frontend-real test file names.
     "docs/audits/lattice-focused-ops-vitest-bundle.md",

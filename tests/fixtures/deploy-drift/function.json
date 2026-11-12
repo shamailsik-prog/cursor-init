@@ -1,0 +1,23 @@
+{
+  "name": "projects/example-project/locations/asia-south1/functions/exampleFunction",
+  "environment": "GEN_2",
+  "state": "ACTIVE",
+  "buildConfig": {
+    "runtime": "nodejs22",
+    "entryPoint": "exampleFunction"
+  },
+  "serviceConfig": {
+    "serviceAccountEmail": "example-runtime",
+    "availableMemory": "256Mi",
+    "timeoutSeconds": 60,
+    "minInstanceCount": 0,
+    "maxInstanceCount": 2,
+    "maxInstanceRequestConcurrency": 1,
+    "ingressSettings": "ALLOW_INTERNAL_ONLY",
+    "environmentVariables": {
+      "SIKANDER_DEPLOY_PROFILE": "production",
+      "SIKANDER_INGRESS_SETTINGS": "ALLOW_INTERNAL_AND_GCLB",
+      "TRUSTED_PROXY_HOPS": "1"
+    }
+  }
+}

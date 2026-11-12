@@ -1,0 +1,13 @@
+{
+  "name": "projects/example-project/locations/asia-south1/queues/exampleWorker",
+  "state": "RUNNING",
+  "rateLimits": {
+    "maxDispatchesPerSecond": 5,
+    "maxConcurrentDispatches": 10
+  },
+  "retryConfig": {
+    "maxAttempts": 3,
+    "minBackoff": "10s",
+    "maxBackoff": "60s"
+  }
+}

@@ -18,7 +18,7 @@
 # application tables it owns (pre-F30 installs created them as the superuser) move to
 # MIGRATE_DB_USER.
 #
-# Annex A corpus contract (audit F19, PR 2b). 15-apply-annex-a.sh applies postgres/ddl 001 + 003 as
+# Annex A corpus contract (audit F19, PR 2b). 15-apply-annex-a.sh applies postgres/ddl 001, 003-008 as
 # the bootstrap superuser before this script runs, which refuses to run without it. Its relations
 # (public.corpus_contract_relations()) and routines (public.corpus_contract_routines()) stay owned by
 # the superuser: the relations are left out of the ownership move and of the runtime role's DML grants.

@@ -80,6 +80,8 @@ python3 ci_gates/check_next_ai_egress.py || fail=1
 
 echo "[20] deploy-contract guard (audit F32: manifest, firebase.json, indexes TTL, alerts, Next maxDuration, terraform drift)"
 python3 ci_gates/check_deploy_contract.py || fail=1
+python3 ci_gates/test_check_deploy_contract.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_deploy_contract.py"; fail=1; }
+python3 ci_gates/test_check_deploy_drift.py >/dev/null 2>&1 || { echo "FAIL: ci_gates/test_check_deploy_drift.py"; fail=1; }
 
 echo "[21] p1-transport-import guard (audit F34 R1-003: only the granted send sites may import a P1 transport)"
 python3 ci_gates/check_p1_transport_imports.py || fail=1
