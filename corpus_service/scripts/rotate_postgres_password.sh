@@ -23,8 +23,8 @@
 # server options rather than stored in PGDATA. Then, over the container's local socket as OS user
 # postgres (peer auth; no old password needed, nothing on argv):
 #   - re-hashes the bootstrap superuser's password as SCRAM from the postgres_password secret file;
-#   - runs docker/postgres/apply-annex-a.sh: applies the Annex A corpus contract (postgres/ddl 001 +
-#     003, audit F19) as the superuser, so a volume created before F19 gets it and an existing one is
+#   - runs docker/postgres/apply-annex-a.sh: applies the Annex A corpus contract (postgres/ddl 001, 003-008,
+#     audit F19) as the superuser, so a volume created before F19 gets it and an existing one is
 #     brought up to date (idempotent);
 #   - runs docker/postgres/provision-roles.sh: creates or updates the app and migration roles,
 #     moves existing application tables to the migration role and grants the app role DML only;

@@ -198,7 +198,7 @@ as_role_local() {
     psql -U "$POSTGRES_USER" -d legal_scraper -v ON_ERROR_STOP=1 -qtA -c "SET ROLE $1" -c "$2"
 }
 
-# annex_a_checks PREFIX: Annex A is applied (001 + 003 by 15-apply-annex-a.sh) and owned by the
+# annex_a_checks PREFIX: Annex A is applied (001, 003-008 by 15-apply-annex-a.sh) and owned by the
 # bootstrap superuser; neither application role owns or holds anything of it (relations, their
 # sequences, and EXECUTE on the routines the DDL keeps from PUBLIC), nor does corpus_clients or PUBLIC;
 # the runtime role's only corpus_* membership is corpus_writer WITH INHERIT FALSE, SET TRUE (D14, D25;

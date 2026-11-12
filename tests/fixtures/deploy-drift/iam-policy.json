@@ -1,0 +1,10 @@
+{
+  "bindings": [
+    {
+      "role": "roles/datastore.user",
+      "members": ["serviceAccount:example-runtime"]
+    }
+  ],
+  "etag": "synthetic",
+  "version": 1
+}

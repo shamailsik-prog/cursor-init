@@ -1,0 +1,10 @@
+[
+  {
+    "name": "projects/example-project/services/run.googleapis.com",
+    "config": {
+      "name": "run.googleapis.com",
+      "title": "synthetic"
+    },
+    "state": "ENABLED"
+  }
+]

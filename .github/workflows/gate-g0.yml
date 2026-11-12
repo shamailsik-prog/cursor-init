@@ -58,9 +58,9 @@ jobs:
         run: |
           set -uo pipefail
           # What each gated job executes, and so depends on:
-          # - postgres-ddl: npm ci, then `npm run test:postgres-ddl` (tests/postgres.ddl.integration.test.ts and
-          #   tests/probe-fa-data-001.regression.test.ts under the root vitest config and its setup files, reading
-          #   postgres/ddl) and `npm run probe:fa-data-001` (docs/audit/probes/probe_fa_data_001.mjs).
+          # - postgres-ddl: npm ci, then `npm run test:postgres-ddl` (tests/postgres.ddl.integration.test.ts,
+          #   tests/probe-fa-data-001.regression.test.ts, and the deploy-path suite, which bind-mounts init.sql,
+          #   apply-annex-a.sh and provision-roles.sh, reading postgres/ddl) and `npm run probe:fa-data-001` (docs/audit/probes/probe_fa_data_001.mjs).
           # - corpus-service: `python -m pytest corpus_service/tests` with corpus_service/requirements-test.txt; the
           #   Annex A suites read postgres/ddl and tests/fixtures/corpus.
           # - corpus-runtime (audit F31): `bash corpus_service/tests/e2e/runtime_smoke.sh`, a venv from
@@ -68,7 +68,7 @@ jobs:
           # - mutation-documents: `npm run mutation:documents` (Stryker on platform/documents with the F03 unit
           #   suites in vitest.stryker.documents.config.ts; those suites drive the documents route and uploadDocument).
           # All of them also depend on this workflow file.
-          postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|tests/fa-data-002\.classification-coverage\.pg\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
+          postgres_ddl_re='^(postgres/|docs/audit/probes/|tests/setup/|tests/postgres\.ddl\.integration\.test\.ts$|tests/probe-fa-data-001\.regression\.test\.ts$|tests/fa-data-002\.classification-coverage\.pg\.test\.ts$|vitest\.config\.ts$|tsconfig\.json$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$|corpus_service/docker/postgres/|corpus_service/init\.sql$|tests/fa-data-002-deploy\.provisioned\.pg\.test\.ts$)'
           corpus_service_re='^(corpus_service/|postgres/|tests/fixtures/corpus/|\.github/workflows/gate-g0\.yml$)'
           documents_re='^(platform/documents/|platform/http/validation\.ts$|app/api/d1/documents/|services/d1-6/|tests/f03-document-|tests/helpers/s3-document-vault\.ts$|tests/setup/|stryker\.config\.mjs$|stryker\.documents\.config\.mjs$|vitest\.config\.ts$|vitest\.stryker\.documents\.config\.ts$|package\.json$|package-lock\.json$|\.github/workflows/gate-g0\.yml$)'
           if [ "$EVENT_NAME" != "pull_request" ]; then
