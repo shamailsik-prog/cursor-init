@@ -21,18 +21,18 @@ import {
 } from "@/platform/p5/permissionDecision"
 import type { Classification } from "@/platform/p1/types"
 
-/** Actions that today fall through the final allow, proved by the caller inventory and the suites that must stay green. */
+/** Actions that fall through the generic branch, proved by the caller inventory and the suites that must stay green. */
 export const GENERIC_MATRIX_ACTIONS = [
   "research",
   "draft",
-  "read",
-  "read_matter",
-  "read_firm",
   "list_matters",
   "normalise_case_number",
   "committee_brain",
   "committee_brain_read",
 ] as const
+
+/** Retired in Q04. Unregistered: unknown-action for a role, no-user for a null caller. */
+export const RETIRED_MATRIX_ACTIONS = ["read", "read_matter", "read_firm"] as const
 
 /** Strings the acceptance checklist requires to be denied. None is a known action. */
 export const UNKNOWN_MATRIX_ACTIONS = [

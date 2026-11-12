@@ -41,21 +41,21 @@ type Case = {
 
 const OWN = { firmId: "firmA", classification: "confidential" }
 const CASES: Case[] = [
-  { name: "member associate reads a matter", role: "associate", action: "read_matter", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
-  { name: "non-member partner", role: "partner", action: "read_matter", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
-  { name: "another firm's matter", role: "partner", action: "read_matter", matter: { firmId: "firmB", classification: "public" }, member: true, expected: { allow: false, reason: "cross-firm" } },
-  { name: "a missing matter", role: "partner", action: "read_matter", matter: "missing", expected: { allow: false, reason: "cross-firm" } },
-  { name: "clearance below the matter", role: "associate", clearance: "internal", action: "read_matter", matter: { firmId: "firmA", classification: "privileged" }, member: true, expected: { allow: false, reason: "clearance" } },
-  { name: "an unreadable classification is refused even at the top clearance", role: "partner", clearance: "privileged-restricted", action: "read_matter", matter: { firmId: "firmA", classification: "bogus" }, member: true, expected: { allow: false, reason: "clearance" } },
-  { name: "an Object.prototype key as classification", role: "partner", clearance: "privileged-restricted", action: "read_matter", matter: { firmId: "firmA", classification: "constructor" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "member associate committee_brain_read on a matter", role: "associate", action: "committee_brain_read", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "non-member partner committee_brain_read", role: "partner", action: "committee_brain_read", matter: OWN, member: false, expected: { allow: false, reason: "not-member" } },
+  { name: "another firm's matter committee_brain_read", role: "partner", action: "committee_brain_read", matter: { firmId: "firmB", classification: "public" }, member: true, expected: { allow: false, reason: "cross-firm" } },
+  { name: "a missing matter committee_brain_read", role: "partner", action: "committee_brain_read", matter: "missing", expected: { allow: false, reason: "cross-firm" } },
+  { name: "clearance below the matter committee_brain_read", role: "associate", clearance: "internal", action: "committee_brain_read", matter: { firmId: "firmA", classification: "privileged" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "an unreadable classification is refused even at the top clearance committee_brain_read", role: "partner", clearance: "privileged-restricted", action: "committee_brain_read", matter: { firmId: "firmA", classification: "bogus" }, member: true, expected: { allow: false, reason: "clearance" } },
+  { name: "an Object.prototype key as classification committee_brain_read", role: "partner", clearance: "privileged-restricted", action: "committee_brain_read", matter: { firmId: "firmA", classification: "constructor" }, member: true, expected: { allow: false, reason: "clearance" } },
   { name: "intern drafting", role: "intern", action: "draft", expected: { allow: false, reason: "intern-channel-denied" } },
-  { name: "intern reading a matter", role: "intern", action: "read_matter", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
+  { name: "intern committee_brain_read on a matter", role: "intern", action: "committee_brain_read", matter: OWN, member: true, expected: { allow: true, reason: "ok" } },
   { name: "client research", role: "client", action: "research", matter: OWN, member: true, expected: { allow: false, reason: "client-channel-denied" } },
   { name: "client lists matters", role: "client", action: "list_matters", expected: { allow: true, reason: "client-own-matters" } },
   { name: "own_matters scope lists", role: "associate", action: "list_matters", scope: "own_matters", expected: { allow: true, reason: "client-own-matters" } },
   { name: "own_matters scope drafts", role: "associate", action: "draft", scope: "own_matters", expected: { allow: false, reason: "client-channel-denied" } },
   { name: "partner lists matters", role: "partner", action: "list_matters", expected: { allow: true, reason: "ok" } },
-  { name: "accounts reads a matter it is a member of", role: "accounts", action: "read_matter", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
+  { name: "accounts committee_brain_read on a matter it is a member of", role: "accounts", action: "committee_brain_read", matter: OWN, member: true, expected: { allow: false, reason: "accounts-register-only" } },
   { name: "accounts drafts", role: "accounts", action: "draft", expected: { allow: false, reason: "accounts-register-only" } },
   { name: "accounts reads the intimation register", role: "accounts", action: "intimation_register", expected: { allow: true, reason: "accounts-register" } },
   { name: "accounts records an entry on its firm's matter", role: "accounts", action: "record_accounts_entry", matter: OWN, member: false, expected: { allow: true, reason: "accounts-register" } },
@@ -138,7 +138,7 @@ describe("permission parity: decide == Next.js checkPermission == functions chec
   })
 
   it("no caller is no-user", () => {
-    expect(decide(null, "read_matter", undefined, false)).toEqual({ allow: false, reason: "no-user" })
-    expect(nextCheckPermission(newStore(), "ghost", "read_matter")).toEqual({ allow: false, reason: "no-user" })
+    expect(decide(null, "committee_brain_read", undefined, false)).toEqual({ allow: false, reason: "no-user" })
+    expect(nextCheckPermission(newStore(), "ghost", "committee_brain_read")).toEqual({ allow: false, reason: "no-user" })
   })
 })

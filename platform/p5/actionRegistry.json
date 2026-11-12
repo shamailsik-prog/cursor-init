@@ -7,27 +7,17 @@
   "genericActions": [
     "research",
     "draft",
-    "read",
-    "read_matter",
-    "read_firm",
     "list_matters",
     "normalise_case_number",
     "committee_brain",
     "committee_brain_read"
   ],
-  "accountsRegisterActionsAlsoOnGenericPath": [
-    "intimation_register",
-    "record_accounts_entry"
-  ],
+  "accountsRegisterActionsAlsoOnGenericPath": [],
   "tableActionsWithNoLiveCaller": [
     "intimation_register",
     "record_accounts_entry"
   ],
-  "genericActionsWithNoLiveCaller": [
-    "read",
-    "read_matter",
-    "read_firm"
-  ],
+  "genericActionsWithNoLiveCaller": [],
   "searchedWithNoCaller": [
     "ops",
     "scripts",
@@ -3188,9 +3178,9 @@
       "line": 46,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3199,9 +3189,9 @@
       "line": 52,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3210,9 +3200,9 @@
       "line": 64,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3221,9 +3211,9 @@
       "line": 73,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3232,9 +3222,9 @@
       "line": 79,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3243,9 +3233,9 @@
       "line": 83,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3254,9 +3244,9 @@
       "line": 118,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3265,9 +3255,9 @@
       "line": 128,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3276,9 +3266,9 @@
       "line": 138,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3287,9 +3277,9 @@
       "line": 147,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3298,9 +3288,9 @@
       "line": 162,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3309,9 +3299,9 @@
       "line": 74,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3320,9 +3310,9 @@
       "line": 93,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3331,9 +3321,9 @@
       "line": 96,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3342,9 +3332,9 @@
       "line": 107,
       "via": "test",
       "binding": "literal",
-      "action": "read_firm",
+      "action": "committee_brain_read",
       "actions": [
-        "read_firm"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3353,9 +3343,9 @@
       "line": 115,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3364,9 +3354,9 @@
       "line": 124,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3375,9 +3365,9 @@
       "line": 131,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3386,9 +3376,9 @@
       "line": 139,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3397,9 +3387,9 @@
       "line": 46,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3408,9 +3398,9 @@
       "line": 57,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3419,9 +3409,9 @@
       "line": 92,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3430,9 +3420,9 @@
       "line": 93,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3441,9 +3431,9 @@
       "line": 95,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3452,9 +3442,9 @@
       "line": 100,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3463,9 +3453,9 @@
       "line": 104,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3474,9 +3464,9 @@
       "line": 111,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3485,9 +3475,9 @@
       "line": 115,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3496,9 +3486,9 @@
       "line": 122,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3507,9 +3497,9 @@
       "line": 126,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3518,9 +3508,9 @@
       "line": 130,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3529,9 +3519,9 @@
       "line": 44,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3540,9 +3530,9 @@
       "line": 45,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3551,9 +3541,9 @@
       "line": 46,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3562,9 +3552,9 @@
       "line": 47,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3573,9 +3563,9 @@
       "line": 48,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3584,9 +3574,9 @@
       "line": 49,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3595,9 +3585,9 @@
       "line": 50,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3606,9 +3596,9 @@
       "line": 52,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3617,9 +3607,9 @@
       "line": 58,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3661,9 +3651,9 @@
       "line": 141,
       "via": "test",
       "binding": "literal",
-      "action": "read_matter",
+      "action": "committee_brain_read",
       "actions": [
-        "read_matter"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3672,9 +3662,273 @@
       "line": 142,
       "via": "test",
       "binding": "literal",
+      "action": "committee_brain_read",
+      "actions": [
+        "committee_brain_read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 57,
+      "via": "test",
+      "binding": "literal",
+      "action": "read",
+      "actions": [
+        "read"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 57,
+      "via": "test",
+      "binding": "literal",
+      "action": "read_firm",
+      "actions": [
+        "read_firm"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 57,
+      "via": "test",
+      "binding": "literal",
       "action": "read_matter",
       "actions": [
         "read_matter"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 85,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 86,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 87,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 88,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 89,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 90,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 91,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 92,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 93,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 94,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 95,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 96,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 97,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 98,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 99,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 100,
+      "via": "test",
+      "binding": "literal",
+      "action": "intimation_register",
+      "actions": [
+        "intimation_register"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 107,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 112,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 113,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 114,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
+      ],
+      "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
+    },
+    {
+      "file": "tests/p5.q04-register-rows.test.ts",
+      "line": 115,
+      "via": "test",
+      "binding": "literal",
+      "action": "record_accounts_entry",
+      "actions": [
+        "record_accounts_entry"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },
@@ -3694,9 +3948,9 @@
       "line": 58,
       "via": "test",
       "binding": "literal",
-      "action": "read",
+      "action": "committee_brain_read",
       "actions": [
-        "read"
+        "committee_brain_read"
       ],
       "note": "Existing suite. Not a production caller. The result must stay what it was at the base."
     },

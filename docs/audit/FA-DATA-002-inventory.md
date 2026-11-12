@@ -18,9 +18,9 @@ DELETE: no app role has DELETE on `judgment` or `corpus_embeddings`. The table o
 
 `declassify()` signature, grants, and `judgment_classification_declassify_audit` are unchanged. Embeddings do not follow a judgment declassify: they stay at the higher rank (fail closed). 005 already hides a vector whose rank is above 0.
 
-`corpus_contract_relations()` stays 37 and `corpus_contract_routines()` stays 14. `enforce_embedding_classification()` is not added to either inventory function. EXECUTE is revoked from PUBLIC and from every app role. The trigger still fires for a role that holds table DML.
+`corpus_contract_relations()` stays 37 and `corpus_contract_routines()` is now 15, because 008 adds `enforce_embedding_classification()` to `corpus_contract_routines()`. EXECUTE is revoked from PUBLIC and from every app role. The trigger still fires for a role that holds table DML.
 
-`corpus_service` pytest and `corpus_service/tests/e2e/lib.sh` apply a fixed Annex A list (`001`, `003`, `004`, `005`, `006`) and compare every public function with a hardcoded list of 14 routines. They do not apply 007, so the new function is invisible to `test_f19_contract_routines` and the e2e count. Adding 007 to that list without extending the hardcoded routines would fail those asserts. Those tests were not weakened.
+`corpus_service` pytest (`conftest.py`) and `corpus_service/tests/e2e/lib.sh` apply 001 and 003-008. `lib.sh:226` asserts 15. PR #242 (Q02b) made this change.
 
 ## Firestore client SDK
 
