@@ -13,6 +13,7 @@ import {
   MATRIX_CLEARANCES,
   MATRIX_MATTERS,
   MATRIX_ROLES,
+  RETIRED_MATRIX_ACTIONS,
   UNKNOWN_MATRIX_ACTIONS,
   evaluateMatrixRow,
   matrixKey,
@@ -20,6 +21,7 @@ import {
 import { checkPermission as functionsCheckPermission } from "../functions/src/p5/permission"
 import { checkPermission } from "@/platform/p5/checkPermission"
 import {
+  ACCOUNTS_REGISTER_ACTIONS,
   GENERIC_ACTIONS,
   decide,
   type DecisionCaller,
@@ -218,14 +220,20 @@ describe("base parity matrix", () => {
     rows: string[]
   }
 
-  it("matches bb8fcc3f on every known action and differs only on unknown actions", () => {
+  it("matches bb8fcc3f on known actions except the Q04 retired and non-accounts register cells", () => {
     expect(fixture.base).toBe(MATRIX_BASE)
     expect(fixture.rows).toHaveLength(fixture.knownCount + fixture.unknownCount)
     const base = new Map(fixture.rows.map((row) => [row.split("\t").slice(0, 4).join("\t"), row.split("\t").slice(4).join("\t")]))
     const knownDiff: string[] = []
+    const retiredDiff: string[] = []
+    const registerNonAccountsDiff: string[] = []
+    const registerAccountsDiff: string[] = []
+    const registerByAction: Record<string, number> = {}
     const unknownDiff: string[] = []
     let unknownSame = 0
-    const check = (actions: readonly string[], unknown: boolean) => {
+    const registerActions = [...ACCOUNTS_REGISTER_ACTIONS]
+    const knownWithoutRegister = KNOWN_MATRIX_ACTIONS.filter((action) => !ACCOUNTS_REGISTER_ACTIONS.has(action))
+    const check = (actions: readonly string[], bucket: "known" | "retired" | "register" | "unknown") => {
       for (const action of actions) {
         for (const role of MATRIX_ROLES) {
           for (const matter of MATRIX_MATTERS) {
@@ -235,19 +243,59 @@ describe("base parity matrix", () => {
               const head = `${decision.allow ? "allow" : "deny"}\t${decision.reason}`
               const previous = base.get(key)
               expect(previous, key).toBeDefined()
-              if (previous !== head) {
-                ;(unknown ? unknownDiff : knownDiff).push(`${key} base=${previous} head=${head}`)
-              } else if (unknown) unknownSame++
-              if (unknown && role !== null) expect(decision).toEqual({ allow: false, reason: "unknown-action" })
-              if (unknown && role === null) expect(decision).toEqual({ allow: false, reason: "no-user" })
+              const changed = previous !== head
+              if (bucket === "known" && changed) knownDiff.push(`${key} base=${previous} head=${head}`)
+              if (bucket === "retired" && changed) {
+                retiredDiff.push(`${key} base=${previous} head=${head}`)
+                if (role !== null) expect(decision).toEqual({ allow: false, reason: "unknown-action" })
+                if (role === null) expect(decision).toEqual({ allow: false, reason: "no-user" })
+              }
+              if (bucket === "register" && changed) {
+                expect(decision.allow, key).toBe(false)
+                if (role === "accounts") registerAccountsDiff.push(`${key} base=${previous} head=${head}`)
+                else {
+                  registerNonAccountsDiff.push(`${key} base=${previous} head=${head}`)
+                  registerByAction[action] = (registerByAction[action] ?? 0) + 1
+                }
+              }
+              if (bucket === "unknown" && changed) unknownDiff.push(`${key} base=${previous} head=${head}`)
+              else if (bucket === "unknown") unknownSame++
+              if (bucket === "unknown" && role !== null) expect(decision).toEqual({ allow: false, reason: "unknown-action" })
+              if (bucket === "unknown" && role === null) expect(decision).toEqual({ allow: false, reason: "no-user" })
             }
           }
         }
       }
     }
-    check(KNOWN_MATRIX_ACTIONS, false)
-    check(UNKNOWN_MATRIX_ACTIONS, true)
+    check(knownWithoutRegister, "known")
+    check(RETIRED_MATRIX_ACTIONS, "retired")
+    check(registerActions, "register")
+    check(UNKNOWN_MATRIX_ACTIONS, "unknown")
+    expect({
+      known: knownDiff.length,
+      retired: retiredDiff.length,
+      registerNonAccounts: registerNonAccountsDiff.length,
+      intimation_register: registerByAction.intimation_register ?? 0,
+      record_accounts_entry: registerByAction.record_accounts_entry ?? 0,
+      registerAccounts: registerAccountsDiff.length,
+      unknownDiff: unknownDiff.length,
+      unknownSame,
+    }).toEqual({
+      known: 0,
+      retired: 180,
+      registerNonAccounts: 84,
+      intimation_register: 34,
+      record_accounts_entry: 50,
+      registerAccounts: 0,
+      unknownDiff: 660,
+      unknownSame: 110,
+    })
     expect(knownDiff).toEqual([])
+    expect(retiredDiff).toHaveLength(180)
+    expect(registerNonAccountsDiff).toHaveLength(84)
+    expect(registerByAction.intimation_register).toBe(34)
+    expect(registerByAction.record_accounts_entry).toBe(50)
+    expect(registerAccountsDiff).toHaveLength(0)
     expect(unknownDiff).toHaveLength(660)
     expect(unknownSame).toBe(110)
     expect(fixture.knownCount).toBe(3850)

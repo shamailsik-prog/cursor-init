@@ -280,9 +280,6 @@ export function buildRegistry(): ActionRegistry {
   const genericActions = [
     "research",
     "draft",
-    "read",
-    "read_matter",
-    "read_firm",
     "list_matters",
     "normalise_case_number",
     "committee_brain",
@@ -296,7 +293,8 @@ export function buildRegistry(): ActionRegistry {
     literalCount: callers.filter((c) => c.binding === "literal").length,
     parameterCount: callers.filter((c) => c.binding === "parameter").length,
     genericActions,
-    accountsRegisterActionsAlsoOnGenericPath: accounts,
+    // Q04 gave intimation_register and record_accounts_entry their own row.
+    accountsRegisterActionsAlsoOnGenericPath: [],
     tableActionsWithNoLiveCaller: accounts.filter((a) => !live.has(a)),
     genericActionsWithNoLiveCaller: genericActions.filter((a) => !live.has(a)),
     searchedWithNoCaller: ["ops", "scripts", "functions/src/cli"],

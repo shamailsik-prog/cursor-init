@@ -55,7 +55,7 @@ afterEach(() => resetRuntimeStoreForTests())
 describe("accounts role is register-only (L17.6 #41)", () => {
   it("checkPermission denies accounts every matter action, even as a member; allows the intimation register", async () => {
     const { store, matterId } = await seed()
-    for (const action of ["draft", "research", "committee_brain", "read", "list_matters"]) {
+    for (const action of ["draft", "research", "committee_brain", "committee_brain_read", "list_matters"]) {
       const decision = checkPermission(store, "accounts_a", action, action === "list_matters" ? undefined : matterId)
       expect(decision).toMatchObject({ allow: false, reason: "accounts-register-only" })
     }

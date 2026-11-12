@@ -105,11 +105,11 @@ describe("functions checkPermission denies an unknown action", () => {
 
     state.matter = { firmId: "firmB", classification: "public" }
     state.member = true
-    const cross = await checkPermission(caller("partner"), "read_matter", "m_other")
+    const cross = await checkPermission(caller("partner"), "committee_brain_read", "m_other")
     expect(cross).toEqual({ allow: false, reason: "cross-firm" })
     state.matter = { firmId: "firmA", classification: "privileged" }
     state.member = false
-    const outsider = await checkPermission(caller("partner"), "read_matter", "m_own")
+    const outsider = await checkPermission(caller("partner"), "committee_brain_read", "m_own")
     expect(outsider).toEqual({ allow: false, reason: "not-member" })
   })
 })

@@ -24,8 +24,8 @@
  *     clearance), doctype.read is firm-level; then the role table -> intern-channel-denied for an
  *     intern (as the legacy `draft` action), role-not-permitted otherwise
  *   - a generic action (GENERIC_ACTIONS: the strings the caller inventory shows reaching this
- *     function with no row of their own — research, draft, read, read_matter, read_firm,
- *     list_matters, normalise_case_number, committee_brain, committee_brain_read). Exact match.
+ *     function with no row of their own — research, draft, list_matters,
+ *     normalise_case_number, committee_brain, committee_brain_read). Exact match.
  *     intern: no research / draft                 -> deny intern-channel-denied
  *     a staff-only action (STAFF_ONLY_ACTIONS) by a client or under an own_matters scope
  *                                                 -> deny staff-only
@@ -57,6 +57,9 @@ export type DecisionMatter = { firmId: string; classification: unknown; deleted?
 
 /** The only actions the accounts role may take (L17.6: getIntimationRegister, recordAccountsEntry). */
 export const ACCOUNTS_REGISTER_ACTIONS: ReadonlySet<string> = new Set(["intimation_register", "record_accounts_entry"])
+
+/** firestore.rules /intimation_register: partner or associate, as members of the matter (L17.6 #41). */
+const INTIMATION_READERS: readonly string[] = ["partner", "associate"]
 
 /**
  * Firm administration (P5 identity and E-19 MFA operations, Cloud Functions): partner only.
@@ -258,30 +261,29 @@ const DRAFT_ROLES: Record<DraftAction | DocTypeAction, readonly string[]> = {
 
 /**
  * Actions with no row of their own that the caller inventory (platform/p5/actionRegistry.json) shows
- * reaching `decide`, plus `read`, `read_matter` and `read_firm`, which the decision-table, parity and
- * functions permission suites call and which must keep today's results. Exact match (`Set.has`): no trim,
- * no case-folding, no prefix or suffix match.
+ * reaching `decide`. Exact match (`Set.has`): no trim, no case-folding, no prefix or suffix match.
  *
- * The branch below is the old fall-through, unchanged:
+ * `read`, `read_matter` and `read_firm` are not in this list. They have no production caller. They are
+ * unregistered: every role is `unknown-action`, and a null caller is `no-user`. Accounts is
+ * `unknown-action` for them too (Q01 SEC-P01).
+ *
+ * The branch below is the old fall-through for the strings that remain:
  *   - `research` / `draft`: an intern is `intern-channel-denied`; a client or an `own_matters` scope is
  *     `client-channel-denied`; otherwise the matter gate when a matter is named, then allow `ok`.
- *   - `read`, `read_matter`, `read_firm`, `committee_brain`, `committee_brain_read`: no extra role cut
- *     (accounts already returned `accounts-register-only`). A named matter goes through the matter gate.
+ *   - `committee_brain`, `committee_brain_read`: no extra role cut (accounts already returned
+ *     `accounts-register-only`). A named matter goes through the matter gate.
  *   - `list_matters`: a client or an `own_matters` scope is allow `client-own-matters`; anyone else is
  *     allow `ok`. The matter gate does not run.
  *   - `normalise_case_number` is also `STAFF_ONLY_ACTIONS`: a client or an `own_matters` scope is
  *     `staff-only`; staff, including an intern, are allow `ok` after the matter gate when a matter is named.
  *
  * `intimation_register` and `record_accounts_entry` are not in this list. The accounts role is answered
- * by the accounts row above. Every other role has no row for them, so the branch below also accepts
- * `ACCOUNTS_REGISTER_ACTIONS` and gives them the same fall-through result as before.
+ * by the accounts row above. Every other role is answered by the register branch immediately above the
+ * generic branch (firestore.rules /intimation_register, L17.6 #41).
  */
 export const GENERIC_ACTIONS = [
   "research",
   "draft",
-  "read",
-  "read_matter",
-  "read_firm",
   "list_matters",
   "normalise_case_number",
   "committee_brain",
@@ -399,10 +401,18 @@ export function decide(
     return deny(caller.role === "intern" ? "intern-channel-denied" : "role-not-permitted")
   }
 
-  // Accounts-register actions are a row only for the accounts role (handled above). Every other
-  // role has no row for them, so they stay on this path — the old fall-through — rather than
-  // becoming unknown-action.
-  if (isGenericAction(action) || ACCOUNTS_REGISTER_ACTIONS.has(action)) {
+  // Non-accounts register row. firestore.rules /intimation_register (L17.6 #41): partner or
+  // associate, as a member of a named matter, cleared. record_accounts_entry has no policy for
+  // any other role. Neither action has a production caller.
+  if (ACCOUNTS_REGISTER_ACTIONS.has(action)) {
+    if (caller.role === "client" || extra?.scope === "own_matters") return deny("client-denied")
+    if (action !== "intimation_register" || !INTIMATION_READERS.includes(caller.role)) return deny("role-not-permitted")
+    const refused = matterGate(caller, matter, isMember)
+    if (refused) return refused
+    return allow("ok")
+  }
+
+  if (isGenericAction(action)) {
     if (caller.role === "intern" && (action === "research" || action === "draft")) {
       return deny("intern-channel-denied")
     }

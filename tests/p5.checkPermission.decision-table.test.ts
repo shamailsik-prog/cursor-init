@@ -43,7 +43,7 @@ function setup(role: Role, clearanceLevel: Classification = "privileged") {
 
 describe("checkPermission decision table", () => {
   it("denies an unknown user with no-user", () => {
-    expect(checkPermission(newStore(), "ghost", "read", "m_own")).toEqual({ allow: false, reason: "no-user" })
+    expect(checkPermission(newStore(), "ghost", "committee_brain_read", "m_own")).toEqual({ allow: false, reason: "no-user" })
   })
 
   it.each(["research", "draft"])("denies an intern %s with intern-channel-denied", (action) => {
@@ -54,7 +54,7 @@ describe("checkPermission decision table", () => {
   })
 
   it("lets an intern read a matter they are a member of", () => {
-    expect(checkPermission(setup("intern"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("intern"), "u1", "committee_brain_read", "m_own")).toEqual({ allow: true, reason: "ok" })
   })
 
   it.each(["research", "draft"])("denies a client %s with client-channel-denied", (action) => {
@@ -89,45 +89,45 @@ describe("checkPermission decision table", () => {
   })
 
   it("does not short-circuit other client actions: they still pass the matter checks", () => {
-    expect(checkPermission(setup("client"), "u1", "read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
-    expect(checkPermission(setup("client"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("client"), "u1", "committee_brain_read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
+    expect(checkPermission(setup("client"), "u1", "committee_brain_read", "m_own")).toEqual({ allow: true, reason: "ok" })
     expect(
-      checkPermission(setup("associate"), "u1", "read", "m_unjoined", { scope: "own_matters" })
+      checkPermission(setup("associate"), "u1", "committee_brain_read", "m_unjoined", { scope: "own_matters" })
     ).toEqual({ allow: false, reason: "not-member" })
   })
 
   it("denies a matter that does not exist with cross-firm (no existence oracle)", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_missing")).toEqual({ allow: false, reason: "cross-firm" })
+    expect(checkPermission(setup("partner"), "u1", "committee_brain_read", "m_missing")).toEqual({ allow: false, reason: "cross-firm" })
   })
 
   it("denies another firm's matter with cross-firm even when a membership row exists", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_other_firm")).toEqual({
+    expect(checkPermission(setup("partner"), "u1", "committee_brain_read", "m_other_firm")).toEqual({
       allow: false,
       reason: "cross-firm",
     })
   })
 
   it("denies a same-firm matter the user is not a member of with not-member", () => {
-    expect(checkPermission(setup("partner"), "u1", "read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
+    expect(checkPermission(setup("partner"), "u1", "committee_brain_read", "m_unjoined")).toEqual({ allow: false, reason: "not-member" })
   })
 
   it("denies a member whose clearance is below the matter's with clearance", () => {
-    expect(checkPermission(setup("partner", "privileged"), "u1", "read", "m_secret")).toEqual({
+    expect(checkPermission(setup("partner", "privileged"), "u1", "committee_brain_read", "m_secret")).toEqual({
       allow: false,
       reason: "clearance",
     })
   })
 
   it("allows a member at exactly the matter's clearance", () => {
-    expect(checkPermission(setup("partner", "privileged-restricted"), "u1", "read", "m_secret")).toEqual({
+    expect(checkPermission(setup("partner", "privileged-restricted"), "u1", "committee_brain_read", "m_secret")).toEqual({
       allow: true,
       reason: "ok",
     })
-    expect(checkPermission(setup("partner", "confidential"), "u1", "read", "m_own")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("partner", "confidential"), "u1", "committee_brain_read", "m_own")).toEqual({ allow: true, reason: "ok" })
   })
 
   it("allows a firm-level action with no matter", () => {
-    expect(checkPermission(setup("associate"), "u1", "read")).toEqual({ allow: true, reason: "ok" })
+    expect(checkPermission(setup("associate"), "u1", "committee_brain_read")).toEqual({ allow: true, reason: "ok" })
   })
 })
 

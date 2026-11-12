@@ -153,7 +153,8 @@ def live_statute_semantic_stmt():
 
     A stored vector is not enough. ``is_repealed`` excludes omission and repeal
     placeholders and every other non-live section, including one whose vector
-    has not been cleared yet.
+    has not been cleared yet. ``corpus_service/tests/test_q04_statute_vector_read_guard.py``
+    fails closed if any other module reads these statute vectors.
     """
     return select(
         StatutesMaster.id,
