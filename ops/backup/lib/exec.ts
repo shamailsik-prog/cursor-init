@@ -135,15 +135,24 @@ export class PersistentPsqlSession implements PsqlQueryable {
     }
   }
 
-  private sync(sql: string): Promise<string> {
+  private sync(sql: string, wholeScript = false): Promise<string> {
     if (this.closed) return Promise.reject(new Error("psql session closed"))
     const marker = `__F33_SYNC_${randomBytes(8).toString("hex")}__`
     const start = this.buffer.length
     return new Promise((resolve, reject) => {
       this.waiters.push({ marker, start, resolve, reject })
-      const stmt = sql.trimEnd().endsWith(";") ? sql : `${sql};`
-      this.proc.stdin.write(`${stmt}\n\\echo ${marker}\n`)
+      const stmt = wholeScript || sql.trimEnd().endsWith(";") ? sql : `${sql};`
+      const body = stmt.endsWith("\n") ? stmt : `${stmt}\n`
+      const payload = `${body}\\echo ${marker}\n`
+      if (!this.proc.stdin.write(payload)) {
+        this.proc.stdin.once("drain", () => undefined)
+      }
     })
+  }
+
+  /** Send a psql script unchanged, including \\connect, and wait until it finishes. */
+  async runScript(sql: string): Promise<string> {
+    return await this.sync(sql, true)
   }
 
   async query(sql: string): Promise<string> {
