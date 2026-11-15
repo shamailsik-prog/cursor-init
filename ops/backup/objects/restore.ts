@@ -1,10 +1,18 @@
 import { decryptDocumentObjectPayload } from "@/platform/documents/documentObjectStore"
 import type { SpineStore } from "@/platform/spine/store"
+import { isolationProblems } from "../drill/target"
 import type { VersionedObjectAccess, ObjectVersionInfo } from "./s3"
 
 export type RestoreRow = { id: string; firmId: string; storagePath: string; contentHash: string; key: string }
 
-export type RestoreReport = { restored: string[]; unrecoverable: string[]; noop: boolean }
+export type ObjectRestoreLocation = {
+  kind: "local" | "temp"
+  endpoint?: string
+  root?: string
+  bucket?: string
+}
+
+export type RestoreReport = { restored: string[]; unrecoverable: string[]; noop: boolean; refused: string[] }
 
 export async function documentObjectIntegrityCheck(
   row: RestoreRow,
@@ -36,30 +44,65 @@ export async function pickIntactVersion(
   return undefined
 }
 
+async function versionIntact(
+  access: VersionedObjectAccess,
+  row: RestoreRow,
+  version: ObjectVersionInfo,
+  store: SpineStore,
+  check?: (row: RestoreRow, body: Buffer) => Promise<boolean>
+): Promise<boolean> {
+  try {
+    const body = await access.getVersion(row.key, version.versionId)
+    return check ? await check(row, body) : await documentObjectIntegrityCheck(row, body, store)
+  } catch {
+    return false
+  }
+}
+
 export async function restoreObjects(opts: {
   rows: RestoreRow[]
   source: VersionedObjectAccess
   target: VersionedObjectAccess
   store: SpineStore
   check?: (row: RestoreRow, body: Buffer) => Promise<boolean>
+  location?: ObjectRestoreLocation
 }): Promise<RestoreReport> {
+  const refused = opts.location
+    ? isolationProblems({
+        kind: opts.location.kind,
+        engine: "objects",
+        endpoint: opts.location.endpoint,
+        root: opts.location.root,
+        bucket: opts.location.bucket,
+      })
+    : ["object restore target is missing (explicit local or temp required)"]
+  if (refused.length) return { restored: [], unrecoverable: [], noop: false, refused }
+
   const restored: string[] = []
   const unrecoverable: string[] = []
   for (const row of opts.rows) {
+    const held = await opts.target.listVersions(row.key)
+    let already = false
+    for (const version of held.filter((item) => !item.isDeleteMarker)) {
+      if (await versionIntact(opts.target, row, version, opts.store, opts.check)) {
+        already = true
+        break
+      }
+    }
+    if (already) continue
     const versions = await opts.source.listVersions(row.key)
     let picked: string | undefined
-    for (const v of versions.filter((x) => !x.isDeleteMarker)) {
-      const body = await opts.source.getVersion(row.key, v.versionId)
+    for (const version of versions.filter((item) => !item.isDeleteMarker)) {
+      const body = await opts.source.getVersion(row.key, version.versionId)
       const ok = opts.check ? await opts.check(row, body) : await documentObjectIntegrityCheck(row, body, opts.store)
       if (ok) {
-        picked = v.versionId
-        const bytes = body
-        await opts.target.put(row.key, bytes)
+        picked = version.versionId
+        await opts.target.put(row.key, body)
         restored.push(row.id)
         break
       }
     }
     if (!picked) unrecoverable.push(row.id)
   }
-  return { restored, unrecoverable, noop: restored.length === 0 }
+  return { restored, unrecoverable, noop: restored.length === 0 && unrecoverable.length === 0, refused: [] }
 }

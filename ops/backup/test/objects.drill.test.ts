@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { type ChildProcess, spawn } from "node:child_process"
 import { describe, expect, it } from "vitest"
-import { S3Client, CreateBucketCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { S3Client, CreateBucketCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { isolationProblems } from "../drill/target"
 import { applyVaultProtection, checkVaultProtection } from "../objects/protection"
 import { loadInfraConfig } from "../config"
 import { recordDrillResult } from "../lib/results"
@@ -56,13 +58,31 @@ describe("document vault objects drill", () => {
         const bucket = "f33-vault-drill"
         await s3.send(new CreateBucketCommand({ Bucket: bucket, ObjectLockEnabledForBucket: true }))
         await applyVaultProtection(s3, bucket, cfg)
+        const targetProblems = isolationProblems({
+          kind: "local",
+          engine: "objects",
+          endpoint,
+          bucket,
+        })
+        expect(targetProblems, targetProblems.join("\n")).toEqual([])
         const problems = await checkVaultProtection(s3, bucket, cfg)
         expect(problems, problems.join("\n")).toEqual([])
-        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: "firm/obj", Body: Buffer.from("x") }))
+        const body = Buffer.from("x")
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: "firm/obj", Body: body }))
+        const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: "firm/obj" }))
+        const stored = Buffer.from(await got.Body!.transformToByteArray())
+        const digest = createHash("sha256").update(stored).digest("hex")
+        expect(digest).toBe(createHash("sha256").update(body).digest("hex"))
         recordDrillResult({
           store: "document-vault",
           rtoMs: Date.now() - started,
-          details: { bucket, endpoint },
+          target: { kind: "local", engine: "objects", isolated: true },
+          details: {
+            ok: true,
+            bucket,
+            endpoint,
+            contentUnits: [{ name: "firm/obj", count: 1, digest, match: true }],
+          },
         })
       } finally {
         await stopMinioServer(proc, dataDir)

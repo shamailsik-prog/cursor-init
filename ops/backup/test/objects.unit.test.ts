@@ -91,6 +91,7 @@ describe("restoreObjects", () => {
       source,
       target,
       store,
+      location: { kind: "temp", root: objectRoot, bucket: "f33-vault-drill" },
     })
     expect(report.restored).toEqual([])
     expect(report.unrecoverable).toEqual(["row1"])
@@ -114,6 +115,7 @@ describe("restoreObjects", () => {
 
     const report = await restoreObjects({
       rows: [{ id: "row2", firmId: "firmA", storagePath: put.storagePath, contentHash: wrongHash, key: "k" }],
+      location: { kind: "temp", root: objectRoot, bucket: "f33-vault-drill" },
       source: {
         listVersions: async () => [{ key: "k", versionId: "v1" }],
         getVersion: async () => encrypted,

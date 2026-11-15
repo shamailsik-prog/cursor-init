@@ -75,6 +75,16 @@ objects do not outlive the Firestore trail.
 
 **NOT DEMONSTRATED:** no restore drill in CI or production has executed this reconciliation end to end.
 
+## Local restore drill (Q16a)
+
+The drill restores only into an explicit local, emulator, or temp target. Anything else must fail closed, including a managed cloud endpoint, a non-loopback host, a socket or data directory outside the temp root, and a production-looking name (`production`, `prod`, `live`, or `(default)`). FA-F33-R3-001 (managed-cloud restore into an isolated cloud project) stays parked: this drill never calls a live or managed restore.
+
+A restore is verified by content. Each Postgres table, Firestore collection, and restored vault object must carry a count and a SHA-256 checksum, and the restored side must match. A process exit code is not verification. A backup whose manifest omits those checksums, or whose dump is missing or zero bytes, is partial or truncated and is refused before the target is written. A flipped or truncated ciphertext is refused by the SKB1 bundle check.
+
+Re-running a restore against an isolated target that already matches those counts and checksums is a no-op success. A target that already exists and differs is refused; the drill does not drop it.
+
+Each passing run writes `ops/backup/.results/<store>.json` with schema `sikander-backup-drill/1`. The file names the target kind, the per-unit counts and checksums, and whether the run was idempotent.
+
 ## Drills
 
 ```bash

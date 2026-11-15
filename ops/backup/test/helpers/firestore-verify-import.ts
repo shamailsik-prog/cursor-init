@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore } from "firebase-admin/firestore"
+import { firestoreContentUnits, formatDrillContentLine } from "../../drill/content"
 import { collectFirestoreManifest, compareFirestoreManifests } from "../../firestore/manifest"
 
 const manifestPath = process.argv[2]
@@ -14,8 +15,8 @@ async function main(): Promise<void> {
   const before = JSON.parse(readFileSync(manifestPath, "utf8"))
   const after = await collectFirestoreManifest(db)
   const diffs = compareFirestoreManifests(before, after)
+  console.log(formatDrillContentLine({ ok: diffs.length === 0, units: firestoreContentUnits(after), problems: diffs }))
   if (diffs.length) throw new Error(diffs.join("\n"))
-  console.log("firestore drill ok")
 }
 
 main().catch((e) => {

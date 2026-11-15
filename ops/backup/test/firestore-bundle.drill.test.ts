@@ -39,7 +39,14 @@ describe("firestore SKB1 bundle drill", () => {
           importDir,
         })
         expect(res.ok, res.differences.join("\n")).toBe(true)
-        recordDrillResult({ store: "firestore-emulator-bundle", rtoMs: Date.now() - started, details: { ok: true } })
+        expect(res.content.length).toBeGreaterThan(0)
+        expect(res.content.every((unit) => unit.match && /^[0-9a-f]{64}$/.test(unit.digest))).toBe(true)
+        recordDrillResult({
+          store: "firestore-emulator-bundle",
+          rtoMs: Date.now() - started,
+          target: { kind: "emulator", engine: "firestore", isolated: true },
+          details: { ok: true, contentUnits: res.content },
+        })
       } finally {
         rmSync(tmp, { recursive: true, force: true })
       }

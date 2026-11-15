@@ -33,6 +33,19 @@ describe("postgres logical backup drill", () => {
           recordStore: "postgres-logical",
         })
         expect(res.ok, res.differences.join("\n")).toBe(true)
+        expect(res.idempotent).toBe(false)
+        expect(res.content.length).toBeGreaterThan(0)
+        expect(res.content.every((unit) => unit.match && /^[0-9a-f]{64}$/.test(unit.digest))).toBe(true)
+        const again = await restoreLogical({
+          bundleDir: dir,
+          ring,
+          db: "legal_scraper",
+          env: target.env,
+          recordStore: "postgres-logical",
+        })
+        expect(again.ok, again.differences.join("\n")).toBe(true)
+        expect(again.idempotent).toBe(true)
+        expect(again.content.every((unit) => unit.match)).toBe(true)
       } finally {
         if (priorTz === undefined) delete process.env.TZ
         else process.env.TZ = priorTz
@@ -41,6 +54,6 @@ describe("postgres logical backup drill", () => {
         rmSync(out, { recursive: true, force: true })
       }
     },
-    120_000
+    180_000
   )
 })
