@@ -26,6 +26,8 @@ import {
   handleWhatsAppWebhook,
   resetD2WhatsAppWebhookForTests,
   WHATSAPP_BODY_CAP_BYTES,
+  WHATSAPP_PROCESSING_TIMEOUT_MS,
+  WHATSAPP_READ_DEADLINE_MS,
   type WebhookDeps,
 } from "@/services/d2-1/webhook"
 import { POST as whatsAppPost } from "@/app/api/d2/whatsapp/route"
@@ -73,7 +75,7 @@ const DENIED_ROLE: Record<(typeof EIGHT)[number], Role> = {
   help: "accounts",
 }
 
-const SECRET = "test-whatsapp-secret"
+const SECRET = "test-whatsapp-secret-0123456789a"
 const NOW = Date.parse("2026-11-15T00:00:00Z")
 
 function caller(role: Role): DecisionCaller {
@@ -90,6 +92,37 @@ function sign(secret: string, raw: string): string {
 
 function signBytes(secret: string, raw: Buffer): string {
   return `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`
+}
+
+function gatedBody(total: number): {
+  request: Request
+  release: () => void
+  pulled: () => number
+} {
+  let pulled = 0
+  let pending: (() => void) | null = null
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      return new Promise<void>((resolve) => {
+        pending = () => {
+          pending = null
+          if (pulled >= total) controller.close()
+          else {
+            controller.enqueue(Uint8Array.of(1))
+            pulled += 1
+          }
+          resolve()
+        }
+      })
+    },
+  })
+  const request = new Request("http://127.0.0.1/api/d2/whatsapp", {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: stream,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" })
+  return { request, release: () => pending?.(), pulled: () => pulled }
 }
 
 function streamedRequest(
@@ -1161,6 +1194,197 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
     const result = await dispatchWhatsApp(store, "intern1", "/presence in")
     expect(result.ok).toBe(true)
     expect(result.permission).toEqual(decide(caller("intern"), "client.read", undefined, false))
+  })
+
+  it.each([
+    ["U+200B", "\u200b"],
+    ["U+200C", "\u200c"],
+    ["U+200D", "\u200d"],
+    ["U+2060", "\u2060"],
+    ["U+180E", "\u180e"],
+  ])("FA-Q14A-R3-L2 refuses a secret that is only %s", async (_label, character) => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const secret = character.repeat(11)
+    expect(secret).toBe(secret.trim())
+    expect(Buffer.byteLength(secret)).toBeGreaterThanOrEqual(32)
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.zw", text: "/help" }, secret), {
+      ...deps(newStore(), transport),
+      secret: () => secret,
+    })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "webhook_not_configured" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-R3-L2 refuses a secret shorter than 32 bytes after trimming", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const secret = "a".repeat(31)
+    expect(secret).toBe(secret.trim())
+    expect(Buffer.byteLength(secret)).toBe(31)
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.short", text: "/help" }, secret), {
+      ...deps(newStore(), transport),
+      secret: () => secret,
+    })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "webhook_not_configured" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-R3-L2 refuses a short secret whose zero-width padding reaches 32 bytes", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const secret = `${"a".repeat(31)}\u200b`
+    expect(secret).toBe(secret.trim())
+    expect(Buffer.byteLength(secret)).toBeGreaterThanOrEqual(32)
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.pad", text: "/help" }, secret), {
+      ...deps(newStore(), transport),
+      secret: () => secret,
+    })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "webhook_not_configured" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-R3-L2 accepts a secret of exactly 32 bytes", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const secret = "b".repeat(32)
+    expect(Buffer.byteLength(secret)).toBe(32)
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.min", text: "/help" }, secret), {
+      ...deps(newStore(), transport),
+      secret: () => secret,
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: false })
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("FA-Q14A-R3-L3 stops a body that sends no bytes within the read deadline", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const transport = new StubWhatsAppTransport()
+      const { request, pulled } = gatedBody(64)
+      const pending = handleWhatsAppWebhook(request, {
+        ...deps(newStore(), transport),
+        secret: () => "b".repeat(32),
+      })
+      await vi.advanceTimersByTimeAsync(WHATSAPP_READ_DEADLINE_MS)
+      const outcome = await new Promise<string>((resolve) => {
+        realSetTimeout(() => {
+          let settled = false
+          pending.then(
+            async (response) => {
+              settled = true
+              const body: unknown = await response.json()
+              resolve(response.status === 408 && JSON.stringify(body) === JSON.stringify({ error: "body_read_timeout" }) ? "bounded" : `status ${response.status}`)
+            },
+            () => {
+              settled = true
+              resolve("threw")
+            }
+          )
+          realSetTimeout(() => {
+            if (!settled) resolve("hung")
+          }, 30)
+        }, 20)
+      })
+      expect(outcome).toBe("bounded")
+      expect(pulled()).toBe(0)
+      expect(transport.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("FA-Q14A-R3-L3 stops a trickling body once the read deadline has passed", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const transport = new StubWhatsAppTransport()
+      const { request, release, pulled } = gatedBody(64)
+      const pending = handleWhatsAppWebhook(request, {
+        ...deps(newStore(), transport),
+        secret: () => "b".repeat(32),
+      })
+      release()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(WHATSAPP_READ_DEADLINE_MS - 1)
+      release()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2)
+      const outcome = await new Promise<string>((resolve) => {
+        realSetTimeout(() => {
+          let settled = false
+          pending.then(
+            async (response) => {
+              settled = true
+              const body: unknown = await response.json()
+              resolve(
+                response.status === 408 && JSON.stringify(body) === JSON.stringify({ error: "body_read_timeout" })
+                  ? "bounded"
+                  : `status ${response.status}`
+              )
+            },
+            () => {
+              settled = true
+              resolve("threw")
+            }
+          )
+          realSetTimeout(() => {
+            if (!settled) resolve("hung")
+          }, 30)
+        }, 20)
+      })
+      expect(outcome).toBe("bounded")
+      expect(pulled()).toBeGreaterThan(0)
+      expect(pulled()).toBeLessThan(64)
+      expect(transport.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("FA-Q14A-R3-L5 keeps one outbound message when the provider accepts and the call then times out", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const transport = new StubWhatsAppTransport()
+      const original = transport.send.bind(transport)
+      let release: () => void = () => {}
+      const hold = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let calls = 0
+      transport.send = async (message, options) => {
+        calls += 1
+        const accepted = await original(message, options)
+        await hold
+        return accepted
+      }
+      const payload = { messageId: "wamid.accept-then-timeout", userId: "clerk1", text: "/help" }
+      const pending = handleWhatsAppWebhook(signed(payload), deps(newStore(), transport))
+      await vi.advanceTimersByTimeAsync(WHATSAPP_PROCESSING_TIMEOUT_MS)
+      const first = await pending
+      expect(first.status).toBe(503)
+      expect(await first.json()).toEqual({ ok: false })
+      expect(transport.sent).toHaveLength(1)
+      expect(transport.sent[0]?.text).toBe("not linked")
+      release()
+      await new Promise((resolve) => realSetTimeout(resolve, 0))
+      const retry = await handleWhatsAppWebhook(signed(payload), deps(newStore(), transport))
+      expect(retry.status).toBe(200)
+      expect(await retry.json()).toEqual({ ok: false })
+      expect(calls).toBe(1)
+      expect(transport.sent).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("FA-Q14A-FLAG-008 does not let a firm-scoped value turn the channel on", () => {
