@@ -188,7 +188,7 @@ function checkCitations(
   for (const detail of scan.unparsed) {
     queue.push(item("ref_unresolved", null, detail))
   }
-  if (!requireReferenceOrder) return
+  if (scheme.kind === "manual" || !requireReferenceOrder) return
   annexures.forEach((annexure, index) => {
     const key = keys[index] ?? ""
     if (!known.includes(key)) {
@@ -210,13 +210,19 @@ function checkManualRefs(
   if (!requireReferenceOrder) return
   const keys = annexures.map((annexure) => assignedKey(annexure.token))
   const scan = scanCitations(draft, { ...citationContext(scheme, annexures), assigned: new Set(keys) })
-  const known = scan.hits.map((hit) => hit.form)
+  const known: string[] = []
+  for (const hit of scan.hits) {
+    if (keys.includes(hit.form) && !known.includes(hit.form)) known.push(hit.form)
+  }
   annexures.forEach((annexure, index) => {
     const detail = `body does not refer to ${annexure.token}`
     if (!known.includes(keys[index] ?? "") && !queue.some((entry) => entry.detail === detail)) {
       queue.push(item("ref_unresolved", annexure.artifactId, detail))
     }
   })
+  if (known.length === keys.length && known.join("\0") !== keys.join("\0")) {
+    queue.push(item("order_unresolved", null, "body refers to the annexures in a different order from the filing set"))
+  }
 }
 
 export function resolveFilingSet(input: DocketFilingSet): ResolveResult {

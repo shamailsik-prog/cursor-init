@@ -1,11 +1,9 @@
 /**
  * One citation reader. The draft is normalised and tokenised, then one label
- * grammar both finds citations and classifies assigned labels. A mark-shaped
- * token has to name an annexure on this docket. The exemptions are an address
- * word directly beside the mark in the same sentence, a mark inside a /YYYY
- * case number, and a p. or pp. page reference. A label-shaped token after a
- * citation keyword that the grammar cannot read is unresolved, as is a
- * connector the grammar does not know.
+ * grammar both finds citations and classifies assigned labels. see, refer, and
+ * relies open a citation only when an uppercase label follows directly.
+ * A lowercase p. or pp. plus a number is a page reference. A dash code after
+ * No. is an address or case number only for an explicit word list.
  */
 
 export type CitationFamily = "letter" | "number" | "mark"
@@ -47,6 +45,14 @@ const ADDRESS_WORDS = new Set(["block", "sector", "phase", "gali", "mohalla", "l
 
 const NON_LABEL_WORDS = new Set(["to", "herewith", "the", "of", "is", "was", "per", "this", "on", "as"])
 
+const ABBREVIATIONS = new Set(["act", "cpc", "ppc", "crpc", "fir", "me", "him", "rs", "mr", "dc", "ac", "no", "sc", "hc"])
+
+const LAW_REPORTS = new Set(["scmr", "pld", "clc", "ylr", "mld", "pcrlj", "cld", "ptd", "scr"])
+
+const OPENER_HEADS = new Set(["annexure", "annexures", "exhibit", "exhibits", "enclosure", "enclosures", "mark", "marks"])
+
+const NO_PREFIXES = new Set(["house", "plot", "flat", "shop", "street", "gali", "suit", "appeal", "petition", "case", "c.p", "cr.misc"])
+
 const SPELLED_NUMBERS = new Set([
   "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
   "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
@@ -59,7 +65,7 @@ const DASHES = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g
 const WRAPPERS = /["'“”‘’«»()[\]{}]/g
 const BREAK = "\u0001"
 
-type Token = { kind: "word" | "num" | "punct" | "break"; value: string; from: number; to: number }
+type Token = { kind: "word" | "num" | "punct" | "break"; value: string; from: number; to: number; caps?: "upper" | "lower" | "mixed" }
 
 type Label = { family: CitationFamily; key: string }
 
@@ -77,13 +83,26 @@ function isIgnorable(code: number): boolean {
   return false
 }
 
+function letterCase(word: string): "upper" | "lower" | "mixed" {
+  const letters = [...word].filter((character) => /[A-Za-z]/.test(character))
+  if (letters.length === 0 || letters.every((character) => character === character.toLowerCase())) return "lower"
+  if (letters.every((character) => character === character.toUpperCase())) return "upper"
+  return "mixed"
+}
+
 export function normaliseCitationText(input: string): string {
+  const rejoined = input.replace(/([A-Za-z])-[ \t]*\r?\n[ \t]*([A-Za-z])/g, "$1$2")
   let text = ""
-  for (const character of input.normalize("NFKC")) {
+  for (const character of rejoined.normalize("NFKC")) {
+    if (character === "\r") continue
+    if (character === "\n") {
+      text += ". "
+      continue
+    }
     const code = character.codePointAt(0) ?? 0
     text += isIgnorable(code) ? BREAK : character
   }
-  return text.replace(DASHES, "-").replace(WRAPPERS, " ").replace(/[ \t\r\n\f\v\u00a0]+/g, " ").trim().toLowerCase()
+  return text.replace(DASHES, "-").replace(WRAPPERS, " ").replace(/[ \t\f\v\u00a0]+/g, " ").trim()
 }
 
 function splitGlued(word: string): { keyword: string; rest: string } | null {
@@ -117,22 +136,34 @@ function tokenise(text: string): Token[] {
       tokens.push({ kind: "num", value: text.slice(from, index), from, to: index })
       continue
     }
-    if ((character >= "a" && character <= "z") || character === "_") {
+    if (character === "_") {
+      index += 1
+      continue
+    }
+    if ((character >= "a" && character <= "z") || (character >= "A" && character <= "Z")) {
       const from = index
-      while (index < text.length && (((text[index] ?? "") >= "a" && (text[index] ?? "") <= "z") || text[index] === "_")) index += 1
-      const word = text.slice(from, index)
+      while (index < text.length) {
+        const next = text[index] ?? ""
+        if ((next >= "a" && next <= "z") || (next >= "A" && next <= "Z")) index += 1
+        else break
+      }
+      const raw = text.slice(from, index)
+      const caps = letterCase(raw)
+      const word = raw.toLowerCase()
       const glued = splitGlued(word)
       if (!glued) {
-        tokens.push({ kind: "word", value: word, from, to: index })
+        tokens.push({ kind: "word", value: word, from, to: index, caps })
         continue
       }
       const split = from + glued.keyword.length
-      tokens.push({ kind: "word", value: glued.keyword, from, to: split })
+      tokens.push({ kind: "word", value: glued.keyword, from, to: split, caps: letterCase(raw.slice(0, glued.keyword.length)) })
+      const rest = glued.rest
       tokens.push({
-        kind: /^\d+$/.test(glued.rest) ? "num" : "word",
-        value: glued.rest,
+        kind: /^\d+$/.test(rest) ? "num" : "word",
+        value: rest,
         from: split,
         to: index,
+        caps: letterCase(raw.slice(glued.keyword.length)),
       })
       continue
     }
@@ -172,7 +203,7 @@ function mergeKeywords(tokens: readonly Token[]): Token[] {
       to = next.to
       cursor = nextAt + 1
     }
-    out.push({ kind: "word", value, from: token.from, to })
+    out.push({ kind: "word", value, from: token.from, to, caps: token.caps })
     index = cursor
   }
   return out
@@ -429,7 +460,8 @@ function failedLabel(tokens: readonly Token[], index: number): boolean {
   ) {
     return true
   }
-  if (!/^[a-z]{2,3}$/.test(token.value) || !sentenceBoundary(tokens[index + 1])) return false
+  if (!/^[a-z]{2,3}$/.test(token.value) || !sentenceBoundary(tokens[index + 1]) || token.caps !== "upper") return false
+  if (ABBREVIATIONS.has(token.value)) return false
   if (token.value in KEYWORD_FAMILY || NON_LABEL_WORDS.has(token.value) || isReservedWord(token.value)) return false
   if (romanValue(token.value) !== null || /^([a-z])\1$/.test(token.value)) return false
   return true
@@ -497,8 +529,9 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
   let first: Item | null
   if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === "-") {
     const afterHyphen = parseItem(tokens, cursor + 1)
+    const after = tokens[cursor + 1]
     if (afterHyphen && !("error" in afterHyphen)) first = afterHyphen
-    else if (!tokens[cursor + 1] || failedLabel(tokens, cursor + 1)) return null
+    else if (!after || after.value === "." || failedLabel(tokens, cursor + 1)) return null
     else return { labels: [], next: index }
   } else if (failedLabel(tokens, cursor)) {
     return null
@@ -526,19 +559,31 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
   return { labels, next: cursor }
 }
 
-function wordBeforeDash(tokens: readonly Token[], index: number): boolean {
-  let cursor = index - 1
-  let numbered = false
-  if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value === "no") {
+function wordsBefore(tokens: readonly Token[], index: number): string {
+  let cursor = index
+  if (tokens[cursor]?.value === ".") cursor -= 1
+  const words: string[] = []
+  while (tokens[cursor]?.kind === "word") {
+    words.unshift(tokens[cursor]?.value ?? "")
+    if (NO_PREFIXES.has(words.join("."))) break
+    if (tokens[cursor - 1]?.value !== "." || tokens[cursor - 2]?.kind !== "word" || (tokens[cursor]?.value.length ?? 0) > 4) break
     cursor -= 2
-    numbered = true
-  } else if (tokens[cursor]?.value === "no") {
-    cursor -= 1
-    numbered = true
   }
-  const previous = tokens[cursor]
-  if (previous?.kind !== "word" || previous.value.includes("_")) return false
-  return numbered || ADDRESS_WORDS.has(previous.value) || previous.value === "plot" || previous.value === "form"
+  return words.join(".")
+}
+
+function numberedPrefix(tokens: readonly Token[], index: number): boolean {
+  let cursor = index - 1
+  if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value === "no") cursor -= 2
+  else if (tokens[cursor]?.value === "no") cursor -= 1
+  else return false
+  return NO_PREFIXES.has(wordsBefore(tokens, cursor))
+}
+
+function wordBeforeDash(tokens: readonly Token[], index: number): boolean {
+  if (numberedPrefix(tokens, index)) return true
+  const previous = tokens[index - 1]
+  return previous?.kind === "word" && (ADDRESS_WORDS.has(previous.value) || previous.value === "plot" || previous.value === "form")
 }
 
 function subdivisionEnd(tokens: readonly Token[], index: number): number | null {
@@ -575,14 +620,48 @@ function dashCodeExempt(tokens: readonly Token[], markIndex: number, afterMark: 
 function isPageReference(tokens: readonly Token[], index: number, next: number): boolean {
   const head = tokens[index]
   const punct = tokens[index + 1]
-  if (punct?.value !== ".") return false
-  const afterAt = head?.value === "pp" ? index + 3 : next
-  if (head?.value === "pp" && tokens[index + 2]?.kind !== "num") return false
-  if (head?.value !== "p" && head?.value !== "pp") return false
-  const after = tokens[afterAt]
-  if (after?.value === "of") return true
-  const para = after?.value === "," ? tokens[afterAt + 1] : after
-  return para?.kind === "word" && /^para(?:graph)?s?$/.test(para.value)
+  if (!head || head.caps === "upper" || punct?.value !== ".") return false
+  if (head.value !== "p" && head.value !== "pp") return false
+  if (tokens[index + 2]?.kind !== "num") return false
+  return next >= index
+}
+
+function lawReportYear(tokens: readonly Token[], index: number): boolean {
+  const year = tokens[index]
+  const report = tokens[index + 1]
+  return year?.kind === "num" && year.value.length === 4 && report?.kind === "word" && LAW_REPORTS.has(report.value)
+}
+
+function directUpperLabel(tokens: readonly Token[], index: number): boolean {
+  const token = tokens[index]
+  if (!token || token.caps !== "upper") return false
+  if (token.kind === "word" && (LAW_REPORTS.has(token.value) || ABBREVIATIONS.has(token.value))) return false
+  if (parseMark(tokens, index)) return true
+  return token.kind === "word" && /^[a-z]{1,3}$/.test(token.value)
+}
+
+function openerStarts(tokens: readonly Token[], index: number): boolean {
+  const next = tokens[index + 1]
+  if (!next) return false
+  if (next.kind === "num" && next.value.length === 4) return !lawReportYear(tokens, index + 1)
+  if (next.kind === "word" && LAW_REPORTS.has(next.value)) return false
+  const cursor = next.kind === "word" && OPENER_HEADS.has(next.value) ? index + 2 : index + 1
+  return directUpperLabel(tokens, cursor)
+}
+
+function spelledBeforeKeyword(tokens: readonly Token[], index: number): boolean {
+  let cursor = index - 1
+  while (isNonLabelWord(tokens[cursor])) cursor -= 1
+  return SPELLED_NUMBERS.has(tokens[cursor]?.value ?? "")
+}
+
+function dottedPath(tokens: readonly Token[], index: number): boolean {
+  return (
+    tokens[index - 1]?.value === "/" &&
+    tokens[index - 2]?.kind === "word" &&
+    tokens[index - 3]?.value === "." &&
+    tokens[index - 4]?.kind === "word"
+  )
 }
 
 function sentenceStart(tokens: readonly Token[], index: number): number {
@@ -598,17 +677,6 @@ function listHeading(tokens: readonly Token[], index: number): boolean {
     if (tokens[cursor]?.kind === "word") words.push(tokens[cursor]?.value ?? "")
   }
   return words[0] === "list" && words[1] === "of" && words[2] === "exhibits"
-}
-
-function negatedMark(tokens: readonly Token[], index: number): boolean {
-  for (let cursor = sentenceStart(tokens, index); cursor < index; cursor += 1) {
-    if (tokens[cursor]?.value === "not") return true
-  }
-  return false
-}
-
-function urlPath(tokens: readonly Token[], index: number): boolean {
-  return tokens[index - 1]?.value === "/" && tokens[index - 2]?.kind === "word"
 }
 
 function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
@@ -703,12 +771,14 @@ export function scanCitations(
     const token = tokens[index]
     const opener = token?.kind === "word" && CITATION_OPENERS.has(token.value)
     const keyword = token?.kind === "word" ? KEYWORD_FAMILY[token.value] : undefined
-    if (token?.kind === "word" && (keyword || opener)) {
-      if (listHeading(tokens, index)) {
+    if (opener && !keyword) {
+      if (!openerStarts(tokens, index)) {
         index += 1
         continue
       }
-      const parsed = parseExpression(tokens, index + 1)
+      const head = tokens[index + 1]
+      const start = head?.kind === "word" && OPENER_HEADS.has(head.value) ? index + 2 : index + 1
+      const parsed = parseExpression(tokens, start)
       if (!parsed) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
         index += 1
@@ -718,13 +788,32 @@ export function scanCitations(
         index += 1
         continue
       }
-      for (const label of parsed.labels) consider(label, opener ? null : (keyword ?? null))
+      for (const label of parsed.labels) consider(label, null)
+      index = parsed.next
+      continue
+    }
+    if (token?.kind === "word" && keyword) {
+      if (listHeading(tokens, index)) {
+        index += 1
+        continue
+      }
+      const parsed = parseExpression(tokens, index + 1)
+      if (!parsed || (parsed.labels.length === 0 && spelledBeforeKeyword(tokens, index))) {
+        unparsed.push(`body cites ${token.value} without a label expression that can be read`)
+        index += 1
+        continue
+      }
+      if (parsed.labels.length === 0) {
+        index += 1
+        continue
+      }
+      for (const label of parsed.labels) consider(label, keyword)
       index = parsed.next
       continue
     }
     const mark = parseMark(tokens, index)
-    if (mark && !token?.value.includes("_")) {
-      if (isPageReference(tokens, index, mark.next) || urlPath(tokens, index) || listHeading(tokens, index) || negatedMark(tokens, index)) {
+    if (mark) {
+      if (isPageReference(tokens, index, mark.next) || dottedPath(tokens, index) || listHeading(tokens, index)) {
         index = mark.next
         continue
       }

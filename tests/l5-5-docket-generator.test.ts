@@ -1571,9 +1571,13 @@ describe("L5.5 fail-closed reference allowlist", () => {
       for (const row of filings) {
         const sentence = `${row.cited} Relies on ${row.mark}, ${word} 5.`
         await expectRefusal({ ...row.filing, draft: { body: sentence } }, `${row.name} ${sentence}`)
+        const bare = `${row.cited} ${row.mark}, ${word} 5.`
+        await expectRefusal({ ...row.filing, draft: { body: bare } }, `bare ${row.name} ${bare}`)
       }
       const before = `Relies on P/1 and P/2. ${word} P/3.`
       await expectRefusal({ ...marked(["P/1", "P/2"]), draft: { body: before } }, before)
+      const bareBefore = `P/1 and P/2. ${word} P/3.`
+      await expectRefusal({ ...marked(["P/1", "P/2"]), draft: { body: bareBefore } }, bareBefore)
     }
   })
 
@@ -1668,7 +1672,6 @@ describe("L5.5 fail-closed reference allowlist", () => {
       "The witness proved P-1.5 and then P-2.5.",
       "See www.example.com/P-1 and file_P-2.",
       "LIST OF EXHIBITS: P-1, P-2.",
-      "The witness did not prove P-1 or P-2.",
       "The witness proved P-10 and then P-2.",
       "The witness proved CP-1 and then P-2.",
       "The witness proved P-1-A and then P-2.",
@@ -1716,6 +1719,85 @@ describe("L5.5 fail-closed reference allowlist", () => {
       { ...petition, draft: { body: "The petitioner relies on Annexures A, B and C. A-D." } },
       "A-D",
     )
+  })
+
+  it("reads P-1 after did not prove", async () => {
+    await expectGeneration({ ...exhibits, draft: { body: "The witness did not prove P-1 or P-2." } }, "did not prove")
+  })
+
+  it("REF-018 refuses a bare mark that a skip used to hide", async () => {
+    const cited = "Relies on P/1 and P/2."
+    const sentences = [
+      "The defendant has not denied P/3.",
+      "It is not disputed that P-9 is the sale deed.",
+      "did not deny P/9 at all, and P/9 is the sale deed",
+      "LIST OF EXHIBITS\nP/9 Sale deed\nThe plaintiff relies on P/1 and P/2 and P/9",
+      "sale-deed/P-9",
+      "deed/P/9",
+      "and/P/9",
+      "P_9",
+      "Copy No. P-9",
+      "sale deed No. P-9",
+    ]
+    for (const sentence of sentences) {
+      await expectRefusal({ ...marked(["P/1", "P/2"]), draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+    await expectRefusal(
+      { ...petition, draft: { body: `${petition.draft.body} Annexure_D` } },
+      "Annexure_D",
+    )
+  })
+
+  it("REF-019 refuses a label split by a line-break hyphen", async () => {
+    for (const sentence of ["See Annex-\nure D.", "Annex-\nure D is attached."]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${petition.draft.body} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("cites D")), sentence).toBe(true)
+    }
+  })
+
+  it("OVER-020 generates legal prose that is not an annexure citation", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "The petitioner relies on 2021 SCMR 1234.",
+      "See 2021 SCMR 1234.",
+      "The petitioner relies on Order XXI Rule 2 CPC.",
+      "See also Section 9 CPC.",
+      "See Section 12(2) CPC.",
+      "The petitioner relies on the FIR.",
+      "The petitioner relies on para A of the judgment.",
+      "The petitioner relies on the following grounds: (a) delay; (b) fraud.",
+      "Annexures A, B and C were issued under Section 7 of the Act.",
+      "Annexure A was signed by me.",
+      "Annexure A shows payment of Rs. 5,000.",
+      "Annexure A is the order of the AC.",
+      "See p. 3.",
+      "See p.3.",
+      "See p. 3, line 4.",
+      "See pp. 3-5 of the record.",
+      "See Annexure A at p. 3.",
+    ]
+    for (const sentence of sentences) {
+      const body = sentence.startsWith("Annexures A, B and C") ? sentence : `${cited} ${sentence}`
+      await expectGeneration({ ...petition, draft: { body } }, sentence)
+    }
+  })
+
+  it("OVER-021 generates a case number with of and a year", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of ["C.P. No. D-1234 of 2023", "Cr. Misc. 45-B of 2024"]) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("does not treat para A or a parenthesised list marker as Annexure A", async () => {
+    const body = "The petitioner relies on Annexures B and C. The petitioner relies on para A of the judgment. The petitioner relies on the following grounds: (a) delay; (b) fraud."
+    enableFlag()
+    const result = await generateDocket({ ...petition, draft: { body } })
+    expect(result.ok).toBe(false)
+    expect(result.queue.some((entry) => entry.detail === "body does not refer to A")).toBe(true)
+    expect(result.queue.some((entry) => entry.detail.includes("different order"))).toBe(false)
   })
 
   it("keeps the three-dot refusal after NFKC and does not keep a U+2026 branch", () => {
