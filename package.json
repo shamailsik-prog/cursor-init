@@ -83,20 +83,20 @@
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/pg": "^8.15.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "firebase": "^11.10.0",
-    "firebase-tools": "^14.27.0",
+    "firebase-tools": "^15.36.0",
     "globals": "^14.0.0",
     "shadcn": "^4.21.0",
     "tailwindcss": "^4",
     "tsx": "4.23.15",
     "typescript": "^5",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "overrides": {
     "undici@^7.0.0": "7.30.1",

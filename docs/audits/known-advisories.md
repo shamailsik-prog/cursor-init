@@ -21,7 +21,9 @@ Rules for this file:
   gate CI/build/emulator/test tooling (`firebase-tools`, `vitest`, and their
   transitive trees) that still runs with repository credentials.
 
-Re-checked 2026-11-15: `functions/` `source-map-js` 1.2.1 -> 1.2.2 and nested `zod` 4.6.5 -> 4.6.7 (patch). Those two dev rows are fixed, not listed. `opentelemetry-api` 1.45.2 and `soupsieve` 4.1.1 are pinned in the corpus lockfiles, so pip-audit is clean. The rows below still need a major bump (`firebase-tools` 15 or `vitest` 5) and stay listed.
+Re-checked 2026-11-15: `functions/` `source-map-js` 1.2.1 -> 1.2.2 and nested `zod` 4.6.5 -> 4.6.7 (patch). Those two dev rows are fixed, not listed. `opentelemetry-api` 1.45.2 and `soupsieve` 4.1.1 are pinned in the corpus lockfiles, so pip-audit is clean.
+
+Re-checked 2026-11-15 (FA-Q250-ADV-002): dev `firebase-tools` 14.27.0 -> 15.36.0 (tar 7.5.23, basic-ftp gone, nested zod 4) and `vitest` 3.2.7 -> 5.1.0 at the root and in `functions/` (tinypool gone). The 15 high/critical dev rows those chains required are fixed, not listed. The allowlist table is empty. Root `@types/node` moved `^20` to `^22` because Vitest 5 declares an optional peer of `@types/node` `^22.0.0 || >=24.0.0`; the app already runs on Node 22. Production dependency ranges and locked production versions are unchanged. `npm audit --omit=dev` is unchanged by this upgrade: root 0 high/critical (7 moderate, 1 low) and `functions/` 0 high/critical (10 moderate, 1 low). Full-tree audits are 0 high/critical.
 
 Re-checked 2026-10-26 (F40): full-tree npm audit is gated; overrides bump
 `vite` to 7.3.7 and `@grpc/grpc-js` to 1.14.6 on root and `functions/`.
@@ -53,26 +55,11 @@ the 2026-10-06 baseline were fixed, not listed, and the table is empty:
   declares undici ^7.29.0), so npm 10 and npm 11 resolved different trees and
   no lockfile satisfied both. The keyed form resolves one tree on both.
 
-Remaining, below the gate's threshold: `npm:root` has 2 moderate (`uuid` < 11.1.1
-nested under `gaxios` 6, GHSA-w5hq-g745-h8pq, buffer-bounds check only when a
-caller passes `buf`; and `gaxios` through it). `npm:functions` has 8 moderate,
-all via `firebase-admin` 13 -> 14 (a major bump, upgrade backlog).
-`pip:corpus_service` has none.
+Remaining, below the gate's threshold: the production moderates in the
+FA-Q250-ADV-002 re-check above. `uuid` < 11.1.1 nested under `gaxios` 6
+(GHSA-w5hq-g745-h8pq, buffer-bounds check only when a caller passes `buf`) is
+still among them. `npm:functions` moderates are still via `firebase-admin` 13
+-> 14 (a major bump, upgrade backlog). `pip:corpus_service` has none.
 
 | scope | advisory | package | severity | reason | owner | review by |
 | --- | --- | --- | --- | --- | --- | --- |
-| npm:root:dev | GHSA-c475-qrg2-pj4r | basic-ftp | high | Transitive under dev `firebase-tools@14` (emulator FTP client); not in production tree; upgrade backlog firebase-tools 15 | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-23hp-3jrh-7fpw | tar | critical | `firebase-tools@14` pins tar@6.x for CLI packaging; CI/emulator only; tar 7.x via firebase-tools 15 | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-34x7-hfp2-rc4v | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-83g3-92jg-28cx | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-8qq5-rm4j-mr97 | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-8x88-c5mf-7j5w | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-9ppj-qmqm-q256 | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-qffp-2rhf-9h96 | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-r292-9mhp-454m | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-r6q2-hw4h-h46w | tar | high | Same tar@6.x chain as GHSA-23hp-3jrh-7fpw | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-5gmw-xhrv-c9v3 | tinypool | critical | `vitest@3` pins tinypool 1.x for test workers; dev/CI only; vitest 5 + tinypool 2 upgrade backlog | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-85c8-ppgw-ccpr | tinypool | critical | Same tinypool 1.x chain as GHSA-5gmw-xhrv-c9v3 | Shamail | 2026-11-15 |
-| npm:root:dev | GHSA-mrhx-c7xc-m3w5 | zod | high | Nested zod under dev `firebase-tools@14`; app depends on zod 4.6.7 | Shamail | 2026-11-15 |
-| npm:functions:dev | GHSA-5gmw-xhrv-c9v3 | tinypool | critical | `vitest@3` in functions devDependencies; vitest 5 upgrade backlog | Shamail | 2026-11-15 |
-| npm:functions:dev | GHSA-85c8-ppgw-ccpr | tinypool | critical | Same tinypool 1.x chain as GHSA-5gmw-xhrv-c9v3 | Shamail | 2026-11-15 |

@@ -14,8 +14,14 @@ export default defineConfig({
       ...(process.env.G2_GATE === "1" ? [] : ["test/g2.cross-firm.test.ts"]),
       ...(process.env.F05_AUTHORITY_SUITE === "1" ? [] : ["test/**/*.pg.test.ts", "test/f05-*.e2e.emu.test.ts"]),
     ],
-    // firebase-tools' and the client SDK's punycode import warns on every worker start (DEP0040); nothing here uses it.
-    poolOptions: { forks: { execArgv: ["--disable-warning=DEP0040"] } },
+    // Vitest 3's default pool was forks. Keep it. poolOptions was removed in Vitest 4;
+    // execArgv is now a top-level option. firebase-tools and the client SDK import
+    // punycode (DEP0040) on every worker start; nothing here uses it.
+    pool: "forks",
+    execArgv: ["--disable-warning=DEP0040"],
+    // Vitest 5 defaults clearMocks to true and wipes call history before each test.
+    // Keep the Vitest 3 default so assertions that span tests in a file stay the same.
+    clearMocks: false,
     // Emulator round-trips (first gRPC connect, 1s revocation wait) exceed the 5s default on cold start.
     testTimeout: 15000,
     // Suites share one emulator and singleton docs (platform/bootstrap, platform/gates): run files one at a time.

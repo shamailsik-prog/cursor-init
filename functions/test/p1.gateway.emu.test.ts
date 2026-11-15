@@ -144,8 +144,10 @@ const monthOf = async (firmId: string, mk = MONTH) => (await monthRef(firmId, mk
 /** Every call made to any logger method, as JSON, for the "no raw text in a log line" checks. */
 function spyLogs(): {
   all: () => string
-  warn: ReturnType<typeof vi.spyOn>
-  error: ReturnType<typeof vi.spyOn>
+  // Vitest 5's last `vi.spyOn` overload makes `ReturnType<typeof vi.spyOn>` a mock
+  // whose `calls` element is `any`. A plain array keeps the call-history checks typed.
+  warn: { mock: { calls: unknown[][] } }
+  error: { mock: { calls: unknown[][] } }
   registeredOf: (event: string) => Record<string, unknown>[]
 } {
   const spies = (["debug", "info", "log", "warn", "error", "write"] as const).map((m) => [m, vi.spyOn(logger, m).mockImplementation(() => undefined)] as const)
