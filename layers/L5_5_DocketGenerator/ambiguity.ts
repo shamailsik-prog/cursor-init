@@ -197,9 +197,15 @@ function checkCitations(
       queue.push(item("ref_unresolved", annexure.artifactId, `body does not refer to ${annexure.token}`))
     }
   })
-  if (known.length === keys.length && known.join("\0") !== keys.join("\0")) {
+  if (citesOutOfOrder(known, keys)) {
     queue.push(item("order_unresolved", null, "body refers to the annexures in a different order from the filing set"))
   }
+}
+
+function citesOutOfOrder(known: readonly string[], keys: readonly string[]): boolean {
+  if (known.length < 2) return false
+  const ordered = keys.filter((key) => known.includes(key))
+  return known.join("\0") !== ordered.join("\0")
 }
 
 function checkManualRefs(
@@ -225,7 +231,7 @@ function checkManualRefs(
       queue.push(item("ref_unresolved", annexure.artifactId, detail))
     }
   })
-  if (known.length === keys.length && known.join("\0") !== keys.join("\0")) {
+  if (citesOutOfOrder(known, keys)) {
     queue.push(item("order_unresolved", null, "body refers to the annexures in a different order from the filing set"))
   }
 }
