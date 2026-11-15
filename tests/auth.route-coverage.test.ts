@@ -20,8 +20,13 @@ vi.mock("firebase-admin/auth", () => ({
 // 401 means the handler is reachable without authentication. The regex checks
 // below are a secondary lint.
 // Every exported HTTP handler under app/api must go through withSession, and
-// only the reviewed allow-list may opt out of authentication.
+// only the reviewed allow-list may opt out of a Firebase session.
+// The health route is public through withSession({ public: true }).
+// The WhatsApp webhook has no Firebase session: Meta signs the raw body
+// (X-Hub-Signature-256, services/d2-1/webhook.ts). With the grammar flag off
+// it refuses before any read. It must not be wrapped in withSession.
 const PUBLIC_ROUTES = new Set(["app/api/g0/monitor/route.ts"])
+const HMAC_WEBHOOKS = new Set(["app/api/d2/whatsapp/route.ts"])
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 function routeFiles(dir: string): string[] {
@@ -50,6 +55,11 @@ describe("app/api route authentication coverage", () => {
           `export\\s+(?:async\\s+)?(?:function\\s+${method}\\b|const\\s+${method}\\b)`
         ).test(source)
         if (!exported) continue
+        if (HMAC_WEBHOOKS.has(file)) {
+          expect(source.includes("withSession"), `${file} authenticates by HMAC, not a session`).toBe(false)
+          expect(source).toContain("handleWhatsAppWebhook")
+          continue
+        }
         const wrapped = new RegExp(
           `export\\s+async\\s+function\\s+${method}\\(request: Request\\)\\s*\\{\\s*return withSession\\(request, handle\\w+(?:, [^)]+)?\\)\\s*\\}`
         ).test(source)
@@ -90,7 +100,7 @@ describe("app/api routes reject unauthenticated calls (behavioural)", () => {
           body: hasBody ? JSON.stringify({ actorId: "partner_a", firmId: "firmA", action: "create" }) : undefined,
         })
         const res = await handler(req)
-        if (PUBLIC_ROUTES.has(file)) {
+        if (PUBLIC_ROUTES.has(file) || HMAC_WEBHOOKS.has(file)) {
           expect(res.status, `${file} ${method}`).not.toBe(401)
         } else {
           expect(res.status, `${file} ${method}`).toBe(401)
