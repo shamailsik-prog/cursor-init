@@ -28,8 +28,10 @@ import {
   acknowledgeCourtOpsItem,
   CourtOpsItemNotFoundError,
   listCourtOpsQueue,
+  recordResolvedFollowUp,
+  requireCourtOpsActor,
   resolveCourtOpsAckItem,
-  resolveFollowUp,
+  courtOpsCanAccessMatter,
   resolveWorkflowBlocker,
   type CourtOpsAckTarget,
 } from "@/services/d2-2/courtOps"
@@ -39,6 +41,11 @@ import {
   courtOpsAckItemIdProblem,
   isCourtOpsAckQueueType,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import {
+  courtOpsResolveActivityId,
+  FOLLOW_UP_NOT_FOUND_BODY,
+  FollowUpResolveRefusedError,
+} from "@/platform/persistence/courtOpsFollowUpResolve"
 
 
 type WhatsAppBody = {
@@ -346,30 +353,70 @@ async function handlePost(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      resolveFollowUp(store, {
-        actorId: parsed.actorId,
-        followUpId: parsed.followUpId,
-        reason: parsed.reason,
-      })
-      const updated = store.followUps.find((row) => row.id === parsed.followUpId)
-      if (updated) {
-        await repos.followUps.upsert(updated)
-        await repos.workflowOpsActivity.upsert(
-          buildCourtOpsActivityRow({
-            id: `ops:court_ops:follow_up:${updated.id}`,
-            firmId: updated.firmId,
-            action: "court_ops_resolve_follow_up",
-            actorId: parsed.actorId,
-            classification: "internal",
-            matterId: updated.matterId,
-            documentId: null,
-            followUpId: updated.id,
-            queueType: "follow_up",
-            status: updated.status ?? "resolved",
-            detail: parsed.reason ?? updated.raw,
-          })
-        )
+      const actor = requireCourtOpsActor(store, parsed.actorId)
+      // A retried transaction must not record the matter decision twice.
+      const matterDecisions = new Map<string, boolean>()
+      let resolved
+      try {
+        resolved = await repos.followUps.resolveOpen({
+          id: parsed.followUpId,
+          firmId: actor.firmId,
+          actorId: actor.id,
+          resolvedAt: Date.now(),
+          reason: parsed.reason,
+          matterAllowed: (matterId) => {
+            const seen = matterDecisions.get(matterId)
+            if (seen !== undefined) return seen
+            const allow = courtOpsCanAccessMatter(store, actor.id, matterId)
+            matterDecisions.set(matterId, allow)
+            return allow
+          },
+        })
+      } catch (err) {
+        if (err instanceof FollowUpResolveRefusedError) {
+          if (err.reason === "not_found") {
+            return NextResponse.json(FOLLOW_UP_NOT_FOUND_BODY, { status: 404 })
+          }
+          // The follow-up committed earlier and the activity write did not. The same resolver's retry
+          // fills that row and answers 200. A different actor, or a row that already has the activity, stays 409.
+          if (err.reason === "already_resolved") {
+            const stored = await repos.followUps.get(parsed.followUpId, actor.firmId)
+            const activityId = courtOpsResolveActivityId(parsed.followUpId)
+            const activity = await repos.workflowOpsActivity.get(activityId, actor.firmId)
+            if (stored?.status === "resolved" && stored.resolvedBy === actor.id && !activity) {
+              await repos.workflowOpsActivity.upsert(
+                buildCourtOpsActivityRow({
+                  id: activityId,
+                  firmId: stored.firmId,
+                  action: "court_ops_resolve_follow_up",
+                  actorId: actor.id,
+                  classification: "internal",
+                  matterId: stored.matterId,
+                  documentId: null,
+                  followUpId: stored.id,
+                  queueType: "follow_up",
+                  status: "resolved",
+                  detail: parsed.reason ?? stored.raw,
+                })
+              )
+              const recovered = { action: "resolve_follow_up", followUpId: parsed.followUpId }
+              claim.complete(recovered)
+              return NextResponse.json({ result: recovered, idempotencyKey: key, reused: false })
+            }
+          }
+          return NextResponse.json(
+            {
+              error: err.reason === "already_resolved" ? "follow_up is already resolved" : "follow_up is not resolvable",
+              code: err.code,
+              reason: err.reason,
+            },
+            { status: 409 }
+          )
+        }
+        throw err
       }
+      // The transaction committed, including the activity row. The detailed audit row is pushed only now.
+      recordResolvedFollowUp(store, { actorId: actor.id, followUp: resolved, reason: parsed.reason })
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

@@ -19,6 +19,8 @@ import { resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 import { adminAuth, adminDb } from "@/tests/helpers/emulator-auth"
 import { HAS_AUTH_FIRESTORE_EMULATORS, requireAuthFirestoreEmulators } from "@/tests/helpers/emulator-require"
 import { deleteFirmRows } from "@/tests/helpers/firm-cleanup"
+// FA-D4-001-FU1-002 runs in this file's vitest entry: `npm run test:rules` names this file and not a new one.
+import "./fa-d4-001-fu1-002-resolve-follow-up.e2e.firestore.suite"
 
 requireAuthFirestoreEmulators("FA-D4-001-FU1 court-ops acknowledgement e2e")
 
