@@ -3,15 +3,18 @@ import {
   Document,
   LineRuleType,
   Packer,
-  PageBreak,
+  PageNumber,
   Paragraph,
+  SectionType,
   TextRun,
 } from "docx"
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
-import { FIXED_DOCKET_TIMESTAMP } from "@/layers/L5_5_DocketGenerator/pdf"
 import type { DocketPlan, PlanLine } from "@/layers/L5_5_DocketGenerator/layout"
 
-const FIXED_DATE = new Date(FIXED_DOCKET_TIMESTAMP)
+/** DOS zip time stores local calendar fields. Local midnight is those fields in every time zone. */
+function fixedZipMtime(): Date {
+  return new Date(2026, 0, 1, 0, 0, 0)
+}
 
 function alignment(line: PlanLine): (typeof AlignmentType)[keyof typeof AlignmentType] {
   if (line.align === "center") return AlignmentType.CENTER
@@ -19,17 +22,27 @@ function alignment(line: PlanLine): (typeof AlignmentType)[keyof typeof Alignmen
   return AlignmentType.LEFT
 }
 
-function paragraph(line: PlanLine): Paragraph {
+function lineTwips(line: PlanLine, previous: PlanLine | null): number {
+  if (!previous) return line.size * 20
+  return Math.round(previous.size * 1.5 * 20)
+}
+
+function paragraph(line: PlanLine, previous: PlanLine | null, pageNumber: boolean): Paragraph {
+  const spacing = { before: 0, after: 0, line: lineTwips(line, previous), lineRule: LineRuleType.EXACT }
+  const run = {
+    bold: line.bold,
+    font: "Times New Roman",
+    size: line.size * 2,
+  }
   return new Paragraph({
     alignment: alignment(line),
-    spacing: { before: 0, after: 0, line: 360, lineRule: LineRuleType.AUTO },
+    spacing,
+    wordWrap: false,
+    widowControl: false,
     children: [
-      new TextRun({
-        text: line.text.length > 0 ? line.text : " ",
-        bold: line.bold,
-        font: "Times New Roman",
-        size: line.size * 2,
-      }),
+      pageNumber
+        ? new TextRun({ ...run, children: [PageNumber.CURRENT] })
+        : new TextRun({ ...run, text: line.text.length > 0 ? line.text : " " }),
     ],
   })
 }
@@ -51,23 +64,14 @@ function freezeDocx(bytes: Uint8Array): Uint8Array {
     let data = files[name]
     if (!data) continue
     if (name === "docProps/core.xml") data = strToU8(freezeCoreTimestamps(strFromU8(data)))
-    frozen[name] = [data, { level: 9, mtime: FIXED_DATE }]
+    frozen[name] = [data, { level: 9, mtime: fixedZipMtime() }]
   }
   return zipSync(frozen)
 }
 
 export async function buildDocx(plan: DocketPlan): Promise<Uint8Array> {
-  const children: Paragraph[] = []
-  plan.pages.forEach((page, index) => {
-    if (page.lines.length === 0) {
-      children.push(paragraph({ text: " ", size: 12, bold: false, align: "left" }))
-    } else {
-      for (const line of page.lines) children.push(paragraph(line))
-    }
-    if (index < plan.pages.length - 1) {
-      children.push(new Paragraph({ children: [new PageBreak()] }))
-    }
-  })
+  const width = Math.round(plan.pageSize.width * 20)
+  const height = Math.round(plan.pageSize.height * 20)
   const doc = new Document({
     creator: "Sikander AI",
     title: "Court-format docket",
@@ -78,24 +82,25 @@ export async function buildDocx(plan: DocketPlan): Promise<Uint8Array> {
       default: {
         document: {
           run: { font: "Times New Roman", size: 24 },
-          paragraph: { spacing: { before: 0, after: 0, line: 360, lineRule: LineRuleType.AUTO } },
+          paragraph: { spacing: { before: 0, after: 0, line: 360, lineRule: LineRuleType.EXACT } },
         },
       },
     },
-    sections: [
-      {
-        properties: {
-          page: {
-            size: {
-              width: Math.round(plan.pageSize.width * 20),
-              height: Math.round(plan.pageSize.height * 20),
-            },
-            margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
-          },
+    sections: plan.pages.map((page) => ({
+      properties: {
+        type: SectionType.NEXT_PAGE,
+        page: {
+          size: { width, height },
+          margin: { top: 2160, right: 1440, bottom: 2160, left: 1440, header: 720, footer: 720 },
         },
-        children,
       },
-    ],
+      children:
+        page.lines.length === 0
+          ? [paragraph({ text: " ", size: 12, bold: false, align: "left" }, null, false)]
+          : page.lines.map((line, index) =>
+              paragraph(line, index === 0 ? null : (page.lines[index - 1] ?? null), index === 0 && line.align === "right"),
+            ),
+    })),
   })
   const raw = await Packer.toBuffer(doc)
   return freezeDocx(new Uint8Array(raw))

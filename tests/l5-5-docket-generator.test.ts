@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -83,10 +84,7 @@ function docxPages(bytes: Uint8Array): { width: number; height: number; texts: s
   const document = strFromU8(files["word/document.xml"] ?? new Uint8Array())
   const core = strFromU8(files["docProps/core.xml"] ?? new Uint8Array())
   const size = document.match(/<w:pgSz[^>]*w:w="(\d+)"[^>]*w:h="(\d+)"/) ?? document.match(/w:h="(\d+)"[^>]*w:w="(\d+)"/)
-  const chunks = document.split(/<w:br[^>]*w:type="page"[^/]*\/>/)
-  const texts = chunks.map((chunk) =>
-    [...chunk.matchAll(/<w:t(?:[^>]*)>([^<]*)<\/w:t>/g)].map((match) => match[1] ?? "").join(""),
-  )
+  const texts = docxSections(bytes).map((section) => section.text)
   const width = size ? Number(size[1]) : 0
   const height = size ? Number(size[2]) : 0
   return { width, height, texts, core }
@@ -244,7 +242,14 @@ describe("L5.5 court-format docket", () => {
 
   it("paginates a legal-size application on odd numbers without body citations", async () => {
     enableFlag()
-    const result = await generateDocket(application)
+    const ready = {
+      ...application,
+      annexures: application.annexures.map((annexure) => ({
+        ...annexure,
+        metadata: { ...annexure.metadata, status: "ready" as const },
+      })),
+    }
+    const result = await generateDocket(ready)
     expect(result.ok).toBe(true)
     expect(result.index?.map((entry) => entry.label)).toEqual(["Annexure A", "Annexure B"])
     expect(result.index?.every((entry) => entry.physicalPage % 2 === 1)).toBe(true)
@@ -459,6 +464,117 @@ describe("L5.5 ambiguity queue", () => {
     expect(result.queue.some((entry) => entry.code === "label_unresolved" && entry.artifactId === "record-b")).toBe(true)
   })
 
+  it("accepts a plural list of the annexures that are in the filing set", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: "The petitioner relies on Annexures A, B and C." },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it("queues citation variants that do not name an annexure in the set", async () => {
+    enableFlag()
+    const phrases: Array<{ phrase: string; canonicals: string[] }> = [
+      { phrase: "ANNEXURE-D", canonicals: ["D"] },
+      { phrase: "annexure d", canonicals: ["D"] },
+      { phrase: "Annexures D and E", canonicals: ["D", "E"] },
+      { phrase: "Annexure A1", canonicals: ["A1"] },
+      { phrase: "ENCLOSURE 9", canonicals: ["9"] },
+      { phrase: "Encl. 9", canonicals: ["9"] },
+    ]
+    for (const { phrase, canonicals } of phrases) {
+      const result = await generateDocket({
+        ...petition,
+        draft: { body: `${petition.draft.body} ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      for (const canonical of canonicals) {
+        expect(
+          result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)),
+          `${phrase} -> ${canonical}`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  it("queues mark variants, including a leading zero, that are not the assigned labels", async () => {
+    enableFlag()
+    const labeled = ambiguous.annexures.map((annexure, index) => ({
+      ...annexure,
+      assignedLabel: index === 0 ? "P/1" : "P/2",
+    }))
+    for (const phrase of ["p/99", "P-99", "P / 99", "P/01"]) {
+      const canonical = phrase.toLowerCase() === "p/01" ? "P/01" : "P/99"
+      const result = await generateDocket({
+        ...ambiguous,
+        draft: { body: `The plaintiff relies on ${phrase}.` },
+        annexures: labeled,
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(
+        result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)),
+        phrase,
+      ).toBe(true)
+    }
+  })
+
+  it("rejects assigned labels that mix a letter series with a P mark", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on Annexure A and on P/1." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "A" : "P/1",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "label_unresolved")).toBe(true)
+  })
+
+  it("refuses a docket while an annexure is pending or blocked", async () => {
+    enableFlag()
+    const blocked = await generateDocket(application)
+    expect(blocked.ok).toBe(false)
+    expect(blocked.pdf).toBeNull()
+    expect(blocked.docx).toBeNull()
+    expect(blocked.queue).toEqual([
+      expect.objectContaining({
+        code: "ref_unresolved",
+        artifactId: "app-b",
+        detail: "annexure status is blocked",
+      }),
+    ])
+
+    const pending = await generateDocket({
+      ...application,
+      annexures: application.annexures.map((annexure) => ({
+        ...annexure,
+        metadata: { ...annexure.metadata, status: annexure.metadata.status === "blocked" ? "pending" : "ready" },
+      })),
+    })
+    expect(pending.ok).toBe(false)
+    expect(pending.pdf).toBeNull()
+    expect(pending.docx).toBeNull()
+    expect(pending.queue).toEqual([
+      expect.objectContaining({
+        code: "ref_unresolved",
+        artifactId: "app-b",
+        detail: "annexure status is pending",
+      }),
+    ])
+  })
+
   it("queues an assigned label that breaks the stated series", async () => {
     enableFlag()
     const result = await generateDocket({
@@ -471,6 +587,95 @@ describe("L5.5 ambiguity queue", () => {
     expect(result.pdf).toBeNull()
     expect(result.queue.some((entry) => entry.code === "label_unresolved" && entry.artifactId === "ann-a")).toBe(true)
   })
+})
+
+function docxSections(bytes: Uint8Array): Array<{ width: number; height: number; margins: Record<string, number>; pageFields: number; text: string; exactLines: number[] }> {
+  const document = strFromU8(unzipSync(bytes)["word/document.xml"] ?? new Uint8Array())
+  const markers = [...document.matchAll(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g)]
+  let cursor = 0
+  return markers.map((marker) => {
+    const sect = marker[0]
+    const sectEnd = (marker.index ?? 0) + sect.length
+    const paragraphEnd = document.indexOf("</w:p>", sectEnd)
+    const bodyEnd = paragraphEnd === -1 ? sectEnd : paragraphEnd + "</w:p>".length
+    const body = document.slice(cursor, bodyEnd)
+    cursor = bodyEnd
+    const size = sect.match(/<w:pgSz[^>]*w:w="(\d+)"[^>]*w:h="(\d+)"/)
+    const margin = sect.match(/<w:pgMar\b[^>]*\/>/)?.[0] ?? sect.match(/<w:pgMar\b[^>]*>/)?.[0] ?? ""
+    const margins: Record<string, number> = {}
+    for (const name of ["top", "right", "bottom", "left"]) {
+      const found = margin.match(new RegExp(`w:${name}="(\\d+)"`))
+      margins[name] = found ? Number(found[1]) : 0
+    }
+    const text = [...body.matchAll(/<w:t(?:[^>]*)>([^<]*)<\/w:t>/g)].map((match) => match[1] ?? "").join("")
+    const pageFields = [...body.matchAll(/<w:instrText[^>]*>[^<]*\bPAGE\b/g)].length
+    const exactLines = [...body.matchAll(/<w:spacing\b[^>]*w:line="(\d+)"[^>]*w:lineRule="exact"/g)].map((match) => Number(match[1]))
+    return {
+      width: size ? Number(size[1]) : 0,
+      height: size ? Number(size[2]) : 0,
+      margins,
+      pageFields,
+      text,
+      exactLines,
+    }
+  })
+}
+
+describe("L5.5 docx pagination", () => {
+  it("gives each plan page its own section, exact spacing, and a PAGE field on content leaves", async () => {
+    enableFlag()
+    const filing: DocketFilingSet = {
+      ...petition,
+      annexures: petition.annexures.map((annexure, index) =>
+        index === 1
+          ? {
+              ...annexure,
+              body: Array.from({ length: 400 }, () => "The record continues on this leaf of the paper-book.").join("\n"),
+            }
+          : annexure,
+      ),
+    }
+    const result = await generateDocket(filing)
+    expect(result.ok).toBe(true)
+    const pdf = await pdfPages(result.pdf!)
+    const sections = docxSections(result.docx!)
+    expect(sections).toHaveLength(pdf.texts.length)
+    expect(sections.length).toBeGreaterThan(10)
+    for (const [index, section] of sections.entries()) {
+      expect(section.width).toBe(12240)
+      expect(section.height).toBe(20160)
+      expect(section.margins).toEqual({ top: 2160, right: 1440, bottom: 2160, left: 1440 })
+      expect(section.exactLines.length).toBeGreaterThan(0)
+      if (index % 2 === 1) {
+        expect(section.text.replace(/\s/g, "")).toBe("")
+        expect(section.pageFields).toBe(0)
+      } else {
+        expect(section.pageFields).toBe(1)
+      }
+    }
+    const document = strFromU8(unzipSync(result.docx!)["word/document.xml"] ?? new Uint8Array())
+    expect(document).toContain('w:ascii="Times New Roman"')
+    expect(document).toContain('w:lineRule="exact"')
+    expect(document).toContain('w:val="nextPage"')
+  })
+
+  it("keeps the same docx bytes in UTC and in New York", () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+    const probe = path.join(root, "tests/l5-5-docx-tz-probe.ts")
+    const bin = path.join(root, "node_modules/.bin/vite-node")
+    const config = path.join(root, "vitest.config.ts")
+    const render = (tz: string) => {
+      const out = path.join("/tmp", `q12a-docket-${tz.replace(/\//g, "_")}.docx`)
+      const run = spawnSync(bin, ["--config", config, probe], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, TZ: tz, DOCKET_TZ_OUT: out },
+      })
+      expect(run.status, `${tz}\n${run.stdout}\n${run.stderr}`).toBe(0)
+      return readFileSync(out)
+    }
+    expect(Buffer.compare(render("UTC"), render("America/New_York"))).toBe(0)
+  }, 60000)
 })
 
 describe("L5.5 layer boundary", () => {

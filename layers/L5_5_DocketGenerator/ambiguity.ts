@@ -21,9 +21,13 @@ export type ResolveResult =
   | { ok: true; docket: ResolvedDocket }
   | { ok: false; queue: AmbiguityItem[] }
 
-const LETTER_CITATION = /\bAnnex(?:ure)?[\s-]+([A-Za-z])\b/g
-const ENCLOSURE_CITATION = /\bEnclosures?\s+([1-9][0-9]*)\b/g
-const ALTERNATE_MARK = /(?:^|[^A-Za-z0-9])([PDR])\/([1-9][0-9]*)/g
+const ANNEX_START = /\bannex(?:ures?|ure)?\b\.?\s*[-:]?\s*/gi
+const ANNEX_LABEL = /^([A-Za-z]\d*)(?![A-Za-z0-9])/
+const ANNEX_SEPARATOR = /^\s*(?:,|&|and)\s+(?=[A-Za-z]\d*(?![A-Za-z0-9]))/
+const ENCLOSURE_START = /\b(?:enclosures?|encl)\b\.?\s*[-:]?\s*/gi
+const ENCLOSURE_LABEL = /^(\d+)(?!\d)/
+const ENCLOSURE_SEPARATOR = /^\s*(?:,|&|and)\s+(?=\d)/
+const MARK_CITATION = /\b([PDRpdr])\s*[/\-]\s*(\d+)\b/g
 
 function item(code: AmbiguityItem["code"], artifactId: string | null, detail: string): AmbiguityItem {
   return { code, artifactId, detail }
@@ -49,24 +53,81 @@ function boundedIndex(text: string, label: string): number {
   return -1
 }
 
-function distinctInOrder(hits: readonly string[]): string[] {
-  const out: string[] = []
-  for (const hit of hits) {
-    if (!out.includes(hit)) out.push(hit)
+type CitationHit = { form: string; canonical: string; index: number }
+
+function canonicalMark(token: string): string | null {
+  const match = /^([PDRpdr])\s*[/\-]\s*(\d+)$/.exec(token.trim())
+  if (!match?.[1] || !match[2]) return null
+  return `${match[1].toUpperCase()}/${match[2]}`
+}
+
+function formsForToken(token: string): string[] {
+  const trimmed = token.trim()
+  const forms = [`raw:${trimmed}`]
+  const mark = canonicalMark(trimmed)
+  if (mark) forms.push(`mark:${mark}`)
+  const annex = /^(?:annex(?:ures?|ure)?\s+)?([A-Za-z]\d*)$/i.exec(trimmed)
+  if (annex?.[1]) forms.push(`annex:${annex[1].toUpperCase()}`)
+  if (/^\d+$/.test(trimmed) || /^(?:enclosures?|encl\.?)\s+\d+$/i.test(trimmed)) {
+    const enclosure = /(\d+)$/.exec(trimmed)
+    if (enclosure?.[1]) forms.push(`encl:${enclosure[1]}`)
   }
-  return out
+  return forms
 }
 
-function letterHits(text: string): string[] {
-  return [...text.matchAll(LETTER_CITATION)].map((match) => (match[1] ?? "").toUpperCase())
+function assignedKey(token: string): string {
+  const forms = formsForToken(token)
+  return forms.find((form) => form.startsWith("mark:") || form.startsWith("annex:") || form.startsWith("encl:")) ?? forms[0] ?? `raw:${token}`
 }
 
-function enclosureHits(text: string): string[] {
-  return [...text.matchAll(ENCLOSURE_CITATION)].map((match) => match[1] ?? "")
+function seriesKind(token: string): string | null {
+  const mark = canonicalMark(token)
+  if (mark) return `mark-${mark[0]}`
+  if (/^(?:annex(?:ures?|ure)?\s+)?[A-Za-z]\d*$/i.test(token.trim())) return "letter"
+  return null
 }
 
-function alternateMarks(text: string): string[] {
-  return [...text.matchAll(ALTERNATE_MARK)].map((match) => `${match[1]}/${match[2]}`)
+function readList(text: string, from: number, label: RegExp, separator: RegExp): Array<{ value: string; index: number }> {
+  const found: Array<{ value: string; index: number }> = []
+  let cursor = from
+  const first = label.exec(text.slice(cursor))
+  if (!first?.[1]) return found
+  found.push({ value: first[1], index: cursor })
+  cursor += first[0].length
+  while (true) {
+    const gap = separator.exec(text.slice(cursor))
+    if (!gap) break
+    const nextAt = cursor + gap[0].length
+    const next = label.exec(text.slice(nextAt))
+    if (!next?.[1]) break
+    found.push({ value: next[1], index: nextAt })
+    cursor = nextAt + next[0].length
+  }
+  return found
+}
+
+function extractCitations(text: string): CitationHit[] {
+  const hits: CitationHit[] = []
+  for (const match of text.matchAll(ANNEX_START)) {
+    const from = (match.index ?? 0) + match[0].length
+    for (const label of readList(text, from, ANNEX_LABEL, ANNEX_SEPARATOR)) {
+      const canonical = label.value.toUpperCase()
+      hits.push({ form: `annex:${canonical}`, canonical, index: label.index })
+    }
+  }
+  for (const match of text.matchAll(ENCLOSURE_START)) {
+    const from = (match.index ?? 0) + match[0].length
+    for (const label of readList(text, from, ENCLOSURE_LABEL, ENCLOSURE_SEPARATOR)) {
+      hits.push({ form: `encl:${label.value}`, canonical: label.value, index: label.index })
+    }
+  }
+  for (const match of text.matchAll(MARK_CITATION)) {
+    const letter = (match[1] ?? "").toUpperCase()
+    const digits = match[2] ?? ""
+    hits.push({ form: `mark:${letter}/${digits}`, canonical: `${letter}/${digits}`, index: match.index ?? 0 })
+  }
+  hits.sort((left, right) => left.index - right.index)
+  return hits
 }
 
 function pageSpec(
@@ -166,48 +227,31 @@ function presentation(token: string, scheme: ClassifiedRule["scheme"], index: nu
   return { indexLabel: token, heading: token }
 }
 
-function checkSeriesRefs(
+function checkCitations(
   draft: string,
-  assigned: readonly { artifactId: string; token: string }[],
-  hits: readonly string[],
+  annexures: readonly ResolvedAnnexure[],
   requireReferenceOrder: boolean,
   queue: AmbiguityItem[],
 ): void {
-  const tokens = assigned.map((row) => row.token)
-  const distinct = distinctInOrder(hits)
-  for (const hit of distinct) {
-    if (!tokens.includes(hit)) {
-      queue.push(item("ref_unresolved", null, `body cites ${hit}, which is not an annexure in this filing set`))
+  const keys = annexures.map((annexure) => assignedKey(annexure.token))
+  const knownKeys = new Set(keys)
+  const known: string[] = []
+  for (const hit of extractCitations(draft)) {
+    if (!knownKeys.has(hit.form)) {
+      queue.push(item("ref_unresolved", null, `body cites ${hit.canonical}, which is not an annexure in this filing set`))
+      continue
     }
+    if (!known.includes(hit.form)) known.push(hit.form)
   }
   if (!requireReferenceOrder) return
-  const known = distinct.filter((hit) => tokens.includes(hit))
-  for (const row of assigned) {
-    if (!known.includes(row.token)) {
-      queue.push(item("ref_unresolved", row.artifactId, `body does not refer to ${row.token}`))
+  annexures.forEach((annexure, index) => {
+    const key = keys[index] ?? ""
+    if (!known.includes(key)) {
+      queue.push(item("ref_unresolved", annexure.artifactId, `body does not refer to ${annexure.token}`))
     }
-  }
-  if (known.length === tokens.length && known.join("\0") !== tokens.join("\0")) {
+  })
+  if (known.length === keys.length && known.join("\0") !== keys.join("\0")) {
     queue.push(item("order_unresolved", null, "body refers to the annexures in a different order from the filing set"))
-  }
-}
-
-function labelForms(token: string): string[] {
-  const forms = [token]
-  const letter = /^Annex(?:ure)?[\s-]+([A-Za-z])$/i.exec(token)
-  if (letter?.[1]) forms.push(letter[1].toUpperCase())
-  const enclosure = /^Enclosures?\s+([1-9][0-9]*)$/i.exec(token)
-  if (enclosure?.[1]) forms.push(enclosure[1])
-  return forms
-}
-
-function checkAmbiguousRefs(draft: string, annexures: readonly ResolvedAnnexure[], queue: AmbiguityItem[]): void {
-  const forms = new Set(annexures.flatMap((annexure) => labelForms(annexure.token)))
-  const hits = distinctInOrder([...letterHits(draft), ...enclosureHits(draft), ...alternateMarks(draft)])
-  for (const hit of hits) {
-    if (!forms.has(hit)) {
-      queue.push(item("ref_unresolved", null, `body cites ${hit}, which is not an annexure in this filing set`))
-    }
   }
 }
 
@@ -276,6 +320,9 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
     if (!annexure.body.trim()) {
       queue.push(item("ref_unresolved", id || null, "annexure body is empty"))
     }
+    if (annexure.metadata.status === "pending" || annexure.metadata.status === "blocked") {
+      queue.push(item("ref_unresolved", id || null, `annexure status is ${annexure.metadata.status}`))
+    }
   })
 
   const tokens = input.annexures.map((annexure, index) => tokenFor(annexure, index, classified, queue))
@@ -312,33 +359,18 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
 
   const draft = input.draft.body.replace(/\r\n/g, "\n")
   const scheme = classified.scheme
-  if (scheme.kind === "letters" || scheme.kind === "single-a") {
-    for (const mark of alternateMarks(draft)) {
-      queue.push(item("ref_unresolved", null, `body cites ${mark}, which this annexure rule does not number`))
+  if (scheme.kind === "ambiguous") {
+    const kinds = [
+      ...new Set(annexures.map((annexure) => seriesKind(annexure.token)).filter((kind): kind is string => kind !== null)),
+    ]
+    if (kinds.length > 1) {
+      queue.push(item("label_unresolved", null, `assigned labels mix series (${kinds.join(", ")})`))
     }
-    checkSeriesRefs(
-      draft,
-      annexures.map((annexure) => ({ artifactId: annexure.artifactId, token: annexure.token })),
-      letterHits(draft),
-      scheme.kind === "letters" && scheme.requireReferenceOrder,
-      queue,
-    )
-  } else if (scheme.kind === "enclosures") {
-    for (const mark of alternateMarks(draft)) {
-      queue.push(item("ref_unresolved", null, `body cites ${mark}, which this annexure rule does not number`))
-    }
-    checkSeriesRefs(
-      draft,
-      annexures.map((annexure) => ({ artifactId: annexure.artifactId, token: annexure.token })),
-      enclosureHits(draft),
-      scheme.requireReferenceOrder,
-      queue,
-    )
-  } else if (scheme.kind === "manual") {
-    checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue)
-  } else if (scheme.kind === "ambiguous") {
-    checkAmbiguousRefs(draft, annexures, queue)
   }
+  const requireReferenceOrder =
+    (scheme.kind === "letters" || scheme.kind === "enclosures" || scheme.kind === "manual") && scheme.requireReferenceOrder
+  checkCitations(draft, annexures, requireReferenceOrder, queue)
+  if (scheme.kind === "manual") checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue)
 
   if (queue.length > 0 || !spec) return { ok: false, queue }
   return {
