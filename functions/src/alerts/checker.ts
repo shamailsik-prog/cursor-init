@@ -24,8 +24,8 @@ import { queueAgeSpec, reservationUnresolvedSpec, sagaAgeSpec } from "./specs"
  * document id. A row with no `leaseUntil` is outside that index and is dropped from the rows alerted (FA-F43-R1-004-002);
  * `createdAt` is the documented creation time and is not a second query. A stored null stays: the index returns it.
  * That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001). The cursor is then cleared
- * and the next run starts again from the oldest row (the wrap). A full raw page continues from its last raw row.
- * An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001). An id-only
+ * and the next run starts again from the oldest row (the wrap). A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001).
+ * Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001). An id-only
  * cursor (`at: null`) cannot resume a time order and is ignored once.
  *
  * Passes rotate (`passIndex` on the same document): run N starts at `CHECK_PASSES[N mod 3]`. A jobs pass that spends
@@ -35,7 +35,8 @@ import { queueAgeSpec, reservationUnresolvedSpec, sagaAgeSpec } from "./specs"
  * run; it is not a bound for the pass that was last). That 3-pass figure is the leading query only. Held and
  * quarantined reservations alternate which one leads (`floor(passIndex / 3)` odd: quarantine first), so a held window
  * cannot skip quarantine on every reservations lead (FA-F43-R1-004-001). So each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query. Counts are of the rows this run read. The
- * cursor is saved after each query; a run that fails or overlaps another costs at most a window re-read.
+ * cursor is saved after each query that can name its last row. A query that stops on a missing order field does not
+ * advance, so later runs read that same window again. An overlap that loses an unsaved tail reads that tail once more.
  *
  * Each pass is caught on its own (`ops_alert.pass_failed`), so a query that fails (an index still building) stops only
  * its own pass.
@@ -87,8 +88,12 @@ export const checkerTestSeam: {
   memory?: CheckerMemoryState
 } = {}
 
-/** Where a query resumes: the last row read (its time field's value, null for an id-ordered query, and its id). */
-export type CheckCursor = { at: Timestamp | null; id: string }
+/**
+ * Where a query resumes: the last raw row (its order-field value and its id). `at` is null for an id-ordered query.
+ * Any present value is kept. Only a missing field is not a cursor (FA-260-R3-001).
+ */
+export type CheckCursorAt = Timestamp | null | number | string | boolean
+export type CheckCursor = { at: CheckCursorAt; id: string }
 
 /** The checker-state document: one cursor per query, and `passIndex` (absent or null cursor: start from the oldest row). */
 export function checkerStateRef(): DocumentReference {
@@ -101,7 +106,7 @@ const at = (ms: number) => Timestamp.fromMillis(ms)
 function isCursor(v: unknown): v is CheckCursor {
   if (v === null || typeof v !== "object") return false
   const c = v as Record<string, unknown>
-  return typeof c.id === "string" && c.id !== "" && (c.at === null || c.at instanceof Timestamp)
+  return typeof c.id === "string" && c.id !== "" && Object.prototype.hasOwnProperty.call(c, "at") && c.at !== undefined
 }
 
 type Scan = { docs: QueryDocumentSnapshot[]; next: CheckCursor | null }
@@ -118,16 +123,19 @@ function rowSnap(row: CheckerPageRow): QueryDocumentSnapshot {
  * One page. A time-ordered query cannot resume from an id-only cursor (`at: null`, the shape saved when the query was
  * ordered by document id): that cursor is ignored and the page starts at the oldest row.
  */
-async function readOrderedPage(name: CheckQuery, base: Query | null, field: string | null, after: CheckCursor | null): Promise<QueryDocumentSnapshot[]> {
+async function readOrderedPage(name: CheckQuery, base: Query | null, field: string | null, after: { at: CheckCursorAt | undefined; id: string } | null): Promise<QueryDocumentSnapshot[]> {
   const usable = after !== null && (field === null || after.at !== null) ? after : null
   if (checkerTestSeam.readPage) {
-    const rows = await checkerTestSeam.readPage(name, field, usable)
+    // A missing order field has no Firestore value to resume from. The seam still sees the row id so a later page in
+    // this run is not restarted from the oldest row (FA-260-001).
+    const handed: CheckCursor | null = usable === null ? null : { at: usable.at === undefined ? null : usable.at, id: usable.id }
+    const rows = await checkerTestSeam.readPage(name, field, handed)
     return rows.slice(0, CHECK_PAGE_SIZE).map(rowSnap)
   }
   if (base === null) throw new Error("checker scan missing query")
   const ordered = field === null ? base.orderBy(FieldPath.documentId()) : base.orderBy(field).orderBy(FieldPath.documentId())
   let q = ordered.limit(CHECK_PAGE_SIZE)
-  if (usable !== null) q = field === null ? q.startAfter(usable.id) : q.startAfter(usable.at as Timestamp, usable.id)
+  if (usable !== null && usable.at !== undefined) q = field === null ? q.startAfter(usable.id) : q.startAfter(usable.at, usable.id)
   return (await q.get()).docs
 }
 
@@ -135,16 +143,16 @@ async function readOrderedPage(name: CheckQuery, base: Query | null, field: stri
  * Reads up to `CHECK_MAX_PAGES` pages of `base` ordered by `field` (null: by document id alone) and the id, starting
  * after `cursor`. Returns the rows and the cursor to save. A raw page shorter than `CHECK_PAGE_SIZE` is the end of
  * the query: the cursor is cleared and the next run wraps to the start. That drop does not end the query: the end is
- * a raw page shorter than 100 (FA-260-001). A full raw page continues from its last raw row, including inside this
- * run when that row's order field is absent. Stops early when the budget is spent.
+ * a raw page shorter than 100 (FA-260-001). A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001).
+ * Stops early when the budget is spent.
  *
- * The cursor returned for the next run is that last raw row only when its order field is a Timestamp or null. An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001). The previous cursor stays. A stored
- * null is a value the index returns, so the row stays in the page and the saved cursor is id-only.
+ * Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001).
+ * A stored null stays in the page. Its saved cursor is id-only and cannot resume a time order.
  */
 async function scan(name: CheckQuery, base: Query | null, field: string | null, cursor: CheckCursor | null, spent: () => boolean): Promise<Scan> {
   const docs: QueryDocumentSnapshot[] = []
-  let after: CheckCursor | null = cursor
-  let anchor: { at: Timestamp | null | undefined; id: string } | null = null
+  let after: { at: CheckCursorAt | undefined; id: string } | null = cursor
+  let anchor: { at: CheckCursorAt | undefined; id: string } | null = null
   for (let page = 0; page < CHECK_MAX_PAGES; page++) {
     if (spent()) break
     const pageDocs = await readOrderedPage(name, base, field, after)
@@ -153,28 +161,27 @@ async function scan(name: CheckQuery, base: Query | null, field: string | null, 
     if (pageDocs.length < CHECK_PAGE_SIZE) return { docs, next: null }
     const last = pageDocs[pageDocs.length - 1]!
     anchor = rawAnchor(field, last)
-    after = { at: anchor.at as Timestamp | null, id: anchor.id }
+    after = anchor
   }
-  if (anchor === null) return { docs, next: after }
-  return { docs, next: cursorToSave(anchor) }
+  if (anchor === null) return { docs, next: cursor }
+  if (anchor.at === undefined) absentOrder(docs)
+  return { docs, next: { at: anchor.at, id: anchor.id } }
 }
 
-/** The last raw row. `at` is undefined only when a time-ordered field is absent (not a stored null). */
-function rawAnchor(field: string | null, last: QueryDocumentSnapshot): { at: Timestamp | null | undefined; id: string } {
+/** The last raw row. `at` is undefined only when the order field is missing. Every present value is kept. */
+function rawAnchor(field: string | null, last: QueryDocumentSnapshot): { at: CheckCursorAt | undefined; id: string } {
   if (field === null) return { at: null, id: last.id }
   const value = last.get(field)
-  if (value instanceof Timestamp || value === null) return { at: value, id: last.id }
-  return { at: undefined, id: last.id }
+  if (value === undefined) return { at: undefined, id: last.id }
+  return { at: value as CheckCursorAt, id: last.id }
 }
 
-/** A cursor that may be written. An absent order field is never written. */
-function cursorToSave(anchor: { at: Timestamp | null | undefined; id: string }): CheckCursor {
-  if (anchor.at === undefined) {
-    const err = new Error(CHECKER_CURSOR_ABSENT_ORDER)
-    ;(err as unknown as { code: string }).code = CHECKER_CURSOR_ABSENT_ORDER
-    throw err
-  }
-  return { at: anchor.at, id: anchor.id }
+/** The rows already read travel with the error so the query can still alert them. */
+function absentOrder(docs: QueryDocumentSnapshot[]): never {
+  const err = new Error(CHECKER_CURSOR_ABSENT_ORDER) as Error & { code: string; docs: QueryDocumentSnapshot[] }
+  err.code = CHECKER_CURSOR_ABSENT_ORDER
+  err.docs = docs
+  throw err
 }
 
 /** One run's cursors: read once at the start, each saved as soon as its query is done. `passIndex` rotates the next run. */
@@ -218,9 +225,16 @@ async function loadCursors(): Promise<Cursors> {
 
 /** Scans query `name` from its cursor and saves where it stopped. `base` is null when the test seam is serving pages. */
 async function scanFrom(name: CheckQuery, base: Query | null, field: string | null, cursors: Cursors, spent: () => boolean): Promise<QueryDocumentSnapshot[]> {
-  const { docs, next } = await scan(name, base, field, cursors.get(name), spent)
-  await cursors.save(name, next)
-  return docs
+  try {
+    const { docs, next } = await scan(name, base, field, cursors.get(name), spent)
+    await cursors.save(name, next)
+    return docs
+  } catch (err) {
+    if (errorCode(err) !== CHECKER_CURSOR_ABSENT_ORDER) throw err
+    logRegisteredError("ops_alert.pass_failed", { pass: name, code: CHECKER_CURSOR_ABSENT_ORDER })
+    const read = (err as { docs?: QueryDocumentSnapshot[] }).docs
+    return Array.isArray(read) ? read : []
+  }
 }
 
 type Group = { firmId: string; key: string; count: number; extra: number; oldestMs: number; oldestId: string }
@@ -332,7 +346,8 @@ export type CheckerOptions = { now?: () => number; passes?: readonly CheckPass[]
 /**
  * One checker run at `now()`: each pass (from its cursors), then one raise per group. Returns the alert ids raised or
  * counted. The scheduled run rotates which pass leads (`passIndex`). A caller that names `passes` keeps that order and
- * does not move the index (the paging tests pin one pass).
+ * does not move the index (the paging tests pin one pass). The budget stops the next page and the next pass. Specs
+ * already built from rows that were read are still raised.
  */
 export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ raised: string[] }> {
   const now = opts.now ?? Date.now
@@ -360,7 +375,6 @@ export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ rais
       continue
     }
     for (const spec of specs) {
-      if (spent()) break
       const id = await raiseAlertBestEffort(spec, nowMs)
       if (id !== null) raised.push(id)
     }

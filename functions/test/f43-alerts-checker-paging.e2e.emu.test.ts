@@ -72,11 +72,14 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     await stateRef().delete()
   }, SEED_TIMEOUT_MS)
 
+  const extraFirms: string[] = []
+
   afterEach(async () => {
     await deleteWhereFirm("jobs", [firmA, firmB])
-    await deleteWhereFirm("ai_reservations", [firmA, firmB])
+    await deleteWhereFirm("ai_reservations", [firmA, firmB, ...extraFirms])
     await stateRef().delete()
-    await deleteFirmData([firmA, firmB])
+    await deleteFirmData([firmA, firmB, ...extraFirms])
+    extraFirms.length = 0
   }, CLEANUP_TIMEOUT_MS)
 
   it("quarantined reservations: firm B's rows behind 520 of firm A's raise firm B's alert within the bounded runs; the cursor then wraps to firm A", { timeout: E2E_TIMEOUT_MS }, async () => {
@@ -159,6 +162,95 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: { toMillis?: () => number }; id?: string } | undefined
     expect(typeof cursor?.at?.toMillis).toBe("function")
     expect(cursor!.at!.toMillis!()).toBeGreaterThan(T + 2)
+  })
+
+  it("FA-260-R3-001: a number leaseUntil at row 100 is carried, and held rows plus the timestamp rows are alerted with no stall", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const T = Date.parse("1970-01-08T00:00:00.000Z")
+    const tag = uniq("n1").slice(2)
+    const firmNum = uniq("firm")
+    const firmTs = uniq("firm")
+    const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
+    extraFirms.push(firmNum, firmTs, ...heldFirms)
+    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
+    expect(prior).toBe(0)
+    const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
+    const quarantined = (firmId: string, leaseUntil: number | Timestamp) => ({ firmId, state: "reconcile_failed", leaseUntil, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) })
+    await writeAll([
+      ...Array.from({ length: 100 }, (_, i) => [ref(`n1num-${tag}-${String(i).padStart(4, "0")}`), quarantined(firmNum, -1_000 + i)] as [DocumentReference, DocumentData]),
+      ...Array.from({ length: 20 }, (_, i) => [ref(`n1ts-${tag}-${String(i).padStart(4, "0")}`), quarantined(firmTs, Timestamp.fromMillis(1 + i))] as [DocumentReference, DocumentData]),
+      ...heldFirms.map((firmId, i) => [ref(`n1held-${tag}-${String(i).padStart(2, "0")}`), { firmId, state: "reserved", leaseUntil: Timestamp.fromMillis(T), reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]),
+    ])
+
+    const { runAlertChecker } = await checker()
+    const now = () => T + 60 * 60_000
+    await runAlertChecker({ now, passes: ["reservations"] })
+    expect(await alertOf(firmNum, "ai.reservation_unresolved")).toBeDefined()
+    expect(await alertOf(firmTs, "ai.reservation_unresolved")).toBeDefined()
+    for (const firmId of heldFirms) expect(await alertOf(firmId, "ai.reservation_unresolved"), firmId).toBeDefined()
+    const before = (await alertOf(firmNum, "ai.reservation_unresolved"))!.count as number
+    await runAlertChecker({ now, passes: ["reservations"] })
+    expect((await alertOf(firmNum, "ai.reservation_unresolved"))!.count as number).toBeGreaterThan(before)
+  })
+
+  it("FA-260-R3-001: a string leaseUntil at row 500 is stored, the tail is read on the next run, and 12 held firms are alerted", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const T = Date.parse("1970-01-09T00:00:00.000Z")
+    const tag = uniq("n3").slice(2)
+    const firmTs = uniq("firm")
+    const firmHead = uniq("firm")
+    const firmTail = uniq("firm")
+    const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
+    extraFirms.push(firmTs, firmHead, firmTail, ...heldFirms)
+    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
+    expect(prior).toBe(0)
+    const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
+    const quarantined = (firmId: string, leaseUntil: Timestamp | string) => ({ firmId, state: "reconcile_failed", leaseUntil, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) })
+    await writeAll([
+      ...Array.from({ length: 450 }, (_, i) => [ref(`n3ts-${tag}-${String(i).padStart(4, "0")}`), quarantined(firmTs, Timestamp.fromMillis(T + i))] as [DocumentReference, DocumentData]),
+      ...Array.from({ length: 50 }, (_, i) => [ref(`n3head-${tag}-${String(i).padStart(4, "0")}`), quarantined(firmHead, `s-${String(i).padStart(4, "0")}`)] as [DocumentReference, DocumentData]),
+      ...Array.from({ length: 70 }, (_, i) => [ref(`n3tail-${tag}-${String(i).padStart(4, "0")}`), quarantined(firmTail, `s-${String(50 + i).padStart(4, "0")}`)] as [DocumentReference, DocumentData]),
+      ...heldFirms.map((firmId, i) => [ref(`n3held-${tag}-${String(i).padStart(2, "0")}`), { firmId, state: "reserved", leaseUntil: Timestamp.fromMillis(T), reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]),
+    ])
+
+    const { runAlertChecker } = await checker()
+    const now = () => T + 60 * 60_000
+    await runAlertChecker({ now, passes: ["reservations"] })
+    for (const firmId of heldFirms) expect(await alertOf(firmId, "ai.reservation_unresolved"), firmId).toBeDefined()
+    expect(await alertOf(firmTs, "ai.reservation_unresolved")).toBeDefined()
+    expect(await alertOf(firmHead, "ai.reservation_unresolved")).toBeDefined()
+    expect(await alertOf(firmTail, "ai.reservation_unresolved")).toBeUndefined()
+    const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: unknown; id?: string } | undefined
+    expect(typeof cursor?.at).toBe("string")
+    await runAlertChecker({ now, passes: ["reservations"] })
+    expect(await alertOf(firmTail, "ai.reservation_unresolved")).toBeDefined()
+  })
+
+  it("FA-260-R3-001: twelve held firms are alerted while a full window of number leases is saved and resumed", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const T = Date.parse("1970-01-10T00:00:00.000Z")
+    const tag = uniq("ncol").slice(2)
+    const firmNum = uniq("firm")
+    const firmLate = uniq("firm")
+    const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
+    extraFirms.push(firmNum, firmLate, ...heldFirms)
+    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
+    expect(prior).toBe(0)
+    const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
+    await writeAll([
+      ...Array.from({ length: WINDOW }, (_, i) => [ref(`ncol-${tag}-${String(i).padStart(4, "0")}`), { firmId: firmNum, state: "reconcile_failed", leaseUntil: i + 1, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]),
+      [ref(`ncol-late-${tag}`), { firmId: firmLate, state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T), reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }],
+      ...heldFirms.map((firmId, i) => [ref(`ncol-held-${tag}-${String(i).padStart(2, "0")}`), { firmId, state: "reserved", leaseUntil: Timestamp.fromMillis(T), reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]),
+    ])
+
+    const { runAlertChecker } = await checker()
+    const now = () => T + 60 * 60_000
+    await runAlertChecker({ now, passes: ["reservations"] })
+    const heldAlerts = await Promise.all(heldFirms.map(async (firmId) => [firmId, await alertOf(firmId, "ai.reservation_unresolved")] as const))
+    expect(heldAlerts.filter(([, alert]) => alert !== undefined)).toHaveLength(12)
+    expect(await alertOf(firmNum, "ai.reservation_unresolved")).toBeDefined()
+    expect(await alertOf(firmLate, "ai.reservation_unresolved")).toBeUndefined()
+    const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: unknown } | undefined
+    expect(cursor?.at).toBe(WINDOW)
+    await runAlertChecker({ now, passes: ["reservations"] })
+    expect(await alertOf(firmLate, "ai.reservation_unresolved")).toBeDefined()
   })
 
   it("the window is bounded: 5 pages of 100 rows per query per run", async () => {

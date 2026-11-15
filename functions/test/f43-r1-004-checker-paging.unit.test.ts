@@ -12,9 +12,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const BOUND_SENTENCE = "each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query"
 const OVERSTATED_BOUND = "rotation then reads a row within 3·ceil"
 const FA_260_001_SENTENCE = "That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001)."
-const FA_260_R2_001_SENTENCE = "An absent order field on the row a run would save is not stored: the pass logs ops_alert.pass_failed with code checker_cursor_absent_order and does not restart in silence (FA-260-R2-001)."
+const FA_260_R2_001_SENTENCE = "Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001)."
+const FA_260_R3_001_SENTENCE = "A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001)."
 const ABSENT_ORDER_CODE = "checker_cursor_absent_order"
 const OVERCLAIMED_STARVE = "starve the rows after it"
+const OVERCLAIMED_FULL_PAGE = "A full raw page continues from its last raw row"
+const OVERCLAIMED_REREAD = "costs at most a window re-read"
 
 /**
  * FA-F43-R1-004. Two defects in the checker, pinned without the emulator:
@@ -40,6 +43,12 @@ function timeMs(v: unknown): number {
   return Number.POSITIVE_INFINITY
 }
 
+function orderMillis(at: CheckCursor["at"] | undefined): number | undefined {
+  if (at instanceof Timestamp) return at.toMillis()
+  if (typeof at === "number" && Number.isFinite(at)) return at
+  return undefined
+}
+
 /** Pages the way the checker asked to: by `field` (id alone when null), then id, after `cursor`. */
 function pageRows(rows: readonly CheckerPageRow[], field: string | null, cursor: CheckCursor | null): CheckerPageRow[] {
   const sorted = [...rows].sort((a, b) => {
@@ -50,7 +59,8 @@ function pageRows(rows: readonly CheckerPageRow[], field: string | null, cursor:
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
   })
   if (cursor === null) return sorted
-  const idx = sorted.findIndex((r) => r.id === cursor.id && (field === null || cursor.at === null || timeMs(r.data[field]) === cursor.at.toMillis()))
+  const atMs = orderMillis(cursor.at)
+  const idx = sorted.findIndex((r) => r.id === cursor.id && (field === null || atMs === undefined || timeMs(r.data[field]) === atMs))
   return idx < 0 ? sorted : sorted.slice(idx + 1)
 }
 
@@ -93,11 +103,11 @@ describe("FA-F43-R1-004: quarantined reservations page oldest lease first", () =
     expect(seen[0]?.cursor).toBeNull()
     // Page 2 resumes at the 100th oldest lease (the 97th firm-A row: three firm-B leases come first).
     expect(seen[1]?.cursor).toMatchObject({ id: "a-0096" })
-    expect(seen[1]?.cursor?.at?.toMillis()).toBe(T + 10_000 + 96)
+    expect(orderMillis(seen[1]?.cursor?.at)).toBe(T + 10_000 + 96)
 
     const cursor = checkerTestSeam.memory?.cursors.reservationsQuarantined
     expect(cursor?.id).toBe("a-0496")
-    expect(cursor?.at?.toMillis()).toBe(T + 10_000 + 496)
+    expect(orderMillis(cursor?.at)).toBe(T + 10_000 + 496)
 
     const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
     expect(firms).toContain("firm-b")
@@ -352,12 +362,6 @@ function pageInOrder(rows: readonly CheckerPageRow[], cursor: CheckCursor | null
   return rows.slice(Math.max(0, start), Math.max(0, start) + CHECK_PAGE_SIZE)
 }
 
-function savedCursorPersistable(): boolean {
-  const saved = checkerTestSeam.memory?.cursors.reservationsQuarantined
-  if (saved == null) return true
-  return saved.at === null || saved.at instanceof Timestamp
-}
-
 describe("FA-260-R2-001: a window that ends on an absent order field fails closed", () => {
   const T = Date.parse("1970-01-06T00:00:00.000Z")
   const window = CHECK_PAGE_SIZE * CHECK_MAX_PAGES
@@ -377,11 +381,13 @@ describe("FA-260-R2-001: a window that ends on an absent order field fails close
         errors.calls.length = 0
         await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
         const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
-        const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
-        expect(firms.includes("firm-late") || coded, `run ${run}`).toBe(true)
-        expect(firms).not.toContain("firm-absent")
+        const coded = errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.pass === "reservationsQuarantined" && fields.code === ABSENT_ORDER_CODE)
+        expect(firms, `run ${run}`).toContain("firm-leased")
+        expect(firms, `run ${run}`).not.toContain("firm-late")
+        expect(firms, `run ${run}`).not.toContain("firm-absent")
+        expect(coded, `run ${run}`).toHaveLength(1)
       }
-      expect(savedCursorPersistable()).toBe(true)
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined ?? null).toBeNull()
     } finally {
       errors.restore()
     }
@@ -401,11 +407,12 @@ describe("FA-260-R2-001: a window that ends on an absent order field fails close
         errors.calls.length = 0
         await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
         const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
-        const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
-        expect(firms.includes("firm-leased") || coded, `run ${run}`).toBe(true)
-        expect(firms).not.toContain("firm-absent")
+        const coded = errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.pass === "reservationsQuarantined" && fields.code === ABSENT_ORDER_CODE)
+        expect(firms, `run ${run}`).not.toContain("firm-leased")
+        expect(firms, `run ${run}`).not.toContain("firm-absent")
+        expect(coded, `run ${run}`).toHaveLength(1)
       }
-      expect(savedCursorPersistable()).toBe(true)
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined ?? null).toBeNull()
     } finally {
       errors.restore()
     }
@@ -426,9 +433,89 @@ describe("FA-260-R2-001: a window that ends on an absent order field fails close
     try {
       await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => (quarantinedPages > 0 ? CHECKER_BUDGET_MS : 0) })
       const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
-      const coded = errors.fieldsOf("ops_alert.pass_failed").some((fields) => fields.pass === "reservations" && fields.code === ABSENT_ORDER_CODE)
-      expect(firms.includes("firm-late") || coded).toBe(true)
-      expect(savedCursorPersistable()).toBe(true)
+      const coded = errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.pass === "reservationsQuarantined" && fields.code === ABSENT_ORDER_CODE)
+      expect(firms).toContain("firm-leased")
+      expect(firms).not.toContain("firm-late")
+      expect(coded).toHaveLength(1)
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined ?? null).toBeNull()
+    } finally {
+      errors.restore()
+    }
+  })
+})
+
+function presentLease(id: string, firmId: string, leaseUntil: number | string): CheckerPageRow {
+  return { id, data: { firmId, state: "reconcile_failed", leaseUntil } }
+}
+
+describe("FA-260-R3-001: a present number or string leaseUntil is a cursor, and one absent field does not drop other firms", () => {
+  const T = Date.parse("1970-01-07T00:00:00.000Z")
+  const window = CHECK_PAGE_SIZE * CHECK_MAX_PAGES
+
+  it("R3/R7: a number lease at row 500 is stored and the next run alerts the row after it", async () => {
+    const errors = spyRegisteredErrors()
+    const numbers = Array.from({ length: window }, (_, i) => presentLease(`num-${String(i).padStart(4, "0")}`, "firm-num", i + 1))
+    const late = leasedRow("firm-late", "firm-late", T)
+    const rows = [...numbers, late]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-num")
+      expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).not.toContain("firm-late")
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toEqual({ at: window, id: "num-0499" })
+      expect(errors.fieldsOf("ops_alert.pass_failed")).toHaveLength(0)
+      raise.mockClear()
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-late")
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("R4: a string lease at row 500 is stored and the next run alerts the row after it", async () => {
+    const errors = spyRegisteredErrors()
+    const strings = Array.from({ length: window }, (_, i) => presentLease(`str-${String(i).padStart(4, "0")}`, "firm-str", `s-${String(i).padStart(4, "0")}`))
+    const late = leasedRow("firm-late", "firm-late", T)
+    const rows = [...strings, late]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toEqual({ at: "s-0499", id: "str-0499" })
+      expect(errors.fieldsOf("ops_alert.pass_failed")).toHaveLength(0)
+      raise.mockClear()
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-late")
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("R8: twelve other firms' held rows are alerted when the quarantined window stops on an absent leaseUntil", async () => {
+    const errors = spyRegisteredErrors()
+    const held = Array.from({ length: 12 }, (_, i) => ({
+      id: `held-${String(i).padStart(2, "0")}`,
+      data: { firmId: `firm-held-${String(i).padStart(2, "0")}`, state: "reserved", leaseUntil: Timestamp.fromMillis(T) },
+    }))
+    const quarantined = [
+      ...Array.from({ length: window - 1 }, (_, i) => leasedRow(`q-${String(i).padStart(4, "0")}`, "firm-quarantined", T + i)),
+      absentRow("absent-500"),
+      leasedRow("firm-late", "firm-late", T + 9_000_000),
+    ]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => {
+      if (name === "reservationsHeld") return cursor === null ? held : []
+      if (name === "reservationsQuarantined") return pageInOrder(quarantined, cursor)
+      return []
+    }
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+      expect(firms.filter((firm) => firm.startsWith("firm-held-")).sort()).toEqual(held.map((row) => row.data.firmId).sort())
+      expect(firms).toContain("firm-quarantined")
+      expect(firms).not.toContain("firm-late")
+      expect(errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.code === ABSENT_ORDER_CODE)).toHaveLength(1)
     } finally {
       errors.restore()
     }
@@ -446,7 +533,10 @@ describe("FA-260 README sentences", () => {
       const text = readFileSync(resolve(repoRoot, file), "utf8")
       expect(text, file).toContain(FA_260_001_SENTENCE)
       expect(text, file).toContain(FA_260_R2_001_SENTENCE)
+      expect(text, file).toContain(FA_260_R3_001_SENTENCE)
       expect(text, file).not.toContain(OVERCLAIMED_STARVE)
+      expect(text, file).not.toContain(OVERCLAIMED_FULL_PAGE)
+      expect(text, file).not.toContain(OVERCLAIMED_REREAD)
     }
   })
 })
