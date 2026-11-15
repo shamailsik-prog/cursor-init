@@ -16,6 +16,7 @@ import {
   isDocketGeneratorEnabled,
 } from "@/layers/L5_5_DocketGenerator/flag"
 import { resolveFilingSet } from "@/layers/L5_5_DocketGenerator/ambiguity"
+import { assignedCitation } from "@/layers/L5_5_DocketGenerator/references"
 import { contentBox, pagePoints, planDocket, WRAP_SLACK, wrapParagraph } from "@/layers/L5_5_DocketGenerator/layout"
 import { TINOS_REGULAR_WIDTHS, TINOS_UNITS_PER_EM, tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
 import { generateDocket } from "@/layers/L5_5_DocketGenerator/service"
@@ -1491,6 +1492,240 @@ describe("L5.5 Times New Roman line measure", () => {
       expect(paragraphCount, `seed ${seed}`).toBeLessThan(lineCount)
       expect(plan.pages).toHaveLength(docxSections(result.docx!).length)
     }
+  })
+})
+
+describe("L5.5 fail-closed reference allowlist", () => {
+  const addressWords = ["block", "sector", "phase", "gali", "mohalla", "lane", "road", "street", "house"]
+
+  function marked(labels: string[]): DocketFilingSet {
+    return {
+      ...ambiguous,
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: labels[index] ?? labels[0],
+      })),
+    }
+  }
+
+  async function expectRefusal(filing: DocketFilingSet, sentence: string): Promise<void> {
+    enableFlag()
+    const result = await generateDocket(filing)
+    expect(result.ok, sentence).toBe(false)
+    expect(result.pdf, sentence).toBeNull()
+    expect(result.docx, sentence).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "ref_unresolved"), sentence).toBe(true)
+  }
+
+  async function expectGeneration(filing: DocketFilingSet, sentence: string): Promise<void> {
+    enableFlag()
+    const result = await generateDocket(filing)
+    expect(result.ok, sentence).toBe(true)
+    expect(result.pdf, sentence).not.toBeNull()
+    expect(result.docx, sentence).not.toBeNull()
+    expect(result.queue, sentence).toEqual([])
+  }
+
+  it("REF-015 refuses a slash mark beside an address word", async () => {
+    const sentences = [
+      "Relies on P/1 and P/2. Relies on P/3, Block 5 of the deed.",
+      "Relies on P/1 and P/2. P/3, Street plan.",
+      "Relies on P/1 and P/2. P/99, House.",
+      "Relies on P/1 and P/2. The plan P/9, Sector shows the boundary.",
+      "Relies on P/1 and P/2. See P/3, house deed.",
+      "Relies on P/1 and P/2. Relies on P/3/2, Block.",
+      "Relies on P/1 and P/2. Relies on P/3, BLOCK plan.",
+      "Relies on P/1 and P/2. Relies on P/3 Khayaban-e-Ittehad lease.",
+      "Relies on P/1 and P/2. The sale deed of the house P/3 is relied on.",
+    ]
+    for (const sentence of sentences) {
+      await expectRefusal({ ...marked(["P/1", "P/2"]), draft: { body: sentence } }, sentence)
+    }
+    await expectRefusal(
+      { ...marked(["D/1", "D/2"]), draft: { body: "Relies on D/1 and D/2. D/9 Street." } },
+      "Relies on D/1 and D/2. D/9 Street.",
+    )
+  })
+
+  it("REF-015 refuses every address word after a slash mark and before a slash mark", async () => {
+    const words = addressWords.map((word) => word[0]!.toUpperCase() + word.slice(1))
+    const filings: Array<{ name: string; filing: DocketFilingSet; cited: string; mark: string }> = [
+      { name: "P", filing: marked(["P/1", "P/2"]), cited: "Relies on P/1 and P/2.", mark: "P/3" },
+      { name: "D", filing: marked(["D/1", "D/2"]), cited: "Relies on D/1 and D/2.", mark: "D/3" },
+      { name: "R", filing: marked(["R/1", "R/2"]), cited: "Relies on R/1 and R/2.", mark: "R/3" },
+      {
+        name: "letter",
+        filing: petition,
+        cited: "The petitioner relies on Annexures A, B and C.",
+        mark: "P/3",
+      },
+      {
+        name: "enclosure",
+        filing: enclosures,
+        cited: "1. The letter encloses Enclosure 1 and then Enclosure 2.",
+        mark: "P/3",
+      },
+    ]
+    expect(words.length * filings.length + words.length).toBe(54)
+    for (const word of words) {
+      for (const row of filings) {
+        const sentence = `${row.cited} Relies on ${row.mark}, ${word} 5.`
+        await expectRefusal({ ...row.filing, draft: { body: sentence } }, `${row.name} ${sentence}`)
+      }
+      const before = `Relies on P/1 and P/2. ${word} P/3.`
+      await expectRefusal({ ...marked(["P/1", "P/2"]), draft: { body: before } }, before)
+    }
+  })
+
+  it("REF-015 generates dash-code addresses, an or-list, and a glued page reference", async () => {
+    const dash = [
+      "At P-12, Phase VIII, DHA.",
+      "At R-12, Gali No. 4, Mohalla Islampura.",
+      "D-12 Khayaban-e-Shamsheer",
+      "House No. D-45, Clifton",
+      "D-45/2, Block 5",
+    ]
+    for (const sentence of dash) {
+      await expectGeneration(
+        { ...marked(["P/1", "P/2"]), draft: { body: `Relies on P/1 and P/2. ${sentence}` } },
+        sentence,
+      )
+    }
+    await expectGeneration(
+      { ...petition, draft: { body: "Annexure A, Annexure B or Annexure C" } },
+      "Annexure A, Annexure B or Annexure C",
+    )
+    await expectGeneration(
+      { ...marked(["P/1", "P/2"]), draft: { body: "Relies on P/1 and P/2. p.3, para 4" } },
+      "p.3, para 4",
+    )
+  })
+
+  it("REF-012 refuses a label after a non-connector", async () => {
+    const prefix = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "See Annexures C, followed by D.",
+      "See Annexures C, then D.",
+      "See Annexures C, as well as D.",
+      "See Annexure C along with D.",
+      "See Annexure C together with D.",
+      "See Annexure C besides D.",
+      "See Annexures A through D.",
+      "See Annexures A till D.",
+      "See Annexures A up to D.",
+      "See Annexures C & then D.",
+      "See Annexures C and then D.",
+      "See the annexure namely D.",
+      "The copy is annexure marked as D.",
+      "See annexure to the petition D.",
+      "See the ninth Annexure.",
+    ]
+    for (const sentence of sentences) {
+      await expectRefusal({ ...petition, draft: { body: `${prefix} ${sentence}` } }, sentence)
+    }
+    await expectRefusal(
+      { ...enclosures, draft: { body: "See Enclosure hundred." } },
+      "See Enclosure hundred.",
+    )
+  })
+
+  it("REF-016 refuses when the article a is not Annexure A", async () => {
+    const sentences = [
+      "The annexure is a true copy. The petitioner relies on Annexures B and C.",
+      "The annexure of a sale is attached. The petitioner relies on Annexures B and C.",
+    ]
+    for (const sentence of sentences) {
+      await expectRefusal({ ...petition, draft: { body: sentence } }, sentence)
+    }
+  })
+
+  it("OVER-014 generates prose that is not a citation", async () => {
+    const letter = [
+      "He obtained high marks in the examination.",
+      "The annexures are true copies.",
+      "All annexures are certified.",
+      "The annexures by the respondent are forged.",
+      "The annexures on record are true.",
+      "No annexure or document is withheld.",
+      "The marks or signatures are genuine.",
+      "Please mark as urgent.",
+      "The mark up on the loan was 12%.",
+      "See p.3 of the order.",
+    ]
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of letter) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+    const enclosed = "1. The letter encloses Enclosure 1 and then Enclosure 2."
+    for (const sentence of ["The enclosures are true copies.", "2. The enclosure is a copy."]) {
+      await expectGeneration({ ...enclosures, draft: { body: `${enclosed} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("MAN-017 does not treat a lookalike as exhibit P-1 or P-2", async () => {
+    const sentences = [
+      "The witness proved P-1/2 and then P-2/3.",
+      "The witness proved P-1.5 and then P-2.5.",
+      "See www.example.com/P-1 and file_P-2.",
+      "LIST OF EXHIBITS: P-1, P-2.",
+      "The witness did not prove P-1 or P-2.",
+      "The witness proved P-10 and then P-2.",
+      "The witness proved CP-1 and then P-2.",
+      "The witness proved P-1-A and then P-2.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...exhibits, draft: { body: sentence } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.pdf, sentence).toBeNull()
+      expect(result.queue.some((entry) => entry.detail === "body does not refer to P-1"), sentence).toBe(true)
+    }
+  })
+
+  it("generates the sub-annexure range Annexures A-1 to A-3", async () => {
+    const base = ambiguous.annexures[0]
+    if (!base) throw new Error("ambiguous fixture has no annexure")
+    await expectGeneration(
+      {
+        ...ambiguous,
+        draft: { body: "The plaintiff relies on Annexures A-1 to A-3." },
+        annexures: [1, 2, 3].map((n) => ({
+          ...base,
+          assignedLabel: `A-${n}`,
+          metadata: { ...base.metadata, artifactId: `range-${n}`, label: `Range ${n}`, sourceRef: `range-${n}` },
+          body: `Range annexure ${n}.`,
+        })),
+      },
+      "Annexures A-1 to A-3",
+    )
+  })
+
+  it("classifies Annexure A-1 through the expression fallback", () => {
+    expect(assignedCitation("Annexure A-1")).toEqual({ form: "annex:A-1", series: "letter" })
+  })
+
+  it("refuses Annexure ABCD-1", async () => {
+    await expectRefusal(
+      { ...petition, draft: { body: `${petition.draft.body} Annexure ABCD-1.` } },
+      "Annexure ABCD-1",
+    )
+  })
+
+  it("generates when an incomplete bare range A-D follows a complete citation", async () => {
+    await expectGeneration(
+      { ...petition, draft: { body: "The petitioner relies on Annexures A, B and C. A-D." } },
+      "A-D",
+    )
+  })
+
+  it("keeps the three-dot refusal after NFKC and does not keep a U+2026 branch", () => {
+    const source = readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../layers/L5_5_DocketGenerator/references.ts"),
+      "utf8",
+    )
+    expect(source).not.toContain("\\u2026")
+    expect(source).not.toContain("\u2026")
+    expect("A\u2026D".normalize("NFKC")).toBe("A...D")
   })
 })
 

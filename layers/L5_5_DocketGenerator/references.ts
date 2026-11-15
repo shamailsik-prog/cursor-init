@@ -35,22 +35,24 @@ const KEYWORD_FAMILY: Readonly<Record<string, CitationFamily>> = {
   exhibit: "mark",
   exhibits: "mark",
   mark: "mark",
+  marked: "mark",
   marks: "mark",
 }
 
+const CITATION_OPENERS = new Set(["relies", "see", "refer"])
+
 const GLUE_KEYWORDS = ["annexures", "annexure", "enclosures", "enclosure", "exhibits", "exhibit"]
 
-const ADDRESS_WORDS = new Set(["house", "plot", "sector", "street", "block", "form", "flat", "shop", "khayaban"])
+const ADDRESS_WORDS = new Set(["block", "sector", "phase", "gali", "mohalla", "lane", "road", "street", "house"])
 
-const NON_LABEL_WORDS = new Set(["to", "herewith", "the", "of", "is", "was", "per", "this"])
-
-const UNKNOWN_CONNECTORS = new Set(["but", "nor", "then", "plus", "with", "followed"])
+const NON_LABEL_WORDS = new Set(["to", "herewith", "the", "of", "is", "was", "per", "this", "on", "as"])
 
 const SPELLED_NUMBERS = new Set([
   "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
   "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
   "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
   "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
+  "hundred",
 ])
 
 const DASHES = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g
@@ -115,9 +117,9 @@ function tokenise(text: string): Token[] {
       tokens.push({ kind: "num", value: text.slice(from, index), from, to: index })
       continue
     }
-    if (character >= "a" && character <= "z") {
+    if ((character >= "a" && character <= "z") || character === "_") {
       const from = index
-      while (index < text.length && (text[index] ?? "") >= "a" && (text[index] ?? "") <= "z") index += 1
+      while (index < text.length && (((text[index] ?? "") >= "a" && (text[index] ?? "") <= "z") || text[index] === "_")) index += 1
       const word = text.slice(from, index)
       const glued = splitGlued(word)
       if (!glued) {
@@ -134,7 +136,7 @@ function tokenise(text: string): Token[] {
       })
       continue
     }
-    if (".,/-#:&+;\u2026".includes(character)) {
+    if (".,/-#:&+;".includes(character)) {
       tokens.push({ kind: "punct", value: character, from: index, to: index + 1 })
       index += 1
       continue
@@ -219,7 +221,6 @@ function parseMark(tokens: readonly Token[], index: number): { key: string; pref
   const punct = tokens[cursor]
   if (punct?.kind === "punct" && "/.-".includes(punct.value)) {
     const after = tokens[cursor + 1]
-    if (punct.value === "." && after?.kind === "num" && after.from !== punct.to) return null
     if (after?.kind === "num") {
       return { key: `${head.value.toUpperCase()}/${after.value}`, prefix: head.value.toUpperCase(), next: cursor + 2 }
     }
@@ -237,7 +238,10 @@ function parseMark(tokens: readonly Token[], index: number): { key: string; pref
 
 function parseCore(tokens: readonly Token[], index: number): { label: Label; next: number } | null {
   const mark = parseMark(tokens, index)
-  if (mark) return { label: { family: "mark", key: mark.key }, next: mark.next }
+  if (mark) {
+    if (isPageReference(tokens, index, mark.next)) return null
+    return { label: { family: "mark", key: mark.key }, next: mark.next }
+  }
   const token = tokens[index]
   if (!token) return null
   if (token.kind === "num") return { label: { family: "number", key: token.value }, next: index + 1 }
@@ -262,7 +266,10 @@ function parseCore(tokens: readonly Token[], index: number): { label: Label; nex
   }
   const roman = romanValue(token.value)
   if (roman !== null) return { label: { family: "number", key: String(roman) }, next: index + 1 }
-  if (/^([a-z])\1$/.test(token.value)) return { label: { family: "letter", key: token.value.toUpperCase() }, next: index + 1 }
+  if (/^([a-z])\1$/.test(token.value)) {
+    if (token.value === "pp" && isPageReference(tokens, index, index + 3)) return null
+    return { label: { family: "letter", key: token.value.toUpperCase() }, next: index + 1 }
+  }
   return null
 }
 
@@ -291,6 +298,12 @@ function expandNumbers(start: string, end: string): string[] | null {
 }
 
 function expand(left: Label, right: Label): Label[] | null {
+  const leftSub = /^([A-Z])-(\d+)$/.exec(left.key)
+  const rightSub = /^([A-Z])-(\d+)$/.exec(right.key)
+  if (left.family === "letter" && right.family === "letter" && leftSub && rightSub && leftSub[1] === rightSub[1]) {
+    const numbers = expandNumbers(leftSub[2] ?? "", rightSub[2] ?? "")
+    return numbers?.map((key) => ({ family: "letter" as const, key: `${leftSub[1]}-${key}` })) ?? null
+  }
   if (left.family === "letter" && right.family === "letter" && left.key.length === 1 && right.key.length === 1) {
     const from = left.key.charCodeAt(0)
     const to = right.key.charCodeAt(0)
@@ -357,21 +370,14 @@ function readContinuation(tokens: readonly Token[], index: number): Item | null 
   if (token.value === "and") {
     if (tokens[index + 1]?.value === "/" && tokens[index + 2]?.value === "or") return finish(parseItem(tokens, index + 3), true)
     if (tokens[index + 1]?.value === "also") return finish(parseItem(tokens, index + 2), true)
-    if (tokens[index + 1]?.value === "then") {
-      const after = tokens[index + 2]
-      if (after?.kind === "word" && after.value in KEYWORD_FAMILY) return null
-      return { error: true }
-    }
     return finish(parseItem(tokens, index + 1), false)
   }
   if (token.value === "or") {
     const next = tokens[index + 1]
-    if (next?.kind === "word" && next.value in KEYWORD_FAMILY) return null
-    return finish(parseItem(tokens, index + 1), true)
+    if (next?.kind === "word" && (next.value in KEYWORD_FAMILY || CITATION_OPENERS.has(next.value))) return null
+    return finish(parseItem(tokens, index + 1), false)
   }
-  if (token.kind === "word" && UNKNOWN_CONNECTORS.has(token.value)) return { error: true }
   if (token.value === "et" && tokens[index + 1]?.value === "seq") return { error: true }
-  if (token.value === "\u2026") return { error: true }
   if (token.value === "." && tokens[index + 1]?.value === "." && tokens[index + 2]?.value === ".") return { error: true }
   if (token.value === "as" && tokens[index + 1]?.value === "well" && tokens[index + 2]?.value === "as") {
     return finish(parseItem(tokens, index + 3), true)
@@ -401,20 +407,17 @@ function isNonLabelWord(token: Token | undefined): boolean {
   return token?.kind === "word" && NON_LABEL_WORDS.has(token.value)
 }
 
-function isShortUnreadLabel(word: string): boolean {
-  if (!/^[a-z]{2,3}$/.test(word)) return false
-  if (word in KEYWORD_FAMILY || NON_LABEL_WORDS.has(word) || ADDRESS_WORDS.has(word) || isReservedWord(word)) return false
-  if (romanValue(word) !== null || /^([a-z])\1$/.test(word)) return false
-  return true
+function sentenceBoundary(token: Token | undefined): boolean {
+  return !token || token.value === "."
 }
 
 function failedLabel(tokens: readonly Token[], index: number): boolean {
   const token = tokens[index]
-  if (!token || token.kind !== "word") return false
-  if (SPELLED_NUMBERS.has(token.value) || isShortUnreadLabel(token.value)) return true
+  if (!token || token.kind !== "word" || token.value.includes("_")) return false
+  if (SPELLED_NUMBERS.has(token.value)) return true
   const dash = tokens[index + 1]
   const number = tokens[index + 2]
-  return (
+  if (
     token.value.length >= 2 &&
     !isReservedWord(token.value) &&
     !(token.value in KEYWORD_FAMILY) &&
@@ -423,12 +426,74 @@ function failedLabel(tokens: readonly Token[], index: number): boolean {
     dash.from === token.to &&
     number?.kind === "num" &&
     number.from === dash.to
-  )
+  ) {
+    return true
+  }
+  if (!/^[a-z]{2,3}$/.test(token.value) || !sentenceBoundary(tokens[index + 1])) return false
+  if (token.value in KEYWORD_FAMILY || NON_LABEL_WORDS.has(token.value) || isReservedWord(token.value)) return false
+  if (romanValue(token.value) !== null || /^([a-z])\1$/.test(token.value)) return false
+  return true
+}
+
+function isCitationWord(token: Token | undefined): boolean {
+  return token?.kind === "word" && (token.value in KEYWORD_FAMILY || CITATION_OPENERS.has(token.value))
+}
+
+function labelShaped(tokens: readonly Token[], index: number, skippedWord: boolean): boolean {
+  const token = tokens[index]
+  if (!token || token.kind !== "word" || token.value.includes("_")) return false
+  if (skippedWord && (token.value === "a" || token.value === "i")) return false
+  if (isPageReference(tokens, index, parseMark(tokens, index)?.next ?? index + 3)) return false
+  if (SPELLED_NUMBERS.has(token.value) || failedLabel(tokens, index)) return true
+  return parseAtom(tokens, index) !== null
+}
+
+function sentenceEnd(tokens: readonly Token[], index: number): number {
+  for (let cursor = index; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor]
+    if (token?.value !== ".") continue
+    if (tokens[cursor + 1]?.value === "." || tokens[cursor - 1]?.value === "no") continue
+    return cursor
+  }
+  return tokens.length
+}
+
+function skippedArticle(tokens: readonly Token[], index: number): boolean {
+  const token = tokens[index]
+  if (token?.value !== "a" && token?.value !== "i") return false
+  const next = tokens[index + 1]
+  if (!next || next.value === "." || next.value === "," || next.value === "-" || next.kind === "num") return false
+  if (next.kind === "word" && (next.value === "and" || next.value === "or" || next.value === "to" || next.value === "also")) return false
+  return true
+}
+
+function orphanLabel(tokens: readonly Token[], from: number): boolean {
+  const end = sentenceEnd(tokens, from)
+  for (let cursor = from; cursor < end; cursor += 1) {
+    const token = tokens[cursor]
+    if (isCitationWord(token)) return false
+    if (!token || token.kind !== "word" || isNonLabelWord(token) || isReservedWord(token.value)) continue
+    let skipped = false
+    for (let later = cursor + 1; later < end; later += 1) {
+      if (isCitationWord(tokens[later]) || parseMark(tokens, later)) return false
+      if (isNonLabelWord(tokens[later])) {
+        skipped = true
+        continue
+      }
+      if (labelShaped(tokens, later, skipped)) return true
+    }
+    return false
+  }
+  return false
 }
 
 function parseExpression(tokens: readonly Token[], index: number): { labels: Label[]; next: number } | null {
   let cursor = skipLead(tokens, index)
-  while (isNonLabelWord(tokens[cursor])) cursor += 1
+  let skippedWord = false
+  while (isNonLabelWord(tokens[cursor]) || (skippedWord && skippedArticle(tokens, cursor))) {
+    skippedWord = isNonLabelWord(tokens[cursor]) || skippedWord
+    cursor += 1
+  }
   let first: Item | null
   if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === "-") {
     const afterHyphen = parseItem(tokens, cursor + 1)
@@ -441,7 +506,7 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
     first = parseItem(tokens, cursor)
     if (!first) {
       const continuation = readContinuation(tokens, cursor)
-      if (!continuation) return { labels: [], next: index }
+      if (!continuation) return orphanLabel(tokens, cursor) ? null : { labels: [], next: index }
       if ("error" in continuation) return null
       first = continuation
     } else if ("error" in first) {
@@ -457,15 +522,23 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
     labels.push(...continuation.labels)
     cursor = continuation.next
   }
+  if (orphanLabel(tokens, cursor)) return null
   return { labels, next: cursor }
 }
 
-function addressDirectlyPrecedes(tokens: readonly Token[], index: number): boolean {
+function wordBeforeDash(tokens: readonly Token[], index: number): boolean {
   let cursor = index - 1
-  if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value === "no") cursor -= 2
-  else if (tokens[cursor]?.value === "no") cursor -= 1
+  let numbered = false
+  if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value === "no") {
+    cursor -= 2
+    numbered = true
+  } else if (tokens[cursor]?.value === "no") {
+    cursor -= 1
+    numbered = true
+  }
   const previous = tokens[cursor]
-  return previous?.kind === "word" && ADDRESS_WORDS.has(previous.value)
+  if (previous?.kind !== "word" || previous.value.includes("_")) return false
+  return numbered || ADDRESS_WORDS.has(previous.value) || previous.value === "plot" || previous.value === "form"
 }
 
 function subdivisionEnd(tokens: readonly Token[], index: number): number | null {
@@ -475,23 +548,82 @@ function subdivisionEnd(tokens: readonly Token[], index: number): number | null 
   return null
 }
 
-function addressExempt(tokens: readonly Token[], markIndex: number, afterMark: number): boolean {
-  if (addressDirectlyPrecedes(tokens, markIndex)) return true
+function addressTail(tokens: readonly Token[], afterMark: number): boolean {
   let cursor = afterMark
+  const subdivided = subdivisionEnd(tokens, cursor)
+  if (subdivided !== null) cursor = subdivided
   if (tokens[cursor]?.value === ",") cursor += 1
+  if (tokens[cursor]?.value === "khayaban") return true
   const word = tokens[cursor]
-  return word?.kind === "word" && ADDRESS_WORDS.has(word.value)
+  if (word?.kind !== "word" || !ADDRESS_WORDS.has(word.value)) return false
+  let nextAt = cursor + 1
+  if (tokens[nextAt]?.value === "no") {
+    nextAt += 1
+    if (tokens[nextAt]?.value === ".") nextAt += 1
+  }
+  const next = tokens[nextAt]
+  if (next?.kind === "num") return true
+  if (next?.kind === "word" && romanValue(next.value) !== null) return true
+  return next?.kind === "word" && /^[a-z]$/.test(next.value) && tokens[nextAt + 1]?.value === "-" && tokens[nextAt + 2]?.kind === "num"
+}
+
+function dashCodeExempt(tokens: readonly Token[], markIndex: number, afterMark: number): boolean {
+  if (tokens[markIndex + 1]?.value !== "-") return false
+  return wordBeforeDash(tokens, markIndex) || addressTail(tokens, afterMark)
 }
 
 function isPageReference(tokens: readonly Token[], index: number, next: number): boolean {
   const head = tokens[index]
   const punct = tokens[index + 1]
-  if (head?.value !== "p" || punct?.value !== ".") return false
-  const number = tokens[index + 2]
-  if (number?.kind === "num" && number.from !== punct.to) return true
-  const after = tokens[next]
-  const para = after?.value === "," ? tokens[next + 1] : after
+  if (punct?.value !== ".") return false
+  const afterAt = head?.value === "pp" ? index + 3 : next
+  if (head?.value === "pp" && tokens[index + 2]?.kind !== "num") return false
+  if (head?.value !== "p" && head?.value !== "pp") return false
+  const after = tokens[afterAt]
+  if (after?.value === "of") return true
+  const para = after?.value === "," ? tokens[afterAt + 1] : after
   return para?.kind === "word" && /^para(?:graph)?s?$/.test(para.value)
+}
+
+function sentenceStart(tokens: readonly Token[], index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (tokens[cursor]?.value === "." && !leadsToLabel(tokens, cursor)) return cursor + 1
+  }
+  return 0
+}
+
+function listHeading(tokens: readonly Token[], index: number): boolean {
+  const words: string[] = []
+  for (let cursor = sentenceStart(tokens, index); cursor < tokens.length && words.length < 3; cursor += 1) {
+    if (tokens[cursor]?.kind === "word") words.push(tokens[cursor]?.value ?? "")
+  }
+  return words[0] === "list" && words[1] === "of" && words[2] === "exhibits"
+}
+
+function negatedMark(tokens: readonly Token[], index: number): boolean {
+  for (let cursor = sentenceStart(tokens, index); cursor < index; cursor += 1) {
+    if (tokens[cursor]?.value === "not") return true
+  }
+  return false
+}
+
+function urlPath(tokens: readonly Token[], index: number): boolean {
+  return tokens[index - 1]?.value === "/" && tokens[index - 2]?.kind === "word"
+}
+
+function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
+  const decimal = tokens[mark.next]
+  const fraction = tokens[mark.next + 1]
+  if (decimal?.value === "." && fraction?.kind === "num") return { key: `${mark.key}.${fraction.value}`, next: mark.next + 2 }
+  const dash = tokens[mark.next]
+  const letter = tokens[mark.next + 1]
+  if (dash?.value === "-" && letter?.kind === "word" && /^[a-z]$/.test(letter.value)) {
+    return { key: `${mark.key}-${letter.value.toUpperCase()}`, next: mark.next + 2 }
+  }
+  const slash = tokens[mark.next]
+  const digits = tokens[mark.next + 1]
+  if (slash?.value === "/" && digits?.kind === "num" && digits.value.length !== 4) return { key: `${mark.key}/${digits.value}`, next: mark.next + 2 }
+  return null
 }
 
 function caseNumberEnd(tokens: readonly Token[], index: number): number | null {
@@ -540,7 +672,7 @@ export function assignedCitation(token: string): { form: string; series: string 
   if (tokens.length === 0) return null
   const atom = parseAtom(tokens, 0)
   if (atom && atom.next === tokens.length) return { form: hitOf(atom.label).form, series: seriesOf(atom.label) }
-  const expression = parseExpression(tokens, 0)
+  const expression = parseExpression(tokens, isCitationWord(tokens[0]) ? 1 : 0)
   const label = expression?.labels.length === 1 ? expression.labels[0] : undefined
   if (!expression || !label || expression.next !== tokens.length) return null
   return { form: hitOf(label).form, series: seriesOf(label) }
@@ -569,8 +701,13 @@ export function scanCitations(
   let index = 0
   while (index < tokens.length) {
     const token = tokens[index]
+    const opener = token?.kind === "word" && CITATION_OPENERS.has(token.value)
     const keyword = token?.kind === "word" ? KEYWORD_FAMILY[token.value] : undefined
-    if (token?.kind === "word" && keyword) {
+    if (token?.kind === "word" && (keyword || opener)) {
+      if (listHeading(tokens, index)) {
+        index += 1
+        continue
+      }
       const parsed = parseExpression(tokens, index + 1)
       if (!parsed) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
@@ -581,13 +718,13 @@ export function scanCitations(
         index += 1
         continue
       }
-      for (const label of parsed.labels) consider(label, keyword)
+      for (const label of parsed.labels) consider(label, opener ? null : (keyword ?? null))
       index = parsed.next
       continue
     }
     const mark = parseMark(tokens, index)
-    if (mark) {
-      if (isPageReference(tokens, index, mark.next)) {
+    if (mark && !token?.value.includes("_")) {
+      if (isPageReference(tokens, index, mark.next) || urlPath(tokens, index) || listHeading(tokens, index) || negatedMark(tokens, index)) {
         index = mark.next
         continue
       }
@@ -596,14 +733,21 @@ export function scanCitations(
         index = yearEnd
         continue
       }
-      const afterSubdivision = subdivisionEnd(tokens, mark.next)
-      const ranged = markRange(tokens, mark)
-      const end = ranged && !("error" in ranged) ? ranged.next : (afterSubdivision ?? mark.next)
-      if (!addressExempt(tokens, index, afterSubdivision ?? mark.next)) {
-        if (ranged && "error" in ranged) unparsed.push(`body cites ${mark.key} without a label expression that can be read`)
-        else if (ranged) for (const label of ranged.labels) consider(label, null)
-        else consider({ family: "mark", key: mark.key }, null)
+      const extension = extendedMark(tokens, mark)
+      if (dashCodeExempt(tokens, index, mark.next)) {
+        index = extension?.next ?? mark.next
+        continue
       }
+      if (extension && tokens[index + 1]?.value === "-") {
+        index = extension.next
+        consider({ family: "mark", key: extension.key }, null)
+        continue
+      }
+      const ranged = markRange(tokens, mark)
+      const end = ranged && !("error" in ranged) ? ranged.next : (extension?.next ?? mark.next)
+      if (ranged && "error" in ranged) unparsed.push(`body cites ${mark.key} without a label expression that can be read`)
+      else if (ranged) for (const label of ranged.labels) consider(label, null)
+      else consider({ family: "mark", key: extension && tokens[index + 1]?.value !== "-" ? extension.key : mark.key }, null)
       index = end
       continue
     }
