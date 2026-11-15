@@ -54,9 +54,12 @@ describe("app/api route authentication coverage", () => {
   })
 
   it("FA-Q14A-GUARD-007 exempts only POST on the WhatsApp webhook file", () => {
-    expect(hmacWebhookExempt("app/api/d2/whatsapp/route.ts", "POST")).toBe(true)
-    expect(hmacWebhookExempt("app/api/d2/whatsapp/route.ts", "GET")).toBe(false)
+    const webhook = "app/api/d2/whatsapp/route.ts"
+    for (const method of METHODS) {
+      expect(hmacWebhookExempt(webhook, method), method).toBe(method === "POST")
+    }
     expect(hmacWebhookExempt("app/api/d1/clients/route.ts", "POST")).toBe(false)
+    expect(hmacWebhookExempt("app/api/d1/clients/route.ts", "PUT")).toBe(false)
   })
 
   for (const file of files) {
