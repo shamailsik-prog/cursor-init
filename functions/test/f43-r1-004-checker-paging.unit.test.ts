@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CHECK_MAX_PAGES, CHECK_PAGE_SIZE, CHECK_PASSES, CHECKER_BUDGET_MS, checkerTestSeam, reservationQueryRunBound, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
+import { CHECK_MAX_PAGES, CHECK_PAGE_SIZE, CHECK_PASSES, CHECKER_BUDGET_MS, CHECKER_RAISE_SLACK_MS, checkerTestSeam, reservationQueryRunBound, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
 import { raiseAlertBestEffort } from "../src/alerts/raise"
 import { spyRegisteredErrors } from "./registeredErrorLog"
 
@@ -12,8 +12,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const BOUND_SENTENCE = "each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query"
 const OVERSTATED_BOUND = "rotation then reads a row within 3·ceil"
 const FA_260_001_SENTENCE = "That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001)."
-const FA_260_R2_001_SENTENCE = "Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001)."
+const FA_260_R2_001_SENTENCE = "Only a missing order field fails closed. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001)."
 const FA_260_R3_001_SENTENCE = "A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001)."
+const FA_260_002_SENTENCE = "A stored null is the exception (FA-260-002, parked): 100 or more null leases at a page end restart the query, the rows behind them are not read, and the first 100 are counted again on each run."
 const ABSENT_ORDER_CODE = "checker_cursor_absent_order"
 const OVERCLAIMED_STARVE = "starve the rows after it"
 const OVERCLAIMED_FULL_PAGE = "A full raw page continues from its last raw row"
@@ -522,6 +523,115 @@ describe("FA-260-R3-001: a present number or string leaseUntil is a cursor, and 
   })
 })
 
+function nullLease(id: string, firmId: string): CheckerPageRow {
+  return { id, data: { firmId, state: "reconcile_failed", leaseUntil: null } }
+}
+
+describe("FA-260-002: a stored null at a full page end is kept and does not resume", () => {
+  const T = Date.parse("1970-01-11T00:00:00.000Z")
+
+  it("re-reads the first 100 null leases five times and does not alert the rows behind them", async () => {
+    const nulls = Array.from({ length: CHECK_PAGE_SIZE }, (_, i) => nullLease(`null-${String(i).padStart(3, "0")}`, "firm-null"))
+    const behind = leasedRow("behind", "firm-behind", T)
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder([...nulls, behind], cursor) : [])
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+    const specs = raise.mock.calls.map((c) => c[0] as { firmId: string; detail: { unresolved: number } })
+    expect(specs.map((spec) => spec.firmId)).not.toContain("firm-behind")
+    expect(specs.find((spec) => spec.firmId === "firm-null")?.detail.unresolved).toBe(CHECK_PAGE_SIZE * CHECK_MAX_PAGES)
+  })
+
+  it("saves the null cursor and does not log a closed failure", async () => {
+    const errors = spyRegisteredErrors()
+    const nulls = Array.from({ length: CHECK_PAGE_SIZE }, (_, i) => nullLease(`null-${String(i).padStart(3, "0")}`, "firm-null"))
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(nulls, cursor) : [])
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(errors.fieldsOf("ops_alert.pass_failed")).toHaveLength(0)
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toEqual({ at: null, id: "null-099" })
+    } finally {
+      errors.restore()
+    }
+  })
+})
+
+describe("cursor resume guards", () => {
+  const T = Date.parse("1970-01-12T00:00:00.000Z")
+  const window = CHECK_PAGE_SIZE * CHECK_MAX_PAGES
+
+  it("keeps a stored cursor when the budget is already spent before that query reads a page", async () => {
+    const pinned = { at: Timestamp.fromMillis(T), id: "pinned-cursor" }
+    checkerTestSeam.memory = { cursors: { reservationsQuarantined: pinned }, passIndex: 0 }
+    let heldRead = false
+    checkerTestSeam.readPage = async (name) => {
+      if (name === "reservationsHeld") {
+        heldRead = true
+        return []
+      }
+      throw new Error(`page read for ${name}`)
+    }
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => (heldRead ? CHECKER_BUDGET_MS : 0) })
+    expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toEqual(pinned)
+  })
+
+  it("leaves the stored cursor in place when the save row has no order field", async () => {
+    const errors = spyRegisteredErrors()
+    const pinned = { at: Timestamp.fromMillis(T), id: "pinned-cursor" }
+    const rows = [...Array.from({ length: window - 1 }, (_, i) => leasedRow(`leased-${String(i).padStart(4, "0")}`, "firm-leased", T + i)), absentRow("absent-500")]
+    checkerTestSeam.memory = { cursors: { reservationsQuarantined: pinned }, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-leased")
+      expect(errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.code === ABSENT_ORDER_CODE)).toHaveLength(1)
+      expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toEqual(pinned)
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("ignores a stored cursor that has no order field and still reads the oldest row", async () => {
+    const rows = [leasedRow("early", "firm-early", T), leasedRow("skip-me", "firm-mid", T + 1), leasedRow("late", "firm-late", T + 2)]
+    checkerTestSeam.memory = { cursors: { reservationsQuarantined: { id: "skip-me" } as CheckCursor }, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+    expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-early")
+  })
+
+  it("alerts rows from earlier pages when the save row has no order field", async () => {
+    const errors = spyRegisteredErrors()
+    const early = Array.from({ length: 300 }, (_, i) => leasedRow(`early-${String(i).padStart(4, "0")}`, "firm-early", T + i))
+    const last = Array.from({ length: window - 300 - 1 }, (_, i) => leasedRow(`last-${String(i).padStart(3, "0")}`, "firm-last", T + 10_000 + i))
+    const rows = [...early, ...last, absentRow("absent-500")]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    try {
+      await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+      const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+      expect(firms).toContain("firm-early")
+      expect(firms).toContain("firm-last")
+      expect(errors.fieldsOf("ops_alert.pass_failed").filter((fields) => fields.code === ABSENT_ORDER_CODE)).toHaveLength(1)
+    } finally {
+      errors.restore()
+    }
+  })
+
+  it("stops raising 10s past the budget and still advances the pass index", async () => {
+    const rows = ["a", "b", "c"].map((name, i) => leasedRow(name, `firm-${name}`, T + i))
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, _field, cursor) => (name === "reservationsQuarantined" ? pageInOrder(rows, cursor) : [])
+    let raised = 0
+    raise.mockImplementation(async () => {
+      raised += 1
+      return "raised"
+    })
+    await runAlertChecker({ now: () => T, wallClock: () => (raised > 0 ? CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS : 0) })
+    expect(raised).toBe(1)
+    expect(checkerTestSeam.memory?.passIndex).toBe(1)
+  })
+})
+
 describe("FA-260 README sentences", () => {
   it("pins the FA-260-001 sentence and the fail-closed sentence in the README, the checker and the spec", () => {
     const files = [
@@ -534,6 +644,7 @@ describe("FA-260 README sentences", () => {
       expect(text, file).toContain(FA_260_001_SENTENCE)
       expect(text, file).toContain(FA_260_R2_001_SENTENCE)
       expect(text, file).toContain(FA_260_R3_001_SENTENCE)
+      expect(text, file).toContain(FA_260_002_SENTENCE)
       expect(text, file).not.toContain(OVERCLAIMED_STARVE)
       expect(text, file).not.toContain(OVERCLAIMED_FULL_PAGE)
       expect(text, file).not.toContain(OVERCLAIMED_REREAD)

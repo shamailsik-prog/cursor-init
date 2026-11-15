@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, Timestamp, type DocumentData, type DocumentReference } from "firebase-admin/firestore"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { adminDb } from "../src/admin"
 import { EMULATORS, uniq } from "./emu"
@@ -36,6 +36,11 @@ async function writeAll(rows: Array<[DocumentReference, DocumentData]>): Promise
     for (const [ref, data] of rows.slice(i, i + 400)) batch.set(ref, data)
     await batch.commit()
   }
+}
+
+/** Counts this test's own ids. Other suites may leave `reconcile_failed` rows; those are not this test's precondition. */
+async function countOwnIds(prefix: string): Promise<number> {
+  return (await adminDb().collection("ai_reservations").orderBy(FieldPath.documentId()).startAt(prefix).endAt(`${prefix}\uf8ff`).select().get()).size
 }
 
 async function deleteWhereFirm(collection: string, firmIds: string[]): Promise<void> {
@@ -171,8 +176,7 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const firmTs = uniq("firm")
     const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
     extraFirms.push(firmNum, firmTs, ...heldFirms)
-    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
-    expect(prior).toBe(0)
+    expect(await countOwnIds(`n1num-${tag}-`)).toBe(0)
     const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
     const quarantined = (firmId: string, leaseUntil: number | Timestamp) => ({ firmId, state: "reconcile_failed", leaseUntil, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) })
     await writeAll([
@@ -200,8 +204,7 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const firmTail = uniq("firm")
     const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
     extraFirms.push(firmTs, firmHead, firmTail, ...heldFirms)
-    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
-    expect(prior).toBe(0)
+    expect(await countOwnIds(`n3ts-${tag}-`)).toBe(0)
     const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
     const quarantined = (firmId: string, leaseUntil: Timestamp | string) => ({ firmId, state: "reconcile_failed", leaseUntil, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) })
     await writeAll([
@@ -219,6 +222,7 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     expect(await alertOf(firmHead, "ai.reservation_unresolved")).toBeDefined()
     expect(await alertOf(firmTail, "ai.reservation_unresolved")).toBeUndefined()
     const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: unknown; id?: string } | undefined
+    expect(String(cursor?.id)).toContain(tag)
     expect(typeof cursor?.at).toBe("string")
     await runAlertChecker({ now, passes: ["reservations"] })
     expect(await alertOf(firmTail, "ai.reservation_unresolved")).toBeDefined()
@@ -231,8 +235,7 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     const firmLate = uniq("firm")
     const heldFirms = Array.from({ length: 12 }, () => uniq("firm"))
     extraFirms.push(firmNum, firmLate, ...heldFirms)
-    const prior = (await adminDb().collection("ai_reservations").where("state", "==", "reconcile_failed").count().get()).data().count
-    expect(prior).toBe(0)
+    expect(await countOwnIds(`ncol-${tag}-`)).toBe(0)
     const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
     await writeAll([
       ...Array.from({ length: WINDOW }, (_, i) => [ref(`ncol-${tag}-${String(i).padStart(4, "0")}`), { firmId: firmNum, state: "reconcile_failed", leaseUntil: i + 1, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]),
@@ -247,10 +250,28 @@ describe.skipIf(!EMULATORS)("PR #120 review: the checker pages through a persist
     expect(heldAlerts.filter(([, alert]) => alert !== undefined)).toHaveLength(12)
     expect(await alertOf(firmNum, "ai.reservation_unresolved")).toBeDefined()
     expect(await alertOf(firmLate, "ai.reservation_unresolved")).toBeUndefined()
-    const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: unknown } | undefined
-    expect(cursor?.at).toBe(WINDOW)
+    const cursor = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: unknown; id?: string } | undefined
+    expect(String(cursor?.id)).toContain(tag)
+    expect(cursor?.at).toEqual((await adminDb().collection("ai_reservations").doc(cursor!.id!).get()).get("leaseUntil"))
+    expect(typeof cursor?.at).toBe("number")
     await runAlertChecker({ now, passes: ["reservations"] })
     expect(await alertOf(firmLate, "ai.reservation_unresolved")).toBeDefined()
+  })
+
+  it("FA-260-R4-001: a map leaseUntil cursor replaces the stored map", { timeout: E2E_TIMEOUT_MS }, async () => {
+    const T = Date.parse("1970-01-13T00:00:00.000Z")
+    const tag = uniq("map").slice(2)
+    const firm = uniq("firm")
+    extraFirms.push(firm)
+    await stateRef().set({ cursors: { reservationsQuarantined: { at: { x: 0 }, id: "" } } })
+    const ref = (id: string) => adminDb().collection("ai_reservations").doc(id)
+    await writeAll(Array.from({ length: WINDOW }, (_, i) => [ref(`map-${tag}-${String(i).padStart(4, "0")}`), { firmId: firm, state: "reconcile_failed", leaseUntil: { m: i + 1 }, reservedMicroUsd: 1, monthKey: "1970-01", createdAt: Timestamp.fromMillis(T) }] as [DocumentReference, DocumentData]))
+    const { runAlertChecker } = await checker()
+    await runAlertChecker({ now: () => T + 60 * 60_000, passes: ["reservations"] })
+    const saved = (await stateRef().get()).get("cursors")?.reservationsQuarantined as { at?: Record<string, unknown>; id?: string } | undefined
+    expect(String(saved?.id)).toContain(tag)
+    expect(saved?.at).toEqual((await adminDb().collection("ai_reservations").doc(saved!.id!).get()).get("leaseUntil"))
+    expect(saved?.at).not.toHaveProperty("x")
   })
 
   it("the window is bounded: 5 pages of 100 rows per query per run", async () => {

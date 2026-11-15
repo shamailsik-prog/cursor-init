@@ -25,7 +25,7 @@ import { queueAgeSpec, reservationUnresolvedSpec, sagaAgeSpec } from "./specs"
  * `createdAt` is the documented creation time and is not a second query. A stored null stays: the index returns it.
  * That drop does not end the query: the end is a raw page shorter than 100 (FA-260-001). The cursor is then cleared
  * and the next run starts again from the oldest row (the wrap). A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001).
- * Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001). An id-only
+ * Only a missing order field fails closed. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001). A stored null is the exception (FA-260-002, parked): 100 or more null leases at a page end restart the query, the rows behind them are not read, and the first 100 are counted again on each run. An id-only
  * cursor (`at: null`) cannot resume a time order and is ignored once.
  *
  * Passes rotate (`passIndex` on the same document): run N starts at `CHECK_PASSES[N mod 3]`. A jobs pass that spends
@@ -49,6 +49,8 @@ export const CHECK_PAGE_SIZE = 100
 export const CHECK_MAX_PAGES = 5
 /** One run's wall-clock budget, inside the function's 60 s timeout. */
 export const CHECKER_BUDGET_MS = 40_000
+/** Stop raising this long after the budget so `passIndex` still advances before the 60 s timeout. */
+export const CHECKER_RAISE_SLACK_MS = 10_000
 /**
  * `ops_alert.pass_failed` code when the row a run would save has no order-field value. The cursor is not written
  * (FA-260-R2-001). A stored null is a value and uses the id-only cursor instead.
@@ -146,7 +148,7 @@ async function readOrderedPage(name: CheckQuery, base: Query | null, field: stri
  * a raw page shorter than 100 (FA-260-001). A present order field, including a number or a string, is stored on the cursor and the next run resumes after that row (FA-260-R3-001).
  * Stops early when the budget is spent.
  *
- * Only a missing order field is absent. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001).
+ * Only a missing order field fails closed. When the row a query would save has no order field, that query logs ops_alert.pass_failed with code checker_cursor_absent_order, the rows already read are still alerted, and the same window is read again on the next run (FA-260-R2-001). A stored null is the exception (FA-260-002, parked): 100 or more null leases at a page end restart the query, the rows behind them are not read, and the first 100 are counted again on each run.
  * A stored null stays in the page. Its saved cursor is id-only and cannot resume a time order.
  */
 async function scan(name: CheckQuery, base: Query | null, field: string | null, cursor: CheckCursor | null, spent: () => boolean): Promise<Scan> {
@@ -215,7 +217,8 @@ async function loadCursors(): Promise<Cursors> {
     passIndex,
     get: (q) => (isCursor(stored[q]) ? stored[q] : null),
     save: async (q, next) => {
-      await checkerStateRef().set({ cursors: { [q]: next }, updatedAt: Timestamp.now() }, { merge: true })
+      // mergeFields replaces `cursors.<query>` whole. set(merge:true) deep-merges a map-valued `at` into the stored map.
+      await checkerStateRef().set({ cursors: { [q]: next }, updatedAt: Timestamp.now() }, { mergeFields: [`cursors.${q}`, "updatedAt"] })
     },
     advancePass: async () => {
       await checkerStateRef().set({ passIndex: passIndex + 1, updatedAt: Timestamp.now() }, { merge: true })
@@ -347,7 +350,7 @@ export type CheckerOptions = { now?: () => number; passes?: readonly CheckPass[]
  * One checker run at `now()`: each pass (from its cursors), then one raise per group. Returns the alert ids raised or
  * counted. The scheduled run rotates which pass leads (`passIndex`). A caller that names `passes` keeps that order and
  * does not move the index (the paging tests pin one pass). The budget stops the next page and the next pass. Specs
- * already built from rows that were read are still raised.
+ * already built are raised until `CHECKER_RAISE_SLACK_MS` past the budget, so the pass index still advances inside the 60 s timeout.
  */
 export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ raised: string[] }> {
   const now = opts.now ?? Date.now
@@ -375,6 +378,7 @@ export async function runAlertChecker(opts: CheckerOptions = {}): Promise<{ rais
       continue
     }
     for (const spec of specs) {
+      if (wall() - started >= CHECKER_BUDGET_MS + CHECKER_RAISE_SLACK_MS) break
       const id = await raiseAlertBestEffort(spec, nowMs)
       if (id !== null) raised.push(id)
     }
