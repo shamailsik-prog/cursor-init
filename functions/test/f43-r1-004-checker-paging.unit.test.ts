@@ -239,4 +239,69 @@ describe("FA-F43-R1-004-002: a quarantined row with no leaseUntil stays outside 
     expect(specs.map((s) => s.firmId)).toEqual(["firm-leased", "firm-null"])
     expect(specs.every((s) => s.detail.quarantined === 1)).toBe(true)
   })
+
+  it("alerts rows after a full page that contains one absent leaseUntil, and resumes from the last raw row", async () => {
+    const calls: Call[] = []
+    const leased = Array.from({ length: CHECK_PAGE_SIZE - 1 }, (_, i) => ({
+      id: `leased-${String(i).padStart(3, "0")}`,
+      data: { firmId: "firm-leased", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + i) },
+    }))
+    const absent = { id: "absent-lease", data: { firmId: "firm-absent", state: "reconcile_failed" } }
+    const late = {
+      id: "firm-late",
+      data: { firmId: "firm-late", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + 1_000_000) },
+    }
+    const firstPage: CheckerPageRow[] = [absent, ...leased]
+    const lastRaw = leased[leased.length - 1]!
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, field, cursor) => {
+      calls.push({ name, field, cursor })
+      if (name !== "reservationsQuarantined") return []
+      if (cursor === null) return firstPage
+      return [late]
+    }
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    const quarantined = calls.filter((c) => c.name === "reservationsQuarantined")
+    expect(firstPage).toHaveLength(CHECK_PAGE_SIZE)
+    expect(firstPage[firstPage.length - 1]?.id).toBe(lastRaw.id)
+    expect(quarantined.map((c) => c.cursor)).toEqual([
+      null,
+      { at: lastRaw.data.leaseUntil, id: lastRaw.id },
+    ])
+    const firms = raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)
+    expect(firms).toContain("firm-late")
+    expect(firms).toContain("firm-leased")
+    expect(firms).not.toContain("firm-absent")
+    expect(checkerTestSeam.memory?.cursors.reservationsQuarantined).toBeNull()
+  })
+
+  it("resumes from the last raw row when that row is the one whose leaseUntil is absent", async () => {
+    const calls: Call[] = []
+    const leased = Array.from({ length: CHECK_PAGE_SIZE - 1 }, (_, i) => ({
+      id: `leased-${String(i).padStart(3, "0")}`,
+      data: { firmId: "firm-leased", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + i) },
+    }))
+    const absent = { id: "absent-last", data: { firmId: "firm-absent", state: "reconcile_failed" } }
+    const late = {
+      id: "firm-late",
+      data: { firmId: "firm-late", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T + 1_000_000) },
+    }
+    const firstPage = [...leased, absent]
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    checkerTestSeam.readPage = async (name, field, cursor) => {
+      calls.push({ name, field, cursor })
+      if (name !== "reservationsQuarantined") return []
+      if (cursor?.id === absent.id) return [late]
+      return cursor === null ? firstPage : []
+    }
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    const quarantined = calls.filter((c) => c.name === "reservationsQuarantined")
+    expect(quarantined[1]?.cursor?.id).toBe(absent.id)
+    expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).toContain("firm-late")
+    expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId)).not.toContain("firm-absent")
+  })
 })
