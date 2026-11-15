@@ -1078,7 +1078,13 @@ describe("R4 operator prefix and plaintext", () => {
           outRoot: dir,
           key: randomBytes(32),
           pgPrefix: ["false"],
-          env: { PATH: process.env.PATH, PGHOST: "/tmp/sikander-backup-drill/nope", PGPORT: "1", PGUSER: "postgres" },
+          env: {
+            NODE_ENV: "test",
+            PATH: process.env.PATH,
+            PGHOST: "/tmp/sikander-backup-drill/nope",
+            PGPORT: "1",
+            PGUSER: "postgres",
+          },
         })
       ).rejects.toThrow(/allowlisted docker exec/)
     } finally {
