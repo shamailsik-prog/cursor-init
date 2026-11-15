@@ -1,0 +1,39 @@
+{
+  "documentTypeId": "constitutional_petition_199",
+  "annexureRule": "Annexures A, B, C … in the order referred to in the petition; indexed; odd pagination; legal size",
+  "draft": {
+    "body": "The petitioner relies on Annexure A and thereafter on Annexure B and Annexure C."
+  },
+  "annexures": [
+    {
+      "metadata": {
+        "artifactId": "ann-a",
+        "label": "Impugned order dated 12-06-2026",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-a"
+      },
+      "body": "Certified copy of the impugned order."
+    },
+    {
+      "metadata": {
+        "artifactId": "ann-b",
+        "label": "Notice dated 01-07-2026",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-b"
+      },
+      "body": "Copy of the notice served on the petitioner."
+    },
+    {
+      "metadata": {
+        "artifactId": "ann-c",
+        "label": "Vakalatnama",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-c"
+      },
+      "body": "Vakalatnama of the petitioner."
+    }
+  ]
+}

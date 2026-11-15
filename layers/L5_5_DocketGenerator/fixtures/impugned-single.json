@@ -1,0 +1,19 @@
+{
+  "documentTypeId": "appeal",
+  "annexureRule": "Certified copy of the impugned order as Annexure A; then the record relied on; paper-book indexed and paginated; legal size",
+  "draft": {
+    "body": "This appeal is from the order produced with the paper-book."
+  },
+  "annexures": [
+    {
+      "metadata": {
+        "artifactId": "impugned",
+        "label": "Impugned order",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-impugned"
+      },
+      "body": "Certified copy of the impugned order."
+    }
+  ]
+}

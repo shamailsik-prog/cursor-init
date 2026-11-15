@@ -1,0 +1,32 @@
+{
+  "documentTypeId": "exhibit",
+  "annexureRule": "Exhibits, if any, marked and referred to in the paragraphs; page size per forum",
+  "forumPageSize": "legal",
+  "draft": {
+    "body": "The witness proved P-1 and then P-2."
+  },
+  "annexures": [
+    {
+      "assignedLabel": "P-1",
+      "metadata": {
+        "artifactId": "ex-1",
+        "label": "Photograph",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-photo"
+      },
+      "body": "Photograph marked at the trial."
+    },
+    {
+      "assignedLabel": "P-2",
+      "metadata": {
+        "artifactId": "ex-2",
+        "label": "Letter",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-ex-letter"
+      },
+      "body": "Letter marked at the trial."
+    }
+  ]
+}
