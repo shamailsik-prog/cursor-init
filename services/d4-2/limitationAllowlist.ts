@@ -3,7 +3,12 @@
  * the canonical reckoning, the canonical month-end, a neutral label clause,
  * or one quantity clause (optional label words, one cardinal, one day/month/year).
  * Anything else fails closed. These two sentences are the whole proviso allowlist.
+ * They are engine fixtures. Published section 12(1) includes "prescribed for any
+ * suit, appeal or application," and does not match CANONICAL_RECKONING, so that
+ * gazetted sentence yields reckoning_unverified. A schedule row with a description
+ * column or a time column beside the period is outside this grammar and refuses.
  * [REQUIRES VERIFICATION] before a lawyer treats either sentence as the gazetted text.
+ * Do not replace either sentence from an unsourced recollection of the Act.
  */
 export const CANONICAL_RECKONING =
   "in computing the period of limitation the day from which such period is to be reckoned shall be excluded"
@@ -29,14 +34,13 @@ export const QUANTITY_LABELS = new Set([
 
 /**
  * Words that may fill a clause that does not hold the quantity.
- * "over" is allowed here so "Possession over the property:" still introduces twelve years.
- * It is not a quantity label, so "over twelve years" does not assess.
+ * "over" is not one of them. The only allowed "over" is the exact phrase
+ * "possession over the property", and only in a clause that does not hold the quantity.
  */
 export const NEUTRAL_WORDS = new Set([
   ...QUANTITY_LABELS,
   "court",
   "file",
-  "over",
   "possession",
   "property",
   "read",

@@ -1292,6 +1292,112 @@ describe("Q11 checkLimitation", () => {
       })
     }
   })
+
+  it("FA-Q11-DOT-R4-001 refuses a dot the sentence split would drop in front of a digit", () => {
+    const rows = [".5 years", ".25 years", ".75 months", ". 5 years.", "..5 years"]
+    for (const period of rows) {
+      expect(assessed("2020-01-15", provision(`${period.endsWith(".") ? period : `${period}.`} ${RECKONING}`)), `start ${period}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+      expect(assessed("2020-01-15", provision(`\n\n${period.endsWith(".") ? period : `${period}.`} ${RECKONING}`)), `blank ${period}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+      const afterCanonical = period.endsWith(".") ? period.slice(0, -1) : period
+      expect(assessed("2020-01-15", provision(`${RECKONING}\n${afterCanonical}`)), `after ${period}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-OVER-R4-001 allows only the phrase possession over the property", () => {
+    for (const text of [
+      `LIMITATION FIXTURE. Over: three years. ${RECKONING}`,
+      `LIMITATION FIXTURE. Three years. Over. ${RECKONING}`,
+      `LIMITATION FIXTURE. Over; three years. ${RECKONING}`,
+      `LIMITATION FIXTURE. Three years: over. ${RECKONING}`,
+      `LIMITATION FIXTURE. Possession over: three years. ${RECKONING}`,
+      `LIMITATION FIXTURE. The period of limitation is three years.\n\nOver. ${RECKONING}`,
+    ]) {
+      expect(assessed("2020-01-01", provision(text)), text).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_ambiguous",
+        deadline: null,
+      })
+    }
+    expect(assessed("2020-01-01", base("Possession over the property: twelve years"))).toMatchObject({
+      status: "ASSESSED",
+      deadline: "2032-01-01",
+      governing: { periodCited: "twelve years" },
+    })
+  })
+
+  it("FA-Q11-S12-R4-001 does not apply section 12 when a later sentence says the rule shall not apply", () => {
+    const versions = [
+      version("limitation-act-1908/article/7", "LIMITATION FIXTURE. The period of limitation is three years.", "1908-01-01", null, 1),
+      version("limitation-act-1908/section/12", `${RECKONING} This rule shall not apply to the suit.`, "1908-01-01", null, 1),
+      version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+    ]
+    expect(assessed("2020-01-01", versions)).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "reckoning_unverified",
+      deadline: null,
+    })
+  })
+
+  it("FA-Q11-DIGIT-R4-002 refuses a non-ASCII decimal digit anywhere in the period", () => {
+    expect(assessed("2020-01-01", base("\u06F1\u06F2 (3 years)"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+  })
+
+  it("FA-Q11-SYM-R2-001 refuses a sign beside the quantity", () => {
+    for (const period of ["> three years", "three years <", "<= three years", "+ three years", "\u00B1 three years", "= three years"]) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_ambiguous",
+        deadline: null,
+      })
+    }
+  })
+
+  it("TEST-256-R4-001 pins more, within, a distant unicode dash, and a section 12 that is not canonical", () => {
+    expect(assessed("2020-01-01", provision(`LIMITATION FIXTURE. Three years. More. ${RECKONING}`)), "more").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_ambiguous",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("within three years")), "within").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_ambiguous",
+      deadline: null,
+    })
+    for (const dash of ["\uFF0D", "\uFE58"]) {
+      const text = `LIMITATION FIXTURE. The period of limitation is three years. ${dash}. ${RECKONING}`
+      expect(assessed("2020-01-01", provision(text)), `dash ${dash}`).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    const unverified = [
+      version("limitation-act-1908/article/7", "LIMITATION FIXTURE. The period of limitation is three years.", "1908-01-01", null, 1),
+      version("limitation-act-1908/section/12", "Q11 FIXTURE. The day is included.", "1908-01-01", null, 1),
+      version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+    ]
+    expect(assessed("2020-01-01", unverified), "section 12").toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "reckoning_unverified",
+      deadline: null,
+    })
+  })
 })
 
 describe("Q11 diary alerts and relevant law dates", () => {

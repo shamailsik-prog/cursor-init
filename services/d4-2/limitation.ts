@@ -464,8 +464,10 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * reckoning, the canonical month-end, a neutral label clause, or one quantity
  * clause. The quantity clause is optional label words, one English cardinal or
  * digit run, and one day, month, or year. Anything else is period_ambiguous, or
- * period_unreadable when the sentence was trying to be a proviso or a unicode
- * dash appears anywhere in the provision. A count above the engine ceiling is
+ * period_unreadable when the sentence was trying to be a proviso, a unicode
+ * dash appears anywhere in the provision, a non-ASCII decimal digit appears,
+ * or a full stop that the sentence split removes sits before a digit
+ * (spaces ignored). A count above the engine ceiling is
  * period_exceeds_engine_cap. A single newline is a space. A blank line splits.
  */
 function normalizeSource(text: string): string {
@@ -483,10 +485,10 @@ function parsePeriod(
 ):
   | { ok: true; n: number; unit: DateUnit; cited: string }
   | { ok: false; reason: "period_unreadable" | "period_ambiguous" | "period_exceeds_engine_cap" } {
-  if (/\p{No}/u.test(text)) return { ok: false, reason: "period_unreadable" }
+  if (/\p{No}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
   const normalized = normalizeSource(text)
-  if (hasUnicodeDash(normalized)) return { ok: false, reason: "period_unreadable" }
+  if (hasUnicodeDash(normalized) || dotBeforeDigit(normalized)) return { ok: false, reason: "period_unreadable" }
   const sentences = normalized.split(/[.\u0000]/)
   for (const sentence of sentences) {
     if (sentence.trim() === "") continue
@@ -587,8 +589,9 @@ function outsideAllowlist(text: string, numberStart: number, unitEnd: number): b
     const words = i === index
       ? [...wordsOf(text.slice(clause.start, numberStart)), ...wordsOf(text.slice(unitEnd, clause.end))]
       : wordsOf(slice)
+    const allowedWords = i === index ? words : withoutExactPhrase(words, POSSESSION_OVER_THE_PROPERTY)
     const allowed = i === index ? QUANTITY_LABELS : NEUTRAL_WORDS
-    if (words.some((word) => !allowed.has(word))) return true
+    if (allowedWords.some((word) => !allowed.has(word))) return true
   }
   return false
 }
@@ -601,8 +604,39 @@ function clauseForbidden(clause: string): boolean {
   return false
 }
 
+const POSSESSION_OVER_THE_PROPERTY = ["possession", "over", "the", "property"]
+
+function withoutExactPhrase(words: readonly string[], phrase: readonly string[]): string[] {
+  const rest: string[] = []
+  for (let i = 0; i < words.length; ) {
+    const matches = phrase.every((word, offset) => words[i + offset] === word)
+    if (matches) {
+      i += phrase.length
+      continue
+    }
+    const word = words[i]
+    if (word) rest.push(word)
+    i += 1
+  }
+  return rest
+}
+
+function dotBeforeDigit(text: string): boolean {
+  return /\.\s*\d/.test(text)
+}
+
+function hasNonAsciiDigit(text: string): boolean {
+  for (const char of text) {
+    if (char >= "0" && char <= "9") continue
+    if (/\p{Nd}/u.test(char)) return true
+  }
+  return false
+}
+
 function textHasCanonicalReckoning(text: string): boolean {
-  return normalizeSource(text).split(/[.\u0000]/).some((part) => isCanonicalReckoning(part))
+  const parts = normalizeSource(text).split(/[.\u0000]/)
+  if (parts.some((part) => part.trim() !== "" && provisoShaped(part) && !isCanonicalProviso(part))) return false
+  return parts.some((part) => isCanonicalReckoning(part))
 }
 
 function isSymbolCode(code: number): boolean {
