@@ -51,7 +51,7 @@ export async function buildPdf(
     regular: await pdf.embedFont(StandardFonts.TimesRoman),
     bold: await pdf.embedFont(StandardFonts.TimesRomanBold),
   }
-  const plan = planDocket(docket, fonts)
+  const plan = planDocket(docket)
   if ("error" in plan) return plan
   drawPlan(pdf, plan, fonts)
   return { bytes: await pdf.save({ useObjectStreams: false }), plan }

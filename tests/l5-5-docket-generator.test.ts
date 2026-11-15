@@ -15,6 +15,9 @@ import {
   DOCKET_GENERATOR_FLAG_ENV,
   isDocketGeneratorEnabled,
 } from "@/layers/L5_5_DocketGenerator/flag"
+import { resolveFilingSet } from "@/layers/L5_5_DocketGenerator/ambiguity"
+import { contentBox, pagePoints, planDocket, WRAP_SLACK, wrapParagraph } from "@/layers/L5_5_DocketGenerator/layout"
+import { tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
 import { generateDocket } from "@/layers/L5_5_DocketGenerator/service"
 import { FIXED_DOCKET_TIMESTAMP } from "@/layers/L5_5_DocketGenerator/pdf"
 import type { DocketFilingSet } from "@/layers/L5_5_DocketGenerator/types"
@@ -587,6 +590,140 @@ describe("L5.5 ambiguity queue", () => {
     expect(result.pdf).toBeNull()
     expect(result.queue.some((entry) => entry.code === "label_unresolved" && entry.artifactId === "ann-a")).toBe(true)
   })
+
+  it("reads label expressions and fails closed when one does not resolve", async () => {
+    enableFlag()
+    const letterPhrases: Array<{ phrase: string; canonical: string }> = [
+      { phrase: "Annexure A\u2013E", canonical: "E" },
+      { phrase: "Annexure A\u2014E", canonical: "E" },
+      { phrase: 'Annexures "A" and "E"', canonical: "E" },
+      { phrase: "Annexure \u201CD\u201D", canonical: "D" },
+      { phrase: "Annexure (D)", canonical: "D" },
+      { phrase: "Annex\u00ADure D", canonical: "D" },
+      { phrase: "Annexure 4", canonical: "4" },
+      { phrase: "Annexure-4", canonical: "4" },
+      { phrase: "Annexure IV", canonical: "4" },
+      { phrase: "Annexure No. 4", canonical: "4" },
+      { phrase: "Annexure AA", canonical: "AA" },
+      { phrase: "Annexures A, B, and E", canonical: "E" },
+      { phrase: "Annexures A,E", canonical: "E" },
+    ]
+    for (const { phrase, canonical } of letterPhrases) {
+      const result = await generateDocket({
+        ...petition,
+        draft: { body: `${petition.draft.body} ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(
+        result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)),
+        phrase,
+      ).toBe(true)
+    }
+
+    const unread = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} Annexure the record.` },
+    })
+    expect(unread.ok).toBe(false)
+    expect(unread.pdf).toBeNull()
+    expect(unread.docx).toBeNull()
+    expect(unread.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it("reads enclosure expressions, including an annexure citation on an enclosure filing", async () => {
+    enableFlag()
+    const phrases = [
+      "Enclosure No. 9",
+      "Enclosure #9",
+      "Enclosure \u20139",
+      "Enclosure IX",
+      "Enclosure (9)",
+      "Enclosure 1 to 9",
+      "Enclosure 1-9",
+      "Enclosures 1, 2, and 9",
+      "Encls. 9",
+      "Annexure 9",
+      "Annexure 1",
+    ]
+    for (const phrase of phrases) {
+      const result = await generateDocket({
+        ...enclosures,
+        draft: { body: `${enclosures.draft.body} ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), phrase).toBe(true)
+    }
+  })
+
+  it("reads mark expressions and does not treat an address as an exhibit mark", async () => {
+    enableFlag()
+    const labeled = ambiguous.annexures.map((annexure, index) => ({
+      ...annexure,
+      assignedLabel: index === 0 ? "P/1" : "P/2",
+    }))
+    const markPhrases: Array<{ phrase: string; canonical: string }> = [
+      { phrase: "P.99", canonical: "P/99" },
+      { phrase: "P\u201399", canonical: "P/99" },
+      { phrase: "P 99", canonical: "P/99" },
+      { phrase: "P3", canonical: "P/3" },
+      { phrase: "Ex.P3", canonical: "P/3" },
+      { phrase: "P No. 3", canonical: "P/3" },
+      { phrase: "P/1 to 5", canonical: "P/5" },
+    ]
+    for (const { phrase, canonical } of markPhrases) {
+      const result = await generateDocket({
+        ...ambiguous,
+        draft: { body: `The plaintiff relies on P/1 and then P/2. ${phrase}.` },
+        annexures: labeled,
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(
+        result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)),
+        phrase,
+      ).toBe(true)
+    }
+
+    const addressed = await generateDocket({
+      ...exhibits,
+      draft: {
+        body: "The witness proved P-1 and then P-2. House No. D-45, Clifton. R-123, Sector 11-A. Plot P-12. Form D-1.",
+      },
+    })
+    expect(addressed.ok).toBe(true)
+    expect(addressed.pdf).not.toBeNull()
+    expect(addressed.docx).not.toBeNull()
+    expect(addressed.queue).toEqual([])
+  })
+
+  it("generates when the letter expressions and the address lines are all present", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: {
+        body: [
+          "The petitioner relies on Annexures A to C.",
+          "Annexures A, B, and C.",
+          "Annexure (C).",
+          "Annexures A\u2013C.",
+          "A-C.",
+          "House No. D-45, Clifton.",
+          "R-123, Sector 11-A.",
+          "Plot P-12.",
+          "Form D-1.",
+        ].join(" "),
+      },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
 })
 
 function docxSections(bytes: Uint8Array): Array<{ width: number; height: number; margins: Record<string, number>; pageFields: number; text: string; exactLines: number[] }> {
@@ -676,6 +813,91 @@ describe("L5.5 docx pagination", () => {
     }
     expect(Buffer.compare(render("UTC"), render("America/New_York"))).toBe(0)
   }, 60000)
+})
+
+const PROSE = [
+  "petitioner", "respectfully", "submits", "constitutional", "jurisdiction", "impugned", "order",
+  "notice", "served", "respondent", "affidavit", "paragraph", "record", "produced", "counsel",
+  "heard", "learned", "court", "holds", "accordingly", "prayed", "granted", "dismissed", "appeal",
+  "statute", "provision", "section", "article", "rights", "liberty", "property", "procedure",
+  "natural", "justice", "reasons", "brief", "grounds", "stated", "above", "below", "witness",
+  "document", "copy", "certified", "date", "place", "karachi", "lahore", "islamabad", "quotation",
+  "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+]
+
+function mulberry32(seed: number): () => number {
+  let state = seed
+  return () => {
+    state = (state + 0x6d2b79f5) | 0
+    let value = Math.imul(state ^ (state >>> 15), 1 | state)
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function prosePetition(seed: number): DocketFilingSet {
+  const random = mulberry32(seed)
+  const count = 220 + Math.floor(random() * 180)
+  const words: string[] = []
+  for (let index = 0; index < count; index++) words.push(PROSE[Math.floor(random() * PROSE.length)] ?? "petition")
+  return {
+    ...petition,
+    draft: {
+      body: `The petitioner relies on Annexure A and thereafter on Annexure B and Annexure C. ${words.join(" ")}`,
+    },
+  }
+}
+
+function assertLinesFit(lines: readonly { text: string; size: number; bold: boolean }[], measure: number): void {
+  for (const line of lines) {
+    const width = tnrWidth(line.text, line.size, line.bold)
+    expect(width).toBeLessThanOrEqual(measure + 1e-6)
+    if (line.text.includes(" ")) expect(width).toBeLessThanOrEqual(measure * WRAP_SLACK + 0.05)
+  }
+}
+
+describe("L5.5 Times New Roman line measure", () => {
+  it("keeps every wrapped line inside the measure under Tinos widths", () => {
+    const measure = contentBox(pagePoints("legal")).width
+    const sample = `${"The petitioner respectfully submits that the constitutional jurisdiction of this Court is invoked. ".repeat(12)}mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm`
+    for (const line of wrapParagraph(sample, 12, measure, false)) {
+      expect(tnrWidth(line, 12, false)).toBeLessThanOrEqual(measure + 1e-6)
+    }
+    const resolved = resolveFilingSet(petition)
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+    const plan = planDocket(resolved.docket)
+    expect("pages" in plan).toBe(true)
+    if (!("pages" in plan)) return
+    assertLinesFit(plan.pages.flatMap((page) => page.lines), contentBox(plan.pageSize).width)
+  })
+
+  it("fits each line of twelve seeded prose petitions under Tinos widths", async () => {
+    enableFlag()
+    const seeds = Array.from({ length: 12 }, (_, index) => 12000 + index)
+    for (const seed of seeds) {
+      const filing = prosePetition(seed)
+      const result = await generateDocket(filing)
+      expect(result.ok, `seed ${seed}`).toBe(true)
+      const resolved = resolveFilingSet(filing)
+      expect(resolved.ok).toBe(true)
+      if (!resolved.ok) continue
+      const plan = planDocket(resolved.docket)
+      expect("pages" in plan).toBe(true)
+      if (!("pages" in plan)) continue
+      const measure = contentBox(plan.pageSize).width
+      assertLinesFit(plan.pages.flatMap((page) => page.lines), measure)
+      const document = strFromU8(unzipSync(result.docx!)["word/document.xml"] ?? new Uint8Array())
+      expect(document, `seed ${seed}`).not.toContain("<w:br")
+      expect(document, `seed ${seed}`).not.toContain('w:wordWrap w:val="false"')
+      expect(document, `seed ${seed}`).not.toContain('w:wordWrap w:val="0"')
+      const lineCount = plan.pages.reduce((sum, page) => sum + page.lines.length, 0)
+      const paragraphCount = [...document.matchAll(/<w:p[ >]/g)].length
+      expect(paragraphCount, `seed ${seed}`).toBeGreaterThan(0)
+      expect(paragraphCount, `seed ${seed}`).toBeLessThan(lineCount)
+      expect(plan.pages).toHaveLength(docxSections(result.docx!).length)
+    }
+  })
 })
 
 describe("L5.5 layer boundary", () => {

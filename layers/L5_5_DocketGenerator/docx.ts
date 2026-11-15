@@ -37,7 +37,6 @@ function paragraph(line: PlanLine, previous: PlanLine | null, pageNumber: boolea
   return new Paragraph({
     alignment: alignment(line),
     spacing,
-    wordWrap: false,
     widowControl: false,
     children: [
       pageNumber
@@ -45,6 +44,60 @@ function paragraph(line: PlanLine, previous: PlanLine | null, pageNumber: boolea
         : new TextRun({ ...run, text: line.text.length > 0 ? line.text : " " }),
     ],
   })
+}
+
+function paragraphText(lines: readonly PlanLine[]): string {
+  return lines
+    .map((line) => line.text.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length > 0)
+    .join(" ")
+}
+
+/** One reflowing paragraph per source paragraph. Line breaks are not written into the file. */
+function flowAlignment(line: PlanLine): (typeof AlignmentType)[keyof typeof AlignmentType] {
+  if (line.align === "left") return AlignmentType.BOTH
+  return alignment(line)
+}
+
+function flowParagraph(lines: readonly PlanLine[]): Paragraph {
+  const first = lines[0]
+  const text = first ? paragraphText(lines) : ""
+  const size = first?.size ?? 12
+  return new Paragraph({
+    alignment: first ? flowAlignment(first) : AlignmentType.LEFT,
+    spacing: { before: 0, after: 0, line: Math.round(size * 1.5 * 20), lineRule: LineRuleType.EXACT },
+    widowControl: false,
+    children: [
+      new TextRun({
+        bold: first?.bold ?? false,
+        font: "Times New Roman",
+        size: size * 2,
+        text: text.length > 0 ? text : " ",
+      }),
+    ],
+  })
+}
+
+function pageParagraphs(lines: readonly PlanLine[]): Paragraph[] {
+  if (lines.length === 0) return [paragraph({ text: " ", size: 12, bold: false, align: "left", paragraphId: -1 }, null, false)]
+  const children: Paragraph[] = []
+  let index = 0
+  const first = lines[0]
+  if (first && first.align === "right" && /^\d+$/.test(first.text)) {
+    children.push(paragraph(first, null, true))
+    index = 1
+  }
+  while (index < lines.length) {
+    const paragraphId = lines[index]?.paragraphId
+    const group: PlanLine[] = []
+    while (index < lines.length && lines[index]?.paragraphId === paragraphId) {
+      const line = lines[index]
+      if (line) group.push(line)
+      index += 1
+    }
+    if (group.length > 0) children.push(flowParagraph(group))
+  }
+  return children
 }
 
 const FIXED_CORE_TIMESTAMP = "2026-01-01T00:00:00Z"
@@ -94,12 +147,7 @@ export async function buildDocx(plan: DocketPlan): Promise<Uint8Array> {
           margin: { top: 2160, right: 1440, bottom: 2160, left: 1440, header: 720, footer: 720 },
         },
       },
-      children:
-        page.lines.length === 0
-          ? [paragraph({ text: " ", size: 12, bold: false, align: "left" }, null, false)]
-          : page.lines.map((line, index) =>
-              paragraph(line, index === 0 ? null : (page.lines[index - 1] ?? null), index === 0 && line.align === "right"),
-            ),
+      children: pageParagraphs(page.lines),
     })),
   })
   const raw = await Packer.toBuffer(doc)

@@ -1,6 +1,10 @@
-import { PageSizes, type PDFFont } from "pdf-lib"
+import { PageSizes } from "pdf-lib"
 import type { ResolvedDocket } from "@/layers/L5_5_DocketGenerator/ambiguity"
+import { tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
 import type { DocketIndexEntry, DocketPageSizeName } from "@/layers/L5_5_DocketGenerator/types"
+
+/** Lines break at this fraction of the measure so a wider Times New Roman reflow still fits. */
+export const WRAP_SLACK = 0.97
 
 export const MARGIN_PT = 72
 export const HEADER_PT = 36
@@ -13,6 +17,7 @@ export type PlanLine = {
   size: typeof BODY_PT | typeof HEADING_PT
   bold: boolean
   align: "left" | "center" | "right"
+  paragraphId: number
 }
 
 export type PlanPage = {
@@ -63,19 +68,21 @@ function overflows(lines: readonly { size: number }[], box: ContentBox): boolean
 }
 
 function pageNumberLine(): PlanLine {
-  return { text: "", size: BODY_PT, bold: false, align: "right" }
+  return { text: "", size: BODY_PT, bold: false, align: "right", paragraphId: -1 }
 }
 
-function wrapParagraph(paragraph: string, font: PDFFont, size: number, width: number): string[] {
+export function wrapParagraph(paragraph: string, size: number, width: number, bold: boolean): string[] {
   const words = paragraph.split(/\s+/).filter((word) => word.length > 0)
   if (words.length === 0) return [""]
+  const budget = width * WRAP_SLACK
+  const widthOf = (text: string) => tnrWidth(text, size, bold)
   const lines: string[] = []
   let current = ""
   const pushLong = (word: string) => {
     let piece = ""
     for (const character of word) {
       const next = piece + character
-      if (piece && font.widthOfTextAtSize(next, size) > width) {
+      if (piece && widthOf(next) > width) {
         lines.push(piece)
         piece = character
       } else {
@@ -86,21 +93,22 @@ function wrapParagraph(paragraph: string, font: PDFFont, size: number, width: nu
   }
   for (const word of words) {
     const candidate = current ? `${current} ${word}` : word
-    if (font.widthOfTextAtSize(candidate, size) <= width) {
+    if (widthOf(candidate) <= budget) {
       current = candidate
       continue
     }
     if (current) lines.push(current)
-    if (font.widthOfTextAtSize(word, size) > width) pushLong(word)
-    else current = word
+    if (widthOf(word) <= width) current = word
+    else pushLong(word)
   }
   if (current) lines.push(current)
   return lines
 }
 
-function justify(text: string, font: PDFFont, size: number, width: number): string {
+function justify(text: string, size: number, width: number, bold: boolean): string {
   const words = text.split(" ")
   if (words.length < 2) return text
+  const budget = width * WRAP_SLACK
   const extras = new Array<number>(words.length - 1).fill(0)
   const join = () => {
     let out = words[0] ?? ""
@@ -115,7 +123,7 @@ function justify(text: string, font: PDFFont, size: number, width: number): stri
       if ((extras[index] ?? 0) < (extras[slot] ?? 0)) slot = index
     }
     extras[slot] = (extras[slot] ?? 0) + 1
-    if (font.widthOfTextAtSize(join(), size) > width) {
+    if (tnrWidth(join(), size, bold) > budget) {
       extras[slot] = (extras[slot] ?? 1) - 1
       return join()
     }
@@ -125,23 +133,25 @@ function justify(text: string, font: PDFFont, size: number, width: number): stri
 
 function textLines(
   text: string,
-  font: PDFFont,
   size: typeof BODY_PT | typeof HEADING_PT,
   width: number,
   bold: boolean,
   align: PlanLine["align"],
+  ids: { next: number },
 ): PlanLine[] {
   const lines: PlanLine[] = []
   for (const paragraph of text.split("\n")) {
-    const wrapped = wrapParagraph(paragraph, font, size, width)
+    const paragraphId = ids.next++
+    const wrapped = wrapParagraph(paragraph, size, width, bold)
     wrapped.forEach((line, index) => {
       const last = index === wrapped.length - 1
       const canJustify = align === "left" && !last && line.includes(" ")
       lines.push({
-        text: canJustify ? justify(line, font, size, width) : line,
+        text: canJustify ? justify(line, size, width, bold) : line,
         size,
         bold,
-        align: align === "left" ? "left" : align,
+        align,
+        paragraphId,
       })
     })
   }
@@ -188,20 +198,18 @@ function stampPageNumbers(
   return pages
 }
 
-export function planDocket(
-  docket: ResolvedDocket,
-  fonts: { regular: PDFFont; bold: PDFFont },
-): DocketPlan | { error: string } {
+export function planDocket(docket: ResolvedDocket): DocketPlan | { error: string } {
   const pageSize = pagePoints(docket.pageSize)
   const box = contentBox(pageSize)
   const odd = docket.pagination === "odd"
-  const draftPages = splitContent(textLines(docket.draftBody, fonts.regular, BODY_PT, box.width, false, "left"), box)
+  const ids = { next: 1 }
+  const draftPages = splitContent(textLines(docket.draftBody, BODY_PT, box.width, false, "left", ids), box)
   const annexurePages = docket.annexures.map((annexure) =>
     splitContent(
       [
-        ...textLines(annexure.heading, fonts.bold, HEADING_PT, box.width, true, "center"),
-        ...textLines(annexure.description, fonts.regular, BODY_PT, box.width, false, "left"),
-        ...textLines(annexure.body, fonts.regular, BODY_PT, box.width, false, "left"),
+        ...textLines(annexure.heading, HEADING_PT, box.width, true, "center", ids),
+        ...textLines(annexure.description, BODY_PT, box.width, false, "left", ids),
+        ...textLines(annexure.body, BODY_PT, box.width, false, "left", ids),
       ],
       box,
     ),
@@ -222,8 +230,8 @@ export function planDocket(
       (annexure, index) => `${annexure.indexLabel} | ${annexure.description} | ${starts[index] ?? ""}`,
     )
     const indexLines = [
-      ...textLines("INDEX OF ANNEXURES", fonts.bold, HEADING_PT, box.width, true, "center"),
-      ...rows.flatMap((row) => textLines(row, fonts.regular, BODY_PT, box.width, false, "left")),
+      ...textLines("INDEX OF ANNEXURES", HEADING_PT, box.width, true, "center", ids),
+      ...rows.flatMap((row) => textLines(row, BODY_PT, box.width, false, "left", ids)),
     ]
     indexPages = splitContent(indexLines, box)
     if (indexPages.length === indexPageCount) {
