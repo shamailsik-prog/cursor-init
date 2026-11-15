@@ -1,9 +1,9 @@
 /**
- * One citation reader. The draft is normalised, then tokenised, then a small
- * expression grammar reads the labels after each reference keyword. A keyword
- * whose following expression cannot be read is unresolved. Bare P/D/R marks
- * are read only for the filing's own mark prefix, and not after an address
- * or form word.
+ * One citation reader. The draft is normalised and tokenised, then one label
+ * grammar both finds citations and checks them. A keyword is a citation only
+ * when a label follows it. A list that continues through a connector is read
+ * in full, or the citation is unresolved. Bare P, D, and R marks are read on
+ * every filing.
  */
 
 export type CitationFamily = "letter" | "number" | "mark"
@@ -17,31 +17,42 @@ export type CitationScan = {
 
 const KEYWORD_FAMILY: Readonly<Record<string, CitationFamily>> = {
   annex: "letter",
+  ann: "letter",
+  annx: "letter",
+  anx: "letter",
+  annexe: "letter",
   annexure: "letter",
   annexures: "letter",
-  enclosure: "number",
-  enclosures: "number",
+  enc: "number",
   encl: "number",
   encls: "number",
+  enclosure: "number",
+  enclosures: "number",
+  ex: "mark",
+  exh: "mark",
   exhibit: "mark",
   exhibits: "mark",
-  ex: "mark",
   mark: "mark",
   marks: "mark",
 }
 
+const GLUE_KEYWORDS = ["annexures", "annexure", "enclosures", "enclosure", "exhibits", "exhibit"]
+
 const ADDRESS_WORDS = new Set(["house", "plot", "sector", "street", "block", "form", "flat", "shop"])
+
+const CONNECTOR_WORDS = new Set(["and", "or", "to", "also", "as", "well"])
 
 const DASHES = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g
 const WRAPPERS = /["'“”‘’«»()[\]{}]/g
+const BREAK = "\u0001"
 
-type Token = { kind: "word" | "num" | "punct"; value: string; from: number; to: number }
+type Token = { kind: "word" | "num" | "punct" | "break"; value: string; from: number; to: number }
 
 type Label = { family: CitationFamily; key: string }
 
 type Item = { labels: Label[]; next: number } | { error: true }
 
-function isFormat(code: number): boolean {
+function isIgnorable(code: number): boolean {
   if (code === 0x00ad || code === 0x061c || code === 0x180e || code === 0xfeff || code === 0x06dd || code === 0x070f) return true
   if (code >= 0x0600 && code <= 0x0605) return true
   if (code >= 0x200b && code <= 0x200f) return true
@@ -54,13 +65,22 @@ function isFormat(code: number): boolean {
 }
 
 export function normaliseCitationText(input: string): string {
-  let stripped = ""
+  let text = ""
   for (const character of input.normalize("NFKC")) {
     const code = character.codePointAt(0) ?? 0
-    if (isFormat(code)) continue
-    stripped += character
+    text += isIgnorable(code) ? BREAK : character
   }
-  return stripped.replace(DASHES, "-").replace(WRAPPERS, " ").replace(/\s+/g, " ").trim().toLowerCase()
+  return text.replace(DASHES, "-").replace(WRAPPERS, " ").replace(/[ \t\r\n\f\v\u00a0]+/g, " ").trim().toLowerCase()
+}
+
+function splitGlued(word: string): { keyword: string; rest: string } | null {
+  if (word in KEYWORD_FAMILY) return null
+  for (const keyword of GLUE_KEYWORDS) {
+    if (!word.startsWith(keyword) || word.length === keyword.length) continue
+    const rest = word.slice(keyword.length)
+    if (/^[a-z]$/.test(rest) || /^\d+$/.test(rest) || /^[a-z]\d+$/.test(rest)) return { keyword, rest }
+  }
+  return null
 }
 
 function tokenise(text: string): Token[] {
@@ -72,6 +92,12 @@ function tokenise(text: string): Token[] {
       index += 1
       continue
     }
+    if (character === BREAK) {
+      const from = index
+      while (text[index] === BREAK) index += 1
+      tokens.push({ kind: "break", value: BREAK, from, to: index })
+      continue
+    }
     if (character >= "0" && character <= "9") {
       const from = index
       while (index < text.length && (text[index] ?? "") >= "0" && (text[index] ?? "") <= "9") index += 1
@@ -81,10 +107,23 @@ function tokenise(text: string): Token[] {
     if (character >= "a" && character <= "z") {
       const from = index
       while (index < text.length && (text[index] ?? "") >= "a" && (text[index] ?? "") <= "z") index += 1
-      tokens.push({ kind: "word", value: text.slice(from, index), from, to: index })
+      const word = text.slice(from, index)
+      const glued = splitGlued(word)
+      if (!glued) {
+        tokens.push({ kind: "word", value: word, from, to: index })
+        continue
+      }
+      const split = from + glued.keyword.length
+      tokens.push({ kind: "word", value: glued.keyword, from, to: split })
+      tokens.push({
+        kind: /^\d+$/.test(glued.rest) ? "num" : "word",
+        value: glued.rest,
+        from: split,
+        to: index,
+      })
       continue
     }
-    if (".,/-#:&".includes(character)) {
+    if (".,/-#:&+;".includes(character)) {
       tokens.push({ kind: "punct", value: character, from: index, to: index + 1 })
       index += 1
       continue
@@ -92,6 +131,38 @@ function tokenise(text: string): Token[] {
     index += 1
   }
   return tokens
+}
+
+function mergeKeywords(tokens: readonly Token[]): Token[] {
+  const out: Token[] = []
+  let index = 0
+  while (index < tokens.length) {
+    const token = tokens[index]
+    if (!token || token.kind === "break") {
+      index += 1
+      continue
+    }
+    if (token.kind !== "word") {
+      out.push(token)
+      index += 1
+      continue
+    }
+    let value = token.value
+    let to = token.to
+    let cursor = index + 1
+    while (tokens[cursor]?.kind === "break") {
+      let nextAt = cursor + 1
+      while (tokens[nextAt]?.kind === "break") nextAt += 1
+      const next = tokens[nextAt]
+      if (next?.kind !== "word" || !(value + next.value in KEYWORD_FAMILY)) break
+      value += next.value
+      to = next.to
+      cursor = nextAt + 1
+    }
+    out.push({ kind: "word", value, from: token.from, to })
+    index = cursor
+  }
+  return out
 }
 
 function canonicalRoman(value: number): string {
@@ -127,7 +198,7 @@ function romanValue(word: string): number | null {
 }
 
 function isReservedWord(word: string): boolean {
-  return word in KEYWORD_FAMILY || word === "and" || word === "to" || word === "no"
+  return word in KEYWORD_FAMILY || word === "and" || word === "to" || word === "no" || word === "or" || word === "also"
 }
 
 function parseMark(tokens: readonly Token[], index: number): { key: string; prefix: string; next: number } | null {
@@ -137,10 +208,11 @@ function parseMark(tokens: readonly Token[], index: number): { key: string; pref
   const punct = tokens[cursor]
   if (punct?.kind === "punct" && "/.-".includes(punct.value)) {
     const after = tokens[cursor + 1]
+    if (punct.value === "." && after?.kind === "num" && after.from !== punct.to) return null
     if (after?.kind === "num") {
       return { key: `${head.value.toUpperCase()}/${after.value}`, prefix: head.value.toUpperCase(), next: cursor + 2 }
     }
-    if (after?.kind === "word" && after.value === "no") cursor = cursor + 1
+    if (after?.kind === "word" && after.value === "no") cursor += 1
     else return null
   }
   if (tokens[cursor]?.kind === "word" && tokens[cursor]?.value === "no") {
@@ -159,24 +231,33 @@ function parseCore(tokens: readonly Token[], index: number): { label: Label; nex
   if (!token) return null
   if (token.kind === "num") return { label: { family: "number", key: token.value }, next: index + 1 }
   if (token.kind !== "word" || isReservedWord(token.value)) return null
-  const following = tokens[index + 1]
-  if (/^[a-z]$/.test(token.value) && following?.kind === "num" && following.from === token.to) {
-    return { label: { family: "letter", key: `${token.value}${following.value}`.toUpperCase() }, next: index + 2 }
+  if (/^[a-z]$/.test(token.value)) {
+    const dash = tokens[index + 1]
+    const number = tokens[index + 2]
+    if (
+      dash?.kind === "punct" &&
+      dash.value === "-" &&
+      dash.from === token.to &&
+      number?.kind === "num" &&
+      number.from === dash.to
+    ) {
+      return { label: { family: "letter", key: `${token.value.toUpperCase()}-${number.value}` }, next: index + 3 }
+    }
+    const following = tokens[index + 1]
+    if (following?.kind === "num" && following.from === token.to) {
+      return { label: { family: "letter", key: `${token.value}${following.value}`.toUpperCase() }, next: index + 2 }
+    }
+    return { label: { family: "letter", key: token.value.toUpperCase() }, next: index + 1 }
   }
   const roman = romanValue(token.value)
   if (roman !== null) return { label: { family: "number", key: String(roman) }, next: index + 1 }
-  if (/^[a-z]$/.test(token.value) || /^[a-z]{2}$/.test(token.value)) {
-    return { label: { family: "letter", key: token.value.toUpperCase() }, next: index + 1 }
-  }
+  if (/^([a-z])\1$/.test(token.value)) return { label: { family: "letter", key: token.value.toUpperCase() }, next: index + 1 }
   return null
 }
 
 function parseAtom(tokens: readonly Token[], index: number): { label: Label; next: number } | null {
   let cursor = index
-  if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === "#") {
-    cursor += 1
-    return parseCore(tokens, cursor)
-  }
+  if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === "#") return parseCore(tokens, cursor + 1)
   if (tokens[cursor]?.kind === "word" && tokens[cursor]?.value === "no") {
     cursor += 1
     if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === ".") cursor += 1
@@ -241,13 +322,39 @@ function parseItem(tokens: readonly Token[], index: number): Item | null {
   return { labels, next: right.next }
 }
 
-function separatorEnd(tokens: readonly Token[], index: number): number | null {
+function finish(item: Item | null, required: boolean): Item | null {
+  if (!item) return required ? { error: true } : null
+  return item
+}
+
+function readContinuation(tokens: readonly Token[], index: number): Item | null {
   const token = tokens[index]
-  if (token?.kind === "punct" && (token.value === "," || token.value === "&")) {
-    const next = tokens[index + 1]
-    return next?.kind === "word" && next.value === "and" ? index + 2 : index + 1
+  if (!token) return null
+  if (token.kind === "punct" && token.value === ",") {
+    let cursor = index + 1
+    let required = false
+    if (tokens[cursor]?.value === "and") {
+      cursor += 1
+      if (tokens[cursor]?.value === "also") {
+        cursor += 1
+        required = true
+      }
+    }
+    return finish(parseItem(tokens, cursor), required)
   }
-  if (token?.kind === "word" && token.value === "and") return index + 1
+  if (token.kind === "punct" && token.value === "&") return finish(parseItem(tokens, index + 1), false)
+  if (token.value === "and") {
+    if (tokens[index + 1]?.value === "/" && tokens[index + 2]?.value === "or") return finish(parseItem(tokens, index + 3), true)
+    if (tokens[index + 1]?.value === "also") return finish(parseItem(tokens, index + 2), true)
+    return finish(parseItem(tokens, index + 1), false)
+  }
+  if (token.value === "or") return finish(parseItem(tokens, index + 1), true)
+  if (token.value === "as" && tokens[index + 1]?.value === "well" && tokens[index + 2]?.value === "as") {
+    return finish(parseItem(tokens, index + 3), true)
+  }
+  if (token.kind === "punct" && token.value === "+") return finish(parseItem(tokens, index + 1), true)
+  if (token.kind === "punct" && token.value === ";") return finish(parseItem(tokens, index + 1), false)
+  if (token.kind === "punct" && token.value === "/") return finish(parseItem(tokens, index + 1), true)
   return null
 }
 
@@ -259,39 +366,43 @@ function skipLead(tokens: readonly Token[], index: number): number {
 
 function parseExpression(tokens: readonly Token[], index: number): { labels: Label[]; next: number } | null {
   const first = parseItem(tokens, skipLead(tokens, index))
-  if (!first || "error" in first) return null
+  if (!first) return { labels: [], next: index }
+  if ("error" in first) return null
   const labels = [...first.labels]
   let cursor = first.next
   while (cursor < tokens.length) {
-    const next = separatorEnd(tokens, cursor)
-    if (next === null) break
-    const item = parseItem(tokens, next)
-    if (!item) break
-    if ("error" in item) return null
-    labels.push(...item.labels)
-    cursor = item.next
+    const continuation = readContinuation(tokens, cursor)
+    if (!continuation) break
+    if ("error" in continuation) return null
+    labels.push(...continuation.labels)
+    cursor = continuation.next
   }
   return { labels, next: cursor }
 }
 
-function addressContext(tokens: readonly Token[], index: number): boolean {
+function addressDirectlyPrecedes(tokens: readonly Token[], index: number): boolean {
   let cursor = index - 1
-  while (cursor >= 0) {
-    const token = tokens[cursor]
-    if (!token) return false
-    if (token.kind === "punct" || (token.kind === "word" && token.value === "no")) {
-      cursor -= 1
-      continue
-    }
-    return token.kind === "word" && ADDRESS_WORDS.has(token.value)
-  }
-  return false
+  if (tokens[cursor]?.value === "." && tokens[cursor - 1]?.value === "no") cursor -= 2
+  else if (tokens[cursor]?.value === "no") cursor -= 1
+  const previous = tokens[cursor]
+  return previous?.kind === "word" && ADDRESS_WORDS.has(previous.value)
 }
 
-function markRange(
-  tokens: readonly Token[],
-  mark: { key: string; next: number },
-): { labels: Label[]; next: number } | { error: true } | null {
+function proseFollows(tokens: readonly Token[], index: number): boolean {
+  const token = tokens[index]
+  if (token?.kind === "word" && !CONNECTOR_WORDS.has(token.value)) return true
+  const afterComma = tokens[index + 1]
+  return token?.value === "," && afterComma?.kind === "word" && ADDRESS_WORDS.has(afterComma.value)
+}
+
+function caseNumberEnd(tokens: readonly Token[], index: number): number | null {
+  const slash = tokens[index]
+  const year = tokens[index + 1]
+  if (slash?.value === "/" && year?.kind === "num" && year.value.length === 4) return index + 2
+  return null
+}
+
+function markRange(tokens: readonly Token[], mark: { key: string; next: number }): Item | null {
   const separator = tokens[mark.next]
   const ranged =
     (separator?.kind === "word" && separator.value === "to") || (separator?.kind === "punct" && separator.value === "-")
@@ -329,7 +440,7 @@ export function scanCitations(
   draft: string,
   filing: { family: CitationFamily; markPrefix: string | null; assigned: ReadonlySet<string> },
 ): CitationScan {
-  const tokens = tokenise(normaliseCitationText(draft))
+  const tokens = mergeKeywords(tokenise(normaliseCitationText(draft)))
   const hits: CitationHit[] = []
   const unparsed: string[] = []
   const consider = (label: Label, keyword: CitationFamily | null) => {
@@ -350,26 +461,30 @@ export function scanCitations(
         index += 1
         continue
       }
+      if (parsed.labels.length === 0) {
+        index += 1
+        continue
+      }
       for (const label of parsed.labels) consider(label, keyword)
       index = parsed.next
       continue
     }
-    if (filing.family === "mark" && filing.markPrefix) {
-      const mark = parseMark(tokens, index)
-      if (mark && mark.prefix === filing.markPrefix) {
-        const ranged = markRange(tokens, mark)
-        if (!addressContext(tokens, index)) {
-          if (ranged && "error" in ranged) {
-            unparsed.push(`body cites ${mark.key} without a label expression that can be read`)
-          } else if (ranged) {
-            for (const label of ranged.labels) consider(label, null)
-          } else {
-            consider({ family: "mark", key: mark.key }, null)
-          }
-        }
-        index = ranged && !("error" in ranged) ? ranged.next : mark.next
+    const mark = parseMark(tokens, index)
+    if (mark) {
+      const yearEnd = caseNumberEnd(tokens, mark.next)
+      if (yearEnd !== null) {
+        index = yearEnd
         continue
       }
+      const ranged = markRange(tokens, mark)
+      const end = ranged && !("error" in ranged) ? ranged.next : mark.next
+      if (!addressDirectlyPrecedes(tokens, index) && !proseFollows(tokens, mark.next)) {
+        if (ranged && "error" in ranged) unparsed.push(`body cites ${mark.key} without a label expression that can be read`)
+        else if (ranged) for (const label of ranged.labels) consider(label, null)
+        else consider({ family: "mark", key: mark.key }, null)
+      }
+      index = end
+      continue
     }
     if (filing.family === "letter") {
       const range = bareLetterRange(tokens, index)
