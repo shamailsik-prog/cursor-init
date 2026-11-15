@@ -7,6 +7,7 @@ declare module "@/platform/spine/store" {
     daysBefore?: 90 | 30 | 7
     deadline?: string
     article?: string
+    forum?: string
     delivery?: "none"
   }
 }
@@ -17,13 +18,14 @@ declare module "@/platform/spine/store" {
  */
 export function scheduleLimitationAlerts(
   store: SpineStore,
-  input: { firmId: string; matterId: string; courtId: string; deadline: string; article: string }
+  input: { firmId: string; matterId: string; courtId: string; forum: string; deadline: string; article: string }
 ): void {
   for (const row of store.followUps) {
     if (
       row.matterId === input.matterId &&
       row.kind === "limitation_alert" &&
       row.article === input.article &&
+      row.forum === input.forum &&
       row.status !== "resolved" &&
       row.deadline !== input.deadline
     ) {
@@ -33,7 +35,7 @@ export function scheduleLimitationAlerts(
     }
   }
   for (const alert of limitationAlertSchedule(input.deadline)) {
-    const id = `limalert_${input.matterId}_${input.article}_${input.deadline}_d${alert.daysBefore}`
+    const id = `limalert_${input.matterId}_${input.forum}_${input.article}_${input.deadline}_d${alert.daysBefore}`
     const existing = store.followUps.find((row) => row.id === id)
     if (existing) {
       if (existing.status === "resolved" && existing.resolvedBy === "limitation-engine") {
@@ -57,6 +59,7 @@ export function scheduleLimitationAlerts(
       daysBefore: alert.daysBefore,
       deadline: input.deadline,
       article: input.article,
+      forum: input.forum,
       delivery: "none",
     })
   }

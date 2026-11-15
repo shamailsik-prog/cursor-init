@@ -74,7 +74,6 @@ const NUMBER_WORDS: Record<string, number> = {
   ninety: 90,
 }
 
-const PERIOD_RE = /(?<![A-Za-z0-9-])(\d{1,4}|[a-z]+(?:-[a-z]+)?)[ \t]+(days|day|months|month|years|year)(?![A-Za-z])/gi
 const RECKONING_RE = /day from which[\s\S]{0,160}?excluded/i
 const MONTH_END_RE = /corresponding date does not exist[\s\S]{0,200}?last day of that month/i
 const CLOSED_RE = /court is closed[\s\S]{0,200}?re-?opens/i
@@ -140,6 +139,7 @@ export type NotAssessedReason =
   | "text_not_verified"
   | "period_unreadable"
   | "period_ambiguous"
+  | "accrual_in_future"
   | "reckoning_unverified"
   | "anniversary_does_not_exist"
   | "exclusion_unsupported"
@@ -190,6 +190,7 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (blank(facts.article) || blank(facts.accrualDate) || blank(facts.filingForum)) return notAssessed("missing_inputs")
   const accrualDate = facts.accrualDate.trim()
   if (!isCalendarDate(accrualDate)) return notAssessed("missing_inputs")
+  if (accrualDate > utcToday()) return notAssessed("accrual_in_future")
   const forum = resolveForum(facts.filingForum.trim())
   if (!forum.ok) return notAssessed(forum.reason)
   const cause = parseCause(facts.article)
@@ -293,6 +294,7 @@ export function applyLimitation(
     firmId: matter.firmId,
     matterId: matter.id,
     courtId: matter.courtId ?? input.filingForum!.trim(),
+    forum: input.filingForum!.trim(),
     deadline: result.deadline,
     article: cause?.token ?? (input.article ?? "").trim(),
   })
@@ -311,7 +313,7 @@ function versionsFromStore(rows: readonly StatuteSectionVersion[]): LimitationVe
         effectiveTo: row.effectiveTo,
         text: row.text,
         reviewStatus: row.reviewStatus ?? "UNVERIFIED",
-        versionConfidence: row.versionConfidence ?? null,
+        versionConfidence: row.versionConfidence,
       },
     ]
   })
@@ -368,38 +370,42 @@ function inForce(versions: readonly LimitationVersion[], sectionId: string, juri
   if (!hit) return { ok: false, reason: "no_history" }
   const source = rows.find((row) => row.versionNo === hit.versionNo && row.effectiveFrom === hit.effectiveFrom)
   if (!source || source.reviewStatus !== "VERIFIED") return { ok: false, reason: "text_not_verified" }
-  if (typeof source.versionConfidence === "number" && !versionUsable(source.versionConfidence)) return { ok: false, reason: "text_not_verified" }
+  if (source.versionConfidence === null || (typeof source.versionConfidence === "number" && !versionUsable(source.versionConfidence))) {
+    return { ok: false, reason: "text_not_verified" }
+  }
   return { ok: true, row: source }
 }
+
+const NUMBER_WORD =
+  "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|zero|nought|dozen|half|quarter"
+const PERIOD_PHRASE_RE = new RegExp(
+  `(?<![A-Za-z0-9./-])(?<!\\b(?:and|${NUMBER_WORD})[ \\t])(\\d{1,4}(?!\\d)|(?:${NUMBER_WORD})(?:[ \\t-]+(?:and|${NUMBER_WORD}))*)[ \\t]+(days|day|months|month|years|year)(?![A-Za-z])`,
+  "gi"
+)
+const DECIMAL_PERIOD_RE = /\d+\.\d+\s*(?:days|day|months|month|years|year)\b/i
+const FRACTION_PERIOD_RE = /\d+\s*\/\s*\d+\s*(?:days|day|months|month|years|year)\b/i
 
 function parsePeriod(
   text: string
 ): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
-  const matches = [...text.matchAll(PERIOD_RE)]
-  const parsed: Array<{ n: number; unit: DateUnit; cited: string }> = []
-  for (const match of matches) {
-    const token = match[1].toLowerCase()
-    if (token.includes("-")) return { ok: false, reason: "period_unreadable" }
-    if (isCompoundTail(text, match.index ?? 0)) return { ok: false, reason: "period_unreadable" }
-    const n = /^\d+$/.test(token) ? Number(token) : NUMBER_WORDS[token]
-    if (n === undefined) continue
-    if (!Number.isInteger(n) || n < 1 || n > 9999) return { ok: false, reason: "period_unreadable" }
-    const word = match[2].toLowerCase()
-    const unit: DateUnit = word.startsWith("day") ? "day" : word.startsWith("month") ? "month" : "year"
-    parsed.push({ n, unit, cited: match[0] })
-  }
-  if (parsed.length === 0) return { ok: false, reason: "period_unreadable" }
-  const first = parsed[0]
-  if (parsed.some((row) => row.n !== first.n || row.unit !== first.unit)) return { ok: false, reason: "period_ambiguous" }
-  return { ok: true, n: first.n, unit: first.unit, cited: first.cited }
+  const normalized = text.replace(/\s+/gu, " ")
+  if (DECIMAL_PERIOD_RE.test(normalized) || FRACTION_PERIOD_RE.test(normalized)) return { ok: false, reason: "period_unreadable" }
+  const phrases = [...normalized.matchAll(PERIOD_PHRASE_RE)]
+  if (phrases.length !== 1) return { ok: false, reason: "period_unreadable" }
+  const head = phrases[0][1].toLowerCase()
+  if (head.includes("-") || head.includes(" ")) return { ok: false, reason: "period_unreadable" }
+  const n = /^\d+$/.test(head) ? Number(head) : NUMBER_WORDS[head]
+  if (n === undefined || !Number.isInteger(n) || n < 1 || n > 9999) return { ok: false, reason: "period_unreadable" }
+  const word = phrases[0][2].toLowerCase()
+  const unit: DateUnit = word.startsWith("day") ? "day" : word.startsWith("month") ? "month" : "year"
+  return { ok: true, n, unit, cited: phrases[0][0] }
 }
 
-const COMPOUND_PREFIX =
-  /(?:^|[^A-Za-z0-9-])(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|ninety|hundred|thousand|and)[ \t]+$/i
-
-/** A spaced compound such as "twenty one days" is not a one-day period. Reject it. */
-function isCompoundTail(text: string, index: number): boolean {
-  return COMPOUND_PREFIX.test(text.slice(0, index))
+function utcToday(): string {
+  const now = new Date()
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(now.getUTCDate()).padStart(2, "0")
+  return `${now.getUTCFullYear()}-${month}-${day}`
 }
 
 function reckoningSource(

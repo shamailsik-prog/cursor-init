@@ -202,7 +202,7 @@ describe("Q11 checkLimitation", () => {
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { reviewStatus: "UNVERIFIED" })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { reviewStatus: "QUARANTINED" })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { versionConfidence: 0.5 })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
-    expect(assessed("2020-01-01", base("three years or one year"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_ambiguous" })
+    expect(assessed("2020-01-01", base("three years or one year"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
     expect(assessed("2020-01-01", base("twenty one days"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
     expect(assessed("2020-01-01", base("one hundred and twenty years"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
     expect(assessed("2020-01-01", base("twenty days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-01-21" })
@@ -211,6 +211,48 @@ describe("Q11 checkLimitation", () => {
     expect(assessed("2020-01-01", sindh)).toMatchObject({ status: "NOT_ASSESSED", reason: "no_history" })
     const usable = assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { versionConfidence: 0.51 })])
     expect(usable.status).toBe("ASSESSED")
+  })
+
+  it("FA-Q11-PARSE-001 rejects an unmapped number word and more than one period phrase", () => {
+    for (const period of [
+      "Seventy one years",
+      "Eighty one years",
+      "Seventy years. The schedule also says thirty days",
+      "three years or one year",
+    ]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-PARSE-002 rejects decimals, fractions, and a number split by newline or NBSP", () => {
+    for (const period of ["2.5 years", "1 1/2 years", "Twenty\none years", "Twenty\u00A0one years"]) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("CONF-001 rejects a null version confidence", () => {
+    expect(
+      assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { versionConfidence: null })])
+    ).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified", deadline: null })
+  })
+
+  it("DATE-001 refuses an accrual date after today", () => {
+    const accrual = `${new Date().getUTCFullYear() + 1}-01-01`
+    expect(assessed(accrual, base())).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "accrual_in_future",
+      deadline: null,
+      governing: null,
+      alerts: [],
+    })
   })
 
   it("does not pick a text when the version history overlaps", () => {
@@ -458,7 +500,7 @@ describe("Q11 diary alerts and relevant law dates", () => {
       courtId: "LHC",
       classification: "internal",
     })
-    const input = { firmId: "firmA", matterId: matter.id, courtId: "LHC", deadline: "2024-06-01", article: "7" }
+    const input = { firmId: "firmA", matterId: matter.id, courtId: "LHC", forum: "LHC", deadline: "2024-06-01", article: "7" }
     scheduleLimitationAlerts(store, input)
     scheduleLimitationAlerts(store, input)
     expect(store.followUps.filter((row) => row.kind === "limitation_alert")).toHaveLength(3)
@@ -475,6 +517,36 @@ describe("Q11 diary alerts and relevant law dates", () => {
       (row) => row.article === "7" && row.deadline === "2024-06-01" && row.status !== "resolved"
     )
     expect(reopened.map((row) => row.daysBefore).sort((a, b) => (b ?? 0) - (a ?? 0))).toEqual([30, 7])
+  })
+
+  it("ALERT-001 includes the forum in the diary alert key", () => {
+    const store = newStore()
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "c1",
+      title: "Q11",
+      courtId: "LHC",
+      classification: "internal",
+    })
+    const shared = { firmId: "firmA", matterId: matter.id, deadline: "2024-06-01", article: "7" }
+    scheduleLimitationAlerts(store, { ...shared, courtId: "LHC", forum: "LHC" })
+    scheduleLimitationAlerts(store, { ...shared, courtId: "SHC", forum: "SHC" })
+    const open = store.followUps.filter((row) => row.kind === "limitation_alert" && row.status !== "resolved")
+    expect(open).toHaveLength(6)
+    expect(open.filter((row) => row.forum === "LHC").map((row) => row.id)).toEqual([
+      `limalert_${matter.id}_LHC_7_2024-06-01_d90`,
+      `limalert_${matter.id}_LHC_7_2024-06-01_d30`,
+      `limalert_${matter.id}_LHC_7_2024-06-01_d7`,
+    ])
+    expect(open.filter((row) => row.forum === "SHC").map((row) => row.id)).toEqual([
+      `limalert_${matter.id}_SHC_7_2024-06-01_d90`,
+      `limalert_${matter.id}_SHC_7_2024-06-01_d30`,
+      `limalert_${matter.id}_SHC_7_2024-06-01_d7`,
+    ])
+    scheduleLimitationAlerts(store, { ...shared, courtId: "LHC", forum: "LHC", deadline: "2025-01-01" })
+    const stillOpen = store.followUps.filter((row) => row.kind === "limitation_alert" && row.status !== "resolved")
+    expect(stillOpen.filter((row) => row.forum === "SHC")).toHaveLength(3)
+    expect(stillOpen.filter((row) => row.forum === "LHC").every((row) => row.deadline === "2025-01-01")).toBe(true)
   })
 })
 
