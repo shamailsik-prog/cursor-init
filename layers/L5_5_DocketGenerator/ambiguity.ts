@@ -1,5 +1,5 @@
 import { classifyAnnexureRule, letterToken, type ClassifiedRule } from "@/layers/L5_5_DocketGenerator/rules"
-import { scanCitations, type CitationFamily } from "@/layers/L5_5_DocketGenerator/references"
+import { assignedCitation, scanCitations, type CitationFamily } from "@/layers/L5_5_DocketGenerator/references"
 import type { AmbiguityItem, DocketAnnexure, DocketFilingSet, DocketPageSizeName } from "@/layers/L5_5_DocketGenerator/types"
 
 export type ResolvedAnnexure = {
@@ -46,36 +46,12 @@ function boundedIndex(text: string, label: string): number {
   return -1
 }
 
-function canonicalMark(token: string): string | null {
-  const match = /^([PDRpdr])\s*[/\-]\s*(\d+)$/.exec(token.trim())
-  if (!match?.[1] || !match[2]) return null
-  return `${match[1].toUpperCase()}/${match[2]}`
-}
-
-function formsForToken(token: string): string[] {
-  const trimmed = token.trim()
-  const forms = [`raw:${trimmed}`]
-  const mark = canonicalMark(trimmed)
-  if (mark) forms.push(`mark:${mark}`)
-  const annex = /^(?:annex(?:ures?|ure)?\s+)?([A-Za-z]\d*)$/i.exec(trimmed)
-  if (annex?.[1]) forms.push(`annex:${annex[1].toUpperCase()}`)
-  if (/^\d+$/.test(trimmed) || /^(?:enclosures?|encl\.?)\s+\d+$/i.test(trimmed)) {
-    const enclosure = /(\d+)$/.exec(trimmed)
-    if (enclosure?.[1]) forms.push(`encl:${enclosure[1]}`)
-  }
-  return forms
-}
-
 function assignedKey(token: string): string {
-  const forms = formsForToken(token)
-  return forms.find((form) => form.startsWith("mark:") || form.startsWith("annex:") || form.startsWith("encl:")) ?? forms[0] ?? `raw:${token}`
+  return assignedCitation(token)?.form ?? `raw:${token.trim()}`
 }
 
 function seriesKind(token: string): string | null {
-  const mark = canonicalMark(token)
-  if (mark) return `mark-${mark[0]}`
-  if (/^(?:annex(?:ures?|ure)?\s+)?[A-Za-z]\d*$/i.test(token.trim())) return "letter"
-  return null
+  return assignedCitation(token)?.series ?? null
 }
 
 function citationContext(
@@ -84,12 +60,12 @@ function citationContext(
 ): { family: CitationFamily; markPrefix: string | null } {
   if (scheme.kind === "letters" || scheme.kind === "single-a") return { family: "letter", markPrefix: null }
   if (scheme.kind === "enclosures") return { family: "number", markPrefix: null }
-  const marks = annexures.map((annexure) => canonicalMark(annexure.token))
-  if (marks.every((mark) => mark !== null)) {
-    const prefixes = new Set(marks.map((mark) => mark?.[0] ?? ""))
+  const described = annexures.map((annexure) => assignedCitation(annexure.token))
+  if (described.every((entry) => entry?.form.startsWith("mark:"))) {
+    const prefixes = new Set(described.map((entry) => entry?.series?.slice("mark-".length) ?? ""))
     return { family: "mark", markPrefix: prefixes.size === 1 ? ([...prefixes][0] ?? null) : null }
   }
-  if (annexures.every((annexure) => /^\d+$/.test(annexure.token.trim()))) return { family: "number", markPrefix: null }
+  if (described.every((entry) => entry?.form.startsWith("encl:"))) return { family: "number", markPrefix: null }
   return { family: "letter", markPrefix: null }
 }
 
