@@ -24,8 +24,13 @@ export const WHATSAPP_READ_DEADLINE_MS = 5_000
 export const WHATSAPP_SECRET_MIN_BYTES = 32
 export const WHATSAPP_NOT_LINKED_TEXT = "not linked"
 
-/** Invisible characters String.trim() keeps. A secret of only these is not a secret. */
-const ZERO_WIDTH = /[\u200B\u200C\u200D\u2060\u180E]/g
+/**
+ * Padding that does not make a secret. Removed before the 32-byte UTF-8 count:
+ * default-ignorable code points (Hangul fillers, variation selectors, tags),
+ * format characters, combining marks, and Unicode white space. trim() still
+ * refuses a secret it would change, so a leading space is not a secret.
+ */
+const SECRET_PADDING = /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{M}\p{White_Space}]/gu
 
 type Cached = { status: number; body: { ok: false } }
 
@@ -67,7 +72,7 @@ function json(status: number, body: unknown): Response {
 
 function secretUsable(secret: string | undefined): secret is string {
   if (typeof secret !== "string" || secret.length === 0 || secret !== secret.trim()) return false
-  const substantive = secret.replace(ZERO_WIDTH, "")
+  const substantive = secret.replace(SECRET_PADDING, "")
   return substantive.length > 0 && Buffer.byteLength(substantive) >= WHATSAPP_SECRET_MIN_BYTES
 }
 
