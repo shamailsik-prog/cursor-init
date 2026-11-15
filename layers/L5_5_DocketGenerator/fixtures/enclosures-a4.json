@@ -1,0 +1,29 @@
+{
+  "documentTypeId": "letter",
+  "annexureRule": "Enclosures 1, 2 … referenced in the numbered paragraphs; A4",
+  "draft": {
+    "body": "1. The letter encloses Enclosure 1 and then Enclosure 2."
+  },
+  "annexures": [
+    {
+      "metadata": {
+        "artifactId": "enc-1",
+        "label": "Challan",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-challan"
+      },
+      "body": "Copy of the challan."
+    },
+    {
+      "metadata": {
+        "artifactId": "enc-2",
+        "label": "Order",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-order"
+      },
+      "body": "Copy of the order."
+    }
+  ]
+}

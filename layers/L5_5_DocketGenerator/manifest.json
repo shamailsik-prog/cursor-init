@@ -1,0 +1,12 @@
+{
+  "id": "L5_5_DocketGenerator",
+  "name": "Annexure Docket and Court-Format Builder",
+  "version": "0.1.0",
+  "depends_on": [],
+  "feature_flag": "L5_5_DOCKET_GENERATOR",
+  "default_enabled": false,
+  "core_edits": false,
+  "events_subscribed": [],
+  "routes": [],
+  "ui": "ui.extension.tsx"
+}

@@ -1,0 +1,29 @@
+{
+  "documentTypeId": "application",
+  "annexureRule": "Annexures A, B, C … to the application; affidavit in support; legal size",
+  "draft": {
+    "body": "The applicant seeks the relief set out in this application."
+  },
+  "annexures": [
+    {
+      "metadata": {
+        "artifactId": "app-a",
+        "label": "Affidavit in support",
+        "required": true,
+        "status": "ready",
+        "sourceRef": "doc-affidavit"
+      },
+      "body": "I solemnly state the facts in this affidavit."
+    },
+    {
+      "metadata": {
+        "artifactId": "app-b",
+        "label": "Supporting letter",
+        "required": false,
+        "status": "blocked",
+        "sourceRef": "doc-letter"
+      },
+      "body": "Letter relied on with the application."
+    }
+  ]
+}
