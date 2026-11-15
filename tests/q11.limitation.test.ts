@@ -761,6 +761,44 @@ describe("Q11 checkLimitation", () => {
       })
     }
   })
+
+  it("refuses a bound that touches the period through parentheses", () => {
+    for (const period of [
+      "at least (three years)",
+      "(at least) three years",
+      "at least ( three years )",
+      "three years (or more)",
+      "three years ( or more )",
+      "three years, (or more)",
+      "three years [or more]",
+    ]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_ambiguous",
+        deadline: null,
+      })
+    }
+  })
+
+  it("reads a colon label and a parenthetical that does not bound the period", () => {
+    const labelled = `LIMITATION FIXTURE. Period of limitation: three years. ${RECKONING}`
+    expect(assessed("2020-01-01", provision(labelled)), "colon").toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-01",
+      governing: { periodCited: "three years" },
+    })
+    const sentence = `LIMITATION FIXTURE. Period of limitation. Three years. ${RECKONING}`
+    expect(assessed("2020-01-01", provision(sentence)), "sentence dot").toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-01",
+      governing: { periodCited: "Three years" },
+    })
+    expect(assessed("2020-01-01", base("three years (see the schedule)")), "aside").toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-01",
+      governing: { periodCited: "three years" },
+    })
+  })
 })
 
 describe("Q11 diary alerts and relevant law dates", () => {

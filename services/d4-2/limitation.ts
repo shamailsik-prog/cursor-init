@@ -497,7 +497,10 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * The reckoning and month-end provisos are removed only when they are the
  * canonical sentences; a number or an extra unit inside either span is unreadable.
  * A range or bound is period_ambiguous only when it touches that quantity.
- * "within one year" stays one year. A count above the engine ceiling is unreadable.
+ * Parentheses or brackets between the phrase and the quantity still touch it.
+ * "within one year" stays one year. A spaced dash, dot, or tilde is unreadable
+ * only as a prefix of a digit. A colon label stays readable. A count above the
+ * engine ceiling is unreadable.
  */
 function parsePeriod(
   text: string
@@ -557,10 +560,20 @@ function calendarOverflow(iso: string, n: number, unit: DateUnit): boolean {
 }
 
 function boundTouches(text: string, numberStart: number, unitEnd: number): boolean {
-  const left = text.slice(0, numberStart).trimEnd().toLowerCase()
+  const left = stripWrappers(text.slice(0, numberStart).toLowerCase())
   const right = text.slice(unitEnd).toLowerCase()
   if (BOUND_BEFORE.some((phrase) => endsWithPhrase(left, phrase))) return true
   return BOUND_AFTER.some((phrase) => startsWithPhrase(right, phrase))
+}
+
+function stripWrappers(text: string): string {
+  let end = text.length
+  while (end > 0 && isWrapper(text[end - 1] ?? "")) end -= 1
+  return text.slice(0, end)
+}
+
+function isWrapper(ch: string): boolean {
+  return ch === " " || ch === "(" || ch === ")" || ch === "[" || ch === "]" || ch === ","
 }
 
 function endsWithPhrase(left: string, phrase: string): boolean {
@@ -572,7 +585,7 @@ function endsWithPhrase(left: string, phrase: string): boolean {
 
 function startsWithPhrase(right: string, phrase: string): boolean {
   let index = 0
-  while (index < right.length && (right[index] === " " || right[index] === ",")) index += 1
+  while (index < right.length && isWrapper(right[index] ?? "")) index += 1
   if (!right.startsWith(phrase, index)) return false
   const after = right[index + phrase.length] ?? ""
   return after === "" || !isLetter(after)
@@ -599,7 +612,7 @@ function hasPhrase(text: string, phrase: string): boolean {
 function spacedMark(text: string, start: number): boolean {
   if (start < 2 || text[start - 1] !== " ") return false
   const mark = text[start - 2] ?? ""
-  return mark !== "" && mark !== "(" && mark !== " " && !isLetter(mark) && !isDigit(mark)
+  return (mark === "-" || mark === "." || mark === "~") && isDigit(text[start] ?? "")
 }
 
 function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]): boolean {
