@@ -31,6 +31,7 @@ export default defineConfig({
             "tests/postgres.ddl.integration.test.ts",
             "tests/probe-fa-data-001.regression.test.ts",
             "tests/fa-data-002.classification-coverage.pg.test.ts",
+            "tests/p6.master.pg.test.ts",
             // FA-DATA-002-DEPLOY-001 starts its own Postgres container. It runs with the
             // other Annex A suites through `npm run test:postgres-ddl`, which sets
             // SIKANDER_POSTGRES_URL. A plain `npm run test:unit` does not.

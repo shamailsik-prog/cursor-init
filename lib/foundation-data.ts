@@ -37,6 +37,7 @@ export const FEATURE_FLAGS = [
   { flag: "L18_TEMPLATE_EXAMPLE", description: "Amendment-layer template", defaultEnabled: false, layer: "L18_X" },
   { flag: "LEGACY_GOVERNANCE_CHAINS", description: "Frozen out-of-spec ops-reporting and filing-transport chains (Erratum E-24)", defaultEnabled: false, layer: "E_24" },
   { flag: "LEGACY_D1_NEXT_WRITES", description: "Legacy Next.js D1 check-free matter create and conflict_check (Erratum E-40)", defaultEnabled: false, layer: "E_40" },
+  { flag: "LEARNERS_ENABLED", description: "Learning components stay off until Gate G-3 passes", defaultEnabled: false, layer: "L17_5" },
 ] as const
 
 export const OPEN_ITEMS = [
