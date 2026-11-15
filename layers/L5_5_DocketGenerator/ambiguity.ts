@@ -205,22 +205,18 @@ function checkManualRefs(
   annexures: readonly ResolvedAnnexure[],
   requireReferenceOrder: boolean,
   queue: AmbiguityItem[],
+  scheme: ClassifiedRule["scheme"],
 ): void {
   if (!requireReferenceOrder) return
-  const places = annexures.map((annexure) => ({
-    annexure,
-    at: boundedIndex(draft, annexure.indexLabel),
-  }))
-  for (const place of places) {
-    if (place.at < 0) {
-      queue.push(item("ref_unresolved", place.annexure.artifactId, `body does not refer to ${place.annexure.indexLabel}`))
+  const keys = annexures.map((annexure) => assignedKey(annexure.token))
+  const scan = scanCitations(draft, { ...citationContext(scheme, annexures), assigned: new Set(keys) })
+  const known = scan.hits.map((hit) => hit.form)
+  annexures.forEach((annexure, index) => {
+    const detail = `body does not refer to ${annexure.token}`
+    if (!known.includes(keys[index] ?? "") && !queue.some((entry) => entry.detail === detail)) {
+      queue.push(item("ref_unresolved", annexure.artifactId, detail))
     }
-  }
-  const found = places.filter((place) => place.at >= 0)
-  const sorted = [...found].sort((a, b) => a.at - b.at)
-  if (found.length === annexures.length && sorted.some((place, index) => place.annexure !== found[index]?.annexure)) {
-    queue.push(item("order_unresolved", null, "body refers to the annexures in a different order from the filing set"))
-  }
+  })
 }
 
 export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
@@ -315,7 +311,7 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
   const requireReferenceOrder =
     (scheme.kind === "letters" || scheme.kind === "enclosures" || scheme.kind === "manual") && scheme.requireReferenceOrder
   checkCitations(draft, annexures, requireReferenceOrder, queue, scheme)
-  if (scheme.kind === "manual") checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue)
+  if (scheme.kind === "manual") checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue, scheme)
 
   if (queue.length > 0 || !spec) return { ok: false, queue }
   return {
