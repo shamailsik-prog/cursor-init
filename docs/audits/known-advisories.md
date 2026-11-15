@@ -21,6 +21,8 @@ Rules for this file:
   gate CI/build/emulator/test tooling (`firebase-tools`, `vitest`, and their
   transitive trees) that still runs with repository credentials.
 
+Re-checked 2026-11-15: `functions/` `source-map-js` 1.2.1 -> 1.2.2 and nested `zod` 4.6.5 -> 4.6.7 (patch). Those two dev rows are fixed, not listed. `opentelemetry-api` 1.45.2 and `soupsieve` 4.1.1 are pinned in the corpus lockfiles, so pip-audit is clean. The rows below still need a major bump (`firebase-tools` 15 or `vitest` 5) and stay listed.
+
 Re-checked 2026-10-26 (F40): full-tree npm audit is gated; overrides bump
 `vite` to 7.3.7 and `@grpc/grpc-js` to 1.14.6 on root and `functions/`.
 Remaining dev rows below are triaged, not ignored.
@@ -72,7 +74,5 @@ all via `firebase-admin` 13 -> 14 (a major bump, upgrade backlog).
 | npm:root:dev | GHSA-5gmw-xhrv-c9v3 | tinypool | critical | `vitest@3` pins tinypool 1.x for test workers; dev/CI only; vitest 5 + tinypool 2 upgrade backlog | Shamail | 2026-11-15 |
 | npm:root:dev | GHSA-85c8-ppgw-ccpr | tinypool | critical | Same tinypool 1.x chain as GHSA-5gmw-xhrv-c9v3 | Shamail | 2026-11-15 |
 | npm:root:dev | GHSA-mrhx-c7xc-m3w5 | zod | high | Nested zod under dev `firebase-tools@14`; app depends on zod 4.6.7 | Shamail | 2026-11-15 |
-| npm:functions:dev | GHSA-68fv-2mgg-jv7q | source-map-js | high | Transitive under `functions/` vitest/esbuild dev tree; not in deployed bundle | Shamail | 2026-11-15 |
 | npm:functions:dev | GHSA-5gmw-xhrv-c9v3 | tinypool | critical | `vitest@3` in functions devDependencies; vitest 5 upgrade backlog | Shamail | 2026-11-15 |
 | npm:functions:dev | GHSA-85c8-ppgw-ccpr | tinypool | critical | Same tinypool 1.x chain as GHSA-5gmw-xhrv-c9v3 | Shamail | 2026-11-15 |
-| npm:functions:dev | GHSA-mrhx-c7xc-m3w5 | zod | high | Nested zod under `firebase` dev tooling in functions tests; not production zod | Shamail | 2026-11-15 |
