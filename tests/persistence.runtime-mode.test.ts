@@ -6963,7 +6963,7 @@ describe("Runtime persistence mode", () => {
   // Later parts continue from the Firestore state persisted by earlier parts (the runtime
   // store is reset between parts, so each part also exercises rehydration).
   // (Body not re-indented to keep the diff small in this frequently edited file.)
-  describe.sequential("activity index lifecycle", () => {
+  describe("activity index lifecycle", { concurrent: false }, () => {
   let activityFlow: { matterId: string; docId: string } | null = null
   let completedParts = 0
   function requireActivityFlow(part: number) {

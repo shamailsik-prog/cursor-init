@@ -16,25 +16,20 @@ cd "$ROOT"
 
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
+  # Vitest 5 matches -t against "suite > test", not the space-joined JSON fullName.
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suite is skipped, so the
-  # JSON result must show exactly the two named tests passed and nothing failed. The tests are
-  # selected by their exact full names (anchored, escaped), and the JSON check repeats the names,
-  # so a renamed or swapped test fails the gate. G4B_FILTER exists only to prove this can fail.
+  # JSON result must show exactly the two named tests passed and nothing failed. A pattern that
+  # selects 0 tests fails the gate. G4B_FILTER exists only to prove this can fail.
   json="$2/invariants.json"
   suite='L17.2 conflict invariants (P2-18, P2-30, P2-41)'
   t1='L17.2 invariant: confirmMerge turns a key review into FLAG and a contradicted resolution into check_stale'
   t2='L17.2 invariant: a rejected or disputed pair is never confirmed identity'
-  esc() { printf '%s' "$1" | sed 's/[][\\.*^$()+?{}|]/\\&/g'; }
-  filter="^$(esc "$suite $t1")\$|^$(esc "$suite $t2")\$"
+  names=("$suite $t1" "$suite $t2")
+  printf '%s\n' "${names[@]}" > "$2/names.txt"
+  filter="$(node "$ROOT/ci_gates/vitest5_name.mjs" filter --names "$2/names.txt" --file "$ROOT/functions/test/d1.entity-invariants.emu.test.ts")"
+  if [ "${3:-}" = "--filter-only" ]; then printf '%s\n' "$filter"; exit 0; fi
   npx vitest run test/d1.entity-invariants.emu.test.ts -t "${G4B_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
-  EXPECT_1="$suite $t1" EXPECT_2="$suite $t2" node -e '
-    const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
-    console.log(`L17.2 invariants: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
-    const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
-    const want = [process.env.EXPECT_1, process.env.EXPECT_2].sort()
-    const exact = passed.length === 2 && passed.every((n, i) => n === want[i])
-    if (!exact) console.log("passed tests are not exactly the two named invariants:", JSON.stringify(passed))
-    process.exit(r.numPassedTests === 2 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+  EXPECTED="$(printf '%s\n' "${names[@]}")" LABEL="L17.2 invariants" node "$ROOT/ci_gates/check_vitest_json_selection.mjs" "$json"
   exit $?
 fi
 

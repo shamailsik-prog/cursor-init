@@ -43,6 +43,7 @@ function expectGateFail(root: string, base: string, head: string) {
 
 describe(
   "check_no_product_phase_audit_docs gate",
+  { timeout: 60_000 },
   () => {
   it("fails when product and audit-doc paths change together", () => {
     const root = mkdtempSync(join(tmpdir(), "no-product-audit-gate-"))
@@ -115,5 +116,4 @@ describe(
     expectGateFail(root, "main", "feature")
   })
   },
-  { timeout: 60_000 }
 )
