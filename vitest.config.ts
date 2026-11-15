@@ -8,9 +8,6 @@ export default defineConfig({
     // `forks` pool can hit Vitest worker RPC timeouts (`onTaskUpdate`) while tests
     // still pass. Threads pool avoids that false non-zero exit.
     pool: "threads",
-    // Vitest 5 defaults clearMocks to true and wipes call history before each test.
-    // Keep the Vitest 3 default so assertions that span tests in a file stay the same.
-    clearMocks: false,
     include: ["tests/**/*.test.ts"],
     // Heavy legacy route-wiring tests take 2.5-6.4 s on a loaded machine; the 5 s
     // default flakes on CI runners. 15 s matches functions/vitest.config.ts.

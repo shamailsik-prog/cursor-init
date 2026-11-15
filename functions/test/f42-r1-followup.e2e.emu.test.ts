@@ -1452,7 +1452,9 @@ describe.skipIf(!EMULATORS)("FA-F42-R1-006: the approver must be independent of 
 
   it("FA-F42-R1-006-003-001-002: legacy ambiguous partner is not independent until backfill stamps false", async () => {
     const f = await newFirm()
-    const legacyUid = uniq("legacy-ambiguous")
+    // Document ids sort the backfill page. A low prefix keeps this partner inside the first
+    // page after the rest of the emulator suite has created hundreds of partners.
+    const legacyUid = uniq("\u0001legacy-ambiguous")
     uids.push(legacyUid)
     await adminDb().collection("users").doc(legacyUid).set({
       firmId: f.firmId,

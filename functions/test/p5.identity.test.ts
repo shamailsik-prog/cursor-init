@@ -621,18 +621,27 @@ describe.skipIf(!EMULATORS)("setUserClaims", () => {
       if (typeof path === "string" && path.endsWith(`/${target.uid}`)) reads.set(this, [...(reads.get(this) ?? []), path.split("/")[0]!])
       return (realGet as (r: unknown) => unknown).call(this, ref)
     }
-    vi.spyOn(Transaction.prototype, "get").mockImplementation(recordingGet as never)
-    await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
-    vi.spyOn(logger, "error").mockImplementation(() => undefined)
-    vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected"))
-    await expect(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, clearanceLevel: "internal" }))).rejects.toBeDefined()
-    const orders = [...reads.values()].map((r) => r.filter((c) => c === "users" || c === "claims_sync"))
-    // change, change, revert: three transactions read both documents
-    expect(orders.filter((o) => o.includes("users") && o.includes("claims_sync"))).toEqual([
-      ["claims_sync", "users"],
-      ["claims_sync", "users"],
-      ["claims_sync", "users"],
-    ])
+    const getSpy = vi.spyOn(Transaction.prototype, "get").mockImplementation(recordingGet as never)
+    try {
+      await setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, role: "clerk" }))
+      const logSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined)
+      const claimsSpy = vi.spyOn(adminAuth(), "setCustomUserClaims").mockRejectedValueOnce(new Error("injected"))
+      try {
+        await expect(setUserClaimsHandler(await req(partner.token, { firmId, uid: target.uid, clearanceLevel: "internal" }))).rejects.toBeDefined()
+        const orders = [...reads.values()].map((r) => r.filter((c) => c === "users" || c === "claims_sync"))
+        // change, change, revert: three transactions read both documents
+        expect(orders.filter((o) => o.includes("users") && o.includes("claims_sync"))).toEqual([
+          ["claims_sync", "users"],
+          ["claims_sync", "users"],
+          ["claims_sync", "users"],
+        ])
+      } finally {
+        logSpy.mockRestore()
+        claimsSpy.mockRestore()
+      }
+    } finally {
+      getSpy.mockRestore()
+    }
   })
 
   it("the target-clearance check uses the users doc, not stale Auth claims", async () => {

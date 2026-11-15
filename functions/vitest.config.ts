@@ -19,9 +19,6 @@ export default defineConfig({
     // punycode (DEP0040) on every worker start; nothing here uses it.
     pool: "forks",
     execArgv: ["--disable-warning=DEP0040"],
-    // Vitest 5 defaults clearMocks to true and wipes call history before each test.
-    // Keep the Vitest 3 default so assertions that span tests in a file stay the same.
-    clearMocks: false,
     // Emulator round-trips (first gRPC connect, 1s revocation wait) exceed the 5s default on cold start.
     testTimeout: 15000,
     // Suites share one emulator and singleton docs (platform/bootstrap, platform/gates): run files one at a time.

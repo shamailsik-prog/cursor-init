@@ -12,8 +12,6 @@ export default defineConfig({
     environment: "node",
     include: ["ops/backup/test/**/*.test.ts"],
     pool: "forks",
-    // Vitest 5 defaults clearMocks to true. Keep the Vitest 3 default.
-    clearMocks: false,
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 180_000,
