@@ -648,10 +648,10 @@ describe("Q15a fail-closed value shapes", () => {
     const ok = new Error("boom")
     ok.name = "A" + "b".repeat(34) + "Error"
     expect(ok.name).toHaveLength(40)
-    expect((redactForObservability(ok) as { errorName?: string }).errorName).toBe(ok.name)
+    expect((redactForObservability(ok) as { errorName?: string }).errorName).toBe(REDACTED)
     const custom = new Error("boom")
     custom.name = "HttpException"
-    expect((redactForObservability(custom) as { errorName?: string }).errorName).toBe("HttpException")
+    expect((redactForObservability(custom) as { errorName?: string }).errorName).toBe(REDACTED)
   })
 
   it("redacts a top-level bigint", () => {
@@ -712,6 +712,8 @@ describe("Q15a fail-closed value shapes", () => {
     drop("code", "token_" + "hunter2")
     drop("code", "password_reset")
     drop("reason", "not_a_token_code")
+    drop("code", "pwd_reset_" + "hunter2")
+    drop("reason", "pwd_reset_" + "hunter2")
   })
 
   it("Q15b L4 keeps URIError, tokenizer_failed and secretary_absent", () => {
@@ -722,6 +724,10 @@ describe("Q15a fail-closed value shapes", () => {
     keep("reason", "secretary_absent")
     keep("status", "tokenizer_failed")
     keep("outcome", "secretary_absent")
+    keep("code", "tokenizer_ok")
+    keep("reason", "secretary_present")
+    keep("status", "tokenizer_ok")
+    keep("outcome", "secretary_present")
   })
 
   it("Q15b L5 anchors AKIA, ASIA, AIZA and sk_live at a token boundary", () => {
@@ -733,8 +739,13 @@ describe("Q15a fail-closed value shapes", () => {
     drop("code", "AKIA" + "1234")
     drop("code", "AIZA" + "1234")
     drop("code", "sk_live_" + "abc")
-    drop("code", "xx" + "sk_live_" + "abc")
+    keep("code", "xx" + "sk_live_" + "abc")
     drop("code", "pre_" + "sk_live_" + "abc")
+    keep("code", "task_live_sync")
+    keep("code", "risk_live")
+    keep("code", "disk_live_ok")
+    keep("code", "ask_live")
+    keep("code", "sk_liveabc")
   })
 
   it("Q15b L2 and L3 keep a minted id and redact the same text", () => {
@@ -785,6 +796,110 @@ describe("Q15a fail-closed value shapes", () => {
     expect(mintDatedId(2026, 13, 1, 1)).toBeUndefined()
     expect(mintDatedId(2026, 11, 15, 1000)).toBeUndefined()
     expect(mintUlid(-1)).toBeUndefined()
+    expect(mintHyphenatedId("job", "123")?.text).toBe("job-123")
+    expect(mintHyphenatedId("job", "muhammad")).toBeUndefined()
+    expect(mintHyphenatedId("job", "hunter2")).toBeUndefined()
+    expect(mintHyphenatedId("job", "ayesha")).toBeUndefined()
+    expect(mintHyphenatedId("trace", "1234")).toBeUndefined()
+    expect(mintHyphenatedId("trace", "abcdefghi")).toBeUndefined()
+    expect(mintHyphenatedId("firm" as "trace", "abc")).toBeUndefined()
+    expect(mintDatedId(2026, 2, 31, 1)).toBeUndefined()
+    expect(mintDatedId(2026, 2, 29, 1)).toBeUndefined()
+    expect(mintDatedId(2024, 2, 29, 1)?.text).toBe("mat_2024_02_29_001")
+    expect(mintDatedId(2026, 4, 31, 1)).toBeUndefined()
+    expect(mintDatedId(2026, 1, 32, 1)).toBeUndefined()
+    expect(mintDatedId(2026, 1, 0, 1)).toBeUndefined()
+  })
+
+
+  it("Q15b R2 keeps the repo error classes and redacts a personal name", () => {
+    const REPO_ERROR_CLASSES = [
+  "APIConnectionError",
+  "ApiError",
+  "AuditAppendConflictError",
+  "AuthError",
+  "AuthorityUnavailableError",
+  "BatchError",
+  "CallerFirmRequiredError",
+  "CitationError",
+  "CommittedEffectError",
+  "CommitteeScopeError",
+  "ConfigurationError",
+  "ContractError",
+  "CorpusUnavailableError",
+  "CourtOpsAckIdError",
+  "CourtOpsAckRefusedError",
+  "CourtOpsItemNotFoundError",
+  "CursorError",
+  "DeployContractError",
+  "DocumentMalformedError",
+  "DocumentObjectAlreadyExistsError",
+  "DocumentObjectConfigurationError",
+  "DocumentObjectStoreError",
+  "DraftChangedError",
+  "DraftCharsetError",
+  "DraftSizeError",
+  "DraftTemplateAnalyticsIdError",
+  "DraftTemplateAnalyticsRefusedError",
+  "EnvelopeError",
+  "ExplodingRowError",
+  "FeatureDisabledError",
+  "FirmScopedCursorError",
+  "FirmScopedUpdateError",
+  "FollowUpResolveRefusedError",
+  "HarvesterContractError",
+  "HttpError",
+  "IdempotencyError",
+  "IdempotencyFenceError",
+  "InsecureDevAuthContextError",
+  "JobError",
+  "LeaseLostError",
+  "ManifestError",
+  "MatterClosedError",
+  "MatterShapeError",
+  "MembershipAssignmentError",
+  "OcrAdmissionError",
+  "OcrTimeoutError",
+  "PDFDownloadError",
+  "PDFExtractionError",
+  "PackageAlreadyDecidedError",
+  "PeriodRangeError",
+  "PersistenceConfigurationError",
+  "PgTargetNotCleanError",
+  "ProviderKeyInRuntimeError",
+  "PublicError",
+  "PublicationError",
+  "QueryTextError",
+  "RateLimitedError",
+  "ReconcileError",
+  "RetentionConfigError",
+  "ScheduledRunsFailedError",
+  "SearchIndexMalformedError",
+  "SectionHistoryInconsistentError",
+  "ServiceAuthError",
+  "SurfaceError",
+  "TokenRejectedError",
+  "ToolContractError",
+  "UnregisteredJobTypeError",
+  "_RecordSpecificError",
+  "P1EmbeddingRequestError",
+  "P1EmbeddingTransportError",
+  "P1PreCallDeadlineError",
+  "P1TransportError",
+]
+    expect(REPO_ERROR_CLASSES).toHaveLength(72)
+    for (const name of REPO_ERROR_CLASSES) {
+      const err = new Error("boom")
+      err.name = name
+      expect((redactForObservability(err) as { errorName?: string }).errorName, name).toBe(name)
+    }
+    for (const name of ["MuhammadError", "KhanError", "AyeshaException", "MuhammadAliError"]) {
+      const err = new Error("boom")
+      err.name = name
+      const out = redactForObservability(err) as { errorName?: string }
+      expect(out.errorName, name).toBe(REDACTED)
+      expect(JSON.stringify(out)).not.toContain(name.slice(0, name.startsWith("Ayesha") ? 6 : 4))
+    }
   })
 
   it("does not keep a plain object that copies a minted id's text", () => {

@@ -13,10 +13,13 @@
  * operational token, a small number, a boolean, or a minted id. Anything else
  * is replaced with `REDACTED` or omitted, so the original is not serialised.
  *
- * An id field keeps a value only when this module minted it (`mintUuid`,
- * `mintFirestoreId`, `mintUlid`, `mintHyphenatedId`, `mintMatterSerial`,
- * `mintDatedId`). A string is not kept because it looks like a UUID, a
- * Firestore auto-id, or any other id shape.
+ * An id field keeps a value only when the object is the same one this module
+ * put in its private registry (`mintUuid`, `mintFirestoreId`, `mintUlid`,
+ * `mintHyphenatedId`, `mintMatterSerial`, `mintDatedId`). Emit copies the
+ * registry text after checking it again. A spread, an assign, a mutation, a
+ * forged symbol, a Proxy or a getter is not that object, so it is redacted.
+ * A string is not kept because it looks like a UUID, a Firestore auto-id, or
+ * any other id shape.
  */
 
 import { randomBytes, randomUUID } from "node:crypto"
@@ -76,11 +79,9 @@ const NUMERIC = new Set<ObservabilityField>(["durationMs", "count", "attempt", "
  * at most 19 characters unless an underscore lets a repo code run to 40, with at most
  * six digits, no secret prefix and no credential segment. A closed set of repo codes
  * is kept by exact membership when that shape would refuse them (`malformed_token`,
- * `pwd_reset`). An id string is never kept. `errorName` is a known class, or one
- * hump of at most 40 characters ending in Error or Exception, copied only off a real Error.
+ * `pwd_reset`). An id string is never kept. `errorName` is a closed set of
+ * built-in classes and this repo's error classes, copied only off a real Error.
  */
-const ERROR_NAME = /^[A-Z][a-z]+(?:[A-Z][a-z]+)*$/
-const ERROR_STEM = /^[A-Z][a-z]+$/
 const KNOWN_ERROR_NAMES = new Set([
   "Error",
   "EvalError",
@@ -92,6 +93,85 @@ const KNOWN_ERROR_NAMES = new Set([
   "AggregateError",
   "AssertionError",
   "SystemError",
+])
+/**
+ * Closed error-class enum. The attached audit list, plus the four exported
+ * TypeScript classes that list missed (`P1TransportError` and the embedding
+ * and deadline classes). A personal name ending in Error is not in the set.
+ */
+const REPO_ERROR_NAMES = new Set([
+  "APIConnectionError",
+  "ApiError",
+  "AuditAppendConflictError",
+  "AuthError",
+  "AuthorityUnavailableError",
+  "BatchError",
+  "CallerFirmRequiredError",
+  "CitationError",
+  "CommittedEffectError",
+  "CommitteeScopeError",
+  "ConfigurationError",
+  "ContractError",
+  "CorpusUnavailableError",
+  "CourtOpsAckIdError",
+  "CourtOpsAckRefusedError",
+  "CourtOpsItemNotFoundError",
+  "CursorError",
+  "DeployContractError",
+  "DocumentMalformedError",
+  "DocumentObjectAlreadyExistsError",
+  "DocumentObjectConfigurationError",
+  "DocumentObjectStoreError",
+  "DraftChangedError",
+  "DraftCharsetError",
+  "DraftSizeError",
+  "DraftTemplateAnalyticsIdError",
+  "DraftTemplateAnalyticsRefusedError",
+  "EnvelopeError",
+  "ExplodingRowError",
+  "FeatureDisabledError",
+  "FirmScopedCursorError",
+  "FirmScopedUpdateError",
+  "FollowUpResolveRefusedError",
+  "HarvesterContractError",
+  "HttpError",
+  "IdempotencyError",
+  "IdempotencyFenceError",
+  "InsecureDevAuthContextError",
+  "JobError",
+  "LeaseLostError",
+  "ManifestError",
+  "MatterClosedError",
+  "MatterShapeError",
+  "MembershipAssignmentError",
+  "OcrAdmissionError",
+  "OcrTimeoutError",
+  "PDFDownloadError",
+  "PDFExtractionError",
+  "PackageAlreadyDecidedError",
+  "PeriodRangeError",
+  "PersistenceConfigurationError",
+  "PgTargetNotCleanError",
+  "ProviderKeyInRuntimeError",
+  "PublicError",
+  "PublicationError",
+  "QueryTextError",
+  "RateLimitedError",
+  "ReconcileError",
+  "RetentionConfigError",
+  "ScheduledRunsFailedError",
+  "SearchIndexMalformedError",
+  "SectionHistoryInconsistentError",
+  "ServiceAuthError",
+  "SurfaceError",
+  "TokenRejectedError",
+  "ToolContractError",
+  "UnregisteredJobTypeError",
+  "_RecordSpecificError",
+  "P1EmbeddingRequestError",
+  "P1EmbeddingTransportError",
+  "P1PreCallDeadlineError",
+  "P1TransportError",
 ])
 /**
  * Repo codes the snake-case grammar refuses because a segment is `token`,
@@ -138,9 +218,10 @@ const SECRET_PREFIXES = [
 // A hyphen is already outside the snake-case grammar, and an id string is never
 // kept, so a hyphenated prefix cannot decide a keep. Live prefixes remain:
 // they still match at the start, one character in, or after "_" or "-".
-// `sk_live` also matches when its own underscore is the token boundary after an
-// alphanumeric run. `AKIA` / `ASIA` / `AIZA` do not: two or more alphanumeric
-// characters in front of those prefixes is not a hit.
+// `sk_live` matches only when that token itself starts: at the beginning, or
+// after "_" or "-". A hit inside task_live, risk_live, disk_live or ask_live
+// is not a token start. `AKIA` / `ASIA` / `AIZA` still match one character in.
+// Two or more alphanumeric characters in front of those prefixes is not a hit.
 const REFUSED_SEGMENTS = [
   "password",
   "passwd",
@@ -174,15 +255,17 @@ function boundaryPrefix(text: string, prefix: string): boolean {
   return false
 }
 
-/** `sk_live` at any start index when the next character is not alphanumeric. */
+/** `sk_live` at a token start when the next character is not alphanumeric. */
 function skLiveHit(text: string): boolean {
   const prefix = "sk_live"
   let from = 0
   while (from < text.length) {
     const at = text.indexOf(prefix, from)
     if (at < 0) return false
+    const prev = at === 0 ? "" : text[at - 1]
     const next = text[at + prefix.length]
-    if (next === undefined || !/[a-z0-9]/.test(next)) return true
+    const tokenStart = at === 0 || prev === "_" || prev === "-"
+    if (tokenStart && (next === undefined || !/[a-z0-9]/.test(next))) return true
     from = at + 1
   }
   return false
@@ -200,12 +283,7 @@ function hasRefusedSegment(raw: string): boolean {
 }
 
 function provenErrorName(raw: string): boolean {
-  if (raw.length > 40) return false
-  if (KNOWN_ERROR_NAMES.has(raw)) return true
-  if (!ERROR_NAME.test(raw)) return false
-  if (!raw.endsWith("Error") && !raw.endsWith("Exception")) return false
-  const stem = raw.endsWith("Exception") ? raw.slice(0, -"Exception".length) : raw.slice(0, -"Error".length)
-  return ERROR_STEM.test(stem)
+  return KNOWN_ERROR_NAMES.has(raw) || REPO_ERROR_NAMES.has(raw)
 }
 
 function provenSafeNonId(raw: string): boolean {
@@ -233,18 +311,32 @@ export type MintedId = {
   readonly [mintedBrand]: true
 }
 
-function stamp(text: string): MintedId {
-  return { text, [mintedBrand]: true }
-}
-
-function isMintedId(value: unknown): value is MintedId {
-  if (typeof value !== "object" || value === null) return false
-  const record = value as { readonly text?: unknown; readonly [mintedBrand]?: unknown }
-  return record[mintedBrand] === true && typeof record.text === "string" && record.text.length > 0 && record.text.length <= 64
-}
+const mintedRegistry = new WeakMap<object, string>()
 
 function acceptableMintedText(text: string): boolean {
   return text.length > 0 && text.length <= 64 && !hasSecretPrefix(text) && !hasRefusedSegment(text)
+}
+
+/** Registry text only. A copy is a different object and is not in the map. */
+function mintedTextOk(record: { text: string }): boolean {
+  return record.text.length > 0 && record.text.length <= 64 && acceptableMintedText(record.text) && digitCount(record.text) <= 32
+}
+
+function stamp(text: string): MintedId | undefined {
+  const record = { text }
+  if (!mintedTextOk(record)) return undefined
+  const minted: MintedId = Object.freeze({ text: record.text, [mintedBrand]: true as const })
+  mintedRegistry.set(minted, record.text)
+  return minted
+}
+
+function emittedMintedText(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const stored = mintedRegistry.get(value)
+  if (stored === undefined) return undefined
+  const record = { text: stored }
+  if (!mintedTextOk(record)) return undefined
+  return record.text
 }
 
 const FIRESTORE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -267,7 +359,8 @@ function firestoreToken(): string {
 export function mintUuid(): MintedId {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const text = randomUUID()
-    if (acceptableMintedText(text)) return stamp(text)
+    const minted = stamp(text)
+    if (minted !== undefined) return minted
   }
   throw new Error("observability uuid mint failed closed")
 }
@@ -276,7 +369,8 @@ export function mintUuid(): MintedId {
 export function mintFirestoreId(): MintedId {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const text = firestoreToken()
-    if (acceptableMintedText(text)) return stamp(text)
+    const minted = stamp(text)
+    if (minted !== undefined) return minted
   }
   throw new Error("observability firestore id mint failed closed")
 }
@@ -314,19 +408,22 @@ export function mintUlid(timeMs = Date.now()): MintedId | undefined {
     const random = encodeUlidRandom(randomBytes(10))
     if (random.length !== 16) continue
     const text = time + random
-    if (acceptableMintedText(text)) return stamp(text)
+    const minted = stamp(text)
+    if (minted !== undefined) return minted
   }
   return undefined
 }
 
 /**
- * `trace-abc` or `job-123`. The suffix is a short token, not an arbitrary string,
- * and the result is refused when it carries a secret prefix or a credential segment.
+ * `trace-abc` or `job-123`. The suffix is a 1–3 letter opcode or a digit serial.
+ * A name (`muhammad`) or a mixed token (`hunter2`) is refused. Length stays on
+ * the charset check, so this pattern is not also a length cap.
  */
 export function mintHyphenatedId(prefix: "trace" | "job", suffix: string): MintedId | undefined {
   if (prefix !== "trace" && prefix !== "job") return undefined
   if (!/^[a-z0-9]{1,8}$/.test(suffix)) return undefined
   if ((suffix.match(/\d/g) ?? []).length > 3) return undefined
+  if (suffix.length <= 8 && !/^(?:[a-z]{1,3}|\d+)$/.test(suffix)) return undefined
   const text = `${prefix}-${suffix}`
   if (!acceptableMintedText(text)) return undefined
   return stamp(text)
@@ -341,12 +438,20 @@ export function mintMatterSerial(year: number, serial: number): MintedId | undef
   return stamp(text)
 }
 
-/** `mat_2026_11_15_001`. Month 1–12, day 1–31, serial 0–999. */
+function isCalendarDay(year: number, month: number, day: number): boolean {
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  const dim = days[month - 1]
+  return dim !== undefined && day <= dim
+}
+
+/** `mat_2026_11_15_001`. Month 1–12, a real calendar day, serial 0–999. */
 export function mintDatedId(year: number, month: number, day: number, serial: number): MintedId | undefined {
   if (!Number.isInteger(year) || year < 2000 || year > 2099) return undefined
   if (!Number.isInteger(month) || month < 1 || month > 12) return undefined
   if (!Number.isInteger(day) || day < 1 || day > 31) return undefined
   if (!Number.isInteger(serial) || serial < 0 || serial > 999) return undefined
+  if (day >= 1 && day <= 31 && !isCalendarDay(year, month, day)) return undefined
   const text = `mat_${year}_${String(month).padStart(2, "0")}_${String(day).padStart(2, "0")}_${String(serial).padStart(3, "0")}`
   if (!acceptableMintedText(text)) return undefined
   return stamp(text)
@@ -407,7 +512,8 @@ function redactObject(value: object): Record<string, unknown> {
     const canonical = CANONICAL.get(normalizeFieldKey(key))
     if (canonical === undefined || canonical === "errorName" || canonical === "errorCode") continue
     if (canonical.endsWith("Id")) {
-      if (isMintedId(child)) out[canonical] = child.text
+      const mintedText = emittedMintedText(child)
+      if (mintedText !== undefined) out[canonical] = mintedText
       else if (typeof child === "string" || (child !== null && typeof child === "object")) out[canonical] = REDACTED
       continue
     }

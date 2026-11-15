@@ -535,6 +535,104 @@ describe("Q15a exporter flags", () => {
     }
   })
 
+  it("Q02 keeps the 64-character cap on minted registry text", () => {
+    const source = readFileSync(path.resolve(__dirname, "../platform/observability/redact.ts"), "utf8")
+    expect(source).toContain("record.text.length > 0 && record.text.length <= 64")
+  })
+
+  function paths(attack: unknown, matter: unknown): { log: Record<string, unknown>; span: Record<string, unknown> } {
+    const phone = "0300" + "1234567"
+    const logs = sinks()
+    createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+      logSink: logs.log,
+    }).log("info", "job_done", { firmId: attack })
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job_run", { firmId: attack })
+    span.setAttribute("matterId", matter)
+    span.end("ok")
+    const log = logs.lines[0]?.record as Record<string, unknown>
+    const traced = traces.lines[0]?.record as Record<string, unknown>
+    expect(JSON.stringify(log)).not.toContain(phone)
+    expect(JSON.stringify(traced)).not.toContain(phone)
+    return { log, span: traced }
+  }
+
+  it("Q15b R2 redacts a spread copy of a minted id", () => {
+    const phone = "0300" + "1234567"
+    const copy = () => ({ ...mintUuid(), text: phone })
+    const { log, span } = paths(copy(), copy())
+    expect(log.firmId).toBe(REDACTED)
+    expect(span.firmId).toBe(REDACTED)
+    expect(span.matterId).toBe(REDACTED)
+  })
+
+  it("Q15b R2 redacts an Object.assign copy of a minted id", () => {
+    const phone = "0300" + "1234567"
+    const copy = () => Object.assign({}, mintUuid(), { text: phone })
+    const { log, span } = paths(copy(), copy())
+    expect(log.firmId).toBe(REDACTED)
+    expect(span.firmId).toBe(REDACTED)
+    expect(span.matterId).toBe(REDACTED)
+  })
+
+  it("Q15b R2 does not let a caller mutate minted text", () => {
+    const phone = "0300" + "1234567"
+    const minted = mintUuid()
+    const original = minted.text
+    expect(Object.isFrozen(minted)).toBe(true)
+    expect(() => {
+      ;(minted as { text: string }).text = phone
+    }).toThrow()
+    expect(minted.text).toBe(original)
+    const { log, span } = paths(minted, minted)
+    expect(log.firmId).toBe(original)
+    expect(span.firmId).toBe(original)
+    expect(span.matterId).toBe(original)
+  })
+
+  it("Q15b R2 redacts a symbol-forged minted id", () => {
+    const phone = "0300" + "1234567"
+    const sym = Object.getOwnPropertySymbols(mintUuid())[0]
+    expect(typeof sym).toBe("symbol")
+    const forged = () => ({ text: phone, [sym]: true })
+    const { log, span } = paths(forged(), forged())
+    expect(log.firmId).toBe(REDACTED)
+    expect(span.firmId).toBe(REDACTED)
+    expect(span.matterId).toBe(REDACTED)
+  })
+
+  it("Q15b R2 redacts a Proxy that claims every symbol", () => {
+    const phone = "0300" + "1234567"
+    const proxy = () => new Proxy({}, { get: (_target, key) => (typeof key === "symbol" ? true : phone) })
+    const { log, span } = paths(proxy(), proxy())
+    expect(log.firmId).toBe(REDACTED)
+    expect(span.firmId).toBe(REDACTED)
+    expect(span.matterId).toBe(REDACTED)
+  })
+
+  it("Q15b R2 redacts a getter that changes text between check and copy", () => {
+    const phone = "0300" + "1234567"
+    const toctou = () => {
+      const sym = Object.getOwnPropertySymbols(mintUuid())[0]
+      let reads = 0
+      return {
+        [sym]: true,
+        get text() {
+          reads += 1
+          return reads === 1 ? "ok" : phone
+        },
+      }
+    }
+    const { log, span } = paths(toctou(), toctou())
+    expect(log.firmId).toBe(REDACTED)
+    expect(span.firmId).toBe(REDACTED)
+    expect(span.matterId).toBe(REDACTED)
+  })
+
   it("has no network exporter in the observability sources", () => {
     const dir = path.resolve(__dirname, "../platform/observability")
     const files = readdirSync(dir).filter((name) => name.endsWith(".ts"))
