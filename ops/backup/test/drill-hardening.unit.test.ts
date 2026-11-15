@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -12,7 +12,7 @@ import {
 import { newStore } from "@/platform/spine/store"
 import { assessContentMatch } from "../drill/content"
 import { planIdempotentRestore } from "../drill/idempotent"
-import { isolationProblems } from "../drill/target"
+import { drillScratchDir, isolationProblems } from "../drill/target"
 import { BundleWriter } from "../lib/bundle"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import * as exec from "../lib/exec"
@@ -167,7 +167,7 @@ describe("gap: partial backups and exit-code-only firestore restores are refused
   let root: string
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "f33-partial-"))
+    root = drillScratchDir("f33-bundle-")
   })
 
   afterEach(() => {
@@ -191,7 +191,7 @@ describe("gap: partial backups and exit-code-only firestore restores are refused
       env: { ...process.env, PGHOST: root, PGPORT: "1" },
     })
     expect(res.ok).toBe(false)
-    expect(res.differences.join("\n")).toMatch(/checksum missing|partial/)
+    expect(res.differences).toContain("table public.t: checksum missing")
   })
 
   it("refuses a zero-byte dump when the manifest claims rows", async () => {
@@ -210,7 +210,26 @@ describe("gap: partial backups and exit-code-only firestore restores are refused
       env: { ...process.env, PGHOST: root, PGPORT: "1" },
     })
     expect(res.ok).toBe(false)
-    expect(res.differences.join("\n")).toMatch(/truncated/)
+    expect(res.differences).toContain("database.dump: truncated")
+  })
+
+  it("refuses a zero-unit postgres manifest before it can report success", async () => {
+    const key = randomBytes(32)
+    const writer = await BundleWriter.create(root, "postgres-logical", key)
+    await writer.addBuffer("globals.sql", Buffer.from("SELECT 1;\n"))
+    await writer.addBuffer("database.dump", Buffer.from("not-empty-dump"))
+    const dir = await writer.finish({
+      meta: { serverVersion: "16.0", database: "legal_scraper" },
+      tables: {},
+    })
+    const res = await restoreLogical({
+      bundleDir: dir,
+      ring: makeKeyRing(key),
+      db: "legal_scraper",
+      env: { ...process.env, PGHOST: root, PGPORT: "1" },
+    })
+    expect(res.ok).toBe(false)
+    expect(res.differences).toContain("zero-unit restore is not success")
   })
 
   it("does not treat a zero exit and a text ok line as a firestore content match", async () => {
@@ -231,7 +250,7 @@ describe("gap: partial backups and exit-code-only firestore restores are refused
       importDir: root,
     })
     expect(res.ok).toBe(false)
-    expect(res.differences.join("\n")).toMatch(/checksum missing|content report/)
+    expect(res.differences.join("\n")).toMatch(/no content report/)
   })
 })
 
@@ -287,7 +306,7 @@ describe("gap: object restore is local-only and idempotent", () => {
     })
     expect(puts).toBe(0)
     expect(report.restored).toEqual([])
-    expect(report.refused?.join("\n") ?? "").toMatch(/local|temp/)
+    expect(report.refused?.join("\n") ?? "").toMatch(/endpoint and bucket/)
   })
 
   it("does not write again when the isolated target already holds the intact bytes", async () => {
@@ -301,6 +320,7 @@ describe("gap: object restore is local-only and idempotent", () => {
         put: async () => {},
       },
       target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
         listVersions: async () => [{ key: "k", versionId: "current" }],
         getVersion: async () => encrypted,
         put: async () => {
@@ -346,6 +366,248 @@ describe("local drill decision table", () => {
       [{ name: "firmA/doc", count: 1, digest: other }]
     )
     expect(problems.join("\n")).toMatch(/checksum differs/)
+  })
+})
+
+describe("gap: zero-unit success, lookalikes, symlinks, and the writer endpoint", () => {
+  it("refuses a passing report with an empty content unit list", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-zero-unit-"))
+    try {
+      expect(() =>
+        recordDrillResult(
+          {
+            store: "postgres-logical",
+            rtoMs: 1,
+            target: { kind: "temp", engine: "postgres", isolated: true },
+            details: { ok: true, contentUnits: [] },
+          },
+          { ...process.env, SIKANDER_BACKUP_RESULTS_DIR: dir }
+        )
+      ).toThrow(/zero-unit/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("refuses lookalike database names that a production denylist misses", async () => {
+    const names = ["proddb", "preprod", "live1", "golive", "pr\u043Ed", "\uFF50rod"]
+    for (const db of names) {
+      const res = await restoreLogical({
+        bundleDir: path.join(os.tmpdir(), "f33-missing-bundle"),
+        ring: makeKeyRing(randomBytes(32)),
+        db,
+        env: { ...process.env, PGHOST: "127.0.0.1", PGPORT: "1" },
+      })
+      expect(res.ok, db).toBe(false)
+      expect(res.differences.join("\n"), db).toMatch(/explicit drill target/)
+    }
+  })
+
+  it("refuses a symlink to /etc even when the link path is under the temp root", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-symlink-"))
+    const link = path.join(dir, "sock")
+    symlinkSync("/etc", link)
+    try {
+      const problems = isolationProblems({
+        kind: "temp",
+        engine: "postgres",
+        host: link,
+        database: "legal_scraper",
+      })
+      expect(problems.join("\n")).toMatch(/symlink/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("refuses /opt/production-pgdata when TMPDIR is /", () => {
+    const prior = process.env.TMPDIR
+    process.env.TMPDIR = "/"
+    try {
+      const problems = isolationProblems({
+        kind: "temp",
+        engine: "postgres",
+        host: "/opt/production-pgdata",
+        database: "legal_scraper",
+        dataDir: "/opt/production-pgdata",
+      })
+      expect(problems.join("\n")).toMatch(/isolated temp/)
+    } finally {
+      if (prior === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = prior
+    }
+  })
+
+  it("checks the object writer's endpoint, not a declared loopback location", async () => {
+    let listed = 0
+    const report = await restoreObjects({
+      rows: [{ id: "row1", firmId: "firmA", storagePath: "s3://b/k", contentHash: HEX, key: "k" }],
+      source: {
+        listVersions: async () => [{ key: "k", versionId: "v1" }],
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "https://s3.amazonaws.com", bucket: "f33-vault-drill" }),
+        listVersions: async () => {
+          listed += 1
+          return []
+        },
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {
+          listed += 1
+        },
+      },
+      store: newStore(),
+      location: { kind: "local", endpoint: "http://127.0.0.1:9", bucket: "f33-vault-drill" },
+    })
+    expect(listed).toBe(0)
+    expect(report.restored).toEqual([])
+    expect(report.refused.join("\n")).toMatch(/endpoint|managed cloud/)
+  })
+})
+
+describe("mutants: loopback, endpoint, firestore host, report target, and digests", () => {
+  it("accepts only an exact loopback host", () => {
+    const base = { kind: "local" as const, engine: "postgres" as const, database: "legal_scraper" }
+    expect(isolationProblems({ ...base, host: "127.0.0.1" })).toEqual([])
+    expect(isolationProblems({ ...base, host: "localhost" })).toEqual([])
+    expect(isolationProblems({ ...base, host: "::1" })).toEqual([])
+    for (const host of ["10.1.2.3", "127.0.0.2", "0.0.0.0", "localhost.evil.com", "127.0.0.1.example", ""]) {
+      expect(isolationProblems({ ...base, host }).join("\n"), host).toMatch(/loopback|missing/)
+    }
+  })
+
+  it("accepts only a loopback http endpoint with a port and the drill bucket", () => {
+    const ok = { kind: "local" as const, engine: "objects" as const, bucket: "f33-vault-drill" }
+    expect(isolationProblems({ ...ok, endpoint: "http://127.0.0.1:19021" })).toEqual([])
+    expect(isolationProblems({ ...ok, endpoint: "http://localhost:1" })).toEqual([])
+    expect(isolationProblems({ ...ok, endpoint: "http://[::1]:9" })).toEqual([])
+    for (const endpoint of [
+      "https://127.0.0.1:19021",
+      "http://127.0.0.1",
+      "http://127.0.0.1:19021/bucket",
+      "http://10.0.0.1:19021",
+      "http://example:19021",
+      "http://127.0.0.1:19021?x=1",
+    ]) {
+      expect(isolationProblems({ ...ok, endpoint }).join("\n"), endpoint).toMatch(/endpoint/)
+    }
+    expect(isolationProblems({ ...ok, endpoint: "http://127.0.0.1:9", bucket: "f33-vault-drill-evil" }).join("\n")).toMatch(
+      /explicit drill target/
+    )
+    expect(isolationProblems({ kind: "local", engine: "objects", endpoint: "http://127.0.0.1:9" }).join("\n")).toMatch(
+      /explicit drill target/
+    )
+  })
+
+  it("accepts only the drill firestore projects on loopback", () => {
+    expect(
+      isolationProblems({ kind: "emulator", engine: "firestore", host: "127.0.0.1", projectId: "f33-backup-drill" })
+    ).toEqual([])
+    expect(
+      isolationProblems({ kind: "emulator", engine: "firestore", host: "localhost", projectId: "demo-sikander" })
+    ).toEqual([])
+    expect(
+      isolationProblems({
+        kind: "emulator",
+        engine: "firestore",
+        host: "10.0.0.5",
+        projectId: "f33-backup-drill",
+      }).join("\n")
+    ).toMatch(/not loopback/)
+    expect(
+      isolationProblems({
+        kind: "emulator",
+        engine: "firestore",
+        host: "127.0.0.1",
+        projectId: "f33-backup-drill-evil",
+      }).join("\n")
+    ).toMatch(/explicit drill target/)
+    expect(
+      isolationProblems({
+        kind: "emulator",
+        engine: "firestore",
+        host: "127.0.0.1",
+        projectId: "demo-sikander.evil",
+      }).join("\n")
+    ).toMatch(/explicit drill target/)
+  })
+
+  it("refuses a passing report whose target or digest is not the drill contract", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-report-mutant-"))
+    const env = { ...process.env, SIKANDER_BACKUP_RESULTS_DIR: dir }
+    const unit = { name: "public.t", count: 1, digest: HEX, match: true as const }
+    const passing = {
+      store: "postgres-logical",
+      rtoMs: 1,
+      target: { kind: "temp" as const, engine: "postgres", isolated: true as const },
+      details: { ok: true, contentUnits: [unit] },
+    }
+    try {
+      expect(() =>
+        recordDrillResult(
+          { ...passing, target: { kind: "managed", engine: "postgres", isolated: true } as unknown as typeof passing.target },
+          env
+        )
+      ).toThrow(/isolated local, emulator, or temp/)
+      expect(() =>
+        recordDrillResult(
+          { ...passing, target: { kind: "temp", engine: "postgres", isolated: false } as unknown as typeof passing.target },
+          env
+        )
+      ).toThrow(/isolated/)
+      expect(() =>
+        recordDrillResult({ ...passing, details: { ok: true, contentUnits: [{ ...unit, digest: "AB".repeat(32) }] } }, env)
+      ).toThrow(/counts and checksums/)
+      expect(() =>
+        recordDrillResult({ ...passing, details: { ok: true, contentUnits: [{ ...unit, digest: "ab".repeat(31) }] } }, env)
+      ).toThrow(/counts and checksums/)
+      expect(() =>
+        recordDrillResult({ ...passing, details: { ok: true, contentUnits: [{ ...unit, digest: "g".repeat(64) }] } }, env)
+      ).toThrow(/counts and checksums/)
+      expect(() =>
+        recordDrillResult({ ...passing, details: { ok: true, contentUnits: [{ ...unit, digest: "" }] } }, env)
+      ).toThrow(/counts and checksums/)
+      expect(() =>
+        recordDrillResult({ ...passing, details: { ok: true, contentUnits: [{ ...unit, match: false }] } }, env)
+      ).toThrow(/counts and checksums/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("requires a real sha256 on both sides of a postgres compare", () => {
+    const left = emptyPg()
+    const right = emptyPg()
+    left.tables["public.t"] = { rows: 1, digest: HEX }
+    right.tables["public.t"] = { rows: 1, digest: HEX }
+    expect(comparePgManifests(left, right)).toEqual([])
+    right.tables["public.t"] = { rows: 1, digest: "cd".repeat(32) }
+    expect(comparePgManifests(left, right).join("\n")).toMatch(/digest differs/)
+    left.tables["public.t"] = { rows: 1, digest: "zz".repeat(32) }
+    right.tables["public.t"] = { rows: 1, digest: "zz".repeat(32) }
+    expect(comparePgManifests(left, right).join("\n")).toMatch(/checksum missing/)
+  })
+
+  it("allows the PITR maintenance database only together with a drill data directory", () => {
+    const dataDir = drillScratchDir("f33-pitr-target-")
+    try {
+      expect(
+        isolationProblems({
+          kind: "temp",
+          engine: "postgres",
+          host: "127.0.0.1",
+          database: "postgres",
+          dataDir,
+        })
+      ).toEqual([])
+      expect(
+        isolationProblems({ kind: "local", engine: "postgres", host: "127.0.0.1", database: "postgres" }).join("\n")
+      ).toMatch(/explicit drill target/)
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 })
 

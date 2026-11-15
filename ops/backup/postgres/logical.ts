@@ -3,7 +3,15 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { backupPayloadProblems, pgContentUnits, type ContentUnit } from "../drill/content"
 import { planIdempotentRestore } from "../drill/idempotent"
-import { isolationProblems, postgresTargetFromEnv } from "../drill/target"
+import { DRILL_POSTGRES_DATABASE, ensureDrillTempRoot, isolationProblems } from "../drill/target"
+import {
+  connectedTargetProblems,
+  drillDatabaseConninfo,
+  parseServerIdentity,
+  postgresRedirectProblems,
+  scrubLibpqEnv,
+  SERVER_IDENTITY_SQL,
+} from "./conn"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle, type ArtefactInfo, type BundleManifest } from "../lib/bundle"
 import { runCommand, psqlArgv, PersistentPsqlSession, PsqlSession } from "../lib/exec"
@@ -27,10 +35,12 @@ export type RestoreLogicalOptions = {
   pgPrefix?: string[]
   env?: NodeJS.ProcessEnv
   recordStore?: string
+  /** system_identifier of the cluster this restore is allowed to write. Read it from that cluster before connecting. */
+  expectedSystemIdentifier?: string
 }
 
 function envOf(opts: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
-  return { ...process.env, ...opts.env }
+  return opts.env ? { ...opts.env } : { ...process.env }
 }
 
 export function logicalPgRestoreArgv(db: string, dumpPath: string): string[] {
@@ -136,6 +146,12 @@ function recordVerified(
   })
 }
 
+function successContent(content: Array<ContentUnit & { match: boolean }>): string[] {
+  if (content.length === 0) return ["zero-unit restore is not success"]
+  if (content.some((unit) => !unit.match)) return ["restored content does not match"]
+  return []
+}
+
 export async function restoreLogical(opts: RestoreLogicalOptions): Promise<LogicalRestoreResult> {
   const started = Date.now()
   const fail = (differences: string[]): LogicalRestoreResult => ({
@@ -146,9 +162,21 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     content: [],
   })
   const env = envOf(opts)
-  const target = postgresTargetFromEnv(env, opts.db)
+  const redirect = postgresRedirectProblems(env)
+  if (redirect.length) return fail(redirect)
+  const host = env.PGHOST?.trim() ?? ""
+  const port = env.PGPORT?.trim() ?? ""
+  const user = env.PGUSER?.trim() || "postgres"
+  const target = {
+    kind: host.startsWith("/") ? ("temp" as const) : ("local" as const),
+    engine: "postgres" as const,
+    host,
+    database: opts.db,
+  }
   const targetProblems = isolationProblems(target)
   if (targetProblems.length) return fail(targetProblems)
+  if (!/^[1-9]\d{0,4}$/.test(port) || Number(port) > 65535) return fail(["postgres target port is missing"])
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(user)) return fail(["postgres target user is not an explicit drill role"])
 
   const verify = await verifyBundle(opts.bundleDir, opts.ring)
   if (!verify.ok || !verify.manifest || !verify.bundle) return fail(verify.problems)
@@ -158,24 +186,48 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     artefacts: verify.manifest.artefacts,
   })
   if (payloadProblems.length) return fail(payloadProblems)
+  const expectedId = opts.expectedSystemIdentifier?.trim() ?? ""
+  if (!/^\d+$/.test(expectedId)) return fail(["expected cluster system identifier is required"])
 
   const expected = verify.manifest.store as PgManifest
   const bundleManifest = verify.manifest
-  const admin = new PsqlSession(opts.pgPrefix, env, "postgres")
+  const childEnv = scrubLibpqEnv(env)
+  const db = DRILL_POSTGRES_DATABASE
+  const maintenance = drillDatabaseConninfo({ host, port, user, maintenance: true })
+  const databaseConn = drillDatabaseConninfo({ host, port, user })
+  const admin = new PsqlSession(opts.pgPrefix, childEnv, "postgres", maintenance, true)
+  let identityLine = ""
+  try {
+    identityLine = await admin.queryScalar(SERVER_IDENTITY_SQL)
+  } catch (err) {
+    return fail([(err as Error).message])
+  }
+  const identity = parseServerIdentity(identityLine)
+  if (!identity) return fail(["connected server did not report its identity"])
+  const identityProblems = connectedTargetProblems({
+    host,
+    port,
+    expectedSystemIdentifier: expectedId,
+    row: identity,
+  })
+  if (identityProblems.length) return fail(identityProblems)
+
   let exists = 0
   try {
-    exists = Number(await admin.queryScalar(`SELECT count(*) FROM pg_database WHERE datname = '${opts.db.replace(/'/g, "''")}';`))
+    exists = Number(await admin.queryScalar(`SELECT count(*) FROM pg_database WHERE datname = '${db}';`))
   } catch (err) {
     return fail([(err as Error).message])
   }
   if (exists > 0) {
     try {
-      const targetSession = new PsqlSession(opts.pgPrefix, env, opts.db)
-      const actual = await takePgManifest(targetSession, opts.db)
+      const targetSession = new PsqlSession(opts.pgPrefix, childEnv, db, databaseConn, true)
+      const actual = await takePgManifest(targetSession, db)
       const differences = comparePgManifests(expected, actual)
       const plan = planIdempotentRestore({ targetExists: true, contentMatch: differences.length === 0 })
       if (plan.action === "noop") {
         const content = matchedUnits(actual, true)
+        const empty = successContent(content)
+        if (empty.length) return fail(empty)
         const rtoMs = Date.now() - started
         recordVerified(opts, target.kind, rtoMs, true, content)
         return { ok: true, differences: [], rtoMs, idempotent: true, content }
@@ -186,8 +238,9 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     }
   }
 
-  const globalsTmp = path.join(opts.bundleDir, ".globals.plain.part")
-  const dumpTmp = path.join(opts.bundleDir, ".dump.part")
+  const scratch = await fsp.mkdtemp(path.join(ensureDrillTempRoot(), "f33-pg-plain-"))
+  const globalsTmp = path.join(scratch, "globals.sql")
+  const dumpTmp = path.join(scratch, "database.dump")
   try {
     await decryptToFile(
       opts.bundleDir,
@@ -200,26 +253,30 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     globalsSql = stripBootstrapSuperuser(globalsSql)
     await fsp.writeFile(globalsTmp, globalsSql, "utf8")
     const roles = parseRolesFromGlobals(globalsSql)
-    const admin = new PsqlSession(opts.pgPrefix, env, "postgres")
     try {
-      await assertPgTargetClean(admin, opts.db, roles, expected.meta.serverVersion)
+      await assertPgTargetClean(admin, db, roles, expected.meta.serverVersion)
     } catch (err) {
       return fail([(err as Error).message])
     }
-    const create = await runCommand(psqlArgv("postgres", ["-c", `CREATE DATABASE "${opts.db.replace(/"/g, '""')}";`]), {
-      env,
+    const create = await runCommand(psqlArgv(maintenance, ["-c", `CREATE DATABASE "${db}";`]), {
+      env: childEnv,
+      exactEnv: true,
       pgPrefix: opts.pgPrefix,
     })
     if (create.code !== 0) return fail([create.stderr || create.stdout])
     const extensions = await runCommand(
-      psqlArgv(opts.db, [
+      psqlArgv(databaseConn, [
         "-c",
         "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;",
       ]),
-      { env, pgPrefix: opts.pgPrefix }
+      { env: childEnv, exactEnv: true, pgPrefix: opts.pgPrefix }
     )
     if (extensions.code !== 0) return fail([extensions.stderr || extensions.stdout])
-    const applyGlobals = await runCommand(psqlArgv(opts.db, ["-f", globalsTmp]), { env, pgPrefix: opts.pgPrefix })
+    const applyGlobals = await runCommand(psqlArgv(databaseConn, ["-f", globalsTmp]), {
+      env: childEnv,
+      exactEnv: true,
+      pgPrefix: opts.pgPrefix,
+    })
     if (applyGlobals.code !== 0) return fail([applyGlobals.stderr || applyGlobals.stdout])
     await decryptToFile(
       opts.bundleDir,
@@ -228,23 +285,27 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
       dumpTmp,
       artefactExpect(bundleManifest, "database.dump")
     )
-    const restore = await runCommand(logicalPgRestoreArgv(opts.db, dumpTmp), {
-      env,
+    const restore = await runCommand(logicalPgRestoreArgv(databaseConn, dumpTmp), {
+      env: childEnv,
+      exactEnv: true,
       pgPrefix: opts.pgPrefix,
     })
     if (restore.code !== 0) {
       const msg = [restore.stderr, restore.stdout].filter(Boolean).join("\n").trim() || `pg_restore exited ${restore.code}`
       return fail([msg])
     }
-    const targetSession = new PsqlSession(opts.pgPrefix, env, opts.db)
-    const actual = await takePgManifest(targetSession, opts.db)
+    const targetSession = new PsqlSession(opts.pgPrefix, childEnv, db, databaseConn, true)
+    const actual = await takePgManifest(targetSession, db)
     const differences = comparePgManifests(expected, actual)
     const rtoMs = Date.now() - started
     const content = matchedUnits(actual, differences.length === 0)
-    if (differences.length === 0) recordVerified(opts, target.kind, rtoMs, false, content)
+    if (differences.length === 0) {
+      const empty = successContent(content)
+      if (empty.length) return fail(empty)
+      recordVerified(opts, target.kind, rtoMs, false, content)
+    }
     return { ok: differences.length === 0, differences, rtoMs, idempotent: false, content }
   } finally {
-    await fsp.rm(globalsTmp, { force: true })
-    await fsp.rm(dumpTmp, { force: true })
+    await fsp.rm(scratch, { recursive: true, force: true })
   }
 }

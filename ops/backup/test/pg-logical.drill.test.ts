@@ -30,6 +30,7 @@ describe("postgres logical backup drill", () => {
           ring,
           db: "legal_scraper",
           env: target.env,
+          expectedSystemIdentifier: target.systemIdentifier,
           recordStore: "postgres-logical",
         })
         expect(res.ok, res.differences.join("\n")).toBe(true)
@@ -41,6 +42,7 @@ describe("postgres logical backup drill", () => {
           ring,
           db: "legal_scraper",
           env: target.env,
+          expectedSystemIdentifier: target.systemIdentifier,
           recordStore: "postgres-logical",
         })
         expect(again.ok, again.differences.join("\n")).toBe(true)

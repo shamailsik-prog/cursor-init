@@ -5,6 +5,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import { runCommand } from "../lib/exec"
+import { drillScratchDir } from "../drill/target"
 import { restoreFirestoreEmulator, firestoreEmulatorExecArgv } from "../firestore/emulator"
 import { recordDrillResult } from "../lib/results"
 
@@ -22,7 +23,7 @@ describe("firestore SKB1 bundle drill", () => {
       const exportDir = path.join(tmp, "export")
       const outRoot = path.join(tmp, "bundles")
       const bundleMarker = path.join(tmp, "bundle-dir.txt")
-      const importDir = path.join(tmp, "import")
+      const importDir = drillScratchDir("f33-fs-import-")
       try {
         const inner = `npx vite-node ops/backup/test/helpers/firestore-bundle-backup.ts ${JSON.stringify(exportDir)} ${JSON.stringify(outRoot)} ${key.toString("hex")} ${JSON.stringify(bundleMarker)}`
         const backup = await runCommand(firestoreEmulatorExecArgv(inner), {
@@ -49,6 +50,7 @@ describe("firestore SKB1 bundle drill", () => {
         })
       } finally {
         rmSync(tmp, { recursive: true, force: true })
+        rmSync(importDir, { recursive: true, force: true })
       }
     },
     300_000

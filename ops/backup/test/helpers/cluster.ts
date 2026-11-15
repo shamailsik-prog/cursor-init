@@ -1,13 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import os from "node:os"
+import { rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { runCommand } from "../../lib/exec"
+import { drillScratchDir } from "../../drill/target"
+import { runCommand, psqlArgv } from "../../lib/exec"
 
 export const DRILL_CLUSTER_TIMEZONE = "Asia/Karachi"
 
 export type PgCluster = {
   dir: string
   port: number
+  systemIdentifier: string
   env: NodeJS.ProcessEnv
   stop: () => Promise<void>
   runAs: (argv: string[]) => Promise<{ code: number; stdout: string; stderr: string }>
@@ -21,7 +22,9 @@ function findFreePort(start: number): number {
 function pgEnv(extra: Partial<NodeJS.ProcessEnv> = {}): NodeJS.ProcessEnv {
   const bin = process.env.SIKANDER_BACKUP_DRILL_PG_BIN?.trim() || "/usr/lib/postgresql/16/bin"
   const tz = extra.TZ ?? process.env.TZ
-  return { ...process.env, ...extra, ...(tz ? { TZ: tz } : {}), PATH: `${bin}:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv
+  const env = { ...process.env, ...extra, ...(tz ? { TZ: tz } : {}), PATH: `${bin}:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv
+  for (const key of ["PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGPASSWORD"]) delete env[key]
+  return env
 }
 
 function pgPrefix(): string[] {
@@ -45,7 +48,7 @@ export async function startCluster(opts: {
       "PostgreSQL 16 client programs are not on PATH (install postgresql-16). Set SIKANDER_BACKUP_DRILL_PG_PORT when multiple drills run."
     )
   }
-  const dir = mkdtempSync(path.join(os.tmpdir(), "f33-pg-"))
+  const dir = drillScratchDir("f33-pg-")
   const port = opts.port ?? findFreePort(55432)
   const initArgs = ["initdb", "-D", dir, "--no-instructions", "-U", "postgres"]
   if (opts.walSegSize) initArgs.push(`--wal-segsize=${opts.walSegSize}`)
@@ -70,9 +73,17 @@ export async function startCluster(opts: {
     pgPrefix: prefix,
   })
   if (start.code !== 0) throw new Error(start.stderr || start.stdout)
+  const ident = await runCommand(
+    psqlArgv("postgres", ["-t", "-A", "-c", "SELECT system_identifier::text FROM pg_control_system();"]),
+    { env, pgPrefix: prefix }
+  )
+  if (ident.code !== 0 || !/^\d+$/.test(ident.stdout.trim())) {
+    throw new Error(ident.stderr || ident.stdout || "cluster did not report system_identifier")
+  }
   return {
     dir,
     port,
+    systemIdentifier: ident.stdout.trim(),
     env,
     async stop() {
       await runCommand(["pg_ctl", "-D", dir, "-m", "fast", "stop"], { env, pgPrefix: prefix })

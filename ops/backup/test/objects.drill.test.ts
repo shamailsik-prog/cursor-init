@@ -5,6 +5,9 @@ import path from "node:path"
 import { type ChildProcess, spawn } from "node:child_process"
 import { describe, expect, it } from "vitest"
 import { S3Client, CreateBucketCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { newStore } from "@/platform/spine/store"
+import { S3Versioned } from "../objects/s3"
+import { restoreObjects } from "../objects/restore"
 import { isolationProblems } from "../drill/target"
 import { applyVaultProtection, checkVaultProtection } from "../objects/protection"
 import { loadInfraConfig } from "../config"
@@ -73,6 +76,26 @@ describe("document vault objects drill", () => {
         const stored = Buffer.from(await got.Body!.transformToByteArray())
         const digest = createHash("sha256").update(stored).digest("hex")
         expect(digest).toBe(createHash("sha256").update(body).digest("hex"))
+        const writer = new S3Versioned(s3, bucket)
+        const actual = await writer.resolvedTarget()
+        expect(actual.bucket).toBe(bucket)
+        expect(actual.endpoint).toBe(endpoint)
+        const lying = await restoreObjects({
+          rows: [],
+          source: writer,
+          target: writer,
+          store: newStore(),
+          location: { kind: "local", endpoint: "https://s3.amazonaws.com", bucket: "prod" },
+        })
+        expect(lying.refused.join("\n")).toMatch(/endpoint|managed cloud|explicit drill target/)
+        const accepted = await restoreObjects({
+          rows: [],
+          source: writer,
+          target: writer,
+          store: newStore(),
+        })
+        expect(accepted.refused).toEqual([])
+        expect(accepted.noop).toBe(true)
         recordDrillResult({
           store: "document-vault",
           rtoMs: Date.now() - started,

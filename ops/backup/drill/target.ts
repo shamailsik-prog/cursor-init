@@ -1,10 +1,15 @@
-import os from "node:os"
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs"
 import path from "node:path"
 
-const CLOUD_HOST = /(amazonaws\.com|googleapis\.com|cloudsql|neon\.tech|supabase\.co|render\.com|cloudflarestorage\.com|firebaseio\.com)/i
-const PRODUCTION_NAME = /(^|[^a-z0-9])(prod|production|live)([^a-z0-9]|$)/i
-const EMULATOR_PROJECT = /^(demo-|f33-|local-|drill-|test-)/
-const LOOPBACK_HTTP = /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{1,5}(?:\/|$)/
+/** Fixed root. os.tmpdir() and TMPDIR are not consulted. */
+export const DRILL_TEMP_ROOT = "/tmp/sikander-backup-drill"
+export const DRILL_POSTGRES_DATABASE = "legal_scraper"
+export const DRILL_PITR_DATABASE = "postgres"
+export const DRILL_FIRESTORE_PROJECTS = ["f33-backup-drill", "demo-sikander"] as const
+export const DRILL_OBJECT_BUCKET = "f33-vault-drill"
+
+const CLOUD_HOST =
+  /(amazonaws\.com|googleapis\.com|cloudsql|neon\.tech|supabase\.co|render\.com|cloudflarestorage\.com|firebaseio\.com)/i
 
 export class RestoreTargetRefused extends Error {
   readonly problems: string[]
@@ -20,19 +25,118 @@ function loopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]"
 }
 
-function productionLooking(value: string): boolean {
+/** NFKC plus a non-ASCII rejection. Only the canonical allowlist string is accepted. */
+export function explicitDrillName(value: string, allowed: readonly string[]): boolean {
   const trimmed = value.trim()
-  if (trimmed === "(default)") return true
-  return PRODUCTION_NAME.test(trimmed)
+  if (trimmed.normalize("NFKC") !== trimmed) return false
+  if ([...trimmed].some((ch) => ch.charCodeAt(0) > 127)) return false
+  return allowed.includes(trimmed)
 }
 
-/** A dedicated directory under the temp root. The temp root itself is not an isolated target. */
-export function insideTempDir(dir: string, tmpRoot = os.tmpdir()): boolean {
-  if (!dir.startsWith("/")) return false
-  const root = path.resolve(tmpRoot)
-  const resolved = path.resolve(dir)
+export function databaseConninfo(database: string): boolean {
+  const value = database.trim()
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return true
+  if (/(?:^|\s)(?:host|hostaddr|port|dbname|user|password|service|servicefile)\s*=/i.test(value)) return true
+  return false
+}
+
+export function loopbackHttpEndpoint(endpoint: string): boolean {
+  if (!endpoint.startsWith("http://")) return false
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    return false
+  }
+  if (url.protocol !== "http:") return false
+  if (url.username || url.password) return false
+  if (url.pathname !== "/" && url.pathname !== "") return false
+  if (url.search || url.hash) return false
+  if (!loopbackHost(url.hostname)) return false
+  if (!url.port || !/^[1-9]\d{0,4}$/.test(url.port)) return false
+  const port = Number(url.port)
+  return port >= 1 && port <= 65535
+}
+
+export function ensureDrillTempRoot(): string {
+  mkdirSync(DRILL_TEMP_ROOT, { recursive: true, mode: 0o700 })
+  if (lstatSync(DRILL_TEMP_ROOT).isSymbolicLink()) throw new Error("drill temp root is a symlink")
+  if (realpathSync(DRILL_TEMP_ROOT) !== DRILL_TEMP_ROOT) throw new Error("drill temp root resolves outside itself")
+  return DRILL_TEMP_ROOT
+}
+
+export function drillScratchDir(prefix: string): string {
+  const safe = prefix.replace(/[^a-z0-9-]/gi, "") || "scratch-"
+  const stem = safe.endsWith("-") ? safe : `${safe}-`
+  return mkdtempSync(path.join(ensureDrillTempRoot(), stem))
+}
+
+function hasSymlinkComponent(absPath: string): boolean {
+  if (!absPath.startsWith("/")) return false
+  const parts = absPath.split(path.sep).filter(Boolean)
+  let cur = path.parse(absPath).root
+  for (const part of parts) {
+    cur = path.join(cur, part)
+    try {
+      if (lstatSync(cur).isSymbolicLink()) return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+function resolvedPath(candidate: string): string | null {
+  try {
+    return realpathSync(candidate)
+  } catch {
+    const parts = candidate.split(path.sep).filter(Boolean)
+    let cur = path.parse(candidate).root
+    let lastReal: string | null = null
+    const rest: string[] = []
+    let missing = false
+    for (const part of parts) {
+      if (missing) {
+        rest.push(part)
+        continue
+      }
+      const next = path.join(cur, part)
+      try {
+        lstatSync(next)
+        cur = next
+        lastReal = realpathSync(next)
+      } catch {
+        missing = true
+        rest.push(part)
+      }
+    }
+    if (!lastReal) return null
+    return path.resolve(lastReal, ...rest)
+  }
+}
+
+/** realpath containment under the fixed drill root. Symlinks are refused. TMPDIR is ignored. */
+export function tempPathProblems(candidate: string): string[] {
+  if (!candidate.startsWith("/")) return [`not an isolated temp directory: ${candidate}`]
+  let root: string
+  try {
+    root = ensureDrillTempRoot()
+  } catch (err) {
+    return [(err as Error).message]
+  }
+  if (hasSymlinkComponent(candidate)) return [`symlink refused: ${candidate}`]
+  const resolved = resolvedPath(candidate)
+  if (!resolved) return [`not an isolated temp directory: ${candidate}`]
+  if (hasSymlinkComponent(resolved)) return [`symlink refused: ${candidate}`]
   const rel = path.relative(root, resolved)
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || resolved === root) {
+    return [`not an isolated temp directory: ${candidate}`]
+  }
+  return []
+}
+
+export function insideTempDir(dir: string): boolean {
+  return tempPathProblems(dir).length === 0
 }
 
 function cloudProblems(value: unknown): string[] {
@@ -42,12 +146,23 @@ function cloudProblems(value: unknown): string[] {
   return []
 }
 
+function postgresDatabaseProblems(database: string, pitr: boolean): string[] {
+  if (!database) return ["postgres target database is missing"]
+  if (databaseConninfo(database)) return ["database argument contains a conninfo or URI"]
+  const allowed = pitr ? [DRILL_PITR_DATABASE] : [DRILL_POSTGRES_DATABASE]
+  if (!explicitDrillName(database, allowed)) {
+    return [`postgres database ${database} is not an explicit drill target`]
+  }
+  return []
+}
+
 /**
  * Fail closed. A target is usable only when its kind is explicitly local, emulator, or temp
- * and every host, path, name, and endpoint agrees. An `isolated: true` flag is ignored.
+ * and every host, path, name, and endpoint is an explicit drill target. An `isolated: true` flag is ignored.
  * Managed-cloud restore (FA-F33-R3-001) is not a target this drill accepts.
+ * The second argument is ignored so a caller cannot point the check at TMPDIR.
  */
-export function isolationProblems(target: unknown, tmpRoot = os.tmpdir()): string[] {
+export function isolationProblems(target: unknown, _ignoredTmpRoot?: string): string[] {
   if (!target || typeof target !== "object") return ["restore target is missing (fail closed)"]
   const claim = target as Record<string, unknown>
   const problems: string[] = []
@@ -65,14 +180,25 @@ export function isolationProblems(target: unknown, tmpRoot = os.tmpdir()): strin
     if (kind === "emulator") problems.push("postgres target cannot use emulator kind")
     const host = typeof claim.host === "string" ? claim.host.trim() : ""
     const database = typeof claim.database === "string" ? claim.database.trim() : ""
+    const pitr = typeof claim.dataDir === "string"
     if (!host) problems.push("postgres target host is missing")
     else if (host.startsWith("/")) {
-      if (!insideTempDir(host, tmpRoot)) problems.push(`postgres socket directory is not an isolated temp directory: ${host}`)
+      for (const problem of tempPathProblems(host)) {
+        problems.push(
+          problem.startsWith("symlink") ? problem : `postgres socket directory is not an isolated temp directory: ${host}`
+        )
+      }
     } else if (!loopbackHost(host)) problems.push(`postgres host ${host} is not loopback`)
-    if (!database) problems.push("postgres target database is missing")
-    else if (productionLooking(database)) problems.push(`postgres database ${database} looks like production`)
-    if (typeof claim.dataDir === "string" && !insideTempDir(claim.dataDir, tmpRoot)) {
-      problems.push(`postgres data directory is not an isolated temp directory: ${claim.dataDir}`)
+    problems.push(...postgresDatabaseProblems(database, pitr))
+    if (pitr) {
+      const dataDir = claim.dataDir as string
+      for (const problem of tempPathProblems(dataDir)) {
+        problems.push(
+          problem.startsWith("symlink")
+            ? problem
+            : `postgres data directory is not an isolated temp directory: ${dataDir}`
+        )
+      }
     }
   }
 
@@ -81,32 +207,40 @@ export function isolationProblems(target: unknown, tmpRoot = os.tmpdir()): strin
     const host = typeof claim.host === "string" ? claim.host.trim() : ""
     if (!loopbackHost(host)) problems.push(`firestore host ${host || "(missing)"} is not loopback`)
     const projectId = typeof claim.projectId === "string" ? claim.projectId.trim() : ""
-    if (!EMULATOR_PROJECT.test(projectId) || productionLooking(projectId)) {
-      problems.push(`firestore project ${projectId || "(missing)"} is not an explicit emulator project`)
+    if (!explicitDrillName(projectId, DRILL_FIRESTORE_PROJECTS)) {
+      problems.push(`firestore project ${projectId || "(missing)"} is not an explicit drill target`)
     }
     const database = typeof claim.database === "string" ? claim.database : ""
-    if (database && productionLooking(database)) problems.push(`firestore database ${database} looks like production`)
-    if (typeof claim.importDir === "string" && !insideTempDir(claim.importDir, tmpRoot)) {
-      problems.push(`firestore import directory is not an isolated temp directory: ${claim.importDir}`)
+    if (database && !explicitDrillName(database, DRILL_FIRESTORE_PROJECTS)) {
+      problems.push(`firestore database ${database} is not an explicit drill target`)
+    }
+    if (typeof claim.importDir === "string") {
+      for (const problem of tempPathProblems(claim.importDir)) {
+        problems.push(
+          problem.startsWith("symlink")
+            ? problem
+            : `firestore import directory is not an isolated temp directory: ${claim.importDir}`
+        )
+      }
     }
   }
 
   if (engine === "objects") {
     if (kind === "emulator") problems.push("object target cannot use emulator kind")
     const endpoint = typeof claim.endpoint === "string" ? claim.endpoint.trim() : ""
-    const root = typeof claim.root === "string" ? claim.root.trim() : ""
-    if (!endpoint && !root) problems.push("object restore target is missing (explicit local or temp required)")
-    if (endpoint && !LOOPBACK_HTTP.test(endpoint)) problems.push(`object endpoint ${endpoint} is not an explicit local endpoint`)
-    if (root && !insideTempDir(root, tmpRoot)) problems.push(`object root ${root} is not an isolated temp directory`)
-    const bucket = typeof claim.bucket === "string" ? claim.bucket : ""
-    if (bucket && productionLooking(bucket)) problems.push(`object bucket ${bucket} looks like production`)
+    const bucket = typeof claim.bucket === "string" ? claim.bucket.trim() : ""
+    if (!endpoint) problems.push("object restore target is missing (explicit local or temp required)")
+    else if (!loopbackHttpEndpoint(endpoint)) problems.push(`object endpoint ${endpoint} is not an explicit local endpoint`)
+    if (!explicitDrillName(bucket, [DRILL_OBJECT_BUCKET])) {
+      problems.push(`object bucket ${bucket || "(missing)"} is not an explicit drill target`)
+    }
   }
 
   return problems
 }
 
-export function assertIsolatedRestoreTarget(target: unknown, tmpRoot = os.tmpdir()): void {
-  const problems = isolationProblems(target, tmpRoot)
+export function assertIsolatedRestoreTarget(target: unknown): void {
+  const problems = isolationProblems(target)
   if (problems.length) throw new RestoreTargetRefused(problems)
 }
 

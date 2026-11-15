@@ -1,14 +1,19 @@
 import { randomBytes } from "node:crypto"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
-import os from "node:os"
+import { writeFileSync, rmSync } from "node:fs"
 import path from "node:path"
+import { drillScratchDir } from "../drill/target"
 import { withManifestPsqlEnv } from "../postgres/psqlEnv"
 
 export type CommandResult = { code: number; stdout: string; stderr: string; stdoutBytes?: Buffer }
 
 export type RunCommandOptions = {
   env?: NodeJS.ProcessEnv
+  /**
+   * Use `env` as the complete child environment. The default merge keeps process.env keys the caller deleted,
+   * which reintroduces PGHOSTADDR and the other libpq redirects.
+   */
+  exactEnv?: boolean
   cwd?: string
   /** R19: argv prefix before client programs (e.g. docker compose exec … gosu postgres). */
   pgPrefix?: string[]
@@ -23,7 +28,9 @@ function prefixArgv(pgPrefix: string[] | undefined, argv: string[]): string[] {
 /** Run a subprocess; rejects when the executable cannot be started. */
 export async function runCommand(argv: string[], options: RunCommandOptions = {}): Promise<CommandResult> {
   const full = prefixArgv(options.pgPrefix, argv)
-  const env = { ...process.env, ...options.env }
+  const env: NodeJS.ProcessEnv = options.exactEnv
+    ? ({ ...options.env } as NodeJS.ProcessEnv)
+    : { ...process.env, ...options.env }
   return await new Promise((resolve, reject) => {
     const child = spawn(full[0], full.slice(1), { env, cwd: options.cwd })
     let stdout = ""
@@ -177,18 +184,25 @@ export class PsqlSession implements PsqlQueryable {
   constructor(
     private readonly pgPrefix: string[] | undefined,
     env: NodeJS.ProcessEnv,
-    private readonly database: string
+    private readonly database: string,
+    private readonly conninfo?: string,
+    private readonly exactEnv = false
   ) {
     this.env = withManifestPsqlEnv(env)
   }
 
+  private connectionArg(): string {
+    return this.conninfo ?? this.database
+  }
+
   async query(sql: string): Promise<string> {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-psql-"))
+    const dir = drillScratchDir("f33-psql-")
     const file = path.join(dir, "q.sql")
     writeFileSync(file, sql, "utf8")
     try {
-      const r = await runCommand(psqlArgv(this.database, ["-f", file]), {
+      const r = await runCommand(psqlArgv(this.connectionArg(), ["-f", file]), {
         env: this.env,
+        exactEnv: this.exactEnv,
         pgPrefix: this.pgPrefix,
       })
       if (r.code !== 0) throw new Error(r.stderr || r.stdout || `psql exited ${r.code}`)
@@ -199,8 +213,9 @@ export class PsqlSession implements PsqlQueryable {
   }
 
   async queryLines(sql: string): Promise<string[]> {
-    const r = await runCommand(psqlArgv(this.database, ["-t", "-A", "-c", sql]), {
+    const r = await runCommand(psqlArgv(this.connectionArg(), ["-t", "-A", "-c", sql]), {
       env: this.env,
+      exactEnv: this.exactEnv,
       pgPrefix: this.pgPrefix,
     })
     if (r.code !== 0) throw new Error(r.stderr || r.stdout || `psql exited ${r.code}`)
@@ -211,8 +226,9 @@ export class PsqlSession implements PsqlQueryable {
   }
 
   async queryScalar(sql: string): Promise<string> {
-    const r = await runCommand(psqlArgv(this.database, ["-t", "-A", "-c", sql]), {
+    const r = await runCommand(psqlArgv(this.connectionArg(), ["-t", "-A", "-c", sql]), {
       env: this.env,
+      exactEnv: this.exactEnv,
       pgPrefix: this.pgPrefix,
     })
     if (r.code !== 0) throw new Error(r.stderr || r.stdout || `psql exited ${r.code}`)

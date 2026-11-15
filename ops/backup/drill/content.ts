@@ -68,6 +68,9 @@ export function backupPayloadProblems(input: PayloadInput): string[] {
         ? (input.storeManifest as { tables?: unknown }).tables
         : undefined
     const problems = recordProblems(tables, (name) => `table ${name}: checksum missing`, "rows")
+    if (tables && typeof tables === "object" && !Array.isArray(tables) && Object.keys(tables as object).length === 0) {
+      problems.push("zero-unit restore is not success")
+    }
     if (artefactBytes(input.artefacts, "globals.sql") === undefined) problems.push("globals.sql: missing (partial)")
     const dump = artefactBytes(input.artefacts, "database.dump")
     if (dump === undefined) problems.push("database.dump: missing (partial)")

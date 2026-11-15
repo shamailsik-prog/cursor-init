@@ -4,7 +4,7 @@ import { pipeline } from "node:stream/promises"
 import { getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore, type Firestore } from "firebase-admin/firestore"
 import { acceptRestoreChild, backupPayloadProblems, type ContentUnit } from "../drill/content"
-import { firestoreEmulatorTarget, isolationProblems } from "../drill/target"
+import { drillScratchDir, firestoreEmulatorTarget, isolationProblems } from "../drill/target"
 import { BundleWriter, openBundleFile, verifyBundle } from "../lib/bundle"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { runCommand } from "../lib/exec"
@@ -99,7 +99,8 @@ export async function restoreFirestoreEmulator(opts: {
   await assertFirestoreEmulatorPortFree(opts.host, opts.port)
   const expected = verify.manifest.store
   await fsp.mkdir(opts.importDir, { recursive: true })
-  const exportTar = path.join(opts.importDir, ".export.tar.part")
+  const scratch = drillScratchDir("f33-fs-plain-")
+  const exportTar = path.join(scratch, "export.tar")
   const exportExpect = verify.manifest.artefacts.find((a) => a.name === "export.tar")
   try {
     await pipeline(
@@ -108,7 +109,7 @@ export async function restoreFirestoreEmulator(opts: {
     )
     const extract = await runCommand(["tar", "-xf", exportTar, "-C", opts.importDir])
     if (extract.code !== 0) return fail([extract.stderr || extract.stdout])
-    const manifestPath = path.join(opts.importDir, ".expected-manifest.json")
+    const manifestPath = path.join(scratch, "expected-manifest.json")
     await fsp.writeFile(manifestPath, JSON.stringify(expected), "utf8")
     const inner = `npx vite-node ops/backup/test/helpers/firestore-verify-import.ts ${JSON.stringify(manifestPath)}`
     const importRun = await runCommand(firestoreEmulatorImportArgv(opts.importDir, inner), {
@@ -123,8 +124,7 @@ export async function restoreFirestoreEmulator(opts: {
     if (!accepted.ok) return fail(accepted.problems, accepted.units)
     return { ok: true, differences: [], rtoMs: Date.now() - started, stop: () => {}, idempotent: false, content: accepted.units }
   } finally {
-    await fsp.rm(exportTar, { force: true })
-    await fsp.rm(path.join(opts.importDir, ".expected-manifest.json"), { force: true })
+    await fsp.rm(scratch, { recursive: true, force: true })
   }
 }
 

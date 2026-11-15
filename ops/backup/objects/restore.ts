@@ -1,7 +1,7 @@
 import { decryptDocumentObjectPayload } from "@/platform/documents/documentObjectStore"
 import type { SpineStore } from "@/platform/spine/store"
 import { isolationProblems } from "../drill/target"
-import type { VersionedObjectAccess, ObjectVersionInfo } from "./s3"
+import type { VersionedObjectAccess, ObjectVersionInfo, ResolvedObjectTarget } from "./s3"
 
 export type RestoreRow = { id: string; firmId: string; storagePath: string; contentHash: string; key: string }
 
@@ -44,6 +44,17 @@ export async function pickIntactVersion(
   return undefined
 }
 
+async function readWriterTarget(access: VersionedObjectAccess): Promise<ResolvedObjectTarget | null> {
+  if (typeof access.resolvedTarget !== "function") return null
+  try {
+    const reported = await access.resolvedTarget()
+    if (!reported || typeof reported.endpoint !== "string" || typeof reported.bucket !== "string") return null
+    return { endpoint: reported.endpoint.trim(), bucket: reported.bucket.trim() }
+  } catch {
+    return null
+  }
+}
+
 async function versionIntact(
   access: VersionedObjectAccess,
   row: RestoreRow,
@@ -67,15 +78,16 @@ export async function restoreObjects(opts: {
   check?: (row: RestoreRow, body: Buffer) => Promise<boolean>
   location?: ObjectRestoreLocation
 }): Promise<RestoreReport> {
-  const refused = opts.location
-    ? isolationProblems({
-        kind: opts.location.kind,
-        engine: "objects",
-        endpoint: opts.location.endpoint,
-        root: opts.location.root,
-        bucket: opts.location.bucket,
-      })
-    : ["object restore target is missing (explicit local or temp required)"]
+  const writer = await readWriterTarget(opts.target)
+  const refused = writer
+    ? isolationProblems({ kind: "local", engine: "objects", endpoint: writer.endpoint, bucket: writer.bucket })
+    : ["object writer did not report an endpoint and bucket"]
+  if (writer && opts.location?.endpoint && opts.location.endpoint !== writer.endpoint) {
+    refused.push("declared object location does not match the writer endpoint")
+  }
+  if (writer && opts.location?.bucket && opts.location.bucket !== writer.bucket) {
+    refused.push("declared object location does not match the writer bucket")
+  }
   if (refused.length) return { restored: [], unrecoverable: [], noop: false, refused }
 
   const restored: string[] = []

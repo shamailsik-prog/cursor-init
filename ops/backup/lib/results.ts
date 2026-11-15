@@ -51,6 +51,9 @@ export function recordDrillResult(result: DrillResult, env: NodeJS.ProcessEnv = 
     if (!units || units.some((unit) => !unitComplete(unit))) {
       throw new Error("passing drill report requires per-unit counts and checksums")
     }
+    if (units.length === 0) {
+      throw new Error("passing drill report refuses a zero-unit restore")
+    }
     const target = result.target
     if (!target || target.isolated !== true || !["local", "emulator", "temp"].includes(target.kind)) {
       throw new Error("passing drill report requires an isolated local, emulator, or temp target")
