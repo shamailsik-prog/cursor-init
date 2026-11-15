@@ -9,18 +9,51 @@ ALLOWED_PREFIXES = (
     "tests/",
 )
 SKIP_PARTS = {"node_modules", ".git", ".next", "_superseded", "corpus_service", ".eve"}
-# INSERT/UPDATE/DELETE/TRUNCATE of master_* or change_proposals, schema-qualified or quoted.
-REL = r'(?:(?:"?public"?\s*\.\s*)?"?(?:master_[a-z0-9_]+|change_proposals)"?)'
-PAT = re.compile(
+# A relation token is schema-qualified and/or quoted. The table name is the last identifier,
+# with quotes removed and case folded, so public."master_x" and PUBLIC.CHANGE_PROPOSALS match.
+_IDENT = r'(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)'
+_QUALIFIED = rf'(?:{_IDENT}\s*\.\s*)*{_IDENT}'
+_WRITE = re.compile(
+    rf"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?({_QUALIFIED})",
+    re.I,
+)
+_OTHER = re.compile(
     r"applyChange\s*\("
-    r"|INSERT\s+INTO\s+(?:master_|templates\b|change_proposals\b)"
-    r"|UPDATE\s+(?:ONLY\s+)?" + REL + r"\b"
-    r"|DELETE\s+FROM\s+(?:ONLY\s+)?" + REL + r"\b"
-    r"|TRUNCATE\s+(?:TABLE\s+)?(?:ONLY\s+)?" + REL + r"\b"
     r"|collection\(\s*['\"]master_versions['\"]"
     r"|match\s+/master_versions/",
     re.I,
 )
+
+
+def relation_name(token: str) -> str:
+    parts = re.findall(r'"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*)', token)
+    idents = [quoted or bare for quoted, bare in parts]
+    return idents[-1].lower() if idents else ""
+
+
+def _protected(verb: str, token: str) -> bool:
+    name = relation_name(token)
+    if name == "templates":
+        return verb.lower().startswith("insert")
+    return name == "change_proposals" or name.startswith("master_")
+
+
+def matches(text: str):
+    other = _OTHER.search(text)
+    if other:
+        return other
+    for hit in _WRITE.finditer(text):
+        if _protected(hit.group(1), hit.group(2)):
+            return hit
+    return None
+
+
+class _Pattern:
+    def search(self, text: str):
+        return matches(text)
+
+
+PAT = _Pattern()
 
 # firestore.rules is a deny-write policy, not a writer.
 SKIP_FILES = {"firestore.rules"}

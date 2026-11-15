@@ -228,6 +228,19 @@ suite("G3 master grants on local Postgres", () => {
     await expect(
       admin.query("TRUNCATE change_proposals, master_versions, master_knowledge"),
     ).rejects.toThrow(/delete or truncate refused/)
+    const pendingEdit = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "learner-style",
+        classification: "confidential",
+        changeClass: "substantive",
+        partition: "mutable",
+        entryKey: "clause.pending",
+        payload: { wording: "original request" },
+        proposedBy: "learner-1",
+      },
+      store,
+    )
     const asP6 = new pg.Client({ connectionString: urlAs(writerUser, writerPassword) })
     await asP6.connect()
     try {
@@ -235,6 +248,14 @@ suite("G3 master grants on local Postgres", () => {
       await asP6.query("SET LOCAL ROLE p6_service")
       await expect(
         asP6.query(`UPDATE change_proposals SET payload = '{"wording":"mutated"}'::jsonb WHERE status = 'applied'`),
+      ).rejects.toThrow(/frozen/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(`UPDATE change_proposals SET payload = '{"wording":"swapped"}'::jsonb WHERE id = $1 AND status = 'pending'`, [
+          pendingEdit.id,
+        ]),
       ).rejects.toThrow(/frozen/)
       await asP6.query("ROLLBACK")
       await asP6.query("BEGIN")

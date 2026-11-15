@@ -3,9 +3,12 @@
 -- Idempotent. No login password is created here. Only p6_service may write the master tables.
 -- The writer trigger refuses every other current_user, including the table owner, because
 -- ownership bypasses a privilege grant;
--- DELETE and TRUNCATE are refused for every role, including the table owner and p6_service.
+-- DELETE and TRUNCATE are refused for every role, including the table owner and p6_service,
+-- while these triggers stay enabled. The table owner can still disable or drop these triggers.
+-- That bypass is a residual, not a privilege.
 -- master_versions is append-only: no update, no row removal, and no truncate.
--- An approved or applied proposal payload is frozen. A classification downgrade is refused
+-- A proposal payload is frozen from the moment it is stored. Approval is bound to payload_hash.
+-- A classification downgrade is refused
 -- unless the transaction set p6.declassify to partner. Learners stay off: this file grants them nothing.
 
 DO $$ BEGIN
@@ -32,6 +35,7 @@ CREATE TABLE IF NOT EXISTS public.change_proposals (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   requested_class TEXT CHECK (requested_class IS NULL OR requested_class IN ('cosmetic','substantive')),
   declassify BOOLEAN NOT NULL DEFAULT false,
+  payload_hash TEXT NOT NULL DEFAULT '',
   CONSTRAINT substantive_partner_approval CHECK (
     (status NOT IN ('approved','applied') OR change_class <> 'substantive')
     OR (decided_kind = 'partner' AND decided_role = 'partner')
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS public.master_versions (
 
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS requested_class TEXT;
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS declassify BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS payload_hash TEXT NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS master_versions_one_proposal
   ON public.master_versions (proposal_id)
@@ -136,7 +141,10 @@ SET search_path = pg_catalog, public
 AS $fn$
 BEGIN
   IF NEW.payload IS DISTINCT FROM OLD.payload
-     OR NEW.entry_key IS DISTINCT FROM OLD.entry_key
+     OR NEW.payload_hash IS DISTINCT FROM OLD.payload_hash THEN
+    RAISE EXCEPTION 'approved proposal payload is frozen' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.entry_key IS DISTINCT FROM OLD.entry_key
      OR NEW.classification IS DISTINCT FROM OLD.classification
      OR NEW.change_class IS DISTINCT FROM OLD.change_class
      OR NEW.partition IS DISTINCT FROM OLD.partition
@@ -180,11 +188,25 @@ BEGIN
 END;
 $fn$;
 
+CREATE OR REPLACE FUNCTION public.p6_bind_payload_hash() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $fn$
+BEGIN
+  IF NEW.payload_hash IS NULL OR NEW.payload_hash = '' THEN
+    NEW.payload_hash := md5(NEW.payload::text);
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+
 REVOKE ALL ON FUNCTION public.p6_refuse_removal() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.p6_bind_payload_hash() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_freeze_approved_payload() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_classification_rank(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.p6_refuse_removal() TO p6_service;
+GRANT EXECUTE ON FUNCTION public.p6_bind_payload_hash() TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_freeze_approved_payload() TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_classification_rank(text) TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_refuse_class_downgrade() TO p6_service;
@@ -218,6 +240,11 @@ DROP TRIGGER IF EXISTS master_knowledge_no_truncate ON public.master_knowledge;
 CREATE TRIGGER master_knowledge_no_truncate
   BEFORE TRUNCATE ON public.master_knowledge
   FOR EACH STATEMENT EXECUTE FUNCTION public.p6_refuse_removal();
+
+DROP TRIGGER IF EXISTS change_proposals_bind_hash ON public.change_proposals;
+CREATE TRIGGER change_proposals_bind_hash
+  BEFORE INSERT ON public.change_proposals
+  FOR EACH ROW EXECUTE FUNCTION public.p6_bind_payload_hash();
 
 DROP TRIGGER IF EXISTS change_proposals_freeze_payload ON public.change_proposals;
 CREATE TRIGGER change_proposals_freeze_payload

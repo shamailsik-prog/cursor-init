@@ -3,7 +3,7 @@
  * The in-memory adapter is the test and local proof. createPgMasterStore talks to Postgres
  * as the p6_service role (009_p6_master.sql). Neither adapter reports a commit it did not finish.
  */
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import pg from "pg"
 import { isClassification, type Classification } from "@/platform/p1/types"
 
@@ -57,6 +57,8 @@ export type PersistedProposal = {
   decidedKind: "partner" | "system" | null
   decidedRole: string | null
   declassify: boolean
+  /** sha256 of the canonical payload. Set when the proposal is stored. Approval is bound to it. */
+  payloadHash: string
 }
 
 export type CommitVersionInput = {
@@ -112,6 +114,65 @@ export interface MasterSession {
 export const P6_ROLE = "p6_service"
 export const EMPTY_SNAPSHOT: MasterSnapshot = { entries: {} }
 
+const POLLUTING_KEYS = new Set(["__proto__", "constructor", "prototype"])
+
+function ownDataValue(value: object, key: string): unknown {
+  const desc = Object.getOwnPropertyDescriptor(value, key)
+  if (!desc || !("value" in desc)) return undefined
+  return desc.value
+}
+
+function canonicalValue(value: unknown, foldSpace: boolean): unknown {
+  if (typeof value === "string") return foldSpace ? value.replace(/\s+/g, " ").trim() : value
+  if (typeof value === "number" || typeof value === "boolean" || value == null) return value ?? null
+  if (Array.isArray(value)) return value.map((item) => canonicalValue(item, foldSpace))
+  if (typeof value === "object") {
+    const out = Object.create(null) as Record<string, unknown>
+    const keys = Object.getOwnPropertyNames(value)
+      .filter((key) => {
+        const desc = Object.getOwnPropertyDescriptor(value, key)
+        return !!desc && "value" in desc && desc.enumerable !== false
+      })
+      .sort()
+    for (const key of keys) {
+      Object.defineProperty(out, key, {
+        value: canonicalValue(ownDataValue(value, key), foldSpace),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
+    }
+    return out
+  }
+  return null
+}
+
+/** True when a prototype-polluting key is an own property at any depth. */
+export function payloadHasPollutingKey(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false
+  if (Array.isArray(value)) return value.some(payloadHasPollutingKey)
+  for (const key of Object.getOwnPropertyNames(value)) {
+    if (POLLUTING_KEYS.has(key)) return true
+    if (payloadHasPollutingKey(ownDataValue(value, key))) return true
+  }
+  return false
+}
+
+/** Key-sorted JSON. Polluting keys stay in the text. Whitespace is collapsed when foldSpace is set. */
+export function canonicalPayload(value: unknown, foldSpace = false): string {
+  return JSON.stringify(canonicalValue(value, foldSpace))
+}
+
+export function payloadDigest(value: unknown): string {
+  return createHash("sha256").update(canonicalPayload(value)).digest("hex")
+}
+
+function assertPayloadFrozen(current: PersistedProposal, next: PersistedProposal): void {
+  if (canonicalPayload(current.payload) !== canonicalPayload(next.payload) || current.payloadHash !== next.payloadHash) {
+    throw new Error("approved proposal payload is frozen")
+  }
+}
+
 type MemoryState = {
   proposals: Map<string, PersistedProposal>
   versions: VersionRow[]
@@ -166,7 +227,11 @@ export class InMemoryMasterStore implements MasterStore {
     this.assertRole()
     const current = this.state.proposals.get(row.id)
     if (!current || current.status !== fromStatus) return false
-    this.state.proposals.set(row.id, structuredClone(row))
+    assertPayloadFrozen(current, row)
+    const next = structuredClone(row)
+    next.payload = structuredClone(current.payload)
+    next.payloadHash = current.payloadHash
+    this.state.proposals.set(row.id, next)
     return true
   }
 
@@ -183,6 +248,7 @@ export class InMemoryMasterStore implements MasterStore {
   async insertProposal(row: PersistedProposal): Promise<PersistedProposal> {
     this.assertRole()
     const saved = structuredClone(row)
+    saved.payloadHash = payloadDigest(saved.payload)
     this.state.proposals.set(saved.id, saved)
     return structuredClone(saved)
   }
@@ -194,7 +260,13 @@ export class InMemoryMasterStore implements MasterStore {
 
   async saveProposal(row: PersistedProposal): Promise<void> {
     this.assertRole()
-    this.state.proposals.set(row.id, structuredClone(row))
+    const current = this.state.proposals.get(row.id)
+    if (!current) throw new Error("proposal not found")
+    assertPayloadFrozen(current, row)
+    const next = structuredClone(row)
+    next.payload = structuredClone(current.payload)
+    next.payloadHash = current.payloadHash
+    this.state.proposals.set(row.id, next)
   }
 
   async listVersions(firmId: string): Promise<VersionRow[]> {
@@ -285,6 +357,7 @@ type ProposalQueryRow = {
   decided_role: string | null
   requested_class: PersistedProposal["requestedClass"]
   declassify: boolean
+  payload_hash: string
 }
 
 function versionFromRow(row: VersionQueryRow): VersionRow {
@@ -320,11 +393,12 @@ function proposalFromRow(row: ProposalQueryRow): PersistedProposal {
     decidedRole: row.decided_role,
     requestedClass: row.requested_class,
     declassify: row.declassify,
+    payloadHash: row.payload_hash,
   }
 }
 
 const PROPOSAL_COLUMNS = `id, firm_id, source_module, classification, change_class, partition, entry_key,
-  payload, proposed_by, status, decided_by, decided_kind, decided_role, requested_class, declassify`
+  payload, proposed_by, status, decided_by, decided_kind, decided_role, requested_class, declassify, payload_hash`
 
 /**
  * Postgres adapter. Every call sets the session role to p6_service for that transaction.
@@ -360,8 +434,9 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         await client.query(
           `INSERT INTO change_proposals
              (id, firm_id, source_module, classification, change_class, partition, entry_key,
-              payload, proposed_by, status, decided_by, decided_kind, decided_role, requested_class, declassify)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15)`,
+              payload, proposed_by, status, decided_by, decided_kind, decided_role, requested_class, declassify,
+              payload_hash)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             row.id,
             row.firmId,
@@ -370,7 +445,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
             row.changeClass,
             row.partition,
             row.entryKey,
-            JSON.stringify(row.payload),
+            JSON.stringify(canonicalValue(row.payload, false)),
             row.proposedBy,
             row.status,
             row.decidedBy,
@@ -378,10 +453,11 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
             row.decidedRole,
             row.requestedClass,
             row.declassify,
+            payloadDigest(row.payload),
           ],
         )
       })
-      return row
+      return { ...row, payloadHash: payloadDigest(row.payload) }
     },
 
     async getProposal(id) {
@@ -397,6 +473,13 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
 
     async saveProposal(row) {
       const updated = await withRole(async (client) => {
+        const found = await client.query<ProposalQueryRow>(
+          `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+          [row.id],
+        )
+        const current = found.rows[0]
+        if (!current) return 0
+        assertPayloadFrozen(proposalFromRow(current), row)
         const result = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5
@@ -509,6 +592,13 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         return found.rows[0]?.version_id ?? null
       },
       async casProposal(row, fromStatus) {
+        const found = await client.query<ProposalQueryRow>(
+          `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+          [row.id],
+        )
+        const current = found.rows[0]
+        if (!current || current.status !== fromStatus) return false
+        assertPayloadFrozen(proposalFromRow(current), row)
         const updated = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5,

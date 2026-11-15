@@ -49,6 +49,19 @@ export function masterDdlFindings(sql: string): string[] {
   }
   if (!/master_versions_one_proposal/.test(sql)) findings.push("one proposal")
   if (!/approved proposal payload is frozen/.test(sql)) findings.push("frozen payload")
+  const blocks = sql.split(/CREATE TRIGGER/i).slice(1)
+  const writerCovers = (table: string, verb: string) =>
+    blocks.some(
+      (block) =>
+        new RegExp(`\\b${verb}\\b`, "i").test(block) &&
+        new RegExp(`ON\\s+public\\.${table}\\b`, "i").test(block) &&
+        /p6_refuse_non_p6_writer/.test(block),
+    )
+  for (const table of ["change_proposals", "master_knowledge"]) {
+    if (!writerCovers(table, "INSERT")) findings.push(`${table} insert writer`)
+    if (!writerCovers(table, "UPDATE")) findings.push(`${table} update writer`)
+  }
+  if (!writerCovers("master_versions", "INSERT")) findings.push("master_versions insert writer")
   return findings
 }
 
@@ -358,16 +371,107 @@ describe("G3 master owned (Layer 18 §10)", () => {
     const sql = readFileSync("postgres/ddl/009_p6_master.sql", "utf8")
     expect(sql).toMatch(/approved proposal payload is frozen/)
     expect(sql).toMatch(/BEFORE UPDATE ON public\.change_proposals[\s\S]*p6_freeze_approved_payload/)
+    expect(sql).toMatch(/payload_hash/)
+  })
+
+  it("FA-Q07-R2-DATA-009: a pending edit cannot be what the partner approves", async () => {
+    const store = p6Store()
+    const original = { wording: "The receiving party shall keep the information secret." }
+    const pending = await proposeChange(substantive("clause.freeze"), store)
+    const row = await store.getProposal(pending.id)
+    expect(row?.payloadHash).toBeTruthy()
+    await expect(
+      store.saveProposal({ ...row!, payload: { wording: "swapped after the request" } }),
+    ).rejects.toThrow(/frozen/)
+    expect((await store.getProposal(pending.id))?.payload).toEqual(original)
+    await approveProposal(pending.id, PARTNER, store)
+    const applied = await applyChange(pending.id, store)
+    expect(applied.masterWritten).toBe(true)
+    expect(applied.diff.after.entries["clause.freeze"]?.body).toEqual(original)
+    expect((await store.getProposal(pending.id))?.payloadHash).toBe(row?.payloadHash)
+  })
+
+  it("FA-Q07-R2-001: __proto__, constructor, and prototype do not auto-apply as cosmetic", async () => {
+    const store = p6Store()
+    const seed = await proposeChange(
+      { ...substantive(), entryKey: "clause.proto", payload: { note: "b  a" } },
+      store,
+    )
+    await approveProposal(seed.id, PARTNER, store)
+    await applyChange(seed.id, store)
+    const attacks = [
+      JSON.parse('{"note":"b a","__proto__":{"smuggled":true}}'),
+      JSON.parse('{"note":"b a","constructor":{"smuggled":true}}'),
+      JSON.parse('{"note":"b a","prototype":{"smuggled":true}}'),
+    ]
+    for (const payload of attacks) {
+      const pending = await proposeChange(
+        {
+          ...cosmetic(),
+          entryKey: "clause.proto",
+          classification: "confidential",
+          payload,
+          changeClass: "cosmetic",
+        },
+        store,
+      )
+      expect(pending.changeClass).toBe("substantive")
+      await expect(applyChange(pending.id, store)).rejects.toThrow(/partner/)
+    }
+    const nestedSeed = await proposeChange(
+      { ...substantive(), entryKey: "clause.nestedproto", payload: { note: "kept", box: {} } },
+      store,
+    )
+    await approveProposal(nestedSeed.id, PARTNER, store)
+    await applyChange(nestedSeed.id, store)
+    const nested = await proposeChange(
+      {
+        ...cosmetic(),
+        entryKey: "clause.nestedproto",
+        classification: "confidential",
+        payload: JSON.parse('{"note":"kept","box":{"__proto__":{"smuggled":true}}}'),
+        changeClass: "cosmetic",
+      },
+      store,
+    )
+    expect(nested.changeClass).toBe("substantive")
+    await expect(applyChange(nested.id, store)).rejects.toThrow(/partner/)
+    const ordered = await proposeChange(
+      { ...substantive(), entryKey: "clause.keyorder", payload: { b: "one", a: "two" } },
+      store,
+    )
+    await approveProposal(ordered.id, PARTNER, store)
+    await applyChange(ordered.id, store)
+    const reordered = await proposeChange(
+      {
+        ...cosmetic(),
+        entryKey: "clause.keyorder",
+        classification: "confidential",
+        payload: { a: "two", b: "one" },
+        changeClass: "cosmetic",
+      },
+      store,
+    )
+    expect(reordered.changeClass).toBe("cosmetic")
+    const applied = await applyChange(reordered.id, store)
+    expect(applied.masterWritten).toBe(true)
   })
 
   it("FA-Q07-TEST-007: a quoted grant is caught, and dropping the owner triggers is a finding", () => {
+    const sql = readFileSync("postgres/ddl/009_p6_master.sql", "utf8")
     expect(masterDdlFindings(`GRANT INSERT ON TABLE master_knowledge TO "evil_role";`)).toContain("evil_role")
-    const stripped = readFileSync("postgres/ddl/009_p6_master.sql", "utf8").replace(
+    const removalStripped = sql.replace(
       /CREATE TRIGGER[\s\S]*?EXECUTE FUNCTION public\.p6_refuse_removal\(\);/g,
       "",
     )
-    expect(masterDdlFindings(stripped).length).toBeGreaterThan(0)
-    expect(masterDdlFindings(readFileSync("postgres/ddl/009_p6_master.sql", "utf8"))).toEqual([])
+    expect(masterDdlFindings(removalStripped).length).toBeGreaterThan(0)
+    const writerStripped = sql.replace(
+      /CREATE TRIGGER[\s\S]*?EXECUTE FUNCTION public\.p6_refuse_non_p6_writer\(\);/g,
+      "",
+    )
+    expect(masterDdlFindings(writerStripped).length).toBeGreaterThan(0)
+    expect(masterDdlFindings(sql)).toEqual([])
+    expect(sql).toMatch(/disable or drop/i)
   })
 
   it("proposeChange still refuses an unknown classification before any write", async () => {

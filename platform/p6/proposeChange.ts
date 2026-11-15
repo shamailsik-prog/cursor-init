@@ -11,6 +11,9 @@
 import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import {
+  canonicalPayload,
+  payloadDigest,
+  payloadHasPollutingKey,
   type CommitVersionResult,
   type MasterDiff,
   type MasterSnapshot,
@@ -57,32 +60,25 @@ export type RolledBackMaster = {
 
 const IMMUTABLE_KEYS = new Set(["citation_protocol", "verification_protocol"])
 
-function formatKey(value: unknown): string {
-  return JSON.stringify(normalizeFormat(value))
-}
-
-function normalizeFormat(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/\s+/g, " ").trim()
-  if (Array.isArray(value)) return value.map(normalizeFormat)
-  if (value && typeof value === "object") {
-    const source = value as Record<string, unknown>
-    const out: Record<string, unknown> = {}
-    for (const key of Object.keys(source).sort()) out[key] = normalizeFormat(source[key])
-    return out
-  }
-  return value ?? null
-}
-
-/** Cosmetic only when the diff is whitespace or object-key order. Anything else is substantive. A caller cannot lower that. */
+/** Cosmetic only when the diff is whitespace or object-key order. Anything else is substantive. A caller cannot lower that. A payload that carries __proto__, constructor, or prototype at any depth is substantive. */
 function effectiveClass(
   requested: "cosmetic" | "substantive" | null | undefined,
   before: unknown,
   after: unknown,
 ): "cosmetic" | "substantive" {
-  const formatOnly = before !== undefined && formatKey(before) === formatKey(after)
+  if (payloadHasPollutingKey(after) || (before !== undefined && payloadHasPollutingKey(before))) {
+    return "substantive"
+  }
+  const formatOnly = before !== undefined && canonicalPayload(before, true) === canonicalPayload(after, true)
   const derived = formatOnly ? "cosmetic" : "substantive"
   if (requested === "substantive") return "substantive"
   return derived
+}
+
+function assertApprovalBound(row: PersistedProposal): void {
+  if (payloadDigest(row.payload) !== row.payloadHash) {
+    throw new Error("approval is bound to a different payload hash")
+  }
 }
 
 function higherClass(left: Classification, right: Classification): Classification {
@@ -148,6 +144,7 @@ async function persistProposal(proposal: ChangeProposal, store: MasterStore): Pr
     decidedKind: null,
     decidedRole: null,
     declassify: false,
+    payloadHash: payloadDigest(proposal.payload),
   }
   return store.insertProposal(row)
 }
@@ -186,6 +183,7 @@ export async function approveProposal(
     refuseNonPartner(actor)
     const row = await tx.getProposal(proposalId)
     if (!row) throw new Error("proposal not found")
+    assertApprovalBound(row)
     if (actor.actorId === row.proposedBy) throw new Error("approver must differ from proposer")
     if (row.changeClass !== "substantive") throw new Error("cosmetic proposals are not partner-approved")
     if (row.status !== "pending") throw new Error("proposal is not pending")
@@ -239,6 +237,7 @@ export async function applyChange(proposalId: string, store: MasterStore): Promi
   const outcome = await store.runExclusive(async (tx) => {
     const row = await tx.getProposal(proposalId)
     if (!row) throw new Error("proposal not found")
+    assertApprovalBound(row)
     assertWritableTarget(row.partition, row.entryKey)
     if (row.status === "applied") throw new Error("proposal is already applied")
     const base = await tx.lockFirm(row.firmId)

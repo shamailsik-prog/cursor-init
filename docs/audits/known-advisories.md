@@ -55,7 +55,7 @@ Remaining, below the gate's threshold: `npm:root` has 2 moderate (`uuid` < 11.1.
 nested under `gaxios` 6, GHSA-w5hq-g745-h8pq, buffer-bounds check only when a
 caller passes `buf`; and `gaxios` through it). `npm:functions` has 8 moderate,
 all via `firebase-admin` 13 -> 14 (a major bump, upgrade backlog).
-`pip:corpus_service` has the two rows below (hash-pinned; not bumped in this change).
+`pip:corpus_service` has none.
 
 | scope | advisory | package | severity | reason | owner | review by |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -76,5 +76,3 @@ all via `firebase-admin` 13 -> 14 (a major bump, upgrade backlog).
 | npm:functions:dev | GHSA-5gmw-xhrv-c9v3 | tinypool | critical | `vitest@3` in functions devDependencies; vitest 5 upgrade backlog | Shamail | 2026-11-15 |
 | npm:functions:dev | GHSA-85c8-ppgw-ccpr | tinypool | critical | Same tinypool 1.x chain as GHSA-5gmw-xhrv-c9v3 | Shamail | 2026-11-15 |
 | npm:functions:dev | GHSA-mrhx-c7xc-m3w5 | zod | high | Nested zod under `firebase` dev tooling in functions tests; not production zod | Shamail | 2026-11-15 |
-| pip:corpus_service | CVE-2026-126360 | opentelemetry-api | unknown | Hash-pinned 1.45.1 in corpus_service/requirements.txt. 1.45.2 is a patch, but the pin is a hashed corpus deploy input and is not bumped in this P6 change. Traceparent ReDoS is on a carrier that keeps an oversized or newline-bearing value, including a JSON body. | Shamail | 2026-12-15 |
-| pip:corpus_service | CVE-2026-126190 | soupsieve | unknown | Hash-pinned 3.0.4 via beautifulsoup4. The fix is soupsieve 4.0, a major bump, so it is not applied here. Descendants-combinator cost is on untrusted HTML; the corpus selectors run on fetched judgments, not on a request body. | Shamail | 2026-12-15 |
