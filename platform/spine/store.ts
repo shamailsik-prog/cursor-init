@@ -48,7 +48,7 @@ export type MatterMember = {
  * `stage` and `createdBy` are always present on a row read from Firestore (the shared validator fills them) and
  * optional only for rows built in memory.
  */
-export type Matter = {
+export interface Matter {
   id: string
   firmId: string
   clientId: string
@@ -119,13 +119,13 @@ export type EntityLink = {
   score: number
 }
 
-export type FollowUp = {
+export interface FollowUp {
   id: string
   firmId: string
   matterId: string
   courtId: string
   raw: string
-  kind: "case_number_reject" | "l4_10_silence"
+  kind: "case_number_reject" | "l4_10_silence" | "limitation_alert"
   status?: "open" | "resolved"
   resolvedBy?: string | null
   resolvedAt?: number | null
@@ -418,7 +418,7 @@ export type TenancyExternalSessionIdentityBridgeRow = {
   updatedAt: number
 }
 
-export type StatuteSectionVersion = {
+export interface StatuteSectionVersion {
   sectionId: string
   versionNo: number
   effectiveFrom: string
