@@ -155,6 +155,9 @@ describe("nextCourtOpsAckRow: the writer's decision inside its transaction (R6)"
 describe("memory repository workflowOpsActivity (R6, R11)", () => {
   it("records an acknowledgement at its id, and refuses (unchanged) over another firm's row", async () => {
     const store = new SpineStore()
+    // Firm-level workflow item: the acknowledgement stays matterId null (FA-D4-001-FU1-001). A matter-bound item is stamped.
+    store.documentWorkflow.set(X, { documentId: X, firmId: F, matterId: null, status: "review_required", reviewerId: null, updatedAt: 1 })
+    store.documentWorkflow.set("doc_2", { documentId: "doc_2", firmId: F, matterId: null, status: "review_required", reviewerId: null, updatedAt: 1 })
     const repos = createMemoryRepositories(store)
     const row = ackRow(F, "workflow", X)
     expect(await repos.workflowOpsActivity.recordCourtOpsAcknowledgement(F, row)).toEqual(row)
