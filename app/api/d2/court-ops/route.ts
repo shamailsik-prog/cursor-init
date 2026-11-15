@@ -41,6 +41,7 @@ import {
   courtOpsAckItemIdProblem,
   isCourtOpsAckQueueType,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import { CourtOpsMatterUnboundError } from "@/platform/persistence/courtOpsMatterBinding"
 import {
   courtOpsResolveActivityId,
   FOLLOW_UP_NOT_FOUND_BODY,
@@ -318,6 +319,13 @@ async function handlePost(request: Request) {
           console.error("[court-ops] acknowledgement refused", { ackId: err.ackId, reason: err.reason })
           return NextResponse.json(
             { error: "court ops acknowledgement row refused", code: err.code, reason: err.reason },
+            { status: 409 }
+          )
+        }
+        if (err instanceof CourtOpsMatterUnboundError) {
+          console.error("[court-ops] acknowledgement unbound", { ackId: row.id, reason: err.reason })
+          return NextResponse.json(
+            { error: "court ops acknowledgement is not bound to its matter", code: err.code, reason: err.reason },
             { status: 409 }
           )
         }

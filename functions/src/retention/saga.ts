@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, Timestamp, type DocumentData, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore"
 import vaultConfig from "@/infra/backup/document-vault.json"
 import { adminDb } from "../admin"
+import { reachCourtOpsDeletion } from "./courtOpsDeletionReach"
 import { REGISTRY_SCOPE, bumpRegistryVersion } from "../d1/registryVersion"
 import { isSafeDocId } from "../p5/common"
 import type { JobSpec } from "../p2/enqueue"
@@ -297,6 +298,9 @@ async function prepareSteps(ctx: JobContext<PreparePayload>, req: Request): Prom
       tx.set(col.doc(`${requestId}_${store.name}`), { ...base, count: ids.length, parts: parts.length, idsSha256: sha256(ids), status: "pending_operator" })
     })
   }
+
+  // FA-D4-001-FU1-001: bind or report null-matter court-ops rows before purge jobs can delete their parents.
+  await reachCourtOpsDeletion({ db: adminDb(), firmId, deletingMatterId: req.matterId, requestId })
 
   const groups = purgeGroups(req.plan, req.expected, typeof req.groupSize === "number" ? req.groupSize : DEFAULT_GROUP_SIZE)
   if (req.plan[OUTPUTS_KEY] === "purge") {
