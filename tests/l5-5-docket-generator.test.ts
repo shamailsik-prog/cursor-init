@@ -17,7 +17,7 @@ import {
 } from "@/layers/L5_5_DocketGenerator/flag"
 import { resolveFilingSet } from "@/layers/L5_5_DocketGenerator/ambiguity"
 import { contentBox, pagePoints, planDocket, WRAP_SLACK, wrapParagraph } from "@/layers/L5_5_DocketGenerator/layout"
-import { tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
+import { TINOS_REGULAR_WIDTHS, TINOS_UNITS_PER_EM, tnrWidth } from "@/layers/L5_5_DocketGenerator/metrics"
 import { generateDocket } from "@/layers/L5_5_DocketGenerator/service"
 import { FIXED_DOCKET_TIMESTAMP } from "@/layers/L5_5_DocketGenerator/pdf"
 import type { DocketFilingSet } from "@/layers/L5_5_DocketGenerator/types"
@@ -622,14 +622,6 @@ describe("L5.5 ambiguity queue", () => {
       ).toBe(true)
     }
 
-    const unread = await generateDocket({
-      ...petition,
-      draft: { body: `${petition.draft.body} Annexure the record.` },
-    })
-    expect(unread.ok).toBe(false)
-    expect(unread.pdf).toBeNull()
-    expect(unread.docx).toBeNull()
-    expect(unread.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
   })
 
   it("reads enclosure expressions, including an annexure citation on an enclosure filing", async () => {
@@ -718,6 +710,216 @@ describe("L5.5 ambiguity queue", () => {
           "Form D-1.",
         ].join(" "),
       },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it("refuses bare P, D, and R marks on every docket", async () => {
+    enableFlag()
+    const labeled = ambiguous.annexures.map((annexure, index) => ({
+      ...annexure,
+      assignedLabel: index === 0 ? "P/1" : "P/2",
+    }))
+    const foreign = [
+      { phrase: "R/1", canonical: "R/1" },
+      { phrase: "D/1", canonical: "D/1" },
+    ]
+    for (const { phrase, canonical } of foreign) {
+      const result = await generateDocket({
+        ...ambiguous,
+        draft: { body: `The plaintiff relies on P/1 and then P/2. ${phrase}.` },
+        annexures: labeled,
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)), phrase).toBe(true)
+    }
+
+    const letter = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} P/3.` },
+    })
+    expect(letter.ok).toBe(false)
+    expect(letter.pdf).toBeNull()
+    expect(letter.queue.some((entry) => entry.detail.includes("P/3"))).toBe(true)
+
+    const enclosure = await generateDocket({
+      ...enclosures,
+      draft: { body: `${enclosures.draft.body} P/9.` },
+    })
+    expect(enclosure.ok).toBe(false)
+    expect(enclosure.pdf).toBeNull()
+    expect(enclosure.queue.some((entry) => entry.detail.includes("P/9"))).toBe(true)
+  })
+
+  it("refuses a mark when an address word does not directly precede it", async () => {
+    enableFlag()
+    const labeled = ambiguous.annexures.map((annexure, index) => ({
+      ...annexure,
+      assignedLabel: index === 0 ? "P/1" : "P/2",
+    }))
+    for (const phrase of ["Main Street. P/3", "same block. P/3", "the form, P/3"]) {
+      const result = await generateDocket({
+        ...ambiguous,
+        draft: { body: `The plaintiff relies on P/1 and then P/2. ${phrase}.` },
+        annexures: labeled,
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("P/3")), phrase).toBe(true)
+    }
+  })
+
+  it("refuses a connector that names another label", async () => {
+    enableFlag()
+    const letterPhrases = ["C or D", "A/D", "A and/or D", "A, B and also D", "A as well as D", "A + D", "A; D"]
+    for (const phrase of letterPhrases) {
+      const result = await generateDocket({
+        ...petition,
+        draft: { body: `${petition.draft.body} Annexures ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("D")), phrase).toBe(true)
+    }
+    for (const phrase of ["Enclosure 2 or 9", "Enclosures 1/9"]) {
+      const result = await generateDocket({
+        ...enclosures,
+        draft: { body: `${enclosures.draft.body} ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("9")), phrase).toBe(true)
+    }
+  })
+
+  it("refuses abbreviated and glued citation keywords", async () => {
+    enableFlag()
+    const phrases = [
+      { phrase: "Exh.P/3", canonical: "P/3" },
+      { phrase: "Exh. D", canonical: "D" },
+      { phrase: "Annexe D", canonical: "D" },
+      { phrase: "Anx. D", canonical: "D" },
+      { phrase: "Annx-D", canonical: "D" },
+      { phrase: "Ann. D", canonical: "D" },
+      { phrase: "Enc. 9", canonical: "9" },
+      { phrase: "AnnexureD", canonical: "D" },
+    ]
+    for (const { phrase, canonical } of phrases) {
+      const result = await generateDocket({
+        ...petition,
+        draft: { body: `${petition.draft.body} ${phrase}.` },
+      })
+      expect(result.ok, phrase).toBe(false)
+      expect(result.pdf, phrase).toBeNull()
+      expect(result.docx, phrase).toBeNull()
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes(canonical)), phrase).toBe(true)
+    }
+  })
+
+  it("treats a soft hyphen as a separator before a label", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} Annexure\u00ADD.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("D"))).toBe(true)
+  })
+
+  it("does not refuse a keyword unless a label follows it", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: {
+        body: [
+          petition.draft.body,
+          "The hearing is ex parte and also ex-parte and ex officio.",
+          "Counsel will mark the margin. Mr. Mark appeared. The student got high marks.",
+          "We annex herewith the affidavit, the annexure to this petition, as per annexure, and each annexure is signed.",
+          "The enclosure of the letter and the exhibit was proved.",
+        ].join(" "),
+      },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+
+    const pages = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. See p. 3 of the judgment." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(pages.ok).toBe(true)
+    expect(pages.pdf).not.toBeNull()
+    expect(pages.queue).toEqual([])
+
+    const caseNumber = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The defendant relies on D/1 and then D/2. C.P. No. D-1234/2025. D-12 Khayaban." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "D/1" : "D/2",
+      })),
+    })
+    expect(caseNumber.ok).toBe(true)
+    expect(caseNumber.pdf).not.toBeNull()
+    expect(caseNumber.queue).toEqual([])
+  })
+
+  it("refuses the sub-annexure label Annexure A-1", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} Annexure A-1.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("A-1"))).toBe(true)
+  })
+
+  it("folds NFKC compatibility characters before reading a label", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} Annexure \uFF24.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("D"))).toBe(true)
+  })
+
+  it("fails closed when a citation range exceeds the series", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...enclosures,
+      draft: { body: `${enclosures.draft.body} Enclosure 1 to 100.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+    expect(result.queue.some((entry) => entry.detail.includes("body cites 100"))).toBe(false)
+  })
+
+  it("reads a bare letter range as the annexures it spans", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: "The petitioner relies on A-C." },
     })
     expect(result.ok).toBe(true)
     expect(result.pdf).not.toBeNull()
@@ -870,6 +1072,31 @@ describe("L5.5 Times New Roman line measure", () => {
     expect("pages" in plan).toBe(true)
     if (!("pages" in plan)) return
     assertLinesFit(plan.pages.flatMap((page) => page.lines), contentBox(plan.pageSize).width)
+  })
+
+  it("keeps packed lines inside 97 percent of the Tinos measure", () => {
+    const measure = contentBox(pagePoints("legal")).width
+    const packed = Array.from({ length: 400 }, () => "the").join(" ")
+    const widthOf = (line: string) => {
+      let units = 0
+      for (const character of line) {
+        const code = character.codePointAt(0) ?? 0
+        units += code >= 32 && code <= 126 ? (TINOS_REGULAR_WIDTHS[code - 32] ?? TINOS_UNITS_PER_EM) : TINOS_UNITS_PER_EM
+      }
+      return (units / TINOS_UNITS_PER_EM) * 12
+    }
+    expect(TINOS_REGULAR_WIDTHS[0]).toBe(512)
+    expect(TINOS_REGULAR_WIDTHS["t".charCodeAt(0) - 32]).toBe(569)
+    const lines = wrapParagraph(packed, 12, measure, false).filter((line) => line.includes(" "))
+    expect(lines.length).toBeGreaterThan(5)
+    let widest = 0
+    for (const line of lines) {
+      const width = widthOf(line)
+      widest = Math.max(widest, width)
+      expect(width).toBeLessThanOrEqual(measure + 1e-6)
+      expect(width).toBeLessThanOrEqual(measure * 0.97 + 0.05)
+    }
+    expect(widest).toBeGreaterThan(measure * 0.9)
   })
 
   it("fits each line of twelve seeded prose petitions under Tinos widths", async () => {
