@@ -215,6 +215,10 @@ function assertNoApprovalStamp(row: PersistedProposal): void {
   }
 }
 
+function assertProposedByUnchanged(current: PersistedProposal, row: PersistedProposal): void {
+  if (row.proposedBy !== current.proposedBy) throw new Error("proposedBy is immutable")
+}
+
 function assertCasShape(current: PersistedProposal, next: PersistedProposal): void {
   if (current.status === "pending" && next.status === "applied") {
     if (
@@ -399,6 +403,7 @@ export class InMemoryMasterStore implements MasterStore {
     const current = this.state.proposals.get(row.id)
     if (!current) throw new Error("proposal not found")
     if (current.status !== "pending") throw new Error("save refuses a status other than pending")
+    assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
@@ -621,7 +626,9 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         const current = found.rows[0]
         if (!current) return 0
         if (current.status !== "pending") throw new Error("save refuses a status other than pending")
-        assertPayloadFrozen(proposalFromRow(current), row)
+        const stored = proposalFromRow(current)
+        assertProposedByUnchanged(stored, row)
+        assertPayloadFrozen(stored, row)
         const result = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5

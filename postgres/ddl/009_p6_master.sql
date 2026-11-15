@@ -9,8 +9,10 @@
 -- master_versions is append-only: no update, no row removal, and no truncate.
 -- A proposal payload is frozen from the moment it is stored. Approval is bound to payload_hash.
 -- A new proposal is pending. The only way to approved is pending -> approved with a partner
--- attestation and an actor key that differs from the proposer. CAS may only apply:
--- pending -> applied for a cosmetic system decision, and approved -> applied with the decision unchanged.
+-- attestation and an actor key that differs from the proposer. The edge shape is mirrored in the DDL.
+-- The database trusts change_class within the p6_service boundary.
+-- CAS may only apply: pending -> applied for a cosmetic system decision, and approved -> applied
+-- with the decision unchanged.
 -- A classification downgrade is refused
 -- unless the transaction set p6.declassify to partner. Learners stay off: this file grants them nothing.
 
@@ -70,18 +72,6 @@ CREATE TABLE IF NOT EXISTS public.master_versions (
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS requested_class TEXT;
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS declassify BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS payload_hash TEXT NOT NULL DEFAULT '';
-
-ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval;
-ALTER TABLE public.change_proposals ADD CONSTRAINT substantive_partner_approval CHECK (
-  status NOT IN ('approved','applied')
-  OR change_class <> 'substantive'
-  OR (
-    decided_kind = 'partner'
-    AND decided_role = 'partner'
-    AND decided_by IS NOT NULL
-    AND btrim(decided_by) <> ''
-  )
-);
 
 CREATE UNIQUE INDEX IF NOT EXISTS master_versions_one_proposal
   ON public.master_versions (proposal_id)
@@ -227,7 +217,8 @@ REVOKE ALL ON FUNCTION public.p6_freeze_approved_payload() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_classification_rank(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
 
--- Actor key: NFKC, drop default-ignorables, trim, lower-case, fold ß to ss.
+-- Actor key: NFKC, drop default-ignorables, ECMAScript trim, lower-case, fold ß to ss.
+-- Trim is every Unicode White_Space and LineTerminator, the same set as String.prototype.trim.
 CREATE OR REPLACE FUNCTION public.p6_actor_key(value text) RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
@@ -239,6 +230,8 @@ DECLARE
   i integer := 1;
   ch text;
   cp integer;
+  ws text := chr(9) || chr(10) || chr(11) || chr(12) || chr(13) || chr(32) || chr(160) || chr(5760);
+  n integer := 8192;
 BEGIN
   WHILE i <= char_length(folded) LOOP
     ch := substr(folded, i, 1);
@@ -264,7 +257,16 @@ BEGIN
     END IF;
     i := i + 1;
   END LOOP;
-  RETURN replace(lower(replace(btrim(out), chr(7838), chr(223))), chr(223), 'ss');
+  WHILE n <= 8202 LOOP
+    ws := ws || chr(n);
+    n := n + 1;
+  END LOOP;
+  ws := ws || chr(8232) || chr(8233) || chr(8239) || chr(8287) || chr(12288);
+  RETURN replace(
+    lower(replace(regexp_replace(out, '^[' || ws || ']+|[' || ws || ']+$', '', 'g'), chr(7838), chr(223))),
+    chr(223),
+    'ss'
+  );
 END;
 $fn$;
 
@@ -334,7 +336,7 @@ BEGIN
        OR NEW.decided_kind IS DISTINCT FROM 'partner'
        OR NEW.decided_role IS DISTINCT FROM 'partner'
        OR NEW.decided_by IS NULL
-       OR btrim(NEW.decided_by) = '' THEN
+       OR public.p6_actor_key(NEW.decided_by) = '' THEN
       RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
     END IF;
     proposer := public.p6_actor_key(NEW.proposed_by);
@@ -431,10 +433,46 @@ CREATE TRIGGER change_proposals_freeze_payload
   BEFORE UPDATE ON public.change_proposals
   FOR EACH ROW EXECUTE FUNCTION public.p6_freeze_approved_payload();
 
-DROP TRIGGER IF EXISTS change_proposals_status_transition ON public.change_proposals;
-CREATE TRIGGER change_proposals_status_transition
-  BEFORE INSERT OR UPDATE ON public.change_proposals
-  FOR EACH ROW EXECUTE FUNCTION public.p6_enforce_proposal_transition();
+-- One statement. psql autocommit must not commit a DROP of the old check and then fail the ADD.
+-- A legacy substantive approval with no distinct partner fails here, before either constraint changes,
+-- and this statement then rolls back, so the old check stays and the status trigger is not created.
+DO $swap$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.change_proposals
+    WHERE status IN ('approved', 'applied')
+      AND change_class = 'substantive'
+      AND (
+        decided_kind IS DISTINCT FROM 'partner'
+        OR decided_role IS DISTINCT FROM 'partner'
+        OR public.p6_actor_key(decided_by) = ''
+        OR public.p6_actor_key(decided_by) = public.p6_actor_key(proposed_by)
+      )
+  ) THEN
+    RAISE EXCEPTION 'refusing to replace substantive_partner_approval: a substantive approved row has no distinct partner decision'
+      USING ERRCODE = '23514';
+  END IF;
+  EXECUTE $sql$ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval_next$sql$;
+  EXECUTE $sql$ALTER TABLE public.change_proposals ADD CONSTRAINT substantive_partner_approval_next CHECK (
+    status NOT IN ('approved','applied')
+    OR change_class <> 'substantive'
+    OR (
+      decided_kind = 'partner'
+      AND decided_role = 'partner'
+      AND decided_by IS NOT NULL
+      AND public.p6_actor_key(decided_by) <> ''
+      AND public.p6_actor_key(decided_by) IS DISTINCT FROM public.p6_actor_key(proposed_by)
+    )
+  ) NOT VALID$sql$;
+  EXECUTE $sql$ALTER TABLE public.change_proposals VALIDATE CONSTRAINT substantive_partner_approval_next$sql$;
+  EXECUTE $sql$ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval$sql$;
+  EXECUTE $sql$ALTER TABLE public.change_proposals RENAME CONSTRAINT substantive_partner_approval_next TO substantive_partner_approval$sql$;
+  EXECUTE $sql$DROP TRIGGER IF EXISTS change_proposals_status_transition ON public.change_proposals$sql$;
+  EXECUTE $sql$CREATE TRIGGER change_proposals_status_transition
+    BEFORE INSERT OR UPDATE ON public.change_proposals
+    FOR EACH ROW EXECUTE FUNCTION public.p6_enforce_proposal_transition();$sql$;
+END
+$swap$;
 
 DROP TRIGGER IF EXISTS master_knowledge_no_downgrade ON public.master_knowledge;
 CREATE TRIGGER master_knowledge_no_downgrade

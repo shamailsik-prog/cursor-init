@@ -68,6 +68,14 @@ export function masterDdlFindings(sql: string): string[] {
       if (!new RegExp(`\\b${verb}\\b`, "i").test(statement)) findings.push(`${writer.name} ${verb}`)
     }
   }
+  const transition = statements.find((item) => /CREATE\s+TRIGGER\s+change_proposals_status_transition\b/i.test(item))
+  const transitionOk =
+    transition !== undefined &&
+    /\bON\s+public\.change_proposals\b/i.test(transition) &&
+    /p6_enforce_proposal_transition\s*\(/.test(transition) &&
+    /\bINSERT\b/i.test(transition) &&
+    /\bUPDATE\b/i.test(transition)
+  if (!transitionOk) findings.push("change_proposals_status_transition")
   return findings
 }
 
@@ -421,6 +429,14 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
+  it("FA-Q07-R2-006: proposedBy is immutable", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.proposer"), store)
+    await expect(store.saveProposal({ ...pending, proposedBy: "other-actor" })).rejects.toThrow(/proposedBy is immutable/)
+    expect((await store.getProposal(pending.id))?.proposedBy).toBe("learner-1")
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
   it("FA-Q07-R2-006: saveProposal cannot stamp partner approval fields", async () => {
     const store = p6Store()
     const pending = await proposeChange(substantive("clause.stamp"), store)
@@ -712,6 +728,8 @@ describe("G3 master owned (Layer 18 §10)", () => {
     const bothFindings = masterDdlFindings(bothGone)
     expect(bothFindings).toContain("master_versions_p6_writer")
     expect(bothFindings).toContain("master_knowledge_p6_writer")
+    const transitionGone = dropNamed(sql, "change_proposals_status_transition")
+    expect(masterDdlFindings(transitionGone)).toContain("change_proposals_status_transition")
   })
 
   it("proposeChange still refuses an unknown classification before any write", async () => {
