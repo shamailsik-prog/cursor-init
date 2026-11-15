@@ -2048,6 +2048,89 @@ describe("L5.5 fail-closed reference allowlist", () => {
     expect(result.queue.some((entry) => entry.detail.includes("different order"))).toBe(false)
   })
 
+  it("REF-R9-001 refuses a label-shaped follower after a bare annexure head", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "See Annexures, viz., D.",
+      "See Annexures, viz. D.",
+      "See Annexures viz., D.",
+      "See Annexures; viz., D.",
+      "See Annexure É.",
+      "See Annexure ABCD.",
+      "See Annexure NO.",
+      "See Annexure IN.",
+      "See Annexure BY.",
+      "See Annexure ON.",
+      "See Annex-\n\nure D.",
+      "See Annex-\rure D.",
+      "See Annex-\u2028ure D.",
+      "See Annex-\u2029ure D.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, JSON.stringify(sentence)).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), JSON.stringify(sentence)).toBe(true)
+    }
+  })
+
+  it("ORDER-R9-001 enforces order when the heading ends at the line break", async () => {
+    const letterBodies = [
+      "LIST OF ANNEXURES\nThe petitioner relies on Annexure C, then Annexure B and Annexure A.",
+      "Index of documents\nAnnexure C is the receipt; Annexure B is the deed; Annexure A is the plaint.",
+    ]
+    for (const body of letterBodies) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body } })
+      expect(result.ok, body).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), body).toBe(true)
+    }
+    const third = exhibits.annexures[1]!
+    const withThird = {
+      ...exhibits,
+      annexures: [
+        ...exhibits.annexures,
+        {
+          ...third,
+          assignedLabel: "P-3",
+          metadata: { ...third.metadata, artifactId: "ex-3", label: "Map", sourceRef: "doc-map" },
+        },
+      ],
+    }
+    const markBodies = [
+      "EXHIBITS:\nThe witness proved P-1, P-3 and then P-2.",
+      "Exhibit: P-1 is the photograph. Exhibit: P-3 is the map. Exhibit: P-2 is the letter.",
+    ]
+    for (const body of markBodies) {
+      enableFlag()
+      const result = await generateDocket({ ...withThird, draft: { body } })
+      expect(result.ok, body).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), body).toBe(true)
+    }
+  })
+
+  it("OVER-R9-001 generates a keyword colon split from its labels by a blank line", async () => {
+    await expectGeneration(
+      {
+        ...petition,
+        draft: {
+          body: "The petitioner relies on Annexures A, B and C. ANNEXURES:\n\nA - Plaint\n\nB - Notice\n\nC - Vakalatnama",
+        },
+      },
+      "blank line after ANNEXURES",
+    )
+  })
+
+  it("LOW refuses bare labels after relies on", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: "The petitioner relies on Annexures A, B and C. The petitioner relies on D and E." },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.queue.some((entry) => entry.detail.includes("D"))).toBe(true)
+  })
+
   it("keeps the three-dot refusal after NFKC and does not keep a U+2026 branch", () => {
     const source = readFileSync(
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../layers/L5_5_DocketGenerator/references.ts"),
