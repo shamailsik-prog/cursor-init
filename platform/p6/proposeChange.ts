@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { isClassification, type Classification } from "@/platform/p1/types"
+import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import {
   type CommitVersionResult,
   type MasterDiff,
@@ -38,6 +38,8 @@ export type ApprovalActor = {
   actorId: string
   kind: "partner" | "autonomous" | "model" | "system"
   role: "partner" | "associate" | "clerk" | "intern" | "system"
+  /** Partner-only. Without it a lower classification is refused. */
+  declassify?: boolean
 }
 
 export type AppliedChange = {
@@ -54,11 +56,53 @@ export type RolledBackMaster = {
 }
 
 const IMMUTABLE_KEYS = new Set(["citation_protocol", "verification_protocol"])
-const SUBSTANTIVE_PAYLOAD_KEYS = new Set(["wording", "taxonomyRule", "citationProtocol", "clauseText"])
 
-function payloadHasSubstantiveContent(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") return false
-  return Object.keys(payload).some((key) => SUBSTANTIVE_PAYLOAD_KEYS.has(key))
+function formatKey(value: unknown): string {
+  return JSON.stringify(normalizeFormat(value))
+}
+
+function normalizeFormat(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim()
+  if (Array.isArray(value)) return value.map(normalizeFormat)
+  if (value && typeof value === "object") {
+    const source = value as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(source).sort()) out[key] = normalizeFormat(source[key])
+    return out
+  }
+  return value ?? null
+}
+
+/** Cosmetic only when the diff is whitespace or object-key order. Anything else is substantive. A caller cannot lower that. */
+function effectiveClass(
+  requested: "cosmetic" | "substantive" | null | undefined,
+  before: unknown,
+  after: unknown,
+): "cosmetic" | "substantive" {
+  const formatOnly = before !== undefined && formatKey(before) === formatKey(after)
+  const derived = formatOnly ? "cosmetic" : "substantive"
+  if (requested === "substantive") return "substantive"
+  return derived
+}
+
+function higherClass(left: Classification, right: Classification): Classification {
+  return classificationRank(left) >= classificationRank(right) ? left : right
+}
+
+function snapshotClass(snapshot: MasterSnapshot, fallback: Classification): Classification {
+  let best = fallback
+  for (const entry of Object.values(snapshot.entries)) {
+    if (!isClassification(entry.classification)) continue
+    best = higherClass(best, entry.classification)
+  }
+  return best
+}
+
+function assertNoDowngrade(existing: string | undefined, proposed: Classification, declassify: boolean): void {
+  if (!isClassification(existing)) return
+  if (classificationRank(proposed) < classificationRank(existing) && !declassify) {
+    throw new Error("classification downgrade requires partner declassify")
+  }
 }
 
 function assertWritableTarget(partition: string, entryKey: string): void {
@@ -78,23 +122,23 @@ function refuseNonPartner(actor: ApprovalActor): void {
 
 async function persistProposal(proposal: ChangeProposal, store: MasterStore): Promise<PersistedProposal> {
   if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
-  const changeClass = proposal.changeClass ?? "substantive"
   const partition = proposal.partition ?? "mutable"
   const entryKey = proposal.entryKey?.trim() ?? ""
   if (entryKey === "") throw new Error("master proposal omitted entry key")
   assertWritableTarget(partition, entryKey)
-  if (changeClass === "cosmetic" && payloadHasSubstantiveContent(proposal.payload)) {
-    throw new Error("cosmetic proposal carries substantive content")
-  }
   if (proposal.firmId.trim() === "" || proposal.proposedBy.trim() === "" || proposal.sourceModule.trim() === "") {
     throw new Error("master proposal omitted firm, source or author")
   }
+  const before = await store.currentSnapshot(proposal.firmId)
+  const requested = proposal.changeClass ?? null
+  const changeClass = effectiveClass(requested, before.entries[entryKey]?.body, proposal.payload)
   const row: PersistedProposal = {
     id: randomUUID(),
     firmId: proposal.firmId,
     sourceModule: proposal.sourceModule,
     classification: proposal.classification,
     changeClass,
+    requestedClass: requested,
     partition,
     entryKey,
     payload: proposal.payload,
@@ -103,6 +147,7 @@ async function persistProposal(proposal: ChangeProposal, store: MasterStore): Pr
     decidedBy: null,
     decidedKind: null,
     decidedRole: null,
+    declassify: false,
   }
   return store.insertProposal(row)
 }
@@ -137,20 +182,25 @@ export async function approveProposal(
   store: MasterStore,
 ): Promise<PersistedProposal> {
   if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
-  refuseNonPartner(actor)
-  const row = await store.getProposal(proposalId)
-  if (!row) throw new Error("proposal not found")
-  if (row.changeClass !== "substantive") throw new Error("cosmetic proposals are not partner-approved")
-  if (row.status !== "pending") throw new Error("proposal is not pending")
-  const next: PersistedProposal = {
-    ...row,
-    status: "approved",
-    decidedBy: actor.actorId,
-    decidedKind: "partner",
-    decidedRole: "partner",
-  }
-  await store.saveProposal(next)
-  return next
+  return store.runExclusive(async (tx) => {
+    refuseNonPartner(actor)
+    const row = await tx.getProposal(proposalId)
+    if (!row) throw new Error("proposal not found")
+    if (actor.actorId === row.proposedBy) throw new Error("approver must differ from proposer")
+    if (row.changeClass !== "substantive") throw new Error("cosmetic proposals are not partner-approved")
+    if (row.status !== "pending") throw new Error("proposal is not pending")
+    const next: PersistedProposal = {
+      ...row,
+      status: "approved",
+      decidedBy: actor.actorId,
+      decidedKind: "partner",
+      decidedRole: "partner",
+      declassify: actor.declassify === true,
+    }
+    const saved = await tx.casProposal(next, "pending")
+    if (!saved) throw new Error("proposal is not pending")
+    return next
+  })
 }
 
 function nextSnapshot(before: MasterSnapshot, row: PersistedProposal): MasterSnapshot {
@@ -186,49 +236,72 @@ async function finishCommit(
  */
 export async function applyChange(proposalId: string, store: MasterStore): Promise<AppliedChange> {
   if (store.role !== "p6_service") throw new Error("non-P6 writer refused")
-  const row = await store.getProposal(proposalId)
-  if (!row) throw new Error("proposal not found")
-  assertWritableTarget(row.partition, row.entryKey)
-  if (row.status === "applied") throw new Error("proposal is already applied")
-  let authorId: string
-  let authorKind: "partner" | "system"
-  let decidedBy: string | null
-  let decidedKind: "partner" | "system"
-  let decidedRole: string
-  if (row.changeClass === "substantive") {
-    if (row.status !== "approved" || row.decidedKind !== "partner" || row.decidedRole !== "partner" || !row.decidedBy) {
-      throw new Error("substantive proposal requires partner approval")
+  const outcome = await store.runExclusive(async (tx) => {
+    const row = await tx.getProposal(proposalId)
+    if (!row) throw new Error("proposal not found")
+    assertWritableTarget(row.partition, row.entryKey)
+    if (row.status === "applied") throw new Error("proposal is already applied")
+    const base = await tx.lockFirm(row.firmId)
+    const before = await tx.currentSnapshot(row.firmId)
+    const existing = before.entries[row.entryKey]
+    const changeClass = effectiveClass(row.requestedClass, existing?.body, row.payload)
+    assertNoDowngrade(existing?.classification, row.classification, row.declassify)
+    let authorId: string
+    let authorKind: "partner" | "system"
+    let decidedBy: string | null
+    let decidedKind: "partner" | "system"
+    let decidedRole: string
+    let fromStatus: PersistedProposal["status"]
+    if (changeClass === "substantive") {
+      if (row.status !== "approved" || row.decidedKind !== "partner" || row.decidedRole !== "partner" || !row.decidedBy) {
+        throw new Error("substantive proposal requires partner approval")
+      }
+      authorId = row.decidedBy
+      authorKind = "partner"
+      decidedBy = row.decidedBy
+      decidedKind = "partner"
+      decidedRole = "partner"
+      fromStatus = "approved"
+    } else {
+      if (row.status !== "pending") throw new Error("cosmetic proposal is not pending")
+      authorId = "p6"
+      authorKind = "system"
+      decidedBy = "p6"
+      decidedKind = "system"
+      decidedRole = "system"
+      fromStatus = "pending"
     }
-    authorId = row.decidedBy
-    authorKind = "partner"
-    decidedBy = row.decidedBy
-    decidedKind = "partner"
-    decidedRole = "partner"
-  } else {
-    if (row.status !== "pending") throw new Error("cosmetic proposal is not pending")
-    authorId = "p6"
-    authorKind = "system"
-    decidedBy = "p6"
-    decidedKind = "system"
-    decidedRole = "system"
-  }
-  const before = await store.currentSnapshot(row.firmId)
-  const after = nextSnapshot(before, row)
-  const diff: MasterDiff = { key: row.entryKey, partition: "mutable", before, after }
-  const outcome = await store.commitVersion({
-    firmId: row.firmId,
-    proposalId: row.id,
-    action: "apply",
-    diff,
-    snapshot: after,
-    authorId,
-    authorKind,
-    restoredFromVersionId: null,
-    classification: row.classification,
-    proposal: { ...row, status: "applied", decidedBy, decidedKind, decidedRole },
+    const after = nextSnapshot(before, row)
+    const diff: MasterDiff = { key: row.entryKey, partition: "mutable", before, after }
+    const next: PersistedProposal = {
+      ...row,
+      status: "applied",
+      changeClass,
+      decidedBy,
+      decidedKind,
+      decidedRole,
+    }
+    const saved = await tx.casProposal(next, fromStatus)
+    if (!saved) throw new Error("proposal status changed")
+    await tx.allowDeclassify(row.declassify)
+    const committed = await tx.commitVersion({
+      firmId: row.firmId,
+      proposalId: row.id,
+      action: "apply",
+      diff,
+      snapshot: after,
+      authorId,
+      authorKind,
+      restoredFromVersionId: null,
+      classification: snapshotClass(after, row.classification),
+      proposal: next,
+      expectedBaseVersionId: base,
+    })
+    if (!committed.committed) throw new Error("master write did not commit")
+    return committed
   })
-  const written = await finishCommit(outcome, store, row.id)
-  return { masterWritten: true, proposalId: row.id, versionId: written.versionId, diff: written.diff }
+  const written = await finishCommit(outcome, store, proposalId)
+  return { masterWritten: true, proposalId, versionId: written.versionId, diff: written.diff }
 }
 
 /** Partner-only. Writes a new version whose snapshot is the chosen prior version. */
@@ -240,21 +313,30 @@ export async function rollbackMaster(
   refuseNonPartner(input.actor)
   const target = await store.getVersion(input.toVersionId)
   if (!target || target.firmId !== input.firmId) throw new Error("version not found")
-  const before = await store.currentSnapshot(input.firmId)
-  const after = target.snapshot
-  const diff: MasterDiff = { key: "*", partition: "mutable", before, after }
-  const classification = Object.values(after.entries)[0]?.classification ?? "internal"
-  const outcome = await store.commitVersion({
-    firmId: input.firmId,
-    proposalId: null,
-    action: "rollback",
-    diff,
-    snapshot: after,
-    authorId: input.actor.actorId,
-    authorKind: "partner",
-    restoredFromVersionId: target.id,
-    classification,
-    proposal: null,
+  const outcome = await store.runExclusive(async (tx) => {
+    const base = await tx.lockFirm(input.firmId)
+    const before = await tx.currentSnapshot(input.firmId)
+    const current = await tx.currentClassification(input.firmId)
+    const after = target.snapshot
+    const targetClass = snapshotClass(after, "internal")
+    const classification = input.actor.declassify === true ? targetClass : higherClass(current, targetClass)
+    const diff: MasterDiff = { key: "*", partition: "mutable", before, after }
+    await tx.allowDeclassify(input.actor.declassify === true)
+    const committed = await tx.commitVersion({
+      firmId: input.firmId,
+      proposalId: null,
+      action: "rollback",
+      diff,
+      snapshot: after,
+      authorId: input.actor.actorId,
+      authorKind: "partner",
+      restoredFromVersionId: target.id,
+      classification,
+      proposal: null,
+      expectedBaseVersionId: base,
+    })
+    if (!committed.committed) throw new Error("master write did not commit")
+    return committed
   })
   const written = await finishCommit(outcome, store, null)
   return { masterWritten: true, versionId: written.versionId, diff: written.diff }

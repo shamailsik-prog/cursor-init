@@ -9,6 +9,7 @@
 #   non-P6 writer — a store opened as any other role is refused
 #   learners — LEARNERS_ENABLED stays false, and a run is refused until G-3 has passed
 # The master-write guard is the same check as G-0 [11]: a learner write outside P6 fails.
+# ci_gates/test_check_master_writes.py (FA-Q07-GATE-005) requires INSERT, UPDATE, DELETE and TRUNCATE.
 # Postgres exercise of 009, when SIKANDER_POSTGRES_URL is set, is tests/p6.master.pg.test.ts
 # (npm run test:postgres-ddl). That is still not a staging proof.
 set -euo pipefail
@@ -18,5 +19,6 @@ cd "$ROOT"
 
 echo "=== Gate G-3: master owned (Layer 18 §10) ==="
 npx vitest run tests/p6.g3.test.ts
+python3 ci_gates/test_check_master_writes.py
 python3 ci_gates/check_master_writes.py
 echo "Gate G-3: PASS"

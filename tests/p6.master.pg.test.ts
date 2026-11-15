@@ -162,5 +162,89 @@ suite("G3 master grants on local Postgres", () => {
     await expect(
       admin.query("UPDATE master_versions SET author_id = 'forged' WHERE firm_id = 'firmA'"),
     ).rejects.toThrow(/append-only/)
+
+    const parallel = new pg.Pool({ connectionString: urlAs(writerUser, writerPassword), max: 8 })
+    try {
+      const raced = createPgMasterStore(parallel)
+      const partner = { actorId: "partner_b", kind: "partner" as const, role: "partner" as const }
+      const keys = ["clause.a", "clause.b", "clause.c", "clause.d"]
+      const ids: string[] = []
+      for (const key of keys) {
+        const pending = await proposeChange(
+          {
+            firmId: "firmA",
+            sourceModule: "learner-style",
+            classification: "confidential",
+            changeClass: "substantive",
+            partition: "mutable",
+            entryKey: key,
+            payload: { wording: key },
+            proposedBy: "learner-1",
+          },
+          raced,
+        )
+        await approveProposal(pending.id, partner, raced)
+        ids.push(pending.id)
+      }
+      const applied = await Promise.all(ids.map((id) => applyChange(id, raced)))
+      expect(applied.every((row) => row.masterWritten)).toBe(true)
+      const head = await admin.query<{ snapshot: { entries: Record<string, { body: unknown }> } }>(
+        `SELECT snapshot FROM master_knowledge WHERE firm_id = 'firmA'`,
+      )
+      for (const key of keys) expect(head.rows[0]?.snapshot.entries[key]?.body).toEqual({ wording: key })
+
+      const same = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "learner-style",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.same",
+          payload: { wording: "once" },
+          proposedBy: "learner-1",
+        },
+        raced,
+      )
+      await approveProposal(same.id, partner, raced)
+      const twice = await Promise.allSettled([applyChange(same.id, raced), applyChange(same.id, raced), applyChange(same.id, raced)])
+      expect(twice.filter((row) => row.status === "fulfilled")).toHaveLength(1)
+      const versions = await admin.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM master_versions WHERE proposal_id = $1`,
+        [same.id],
+      )
+      expect(versions.rows[0]?.n).toBe(1)
+    } finally {
+      await parallel.end()
+    }
+
+    for (const table of ["change_proposals", "master_versions", "master_knowledge"]) {
+      await expect(admin.query(`DELETE FROM ${table}`)).rejects.toThrow(/delete or truncate refused|append-only/)
+    }
+    // A lone TRUNCATE of a referenced table fails the foreign-key check before any trigger.
+    // Listing the referencing tables lets the statement trigger refuse the command.
+    await expect(admin.query("TRUNCATE master_knowledge")).rejects.toThrow(/delete or truncate refused/)
+    await expect(admin.query("TRUNCATE master_versions, master_knowledge")).rejects.toThrow(/delete or truncate refused/)
+    await expect(
+      admin.query("TRUNCATE change_proposals, master_versions, master_knowledge"),
+    ).rejects.toThrow(/delete or truncate refused/)
+    const asP6 = new pg.Client({ connectionString: urlAs(writerUser, writerPassword) })
+    await asP6.connect()
+    try {
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(`UPDATE change_proposals SET payload = '{"wording":"mutated"}'::jsonb WHERE status = 'applied'`),
+      ).rejects.toThrow(/frozen/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(`UPDATE master_knowledge SET classification = 'public' WHERE firm_id = 'firmA'`),
+      ).rejects.toThrow(/declassify/)
+      await asP6.query("ROLLBACK")
+    } finally {
+      await asP6.end()
+    }
   }, 60_000)
 })

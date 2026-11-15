@@ -6,8 +6,7 @@ INSERT INTO feature_flags VALUES
  ('L17_8A_ENABLED','Auto-Clerk ambiguity queue',true,'L17_8'),('L17_8B_ENABLED','Case-number follow-up',true,'L17_8'),('L17_10_ENABLED','Corpus contract',true,'L17_10'),('L17_11_ENABLED','Authority integrity',true,'L17_11'),
  ('L9_2_BILLING','Subscription invoicing (GATED)',false,'L9_2'),('WA_31_CUT','Deferred v6 WhatsApp commands beyond the 8-command grammar',false,'D2_1'),('L18_TEMPLATE_EXAMPLE','Amendment-layer template',false,'L18_X'),
  ('LEGACY_GOVERNANCE_CHAINS','Frozen out-of-spec ops-reporting and filing-transport chains (Erratum E-24)',false,'E_24'),
- ('LEGACY_D1_NEXT_WRITES','Legacy Next.js D1 check-free matter create and conflict_check (Erratum E-40)',false,'E_40'),
- ('LEARNERS_ENABLED','Learning components stay off until Gate G-3 passes',false,'L17_5')
+ ('LEGACY_D1_NEXT_WRITES','Legacy Next.js D1 check-free matter create and conflict_check (Erratum E-40)',false,'E_40')
  ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS firm_feature_overrides (firm_id TEXT NOT NULL, flag TEXT REFERENCES feature_flags(flag), enabled BOOLEAN NOT NULL, rollout_percent SMALLINT DEFAULT 100 CHECK (rollout_percent BETWEEN 0 AND 100), updated_by TEXT, updated_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (firm_id, flag));
 CREATE TABLE IF NOT EXISTS firm_decisions_register (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), firm_id TEXT NOT NULL, decision_key TEXT NOT NULL, decision_value TEXT NOT NULL, effective_from DATE NOT NULL, decided_by TEXT NOT NULL, reason TEXT, created_at TIMESTAMPTZ DEFAULT now());
