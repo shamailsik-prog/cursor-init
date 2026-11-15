@@ -1,0 +1,10 @@
+{
+  "statute": "Limitation Act, 1908",
+  "articles": [],
+  "exclusions": {
+    "4": "NOT_ASSESSED",
+    "12": "NOT_ASSESSED",
+    "14": "NOT_ASSESSED"
+  },
+  "note": "No First Schedule text and no text of sections 4, 12 or 14 is in the repository fixtures or corpus. checkLimitation returns NOT_ASSESSED for an article until a VERIFIED version in force on the accrual date is stored. This file states no period."
+}
