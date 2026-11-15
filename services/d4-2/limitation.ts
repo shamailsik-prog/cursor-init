@@ -141,6 +141,8 @@ export type NotAssessedReason =
   | "text_not_verified"
   | "period_unreadable"
   | "period_ambiguous"
+  | "period_exceeds_engine_cap"
+  | "accrual_before_floor"
   | "accrual_in_future"
   | "reckoning_unverified"
   | "anniversary_does_not_exist"
@@ -197,6 +199,9 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (!forum.ok) return notAssessed(forum.reason)
   const cause = parseCause(facts.article)
   if (!cause) return notAssessed("unknown_article")
+  if (accrualDate < accrualFloor(facts.versions, cause.sectionId, forum.jurisdiction)) {
+    return notAssessed("accrual_before_floor")
+  }
 
   const article = inForce(facts.versions, cause.sectionId, forum.jurisdiction, accrualDate)
   if (!article.ok) return notAssessed(article.reason)
@@ -336,6 +341,20 @@ function versionsFromStore(rows: readonly StatuteSectionVersion[]): LimitationVe
   })
 }
 
+/** Limitation Act, 1908. Not an article period. A later text in force raises the floor to its effectiveFrom. */
+const ACT_FLOOR = "1908-01-01"
+
+function accrualFloor(versions: readonly LimitationVersion[], sectionId: string, jurisdiction: string): string {
+  let earliest = ""
+  for (const row of versions) {
+    if (row.sectionId !== sectionId || row.jurisdiction !== jurisdiction) continue
+    if (!isCalendarDate(row.effectiveFrom)) continue
+    if (earliest === "" || row.effectiveFrom < earliest) earliest = row.effectiveFrom
+  }
+  if (earliest === "" || earliest < ACT_FLOOR) return ACT_FLOOR
+  return earliest
+}
+
 function blank(value: string | null | undefined): value is null | undefined | "" {
   return value == null || value.trim() === ""
 }
@@ -420,32 +439,66 @@ const UNIT_WORD_RE = /\b(fortnights?|weeks?|months?|years?|hours?|days?|mos|mths
 const FILLER_JOIN_RE = /\d(?:\p{Cf}|[\u034F\u3164\u2800])+\d|[A-Za-z](?:\p{Cf}|[\u034F\u3164\u2800])+[A-Za-z]/u
 /**
  * Engine ceiling, not a Limitation Act article. 81 years and 9999 days still assess.
- * A longer span is not read as a period: it cannot be a four-digit deadline.
+ * A longer span is period_exceeds_engine_cap. It is not read as a period.
  */
 const SPAN_LIMIT_YEARS = 100
-/** Words that change the length, only when they touch the number and its unit. "within" does not: "within one year" is one year. */
-const BOUND_BEFORE = [
+/**
+ * Bound lexemes. "within" is not one: "within one year" is one year.
+ * Matched anywhere in the clause that holds the quantity, and in a following
+ * clause that is only a bound. Commas are spaces. "more-than" and "or-more" are words.
+ */
+const BOUND_PHRASES = [
   "not less than",
   "not more than",
   "no less than",
   "no more than",
+  "no fewer than",
   "not exceeding",
   "not within",
   "not above",
   "not below",
   "less than",
   "more than",
+  "fewer than",
+  "greater than",
+  "longer than",
+  "shorter than",
   "at the maximum",
   "at the minimum",
   "at the least",
   "at the most",
+  "maximum period of",
+  "minimum period of",
   "maximum of",
   "minimum of",
+  "in excess of",
+  "more or less",
+  "a further",
+  "an additional",
   "at least",
   "at most",
+  "or thereabouts",
+  "or under",
+  "or below",
+  "or above",
+  "or over",
+  "or more",
+  "or less",
+  "or longer",
+  "or shorter",
+  "or such",
+  "and upwards",
+  "or upwards",
+  "and upward",
+  "or upward",
+  "and more",
+  "and less",
+  "and above",
+  "and below",
+  "and over",
   "up to",
-  "upto",
-  "approximately",
+  "kam az kam",
+  "zyada se zyada",
   "not",
   "about",
   "above",
@@ -457,7 +510,10 @@ const BOUND_BEFORE = [
   "some",
   "twice",
   "thrice",
+  "double",
   "exceeding",
+  "extendable",
+  "beyond",
   "around",
   "roughly",
   "nearly",
@@ -466,28 +522,16 @@ const BOUND_BEFORE = [
   "least",
   "plus",
   "minus",
-]
-const BOUND_AFTER = [
-  "and upwards",
-  "or upwards",
-  "and upward",
-  "or upward",
-  "or more",
-  "or less",
-  "and more",
-  "and less",
-  "or above",
-  "or below",
-  "and above",
-  "and below",
-  "or over",
-  "and over",
-  "or longer",
-  "or shorter",
-  "at least",
-  "at most",
+  "more",
+  "less",
+  "upto",
+  "atleast",
+  "approximately",
+  "approx",
+  "taqreeban",
   "or so",
 ]
+const BOUND_TOKEN_PHRASES = BOUND_PHRASES.map((phrase) => phrase.split(" ")).sort((a, b) => b.length - a.length)
 
 type NumberToken = { start: number; end: number; value: number | null; raw: string }
 
@@ -496,21 +540,34 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * exactly one day, month, or year. Superscripts and subscripts are not digits.
  * The reckoning and month-end provisos are removed only when they are the
  * canonical sentences; a number or an extra unit inside either span is unreadable.
- * A range or bound is period_ambiguous only when it touches that quantity.
- * Parentheses or brackets between the phrase and the quantity still touch it.
+ * A bound lexeme anywhere in that quantity's clause is period_ambiguous.
+ * Clauses split on . ; : em-dash and newline. Parentheses are transparent.
+ * A following clause that is only a bound is the same refusal.
  * "within one year" stays one year. A spaced dash, dot, or tilde is unreadable
  * only as a prefix of a digit. A colon label stays readable. A count above the
- * engine ceiling is unreadable.
+ * engine ceiling is period_exceeds_engine_cap.
  */
+function normalizeSource(text: string): string {
+  let out = text.replace(/\p{Cf}/gu, "").replace(/\r\n?/g, "\n")
+  out = out.replace(
+    /\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\n(one|two|three|four|five|six|seven|eight|nine)\b/gi,
+    "$1 $2"
+  )
+  out = out.replace(/\b([A-Za-z]+|\d+)\n(years?|months?|days?)\b/gi, "$1 $2")
+  return out.replace(/[^\S\n]+/gu, " ")
+}
+
 function parsePeriod(
   text: string
-): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
+):
+  | { ok: true; n: number; unit: DateUnit; cited: string }
+  | { ok: false; reason: "period_unreadable" | "period_ambiguous" | "period_exceeds_engine_cap" } {
   if (/\p{No}/u.test(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
-  const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
+  const normalized = normalizeSource(text)
   if (provisoUnsafe(normalized, RECKONING_RE, ["day"])) return { ok: false, reason: "period_unreadable" }
   if (provisoUnsafe(normalized, MONTH_END_RE, ["day", "month"])) return { ok: false, reason: "period_unreadable" }
-  const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/\s+/gu, " ")
+  const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/[^\S\n]+/gu, " ")
   const numbers = numberTokens(scan)
   UNIT_WORD_RE.lastIndex = 0
   const units = [...scan.matchAll(UNIT_WORD_RE)]
@@ -523,14 +580,14 @@ function parsePeriod(
   if (badNeighbour(scan, number.start, number.end) || spacedMark(scan, number.start)) {
     return { ok: false, reason: "period_unreadable" }
   }
-  if (boundTouches(scan, number.start, unitEnd)) return { ok: false, reason: "period_ambiguous" }
+  if (boundInScope(scan, number.start, unitEnd)) return { ok: false, reason: "period_ambiguous" }
   const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
   if (previous === "and" || previous === "or" || previous === "to") return { ok: false, reason: "period_unreadable" }
   const unit = canonicalUnit(unitMatch[1] ?? "")
   if (!unit || number.value === null || !Number.isInteger(number.value) || number.value < 1 || number.value > 9999) {
     return { ok: false, reason: "period_unreadable" }
   }
-  if (!spanAllowed(number.value, unit)) return { ok: false, reason: "period_unreadable" }
+  if (!spanAllowed(number.value, unit)) return { ok: false, reason: "period_exceeds_engine_cap" }
   return { ok: true, n: number.value, unit, cited: `${number.raw} ${unitMatch[1]}` }
 }
 
@@ -559,54 +616,95 @@ function calendarOverflow(iso: string, n: number, unit: DateUnit): boolean {
   }
 }
 
-function boundTouches(text: string, numberStart: number, unitEnd: number): boolean {
-  const left = stripWrappers(text.slice(0, numberStart).toLowerCase())
-  const right = text.slice(unitEnd).toLowerCase()
-  if (BOUND_BEFORE.some((phrase) => endsWithPhrase(left, phrase))) return true
-  return BOUND_AFTER.some((phrase) => startsWithPhrase(right, phrase))
+function boundInScope(text: string, numberStart: number, unitEnd: number): boolean {
+  const clauses = splitClauses(text)
+  const index = clauses.findIndex((clause) => numberStart >= clause.start && numberStart < clause.end)
+  const current = index < 0 ? undefined : clauses[index]
+  if (!current) return true
+  const origin = current.start
+  if (clauseHasBound(text.slice(current.start, current.end), numberStart - origin, unitEnd - origin)) return true
+  const next = clauses[index + 1]
+  return next !== undefined && boundOnly(text.slice(next.start, next.end))
 }
 
-function stripWrappers(text: string): string {
-  let end = text.length
-  while (end > 0 && isWrapper(text[end - 1] ?? "")) end -= 1
-  return text.slice(0, end)
+function splitClauses(text: string): { start: number; end: number }[] {
+  const clauses: { start: number; end: number }[] = []
+  let start = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? ""
+    if (ch === "." || ch === ";" || ch === ":" || ch === "\n" || ch === "\u2014") {
+      clauses.push({ start, end: i })
+      start = i + 1
+    }
+  }
+  clauses.push({ start, end: text.length })
+  return clauses
 }
 
-function isWrapper(ch: string): boolean {
-  return ch === " " || ch === "(" || ch === ")" || ch === "[" || ch === "]" || ch === ","
+function clauseHasBound(clause: string, numberStart: number, unitEnd: number): boolean {
+  if (clause.includes("~")) return true
+  const left = clauseTokens(clause.slice(0, numberStart))
+  const right = clauseTokens(clause.slice(unitEnd))
+  if (tokensHaveBound(left)) return true
+  if (tokensHaveBound(right)) return true
+  const trailing = right[0]
+  return trailing === "more" || trailing === "less" || trailing === "plus"
 }
 
-function endsWithPhrase(left: string, phrase: string): boolean {
-  if (!left.endsWith(phrase)) return false
-  const at = left.length - phrase.length
-  if (at === 0) return true
-  return !isLetter(left[at - 1] ?? "")
+function boundOnly(clause: string): boolean {
+  if (clause.includes("~") && clauseTokens(clause).length === 0) return true
+  const tokens = clauseTokens(clause)
+  if (tokens.length === 0) return false
+  return tokensHaveBound(tokens) && stripBounds(tokens).length === 0
 }
 
-function startsWithPhrase(right: string, phrase: string): boolean {
+function tokensHaveBound(tokens: string[]): boolean {
+  return BOUND_TOKEN_PHRASES.some((phrase) => tokenIncludes(tokens, phrase))
+}
+
+function tokenIncludes(tokens: string[], phrase: readonly string[]): boolean {
+  for (let i = 0; i <= tokens.length - phrase.length; i += 1) {
+    if (phrase.every((word, offset) => tokens[i + offset] === word)) return true
+  }
+  return false
+}
+
+function stripBounds(tokens: string[]): string[] {
+  const kept: string[] = []
   let index = 0
-  while (index < right.length && isWrapper(right[index] ?? "")) index += 1
-  if (!right.startsWith(phrase, index)) return false
-  const after = right[index + phrase.length] ?? ""
-  return after === "" || !isLetter(after)
+  while (index < tokens.length) {
+    const hit = BOUND_TOKEN_PHRASES.find((phrase) => phrase.every((word, offset) => tokens[index + offset] === word))
+    if (hit) {
+      index += hit.length
+      continue
+    }
+    kept.push(tokens[index] ?? "")
+    index += 1
+  }
+  return kept
+}
+
+/** Commas are spaces so "or, more" and "in, excess of" stay one phrase. G4. */
+function clauseTokens(text: string): string[] {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[()[\]]/g, " ")
+    .replace(/([a-z])-([a-z])/g, "$1 $2")
+    .replace(/,/g, " ")
+  return normalized
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^a-z,]+|[^a-z,]+$/g, ""))
+    .filter((token) => /^[a-z]+$/.test(token))
 }
 
 function spanHasBound(span: string): boolean {
-  const lower = span.toLowerCase()
-  return [...BOUND_BEFORE, ...BOUND_AFTER].some((phrase) => phrase !== "not" && hasPhrase(lower, phrase))
+  const tokens = clauseTokens(span)
+  if (hasBareNot(tokens)) return true
+  return tokensHaveBound(tokens.filter((token) => token !== "not"))
 }
 
-function hasPhrase(text: string, phrase: string): boolean {
-  let from = 0
-  while (from <= text.length) {
-    const at = text.indexOf(phrase, from)
-    if (at < 0) return false
-    const before = at === 0 ? "" : (text[at - 1] ?? "")
-    const after = text[at + phrase.length] ?? ""
-    if ((before === "" || !isLetter(before)) && (after === "" || !isLetter(after))) return true
-    from = at + phrase.length
-  }
-  return false
+function hasBareNot(tokens: readonly string[]): boolean {
+  return tokens.some((token, index) => token === "not" && !(tokens[index - 1] === "does" && tokens[index + 1] === "exist"))
 }
 
 function spacedMark(text: string, start: number): boolean {
