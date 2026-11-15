@@ -454,7 +454,7 @@ suite("G3 master grants on local Postgres", () => {
       expect(keys.rows[0]?.folded).toBe("strasse")
       expect(keys.rows[0]?.upper).toBe("strasse")
 
-      // D6. The CHECK still rejects a null approver when the transition trigger is off.
+      // CHECK-only. With the status trigger off, the check still rejects a blank or self approver.
       await admin.query("ALTER TABLE change_proposals DISABLE TRIGGER change_proposals_status_transition")
       try {
         await asP6.query("BEGIN")
@@ -468,11 +468,33 @@ suite("G3 master grants on local Postgres", () => {
           ),
         ).rejects.toThrow(/substantive_partner_approval/)
         await asP6.query("ROLLBACK")
+        await asP6.query("BEGIN")
+        await asP6.query("SET LOCAL ROLE p6_service")
+        await expect(
+          asP6.query(
+            `UPDATE change_proposals
+                SET status = 'approved', decided_by = E'\\n', decided_kind = 'partner', decided_role = 'partner'
+              WHERE id = $1`,
+            [pendingEdit.id],
+          ),
+        ).rejects.toThrow(/substantive_partner_approval/)
+        await asP6.query("ROLLBACK")
+        await asP6.query("BEGIN")
+        await asP6.query("SET LOCAL ROLE p6_service")
+        await expect(
+          asP6.query(
+            `UPDATE change_proposals
+                SET status = 'approved', decided_by = 'learner-1', decided_kind = 'partner', decided_role = 'partner'
+              WHERE id = $1`,
+            [pendingEdit.id],
+          ),
+        ).rejects.toThrow(/substantive_partner_approval/)
+        await asP6.query("ROLLBACK")
       } finally {
         await admin.query("ALTER TABLE change_proposals ENABLE TRIGGER change_proposals_status_transition")
       }
 
-      // D11. A substantive pending row cannot be applied as a system decision.
+      // A substantive pending row cannot take the cosmetic apply edge. This is not R1 D11.
       const substantiveApply = await proposeChange(
         {
           firmId: "firmA",
@@ -480,7 +502,7 @@ suite("G3 master grants on local Postgres", () => {
           classification: "confidential",
           changeClass: "substantive",
           partition: "mutable",
-          entryKey: "clause.d11",
+          entryKey: "clause.apply-edge",
           payload: { wording: "substantive apply" },
           proposedBy: "learner-1",
         },
@@ -498,7 +520,7 @@ suite("G3 master grants on local Postgres", () => {
       ).rejects.toThrow(/proposal status transition is refused/)
       await asP6.query("ROLLBACK")
 
-      // D14. approved -> applied cannot rewrite the partner who decided.
+      // R1 D6. approved -> applied cannot rewrite the partner who decided.
       await asP6.query("BEGIN")
       await asP6.query("SET LOCAL ROLE p6_service")
       await expect(
@@ -511,12 +533,121 @@ suite("G3 master grants on local Postgres", () => {
       ).rejects.toThrow(/proposal status transition is refused/)
       await asP6.query("ROLLBACK")
 
-      const spaced = await admin.query<{ newline: string; tab: string; nbsp: string; line: string }>(
-        `SELECT public.p6_actor_key($1) AS newline, public.p6_actor_key($2) AS tab,
-                public.p6_actor_key($3) AS nbsp, public.p6_actor_key($4) AS line`,
-        ["partner_a\n", "\tpartner_a", "partner_a\u00A0", "partner_a\u2028"],
+      // R1 D11. The catch-all refuses pending -> rejected and approved -> pending.
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals SET status = 'rejected' WHERE id = $1 AND status = 'pending'`,
+          [pendingEdit.id],
+        ),
+      ).rejects.toThrow(/proposal status transition is refused/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals SET status = 'pending' WHERE id = $1 AND status = 'approved'`,
+          [self.id],
+        ),
+      ).rejects.toThrow(/proposal status transition is refused/)
+      await asP6.query("ROLLBACK")
+      const afterD11 = await admin.query<{ id: string; status: string }>(
+        `SELECT id, status FROM change_proposals WHERE id = ANY($1::uuid[])`,
+        [[pendingEdit.id, self.id]],
       )
-      expect(spaced.rows[0]).toEqual({ newline: "partner_a", tab: "partner_a", nbsp: "partner_a", line: "partner_a" })
+      expect(afterD11.rows).toEqual(
+        expect.arrayContaining([
+          { id: pendingEdit.id, status: "pending" },
+          { id: self.id, status: "approved" },
+        ]),
+      )
+
+      // R1 D14. Dropping the cosmetic guard would let this partner approval land.
+      const cosmeticId = randomUUID()
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await asP6.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'cosmetic', 'mutable', 'clause.d14',
+                 '{"wording":"cosmetic"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [cosmeticId],
+      )
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals
+              SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+            WHERE id = $1 AND status = 'pending'`,
+          [cosmeticId],
+        ),
+      ).rejects.toThrow(/approval is not a direct status change/)
+      await asP6.query("ROLLBACK")
+      const cosmeticKept = await admin.query<{ status: string }>(
+        `SELECT status FROM change_proposals WHERE id = $1`,
+        [cosmeticId],
+      )
+      expect(cosmeticKept.rows).toEqual([])
+
+      // MEM-252-005 mirror. approved -> applied cannot rewrite proposed_by.
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals SET status = 'applied', proposed_by = 'other-actor' WHERE id = $1 AND status = 'approved'`,
+          [self.id],
+        ),
+      ).rejects.toThrow(/approved proposal payload is frozen|proposedBy is immutable/)
+      await asP6.query("ROLLBACK")
+      const proposerKept = await admin.query<{ proposed_by: string; status: string }>(
+        `SELECT proposed_by, status FROM change_proposals WHERE id = $1`,
+        [self.id],
+      )
+      expect(proposerKept.rows[0]).toEqual({ proposed_by: "partner_a", status: "approved" })
+
+      const spaced = await admin.query<{
+        newline: string
+        tab: string
+        nbsp: string
+        line: string
+        vt: string
+        ff: string
+        cr: string
+        ogham: string
+        para: string
+        next: string
+      }>(
+        `SELECT public.p6_actor_key($1) AS newline, public.p6_actor_key($2) AS tab,
+                public.p6_actor_key($3) AS nbsp, public.p6_actor_key($4) AS line,
+                public.p6_actor_key($5) AS vt, public.p6_actor_key($6) AS ff,
+                public.p6_actor_key($7) AS cr, public.p6_actor_key($8) AS ogham,
+                public.p6_actor_key($9) AS para, public.p6_actor_key($10) AS next`,
+        [
+          "partner_a\n",
+          "\tpartner_a",
+          "partner_a\u00A0",
+          "partner_a\u2028",
+          "\vpartner_a",
+          "\fpartner_a",
+          "\rpartner_a",
+          "\u1680partner_a",
+          "partner_a\u2029",
+          "partner_a\u0085",
+        ],
+      )
+      expect(spaced.rows[0]).toEqual({
+        newline: "partner_a",
+        tab: "partner_a",
+        nbsp: "partner_a",
+        line: "partner_a",
+        vt: "partner_a",
+        ff: "partner_a",
+        cr: "partner_a",
+        ogham: "partner_a",
+        para: "partner_a",
+        next: "partner_a\u0085",
+      })
       const newlineSelf = await proposeChange(
         {
           firmId: "firmA",
@@ -541,6 +672,89 @@ suite("G3 master grants on local Postgres", () => {
         ),
       ).rejects.toThrow(/differ from proposer/)
       await asP6.query("ROLLBACK")
+
+      // PARITY-R2-003. JS NFKC folds U+A7F1 to S; the same raw-SQL self-approval must be refused.
+      const swash = "\u{A7F1}"
+      const swashKey = await admin.query<{ key: string }>(`SELECT public.p6_actor_key($1) AS key`, [swash])
+      expect(swashKey.rows[0]?.key).toBe("s")
+      const swashRow = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "learner-style",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.swash",
+          payload: { wording: "swash" },
+          proposedBy: "s",
+        },
+        store,
+      )
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals
+              SET status = 'approved', decided_by = $2, decided_kind = 'partner', decided_role = 'partner'
+            WHERE id = $1 AND status = 'pending'`,
+          [swashRow.id, swash],
+        ),
+      ).rejects.toThrow(/differ from proposer/)
+      await asP6.query("ROLLBACK")
+
+      const duplicate = await store.getProposal(pendingEdit.id)
+      await expect(store.insertProposal({ ...duplicate!, proposedBy: "other-actor" })).rejects.toThrow(
+        new RegExp(`proposal id already exists: ${pendingEdit.id}`),
+      )
+      const duplicateStill = await admin.query<{ proposed_by: string }>(
+        `SELECT proposed_by FROM change_proposals WHERE id = $1`,
+        [pendingEdit.id],
+      )
+      expect(duplicateStill.rows[0]?.proposed_by).toBe("learner-1")
+      const head = await admin.query<{ version_id: string | null }>(
+        `SELECT version_id FROM master_knowledge WHERE firm_id = 'firmA'`,
+      )
+      await expect(
+        store.commitVersion({
+          firmId: "firmA",
+          proposalId: pendingEdit.id,
+          action: "apply",
+          diff: { key: pendingEdit.entryKey, partition: "mutable", before: { entries: {} }, after: { entries: {} } },
+          snapshot: { entries: {} },
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: { ...duplicate!, proposedBy: "other-actor" },
+          expectedBaseVersionId: head.rows[0]?.version_id ?? null,
+        }),
+      ).rejects.toThrow(/proposedBy is immutable/)
+      await expect(
+        store.commitVersion({
+          firmId: "firmA",
+          proposalId: pendingEdit.id,
+          action: "apply",
+          diff: { key: pendingEdit.entryKey, partition: "mutable", before: { entries: {} }, after: { entries: {} } },
+          snapshot: { entries: {} },
+          authorId: "partner_b",
+          authorKind: "partner",
+          restoredFromVersionId: null,
+          classification: "confidential",
+          proposal: { ...duplicate!, payload: { wording: "swapped" } },
+          expectedBaseVersionId: head.rows[0]?.version_id ?? null,
+        }),
+      ).rejects.toThrow(/approved proposal payload is frozen/)
+      const approvedForCas = await store.getProposal(self.id)
+      await store.runExclusive(async (tx) => {
+        await expect(
+          tx.casProposal({ ...approvedForCas!, status: "applied", proposedBy: "other-actor" }, "approved"),
+        ).rejects.toThrow(/proposedBy is immutable/)
+      })
+      const casKept = await admin.query<{ proposed_by: string; status: string }>(
+        `SELECT proposed_by, status FROM change_proposals WHERE id = $1`,
+        [self.id],
+      )
+      expect(casKept.rows[0]).toEqual({ proposed_by: "partner_a", status: "approved" })
 
       const proposerRow = await store.getProposal(pendingEdit.id)
       await expect(store.saveProposal({ ...proposerRow!, proposedBy: "other-actor" })).rejects.toThrow(/proposedBy is immutable/)
@@ -572,6 +786,7 @@ suite("G3 master grants on local Postgres", () => {
     const client = new pg.Client({ connectionString: connection })
     await client.connect()
     const badId = randomUUID()
+    const selfId = randomUUID()
     try {
       await client.query("SET ROLE p6_service")
       await client.query(
@@ -582,10 +797,30 @@ suite("G3 master grants on local Postgres", () => {
                  '{"wording":"legacy"}'::jsonb, 'partner_a', 'approved', NULL, 'partner', 'partner', 'abc')`,
         [badId],
       )
+      await client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, decided_by, decided_kind, decided_role, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.legacy-self',
+                 '{"wording":"self"}'::jsonb, 'partner_a', 'approved', 'partner_a', 'partner', 'partner', 'abc')`,
+        [selfId],
+      )
       await client.query("RESET ROLE")
+      const before = await client.query<{
+        id: string
+        proposed_by: string
+        status: string
+        decided_by: string | null
+        decided_kind: string
+        decided_role: string
+      }>(
+        `SELECT id, proposed_by, status, decided_by, decided_kind, decided_role
+           FROM change_proposals WHERE id = ANY($1::uuid[]) ORDER BY entry_key`,
+        [[badId, selfId]],
+      )
       const upgraded = applyPsqlFile(connection, DDL)
-      const constraint = await client.query<{ def: string }>(
-        `SELECT pg_get_constraintdef(oid) AS def
+      const constraint = await client.query<{ def: string; convalidated: boolean }>(
+        `SELECT pg_get_constraintdef(oid) AS def, convalidated
            FROM pg_catalog.pg_constraint
           WHERE conname = 'substantive_partner_approval'
             AND conrelid = 'public.change_proposals'::regclass`,
@@ -597,21 +832,33 @@ suite("G3 master grants on local Postgres", () => {
           WHERE c.relname = 'change_proposals' AND NOT t.tgisinternal AND t.tgenabled = 'O'`,
       )
       const names = triggers.rows.map((row) => row.tgname)
-      const kept = await client.query<{ status: string; decided_by: string | null }>(
-        `SELECT status, decided_by FROM change_proposals WHERE id = $1`,
-        [badId],
+      const kept = await client.query<{
+        id: string
+        proposed_by: string
+        status: string
+        decided_by: string | null
+        decided_kind: string
+        decided_role: string
+      }>(
+        `SELECT id, proposed_by, status, decided_by, decided_kind, decided_role
+           FROM change_proposals WHERE id = ANY($1::uuid[]) ORDER BY entry_key`,
+        [[badId, selfId]],
       )
       if (upgraded.status === 0) {
         expect(constraint.rows[0]?.def ?? "").toMatch(/p6_actor_key|decided_by IS NOT NULL/)
+        expect(constraint.rows[0]?.convalidated).toBe(true)
         expect(names).toContain("change_proposals_status_transition")
         expect(names).toContain("change_proposals_p6_writer")
       } else {
         expect(upgraded.stderr).toMatch(/refusing to replace substantive_partner_approval/)
+        expect(upgraded.stderr).toContain(badId)
+        expect(upgraded.stderr).toContain(selfId)
         expect(constraint.rows).toHaveLength(1)
+        expect(constraint.rows[0]?.convalidated).toBe(true)
         expect(constraint.rows[0]?.def ?? "").not.toMatch(/decided_by IS NOT NULL/)
         expect(names).toContain("change_proposals_p6_writer")
         expect(names).not.toContain("change_proposals_status_transition")
-        expect(kept.rows[0]).toEqual({ status: "approved", decided_by: null })
+        expect(kept.rows).toEqual(before.rows)
       }
 
       const okDb = `p6ok_${migHex}`
@@ -648,8 +895,8 @@ suite("G3 master grants on local Postgres", () => {
         await ok.query("RESET ROLE")
         const okUpgrade = applyPsqlFile(okConnection, DDL)
         expect(okUpgrade.status, okUpgrade.stderr).toBe(0)
-        const okConstraint = await ok.query<{ def: string }>(
-          `SELECT pg_get_constraintdef(oid) AS def
+        const okConstraint = await ok.query<{ def: string; convalidated: boolean }>(
+          `SELECT pg_get_constraintdef(oid) AS def, convalidated
              FROM pg_catalog.pg_constraint
             WHERE conname = 'substantive_partner_approval'
               AND conrelid = 'public.change_proposals'::regclass`,
@@ -661,6 +908,7 @@ suite("G3 master grants on local Postgres", () => {
             WHERE c.relname = 'change_proposals' AND NOT t.tgisinternal AND t.tgenabled = 'O'`,
         )
         expect(okConstraint.rows[0]?.def ?? "").toMatch(/p6_actor_key/)
+        expect(okConstraint.rows[0]?.convalidated).toBe(true)
         expect(okTriggers.rows.map((row) => row.tgname)).toContain("change_proposals_status_transition")
         const good = await ok.query<{ status: string; decided_by: string }>(
           `SELECT status, decided_by FROM change_proposals WHERE id = $1`,

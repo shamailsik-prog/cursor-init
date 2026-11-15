@@ -34,23 +34,62 @@ function substantive(entryKey = "clause.nda.confidentiality") {
   }
 }
 
+/** Comments are not DDL. A trigger or grant that exists only after `--` or inside a block comment is absent. */
+function stripSqlComments(sql: string): string {
+  let out = ""
+  let i = 0
+  while (i < sql.length) {
+    if (sql.startsWith("--", i)) {
+      const nl = sql.indexOf("\n", i)
+      i = nl === -1 ? sql.length : nl
+      continue
+    }
+    if (sql.startsWith("/*", i)) {
+      const end = sql.indexOf("*/", i + 2)
+      i = end === -1 ? sql.length : end + 2
+      continue
+    }
+    if (sql[i] === "'") {
+      let j = i + 1
+      while (j < sql.length) {
+        if (sql[j] === "'" && sql[j + 1] === "'") {
+          j += 2
+          continue
+        }
+        if (sql[j] === "'") {
+          j += 1
+          break
+        }
+        j += 1
+      }
+      out += sql.slice(i, j)
+      i = j
+      continue
+    }
+    out += sql[i]
+    i += 1
+  }
+  return out
+}
+
 /** FA-Q07-TEST-007. A grant to any role but p6_service is a finding, including a quoted role. */
 export function masterDdlFindings(sql: string): string[] {
+  const source = stripSqlComments(sql)
   const findings: string[] = []
-  const grants = sql.matchAll(/GRANT\s+[\s\S]*?\sTO\s+("?)([A-Za-z_][A-Za-z0-9_]*)\1\s*;/gi)
+  const grants = source.matchAll(/GRANT\s+[\s\S]*?\sTO\s+("?)([A-Za-z_][A-Za-z0-9_]*)\1\s*;/gi)
   for (const grant of grants) {
     if (grant[2] !== "p6_service") findings.push(grant[2])
   }
   for (const table of ["change_proposals", "master_versions", "master_knowledge"]) {
-    if (!new RegExp(`BEFORE DELETE ON public\\.${table}\\b`).test(sql)) findings.push(`${table} delete`)
-    if (!new RegExp(`BEFORE TRUNCATE ON public\\.${table}[\\s\\S]*?FOR EACH STATEMENT`).test(sql)) {
+    if (!new RegExp(`BEFORE DELETE ON public\\.${table}\\b`).test(source)) findings.push(`${table} delete`)
+    if (!new RegExp(`BEFORE TRUNCATE ON public\\.${table}[\\s\\S]*?FOR EACH STATEMENT`).test(source)) {
       findings.push(`${table} truncate`)
     }
   }
-  if (!/master_versions_one_proposal/.test(sql)) findings.push("one proposal")
-  if (!/approved proposal payload is frozen/.test(sql)) findings.push("frozen payload")
+  if (!/master_versions_one_proposal/.test(source)) findings.push("one proposal")
+  if (!/approved proposal payload is frozen/.test(source)) findings.push("frozen payload")
   // One statement ends at its own semicolon. A later DROP TRIGGER must not count as this trigger.
-  const statements = [...sql.matchAll(/CREATE\s+TRIGGER\b[\s\S]*?;/gi)].map((hit) => hit[0])
+  const statements = [...source.matchAll(/CREATE\s+TRIGGER\b[\s\S]*?;/gi)].map((hit) => hit[0])
   const writers = [
     { name: "change_proposals_p6_writer", table: "change_proposals", verbs: ["INSERT", "UPDATE"] },
     { name: "master_knowledge_p6_writer", table: "master_knowledge", verbs: ["INSERT", "UPDATE"] },
@@ -437,6 +476,82 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
+  it("MEM-252-005: a duplicate insert cannot rewrite proposedBy", async () => {
+    const store = p6Store()
+    const pending = await proposeChange({ ...substantive("clause.dup"), proposedBy: "partner_a" }, store)
+    await expect(store.insertProposal({ ...pending, proposedBy: "other-actor" })).rejects.toThrow(
+      new RegExp(`proposal id already exists: ${pending.id}`),
+    )
+    expect((await store.getProposal(pending.id))?.proposedBy).toBe("partner_a")
+    await expect(
+      approveProposal(pending.id, { actorId: "partner_a", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/differ from proposer/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
+  it("MEM-252-005: commitVersion cannot rewrite proposedBy", async () => {
+    const store = p6Store()
+    const pending = await proposeChange({ ...substantive("clause.commit-by"), proposedBy: "partner_a" }, store)
+    await expect(
+      store.commitVersion({
+        firmId: pending.firmId,
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: { entries: {} }, after: { entries: {} } },
+        snapshot: { entries: {} },
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: { ...pending, proposedBy: "other-actor" },
+        expectedBaseVersionId: null,
+      }),
+    ).rejects.toThrow(/proposedBy is immutable/)
+    expect((await store.getProposal(pending.id))?.proposedBy).toBe("partner_a")
+    expect((await store.getProposal(pending.id))?.payload).toEqual(pending.payload)
+    expect(await store.listVersions("firmA")).toEqual([])
+    await expect(
+      approveProposal(pending.id, { actorId: "partner_a", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/differ from proposer/)
+  })
+
+  it("MEM-252-005: commitVersion cannot swap the payload", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.commit-payload"), store)
+    await expect(
+      store.commitVersion({
+        firmId: pending.firmId,
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: { entries: {} }, after: { entries: {} } },
+        snapshot: { entries: {} },
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: { ...pending, payload: { wording: "swapped" } },
+        expectedBaseVersionId: null,
+      }),
+    ).rejects.toThrow(/approved proposal payload is frozen/)
+    expect((await store.getProposal(pending.id))?.payload).toEqual(pending.payload)
+    expect(await store.listVersions("firmA")).toEqual([])
+  })
+
+  it("MEM-252-005: cas approved to applied cannot rewrite proposedBy", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.cas-by"), store)
+    await approveProposal(pending.id, PARTNER, store)
+    const approved = await store.getProposal(pending.id)
+    await store.runExclusive(async (tx) => {
+      await expect(
+        tx.casProposal({ ...approved!, status: "applied", proposedBy: "other-actor" }, "approved"),
+      ).rejects.toThrow(/proposedBy is immutable/)
+    })
+    const kept = await store.getProposal(pending.id)
+    expect(kept?.proposedBy).toBe("learner-1")
+    expect(kept?.status).toBe("approved")
+  })
+
   it("FA-Q07-R2-006: saveProposal cannot stamp partner approval fields", async () => {
     const store = p6Store()
     const pending = await proposeChange(substantive("clause.stamp"), store)
@@ -730,6 +845,14 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect(bothFindings).toContain("master_knowledge_p6_writer")
     const transitionGone = dropNamed(sql, "change_proposals_status_transition")
     expect(masterDdlFindings(transitionGone)).toContain("change_proposals_status_transition")
+    const commentedTrigger = sql.replace(
+      "CREATE TRIGGER change_proposals_status_transition",
+      "-- CREATE TRIGGER change_proposals_status_transition",
+    )
+    expect(commentedTrigger).not.toBe(sql)
+    expect(masterDdlFindings(commentedTrigger)).toContain("change_proposals_status_transition")
+    expect(masterDdlFindings(`-- GRANT INSERT ON TABLE master_knowledge TO evil_role;\n${sql}`)).toEqual([])
+    expect(masterDdlFindings(`/* GRANT INSERT ON TABLE master_knowledge TO evil_role; */\n${sql}`)).toEqual([])
   })
 
   it("proposeChange still refuses an unknown classification before any write", async () => {

@@ -219,13 +219,15 @@ REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
 
 -- Actor key: NFKC, drop default-ignorables, ECMAScript trim, lower-case, fold ß to ss.
 -- Trim is every Unicode White_Space and LineTerminator, the same set as String.prototype.trim.
+-- U+0085 NEXT LINE is not in that set. U+A7F1 is mapped to U+0053 because this server's
+-- normalize(NFKC) leaves it unchanged while ECMAScript NFKC maps it to S.
 CREATE OR REPLACE FUNCTION public.p6_actor_key(value text) RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
 SET search_path = pg_catalog, public
 AS $fn$
 DECLARE
-  folded text := normalize(coalesce(value, ''), NFKC);
+  folded text := replace(normalize(coalesce(value, ''), NFKC), chr(42993), 'S');
   out text := '';
   i integer := 1;
   ch text;
@@ -437,19 +439,22 @@ CREATE TRIGGER change_proposals_freeze_payload
 -- A legacy substantive approval with no distinct partner fails here, before either constraint changes,
 -- and this statement then rolls back, so the old check stays and the status trigger is not created.
 DO $swap$
+DECLARE
+  bad_ids text;
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM public.change_proposals
-    WHERE status IN ('approved', 'applied')
-      AND change_class = 'substantive'
-      AND (
-        decided_kind IS DISTINCT FROM 'partner'
-        OR decided_role IS DISTINCT FROM 'partner'
-        OR public.p6_actor_key(decided_by) = ''
-        OR public.p6_actor_key(decided_by) = public.p6_actor_key(proposed_by)
-      )
-  ) THEN
-    RAISE EXCEPTION 'refusing to replace substantive_partner_approval: a substantive approved row has no distinct partner decision'
+  SELECT string_agg(id::text, ', ' ORDER BY id::text)
+    INTO bad_ids
+    FROM public.change_proposals
+   WHERE status IN ('approved', 'applied')
+     AND change_class = 'substantive'
+     AND (
+       decided_kind IS DISTINCT FROM 'partner'
+       OR decided_role IS DISTINCT FROM 'partner'
+       OR public.p6_actor_key(decided_by) = ''
+       OR public.p6_actor_key(decided_by) = public.p6_actor_key(proposed_by)
+     );
+  IF bad_ids IS NOT NULL THEN
+    RAISE EXCEPTION 'refusing to replace substantive_partner_approval: % has no distinct partner decision', bad_ids
       USING ERRCODE = '23514';
   END IF;
   EXECUTE $sql$ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval_next$sql$;

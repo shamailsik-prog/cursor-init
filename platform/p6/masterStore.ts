@@ -351,6 +351,7 @@ export class InMemoryMasterStore implements MasterStore {
     refuseDirectCas(current, row, fromStatus)
     if (!current || current.status !== fromStatus) return false
     assertCasShape(current, row)
+    assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
@@ -385,6 +386,7 @@ export class InMemoryMasterStore implements MasterStore {
   async insertProposal(row: PersistedProposal): Promise<PersistedProposal> {
     this.assertRole()
     assertNewProposal(row)
+    if (this.state.proposals.has(row.id)) throw new Error(`proposal id already exists: ${row.id}`)
     const saved = structuredClone(row)
     saved.payloadHash = payloadDigest(saved.payload)
     this.state.proposals.set(saved.id, saved)
@@ -428,7 +430,12 @@ export class InMemoryMasterStore implements MasterStore {
     this.assertRole()
     const snap = cloneState(this.state)
     try {
-      if (input.proposal) assertCommitLeavesApprovalAlone(this.state.proposals.get(input.proposal.id), input.proposal)
+      const currentProposal = input.proposal ? this.state.proposals.get(input.proposal.id) : undefined
+      if (input.proposal) assertCommitLeavesApprovalAlone(currentProposal, input.proposal)
+      if (input.proposal && currentProposal) {
+        assertProposedByUnchanged(currentProposal, input.proposal)
+        assertPayloadFrozen(currentProposal, input.proposal)
+      }
       const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
       const parent = firmVersions[firmVersions.length - 1] ?? null
       if ((parent?.id ?? null) !== input.expectedBaseVersionId) {
@@ -575,6 +582,8 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
     async insertProposal(row) {
       assertNewProposal(row)
       await withRole(async (client) => {
+        const existing = await client.query(`SELECT 1 FROM change_proposals WHERE id = $1`, [row.id])
+        if ((existing.rowCount ?? 0) > 0) throw new Error(`proposal id already exists: ${row.id}`)
         await client.query(
           `INSERT INTO change_proposals
              (id, firm_id, source_module, classification, change_class, partition, entry_key,
@@ -683,6 +692,17 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
       const versionId = randomUUID()
       try {
         await withRole(async (client) => {
+          if (input.proposal) {
+            const found = await client.query<ProposalQueryRow>(
+              `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+              [input.proposal.id],
+            )
+            const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+            if (current) {
+              assertProposedByUnchanged(current, input.proposal)
+              assertPayloadFrozen(current, input.proposal)
+            }
+          }
           await writeVersion(client, input, versionId)
         })
       } catch (error) {
@@ -749,6 +769,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         refuseDirectCas(current, row, fromStatus)
         if (!current || current.status !== fromStatus) return false
         assertCasShape(current, row)
+        assertProposedByUnchanged(current, row)
         assertPayloadFrozen(current, row)
         const updated = await client.query(
           `UPDATE change_proposals
@@ -802,7 +823,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 }
 
 function commitError(error: unknown): Error {
-  if (error instanceof Error && /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen/.test(error.message)) {
+  if (error instanceof Error && /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable/.test(error.message)) {
     return error
   }
   return new Error("master write did not commit", { cause: error })
