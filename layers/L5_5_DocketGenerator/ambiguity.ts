@@ -1,4 +1,5 @@
 import { classifyAnnexureRule, letterToken, type ClassifiedRule } from "@/layers/L5_5_DocketGenerator/rules"
+import { scanCitations, type CitationFamily } from "@/layers/L5_5_DocketGenerator/references"
 import type { AmbiguityItem, DocketAnnexure, DocketFilingSet, DocketPageSizeName } from "@/layers/L5_5_DocketGenerator/types"
 
 export type ResolvedAnnexure = {
@@ -20,14 +21,6 @@ export type ResolvedDocket = {
 export type ResolveResult =
   | { ok: true; docket: ResolvedDocket }
   | { ok: false; queue: AmbiguityItem[] }
-
-const ANNEX_START = /\bannex(?:ures?|ure)?\b\.?\s*[-:]?\s*/gi
-const ANNEX_LABEL = /^([A-Za-z]\d*)(?![A-Za-z0-9])/
-const ANNEX_SEPARATOR = /^\s*(?:,|&|and)\s+(?=[A-Za-z]\d*(?![A-Za-z0-9]))/
-const ENCLOSURE_START = /\b(?:enclosures?|encl)\b\.?\s*[-:]?\s*/gi
-const ENCLOSURE_LABEL = /^(\d+)(?!\d)/
-const ENCLOSURE_SEPARATOR = /^\s*(?:,|&|and)\s+(?=\d)/
-const MARK_CITATION = /\b([PDRpdr])\s*[/\-]\s*(\d+)\b/g
 
 function item(code: AmbiguityItem["code"], artifactId: string | null, detail: string): AmbiguityItem {
   return { code, artifactId, detail }
@@ -52,8 +45,6 @@ function boundedIndex(text: string, label: string): number {
   }
   return -1
 }
-
-type CitationHit = { form: string; canonical: string; index: number }
 
 function canonicalMark(token: string): string | null {
   const match = /^([PDRpdr])\s*[/\-]\s*(\d+)$/.exec(token.trim())
@@ -87,47 +78,19 @@ function seriesKind(token: string): string | null {
   return null
 }
 
-function readList(text: string, from: number, label: RegExp, separator: RegExp): Array<{ value: string; index: number }> {
-  const found: Array<{ value: string; index: number }> = []
-  let cursor = from
-  const first = label.exec(text.slice(cursor))
-  if (!first?.[1]) return found
-  found.push({ value: first[1], index: cursor })
-  cursor += first[0].length
-  while (true) {
-    const gap = separator.exec(text.slice(cursor))
-    if (!gap) break
-    const nextAt = cursor + gap[0].length
-    const next = label.exec(text.slice(nextAt))
-    if (!next?.[1]) break
-    found.push({ value: next[1], index: nextAt })
-    cursor = nextAt + next[0].length
+function citationContext(
+  scheme: ClassifiedRule["scheme"],
+  annexures: readonly ResolvedAnnexure[],
+): { family: CitationFamily; markPrefix: string | null } {
+  if (scheme.kind === "letters" || scheme.kind === "single-a") return { family: "letter", markPrefix: null }
+  if (scheme.kind === "enclosures") return { family: "number", markPrefix: null }
+  const marks = annexures.map((annexure) => canonicalMark(annexure.token))
+  if (marks.every((mark) => mark !== null)) {
+    const prefixes = new Set(marks.map((mark) => mark?.[0] ?? ""))
+    return { family: "mark", markPrefix: prefixes.size === 1 ? ([...prefixes][0] ?? null) : null }
   }
-  return found
-}
-
-function extractCitations(text: string): CitationHit[] {
-  const hits: CitationHit[] = []
-  for (const match of text.matchAll(ANNEX_START)) {
-    const from = (match.index ?? 0) + match[0].length
-    for (const label of readList(text, from, ANNEX_LABEL, ANNEX_SEPARATOR)) {
-      const canonical = label.value.toUpperCase()
-      hits.push({ form: `annex:${canonical}`, canonical, index: label.index })
-    }
-  }
-  for (const match of text.matchAll(ENCLOSURE_START)) {
-    const from = (match.index ?? 0) + match[0].length
-    for (const label of readList(text, from, ENCLOSURE_LABEL, ENCLOSURE_SEPARATOR)) {
-      hits.push({ form: `encl:${label.value}`, canonical: label.value, index: label.index })
-    }
-  }
-  for (const match of text.matchAll(MARK_CITATION)) {
-    const letter = (match[1] ?? "").toUpperCase()
-    const digits = match[2] ?? ""
-    hits.push({ form: `mark:${letter}/${digits}`, canonical: `${letter}/${digits}`, index: match.index ?? 0 })
-  }
-  hits.sort((left, right) => left.index - right.index)
-  return hits
+  if (annexures.every((annexure) => /^\d+$/.test(annexure.token.trim()))) return { family: "number", markPrefix: null }
+  return { family: "letter", markPrefix: null }
 }
 
 function pageSpec(
@@ -232,16 +195,22 @@ function checkCitations(
   annexures: readonly ResolvedAnnexure[],
   requireReferenceOrder: boolean,
   queue: AmbiguityItem[],
+  scheme: ClassifiedRule["scheme"],
 ): void {
   const keys = annexures.map((annexure) => assignedKey(annexure.token))
   const knownKeys = new Set(keys)
+  const context = citationContext(scheme, annexures)
+  const scan = scanCitations(draft, { ...context, assigned: knownKeys })
   const known: string[] = []
-  for (const hit of extractCitations(draft)) {
+  for (const hit of scan.hits) {
     if (!knownKeys.has(hit.form)) {
       queue.push(item("ref_unresolved", null, `body cites ${hit.canonical}, which is not an annexure in this filing set`))
       continue
     }
     if (!known.includes(hit.form)) known.push(hit.form)
+  }
+  for (const detail of scan.unparsed) {
+    queue.push(item("ref_unresolved", null, detail))
   }
   if (!requireReferenceOrder) return
   annexures.forEach((annexure, index) => {
@@ -369,7 +338,7 @@ export function resolveFilingSet(input: DocketFilingSet): ResolveResult {
   }
   const requireReferenceOrder =
     (scheme.kind === "letters" || scheme.kind === "enclosures" || scheme.kind === "manual") && scheme.requireReferenceOrder
-  checkCitations(draft, annexures, requireReferenceOrder, queue)
+  checkCitations(draft, annexures, requireReferenceOrder, queue, scheme)
   if (scheme.kind === "manual") checkManualRefs(draft, annexures, scheme.requireReferenceOrder, queue)
 
   if (queue.length > 0 || !spec) return { ok: false, queue }
