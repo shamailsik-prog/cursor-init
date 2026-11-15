@@ -2,13 +2,14 @@
  * One citation reader. The draft is normalised and tokenised, then one label
  * grammar both finds citations and classifies assigned labels. see, refer, and
  * relies open a citation only when an uppercase label follows directly.
- * A lowercase p. or pp. plus a number is a page reference. A dash code after
- * No. is an address or case number only for an explicit word list.
+ * A lowercase p. or pp. plus a number is a page reference. A single newline is a
+ * space. A blank line, or a newline after a period, ends a sentence. No. before
+ * a letter-dash-digits code is a case number when of YYYY or /YYYY follows.
  */
 
 export type CitationFamily = "letter" | "number" | "mark"
 
-export type CitationHit = { form: string; canonical: string }
+export type CitationHit = { form: string; canonical: string; forOrder: boolean }
 
 export type CitationScan = {
   hits: CitationHit[]
@@ -43,9 +44,16 @@ const GLUE_KEYWORDS = ["annexures", "annexure", "enclosures", "enclosure", "exhi
 
 const ADDRESS_WORDS = new Set(["block", "sector", "phase", "gali", "mohalla", "lane", "road", "street", "house"])
 
-const NON_LABEL_WORDS = new Set(["to", "herewith", "the", "of", "is", "was", "per", "this", "on", "as"])
+const NON_LABEL_WORDS = new Set([
+  "to", "herewith", "the", "of", "is", "was", "per", "this", "on", "as", "viz",
+  "in", "by", "from", "for", "at", "upon", "under",
+])
 
-const ABBREVIATIONS = new Set(["act", "cpc", "ppc", "crpc", "fir", "me", "him", "rs", "mr", "dc", "ac", "no", "sc", "hc"])
+const ABBREVIATIONS = new Set([
+  "act", "cpc", "ppc", "crpc", "fir", "me", "him", "rs", "mr", "dc", "ac", "no", "sc", "hc",
+  "nab", "shc", "kda", "ecp", "it", "fbr", "cda", "lda", "sho", "dsp", "pw",
+  "nlr", "klr", "plj", "plc", "scc",
+])
 
 const LAW_REPORTS = new Set(["scmr", "pld", "clc", "ylr", "mld", "pcrlj", "cld", "ptd", "scr"])
 
@@ -90,15 +98,20 @@ function letterCase(word: string): "upper" | "lower" | "mixed" {
   return "mixed"
 }
 
+function foldNewlines(input: string): string {
+  const rejoined = input
+    .replace(/([A-Za-z])-[ \t]*\r?\n[ \t]*([A-Za-z])/g, "$1$2")
+    .replace(/([A-Za-z])-[ \t]*\r?\n[ \t]*(\d)/g, "$1-$2")
+  const kept = rejoined.replace(
+    /\b(annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?)\b[ \t]*(?:\r?\n[ \t]*){2,}(?=[A-Za-z0-9])/gi,
+    "$1 ",
+  )
+  return kept.replace(/[ \t]*(?:\r?\n[ \t]*){2,}/g, ". ").replace(/[ \t]*\r?\n[ \t]*/g, " ")
+}
+
 export function normaliseCitationText(input: string): string {
-  const rejoined = input.replace(/([A-Za-z])-[ \t]*\r?\n[ \t]*([A-Za-z])/g, "$1$2")
   let text = ""
-  for (const character of rejoined.normalize("NFKC")) {
-    if (character === "\r") continue
-    if (character === "\n") {
-      text += ". "
-      continue
-    }
+  for (const character of foldNewlines(input).normalize("NFKC")) {
     const code = character.codePointAt(0) ?? 0
     text += isIgnorable(code) ? BREAK : character
   }
@@ -438,10 +451,6 @@ function isNonLabelWord(token: Token | undefined): boolean {
   return token?.kind === "word" && NON_LABEL_WORDS.has(token.value)
 }
 
-function sentenceBoundary(token: Token | undefined): boolean {
-  return !token || token.value === "."
-}
-
 function failedLabel(tokens: readonly Token[], index: number): boolean {
   const token = tokens[index]
   if (!token || token.kind !== "word" || token.value.includes("_")) return false
@@ -460,9 +469,16 @@ function failedLabel(tokens: readonly Token[], index: number): boolean {
   ) {
     return true
   }
-  if (!/^[a-z]{2,3}$/.test(token.value) || !sentenceBoundary(tokens[index + 1]) || token.caps !== "upper") return false
-  if (ABBREVIATIONS.has(token.value)) return false
+  return false
+}
+
+function unreadableLabel(token: Token | undefined, next: Token | undefined): boolean {
+  if (!token || token.kind !== "word") return false
+  const upperShort = token.caps === "upper" && token.value.length >= 2 && token.value.length <= 3
+  const lowerPair = token.value.length === 2 && token.caps !== "upper" && (!next || next.value === ".")
+  if (!upperShort && !lowerPair) return false
   if (token.value in KEYWORD_FAMILY || NON_LABEL_WORDS.has(token.value) || isReservedWord(token.value)) return false
+  if (ABBREVIATIONS.has(token.value) || LAW_REPORTS.has(token.value)) return false
   if (romanValue(token.value) !== null || /^([a-z])\1$/.test(token.value)) return false
   return true
 }
@@ -484,7 +500,7 @@ function sentenceEnd(tokens: readonly Token[], index: number): number {
   for (let cursor = index; cursor < tokens.length; cursor += 1) {
     const token = tokens[cursor]
     if (token?.value !== ".") continue
-    if (tokens[cursor + 1]?.value === "." || tokens[cursor - 1]?.value === "no") continue
+    if (tokens[cursor + 1]?.value === "." || tokens[cursor - 1]?.value === "no" || tokens[cursor - 1]?.value === "viz") continue
     return cursor
   }
   return tokens.length
@@ -525,6 +541,7 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
   while (isNonLabelWord(tokens[cursor]) || (skippedWord && skippedArticle(tokens, cursor))) {
     skippedWord = isNonLabelWord(tokens[cursor]) || skippedWord
     cursor += 1
+    cursor = skipLead(tokens, cursor)
   }
   let first: Item | null
   if (tokens[cursor]?.kind === "punct" && tokens[cursor]?.value === "-") {
@@ -539,7 +556,7 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
     first = parseItem(tokens, cursor)
     if (!first) {
       const continuation = readContinuation(tokens, cursor)
-      if (!continuation) return orphanLabel(tokens, cursor) ? null : { labels: [], next: index }
+      if (!continuation) return orphanLabel(tokens, cursor) || unreadableLabel(tokens[cursor], tokens[cursor + 1]) ? null : { labels: [], next: index }
       if ("error" in continuation) return null
       first = continuation
     } else if ("error" in first) {
@@ -612,9 +629,23 @@ function addressTail(tokens: readonly Token[], afterMark: number): boolean {
   return next?.kind === "word" && /^[a-z]$/.test(next.value) && tokens[nextAt + 1]?.value === "-" && tokens[nextAt + 2]?.kind === "num"
 }
 
+function noBefore(tokens: readonly Token[], index: number): boolean {
+  const previous = tokens[index - 1]
+  if (previous?.value === "no") return true
+  return previous?.value === "." && tokens[index - 2]?.value === "no"
+}
+
+function ofYear(tokens: readonly Token[], index: number): boolean {
+  let cursor = index
+  if (tokens[cursor]?.value === ",") cursor += 1
+  const year = tokens[cursor + 1]
+  return tokens[cursor]?.value === "of" && year?.kind === "num" && year.value.length === 4
+}
+
 function dashCodeExempt(tokens: readonly Token[], markIndex: number, afterMark: number): boolean {
   if (tokens[markIndex + 1]?.value !== "-") return false
-  return wordBeforeDash(tokens, markIndex) || addressTail(tokens, afterMark)
+  if (wordBeforeDash(tokens, markIndex) || addressTail(tokens, afterMark)) return true
+  return noBefore(tokens, markIndex) && (ofYear(tokens, afterMark) || caseNumberEnd(tokens, afterMark) !== null)
 }
 
 function isPageReference(tokens: readonly Token[], index: number, next: number): boolean {
@@ -626,27 +657,41 @@ function isPageReference(tokens: readonly Token[], index: number, next: number):
   return next >= index
 }
 
-function lawReportYear(tokens: readonly Token[], index: number): boolean {
+function isInitial(tokens: readonly Token[], index: number): boolean {
+  const dot = tokens[index + 1]
+  const name = tokens[index + 2]
+  return dot?.value === "." && name?.kind === "word" && name.value.length > 1
+}
+
+function lawReportShape(tokens: readonly Token[], index: number): boolean {
   const year = tokens[index]
   const report = tokens[index + 1]
-  return year?.kind === "num" && year.value.length === 4 && report?.kind === "word" && LAW_REPORTS.has(report.value)
+  const volume = tokens[index + 1]
+  const reporter = tokens[index + 2]
+  if (year?.kind !== "num" || year.value.length !== 4) return false
+  if (report?.kind === "word" && report.caps === "upper") return true
+  return volume?.kind === "num" && reporter?.kind === "word" && reporter.caps === "upper"
 }
 
 function directUpperLabel(tokens: readonly Token[], index: number): boolean {
   const token = tokens[index]
-  if (!token || token.caps !== "upper") return false
+  if (!token || token.caps !== "upper" || isInitial(tokens, index)) return false
   if (token.kind === "word" && (LAW_REPORTS.has(token.value) || ABBREVIATIONS.has(token.value))) return false
   if (parseMark(tokens, index)) return true
   return token.kind === "word" && /^[a-z]{1,3}$/.test(token.value)
 }
 
+function citationStart(tokens: readonly Token[], index: number): number {
+  const next = tokens[index + 1]
+  return next?.kind === "word" && OPENER_HEADS.has(next.value) ? index + 2 : index + 1
+}
+
 function openerStarts(tokens: readonly Token[], index: number): boolean {
   const next = tokens[index + 1]
-  if (!next) return false
-  if (next.kind === "num" && next.value.length === 4) return !lawReportYear(tokens, index + 1)
-  if (next.kind === "word" && LAW_REPORTS.has(next.value)) return false
-  const cursor = next.kind === "word" && OPENER_HEADS.has(next.value) ? index + 2 : index + 1
-  return directUpperLabel(tokens, cursor)
+  if (!next || lawReportShape(tokens, index + 1)) return false
+  if (next.kind === "num" && next.value.length === 4) return false
+  if (next.kind === "word" && OPENER_HEADS.has(next.value)) return true
+  return directUpperLabel(tokens, index + 1)
 }
 
 function spelledBeforeKeyword(tokens: readonly Token[], index: number): boolean {
@@ -655,13 +700,20 @@ function spelledBeforeKeyword(tokens: readonly Token[], index: number): boolean 
   return SPELLED_NUMBERS.has(tokens[cursor]?.value ?? "")
 }
 
+function tight(left: Token | undefined, right: Token | undefined): boolean {
+  return !!left && !!right && left.to === right.from
+}
+
 function dottedPath(tokens: readonly Token[], index: number): boolean {
-  return (
-    tokens[index - 1]?.value === "/" &&
-    tokens[index - 2]?.kind === "word" &&
-    tokens[index - 3]?.value === "." &&
-    tokens[index - 4]?.kind === "word"
-  )
+  const slash = tokens[index - 1]
+  const host = tokens[index - 2]
+  const dot = tokens[index - 3]
+  const middle = tokens[index - 4]
+  const earlierDot = tokens[index - 5]
+  const prefix = tokens[index - 6]
+  if (slash?.value !== "/" || host?.kind !== "word" || dot?.value !== "." || middle?.kind !== "word") return false
+  if (earlierDot?.value !== "." || prefix?.kind !== "word") return false
+  return tight(prefix, earlierDot) && tight(earlierDot, middle) && tight(middle, dot) && tight(dot, host) && tight(host, slash)
 }
 
 function sentenceStart(tokens: readonly Token[], index: number): number {
@@ -671,12 +723,16 @@ function sentenceStart(tokens: readonly Token[], index: number): number {
   return 0
 }
 
-function listHeading(tokens: readonly Token[], index: number): boolean {
+function headingSentence(tokens: readonly Token[], index: number): boolean {
   const words: string[] = []
   for (let cursor = sentenceStart(tokens, index); cursor < tokens.length && words.length < 3; cursor += 1) {
-    if (tokens[cursor]?.kind === "word") words.push(tokens[cursor]?.value ?? "")
+    const token = tokens[cursor]
+    if (token?.value === ":") break
+    if (token?.value === "." && tokens[cursor - 1]?.value !== "no") break
+    if (token?.kind === "word") words.push(token.value)
   }
-  return words[0] === "list" && words[1] === "of" && words[2] === "exhibits"
+  if (words[0] === "list" && words[1] === "of" && words[2] === "exhibits") return true
+  return words[0] === "annexure" || words[0] === "annexures"
 }
 
 function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
@@ -729,6 +785,15 @@ function bareLetterRange(tokens: readonly Token[], index: number): { labels: Lab
   return { labels, next: index + 3 }
 }
 
+function bareLetterSeries(tokens: readonly Token[], index: number): { labels: Label[]; next: number } | null {
+  const token = tokens[index]
+  if (token?.kind !== "word" || !/^[a-z]$/.test(token.value)) return null
+  if (tokens[index + 1]?.value === "-" && tokens[index + 1]?.from === token.to) return null
+  const parsed = parseExpression(tokens, index)
+  if (!parsed || parsed.labels.length < 2 || parsed.labels.some((label) => label.family !== "letter")) return null
+  return parsed
+}
+
 function seriesOf(label: Label): string | null {
   if (label.family === "letter") return "letter"
   if (label.family === "mark") return `mark-${label.key[0] ?? ""}`
@@ -746,7 +811,7 @@ export function assignedCitation(token: string): { form: string; series: string 
   return { form: hitOf(label).form, series: seriesOf(label) }
 }
 
-function hitOf(label: Label): CitationHit {
+function hitOf(label: Label): { form: string; canonical: string } {
   if (label.family === "mark") return { form: `mark:${label.key}`, canonical: label.key }
   if (label.family === "number") return { form: `encl:${label.key}`, canonical: label.key }
   return { form: `annex:${label.key}`, canonical: label.key }
@@ -759,44 +824,47 @@ export function scanCitations(
   const tokens = mergeKeywords(tokenise(normaliseCitationText(draft)))
   const hits: CitationHit[] = []
   const unparsed: string[] = []
-  const consider = (label: Label, keyword: CitationFamily | null) => {
+  const consider = (label: Label, keyword: CitationFamily | null, forOrder: boolean) => {
     if (keyword && keyword !== filing.family) {
       unparsed.push(`body cites ${label.key}, which is not an annexure in this filing set`)
       return
     }
-    hits.push(hitOf(label))
+    hits.push({ ...hitOf(label), forOrder })
   }
   let index = 0
   while (index < tokens.length) {
     const token = tokens[index]
     const opener = token?.kind === "word" && CITATION_OPENERS.has(token.value)
     const keyword = token?.kind === "word" ? KEYWORD_FAMILY[token.value] : undefined
+    if (token?.kind === "word" && token.value === "pp") {
+      if (isPageReference(tokens, index, index + 3)) {
+        index += 3
+        continue
+      }
+      if (tokens[index + 1]?.value === "." && tokens[index + 2]?.kind === "num") {
+        consider({ family: "mark", key: `P/${tokens[index + 2]?.value ?? ""}` }, null, !headingSentence(tokens, index))
+        index += 3
+        continue
+      }
+    }
     if (opener && !keyword) {
       if (!openerStarts(tokens, index)) {
         index += 1
         continue
       }
-      const head = tokens[index + 1]
-      const start = head?.kind === "word" && OPENER_HEADS.has(head.value) ? index + 2 : index + 1
+      const start = citationStart(tokens, index)
       const parsed = parseExpression(tokens, start)
-      if (!parsed) {
+      if (!parsed || parsed.labels.length === 0) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
-        index += 1
+        const end = sentenceEnd(tokens, index)
+        index = end < tokens.length ? end + 1 : tokens.length
         continue
       }
-      if (parsed.labels.length === 0) {
-        index += 1
-        continue
-      }
-      for (const label of parsed.labels) consider(label, null)
+      for (const label of parsed.labels) consider(label, null, !headingSentence(tokens, index))
       index = parsed.next
       continue
     }
     if (token?.kind === "word" && keyword) {
-      if (listHeading(tokens, index)) {
-        index += 1
-        continue
-      }
       const parsed = parseExpression(tokens, index + 1)
       if (!parsed || (parsed.labels.length === 0 && spelledBeforeKeyword(tokens, index))) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
@@ -807,13 +875,13 @@ export function scanCitations(
         index += 1
         continue
       }
-      for (const label of parsed.labels) consider(label, keyword)
+      for (const label of parsed.labels) consider(label, keyword, !headingSentence(tokens, index))
       index = parsed.next
       continue
     }
     const mark = parseMark(tokens, index)
     if (mark) {
-      if (isPageReference(tokens, index, mark.next) || dottedPath(tokens, index) || listHeading(tokens, index)) {
+      if (isPageReference(tokens, index, mark.next) || dottedPath(tokens, index)) {
         index = mark.next
         continue
       }
@@ -827,24 +895,31 @@ export function scanCitations(
         index = extension?.next ?? mark.next
         continue
       }
+      const inOrder = !headingSentence(tokens, index)
       if (extension && tokens[index + 1]?.value === "-") {
         index = extension.next
-        consider({ family: "mark", key: extension.key }, null)
+        consider({ family: "mark", key: extension.key }, null, inOrder)
         continue
       }
       const ranged = markRange(tokens, mark)
       const end = ranged && !("error" in ranged) ? ranged.next : (extension?.next ?? mark.next)
       if (ranged && "error" in ranged) unparsed.push(`body cites ${mark.key} without a label expression that can be read`)
-      else if (ranged) for (const label of ranged.labels) consider(label, null)
-      else consider({ family: "mark", key: extension && tokens[index + 1]?.value !== "-" ? extension.key : mark.key }, null)
+      else if (ranged) for (const label of ranged.labels) consider(label, null, inOrder)
+      else consider({ family: "mark", key: extension && tokens[index + 1]?.value !== "-" ? extension.key : mark.key }, null, inOrder)
       index = end
       continue
     }
     if (filing.family === "letter") {
       const range = bareLetterRange(tokens, index)
       if (range && range.labels.every((label) => filing.assigned.has(`annex:${label.key}`))) {
-        for (const label of range.labels) consider(label, null)
+        for (const label of range.labels) consider(label, null, !headingSentence(tokens, index))
         index = range.next
+        continue
+      }
+      const series = bareLetterSeries(tokens, index)
+      if (series) {
+        for (const label of series.labels) consider(label, null, !headingSentence(tokens, index))
+        index = series.next
         continue
       }
     }

@@ -177,13 +177,15 @@ function checkCitations(
   const knownKeys = new Set(keys)
   const context = citationContext(scheme, annexures)
   const scan = scanCitations(draft, { ...context, assigned: knownKeys })
+  const referred: string[] = []
   const known: string[] = []
   for (const hit of scan.hits) {
     if (!knownKeys.has(hit.form)) {
       queue.push(item("ref_unresolved", null, `body cites ${hit.canonical}, which is not an annexure in this filing set`))
       continue
     }
-    if (!known.includes(hit.form)) known.push(hit.form)
+    if (!referred.includes(hit.form)) referred.push(hit.form)
+    if (hit.forOrder && !known.includes(hit.form)) known.push(hit.form)
   }
   for (const detail of scan.unparsed) {
     queue.push(item("ref_unresolved", null, detail))
@@ -191,7 +193,7 @@ function checkCitations(
   if (scheme.kind === "manual" || !requireReferenceOrder) return
   annexures.forEach((annexure, index) => {
     const key = keys[index] ?? ""
-    if (!known.includes(key)) {
+    if (!referred.includes(key)) {
       queue.push(item("ref_unresolved", annexure.artifactId, `body does not refer to ${annexure.token}`))
     }
   })
@@ -210,13 +212,16 @@ function checkManualRefs(
   if (!requireReferenceOrder) return
   const keys = annexures.map((annexure) => assignedKey(annexure.token))
   const scan = scanCitations(draft, { ...citationContext(scheme, annexures), assigned: new Set(keys) })
+  const referred: string[] = []
   const known: string[] = []
   for (const hit of scan.hits) {
-    if (keys.includes(hit.form) && !known.includes(hit.form)) known.push(hit.form)
+    if (!keys.includes(hit.form)) continue
+    if (!referred.includes(hit.form)) referred.push(hit.form)
+    if (hit.forOrder && !known.includes(hit.form)) known.push(hit.form)
   }
   annexures.forEach((annexure, index) => {
     const detail = `body does not refer to ${annexure.token}`
-    if (!known.includes(keys[index] ?? "") && !queue.some((entry) => entry.detail === detail)) {
+    if (!referred.includes(keys[index] ?? "") && !queue.some((entry) => entry.detail === detail)) {
       queue.push(item("ref_unresolved", annexure.artifactId, detail))
     }
   })
