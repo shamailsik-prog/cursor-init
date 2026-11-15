@@ -203,6 +203,9 @@ describe("Q11 checkLimitation", () => {
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { reviewStatus: "QUARANTINED" })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { versionConfidence: 0.5 })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", base("three years or one year"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_ambiguous" })
+    expect(assessed("2020-01-01", base("twenty one days"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
+    expect(assessed("2020-01-01", base("one hundred and twenty years"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
+    expect(assessed("2020-01-01", base("twenty days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-01-21" })
     expect(assessed("2020-01-01", [version("limitation-act-1908/article/7", "Q11 FIXTURE. No period is stated in this text.", "1908-01-01", null, 1)])).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable" })
     const sindh = [article("three years", "1908-01-01", null, 1, "", { jurisdiction: "Sindh" })]
     expect(assessed("2020-01-01", sindh)).toMatchObject({ status: "NOT_ASSESSED", reason: "no_history" })
@@ -386,7 +389,51 @@ describe("Q11 diary alerts and relevant law dates", () => {
     const resolved = store.followUps.filter((row) => row.kind === "limitation_alert" && row.status === "resolved")
     expect(open.map((row) => row.deadline)).toEqual(["2022-06-01", "2022-06-01", "2022-06-01"])
     expect(resolved).toHaveLength(3)
-    expect(resolved.every((row) => row.deadline === "2024-06-01")).toBe(true)
+    expect(resolved.every((row) => row.deadline === "2024-06-01" && row.resolvedBy === "limitation-engine")).toBe(true)
+
+    store.sectionVersions.length = 0
+    for (const row of base()) store.sectionVersions.push({ ...row })
+    applyLimitation(store, {
+      matterId: matter.id,
+      article: "7",
+      accrualDate: "2021-06-01",
+      filingForum: "LHC",
+      calendar: OPEN,
+    })
+    const restored = store.followUps.filter((row) => row.kind === "limitation_alert" && row.status !== "resolved")
+    expect(restored.map((row) => row.deadline)).toEqual(["2024-06-01", "2024-06-01", "2024-06-01"])
+    expect(listCourtOpsQueue(store, "clerk1", { matterId: matter.id, limit: 10, cursor: 0 }).items).toHaveLength(3)
+  })
+
+  it("keeps another article's open alerts when this article is assessed", () => {
+    const { store, matter } = matterStore()
+    store.sectionVersions.push(version("limitation-act-1908/article/113", articleText("one year"), "1908-01-01", null, 1))
+    applyLimitation(store, {
+      matterId: matter.id,
+      article: "7",
+      accrualDate: "2021-06-01",
+      filingForum: "LHC",
+      calendar: OPEN,
+    })
+    applyLimitation(store, {
+      matterId: matter.id,
+      article: "113",
+      accrualDate: "2021-06-01",
+      filingForum: "LHC",
+      calendar: OPEN,
+    })
+    const open = store.followUps.filter((row) => row.kind === "limitation_alert" && row.status !== "resolved")
+    expect(open.filter((row) => row.article === "7").map((row) => row.deadline)).toEqual([
+      "2024-06-01",
+      "2024-06-01",
+      "2024-06-01",
+    ])
+    expect(open.filter((row) => row.article === "113").map((row) => row.deadline)).toEqual([
+      "2022-06-01",
+      "2022-06-01",
+      "2022-06-01",
+    ])
+    expect(listCourtOpsQueue(store, "clerk1", { matterId: matter.id, limit: 10, cursor: 0 }).items).toHaveLength(6)
   })
 
   it("refuses a filing forum that is not the matter's court", () => {
@@ -415,6 +462,19 @@ describe("Q11 diary alerts and relevant law dates", () => {
     scheduleLimitationAlerts(store, input)
     scheduleLimitationAlerts(store, input)
     expect(store.followUps.filter((row) => row.kind === "limitation_alert")).toHaveLength(3)
+    const kept = store.followUps.find((row) => row.daysBefore === 90)
+    if (!kept) throw new Error("missing 90-day alert")
+    kept.status = "resolved"
+    kept.resolvedBy = "clerk1"
+    kept.resolvedAt = 1
+    scheduleLimitationAlerts(store, { ...input, deadline: "2025-01-01" })
+    scheduleLimitationAlerts(store, input)
+    expect(kept.status).toBe("resolved")
+    expect(kept.resolvedBy).toBe("clerk1")
+    const reopened = store.followUps.filter(
+      (row) => row.article === "7" && row.deadline === "2024-06-01" && row.status !== "resolved"
+    )
+    expect(reopened.map((row) => row.daysBefore).sort((a, b) => (b ?? 0) - (a ?? 0))).toEqual([30, 7])
   })
 })
 

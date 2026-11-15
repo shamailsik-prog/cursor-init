@@ -6,6 +6,7 @@ declare module "@/platform/spine/store" {
     dueOn?: string
     daysBefore?: 90 | 30 | 7
     deadline?: string
+    article?: string
     delivery?: "none"
   }
 }
@@ -22,6 +23,7 @@ export function scheduleLimitationAlerts(
     if (
       row.matterId === input.matterId &&
       row.kind === "limitation_alert" &&
+      row.article === input.article &&
       row.status !== "resolved" &&
       row.deadline !== input.deadline
     ) {
@@ -31,8 +33,16 @@ export function scheduleLimitationAlerts(
     }
   }
   for (const alert of limitationAlertSchedule(input.deadline)) {
-    const id = `limalert_${input.matterId}_${input.deadline}_d${alert.daysBefore}`
-    if (store.followUps.some((row) => row.id === id)) continue
+    const id = `limalert_${input.matterId}_${input.article}_${input.deadline}_d${alert.daysBefore}`
+    const existing = store.followUps.find((row) => row.id === id)
+    if (existing) {
+      if (existing.status === "resolved" && existing.resolvedBy === "limitation-engine") {
+        existing.status = "open"
+        existing.resolvedBy = null
+        existing.resolvedAt = null
+      }
+      continue
+    }
     store.followUps.push({
       id,
       firmId: input.firmId,
@@ -46,6 +56,7 @@ export function scheduleLimitationAlerts(
       dueOn: alert.dueOn,
       daysBefore: alert.daysBefore,
       deadline: input.deadline,
+      article: input.article,
       delivery: "none",
     })
   }

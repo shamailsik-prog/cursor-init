@@ -380,6 +380,7 @@ function parsePeriod(
   for (const match of matches) {
     const token = match[1].toLowerCase()
     if (token.includes("-")) return { ok: false, reason: "period_unreadable" }
+    if (isCompoundTail(text, match.index ?? 0)) return { ok: false, reason: "period_unreadable" }
     const n = /^\d+$/.test(token) ? Number(token) : NUMBER_WORDS[token]
     if (n === undefined) continue
     if (!Number.isInteger(n) || n < 1 || n > 9999) return { ok: false, reason: "period_unreadable" }
@@ -391,6 +392,14 @@ function parsePeriod(
   const first = parsed[0]
   if (parsed.some((row) => row.n !== first.n || row.unit !== first.unit)) return { ok: false, reason: "period_ambiguous" }
   return { ok: true, n: first.n, unit: first.unit, cited: first.cited }
+}
+
+const COMPOUND_PREFIX =
+  /(?:^|[^A-Za-z0-9-])(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|ninety|hundred|thousand|and)[ \t]+$/i
+
+/** A spaced compound such as "twenty one days" is not a one-day period. Reject it. */
+function isCompoundTail(text: string, index: number): boolean {
+  return COMPOUND_PREFIX.test(text.slice(0, index))
 }
 
 function reckoningSource(
