@@ -18,6 +18,7 @@ if (process.env.CI && !postgresUrl) {
 
 const suite = postgresUrl ? describe : describe.skip
 const DDL = fs.readFileSync(path.join(process.cwd(), "postgres/ddl/009_p6_master.sql"), "utf8")
+const ACTOR_KEY_DDL = fs.readFileSync(path.join(process.cwd(), "postgres/ddl/011_p6_actor_key.sql"), "utf8")
 const MAIN_DDL = fs.readFileSync(path.join(process.cwd(), "tests/fixtures/p6/009_p6_master_main.sql"), "utf8")
 
 function applyPsqlFile(connectionString: string, sql: string): { status: number; stderr: string } {
@@ -646,7 +647,8 @@ suite("G3 master grants on local Postgres", () => {
         cr: "partner_a",
         ogham: "partner_a",
         para: "partner_a",
-        next: "partner_a\u0085",
+        // U+0085 survives trim, then the actor-id charset rejects the key.
+        next: "",
       })
       const newlineSelf = await proposeChange(
         {
@@ -942,6 +944,363 @@ suite("G3 master grants on local Postgres", () => {
       } finally {
         await drop.end()
       }
+    }
+  }, 60_000)
+
+  async function freshDb(prefix: string): Promise<{ name: string; url: string; client: pg.Client }> {
+    const name = `${prefix}_${randomBytes(4).toString("hex")}`
+    const server = new pg.Client({ connectionString: adminUrl })
+    await server.connect()
+    try {
+      await server.query(`CREATE DATABASE ${quoteIdent(name)}`)
+    } finally {
+      await server.end()
+    }
+    const url = new URL(adminUrl)
+    url.pathname = `/${name}`
+    const client = new pg.Client({ connectionString: url.toString() })
+    await client.connect()
+    return { name, url: url.toString(), client }
+  }
+
+  async function dropDb(name: string, client?: pg.Client): Promise<void> {
+    await client?.end()
+    const drop = new pg.Client({ connectionString: adminUrl })
+    await drop.connect()
+    try {
+      await drop.query(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+        [name],
+      )
+      await drop.query(`DROP DATABASE IF EXISTS ${quoteIdent(name)}`)
+    } finally {
+      await drop.end()
+    }
+  }
+
+  async function expectRefused(
+    client: pg.Client,
+    sql: string,
+    params: unknown[],
+    message: RegExp,
+  ): Promise<void> {
+    await client.query("BEGIN")
+    await client.query("SET LOCAL ROLE p6_service")
+    try {
+      await expect(client.query(sql, params)).rejects.toThrow(message)
+    } finally {
+      await client.query("ROLLBACK")
+    }
+  }
+
+  it("TEST-252-R3-001: raw SQL refuses pending rewrites and the catch-all transitions", async () => {
+    const db = await freshDb("p6r3")
+    try {
+      await db.client.query(DDL)
+      await db.client.query("SET ROLE p6_service")
+      const substantiveId = randomUUID()
+      const firmId = randomUUID()
+      const requestedId = randomUUID()
+      const relabelId = randomUUID()
+      const stampId = randomUUID()
+      const approvedId = randomUUID()
+      const cosmeticId = randomUUID()
+      const rejectedId = randomUUID()
+      async function insertPending(id: string, entryKey: string, changeClass: "cosmetic" | "substantive", proposedBy: string) {
+        await db.client.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, requested_class, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', $2, 'mutable', $3,
+                   '{"wording":"substantive body"}'::jsonb, $4, 'pending', $2, 'abc')`,
+          [id, changeClass, entryKey, proposedBy],
+        )
+      }
+      await insertPending(substantiveId, "clause.d15", "substantive", "partner_a")
+      await insertPending(firmId, "clause.d16", "substantive", "partner_a")
+      await insertPending(requestedId, "clause.d17", "substantive", "partner_a")
+      await insertPending(relabelId, "clause.d18", "substantive", "partner_a")
+      await insertPending(stampId, "clause.d9", "substantive", "partner_a")
+      await insertPending(approvedId, "clause.catch-approved", "substantive", "partner_a")
+      await insertPending(cosmeticId, "clause.catch-applied", "cosmetic", "learner-1")
+      await insertPending(rejectedId, "clause.catch-rejected", "substantive", "partner_a")
+      await db.client.query("RESET ROLE")
+
+      // D15T. A proposed_by rewrite, then self-approval by the original proposer.
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET proposed_by = 'partner_b' WHERE id = $1 AND status = 'pending'`,
+        [substantiveId],
+        /approved proposal payload is frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = 'partner_a', decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1 AND status = 'pending'`,
+        [substantiveId],
+        /differ from proposer/,
+      )
+      // D16T / D17. firm_id and requested_class stay frozen on a pending row.
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET firm_id = 'firmB' WHERE id = $1 AND status = 'pending'`,
+        [firmId],
+        /approved proposal payload is frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET requested_class = 'cosmetic' WHERE id = $1 AND status = 'pending'`,
+        [requestedId],
+        /approved proposal payload is frozen/,
+      )
+      // D18. Relabel substantive to cosmetic, then the cosmetic auto-apply.
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET change_class = 'cosmetic' WHERE id = $1 AND status = 'pending'`,
+        [relabelId],
+        /approval is not a direct status change/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals
+            SET status = 'applied', decided_by = 'p6', decided_kind = 'system', decided_role = 'system'
+          WHERE id = $1 AND status = 'pending'`,
+        [relabelId],
+        /proposal status transition is refused/,
+      )
+      // D9full. A decided_by stamp while the row stays pending.
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET decided_by = 'partner_b' WHERE id = $1 AND status = 'pending'`,
+        [stampId],
+        /approval is not a direct status change/,
+      )
+
+      await db.client.query("BEGIN")
+      await db.client.query("SET LOCAL ROLE p6_service")
+      await db.client.query(
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1 AND status = 'pending'`,
+        [approvedId],
+      )
+      await db.client.query(
+        `UPDATE change_proposals
+            SET status = 'applied', decided_by = 'p6', decided_kind = 'system', decided_role = 'system'
+          WHERE id = $1 AND status = 'pending'`,
+        [cosmeticId],
+      )
+      await db.client.query("COMMIT")
+      await db.client.query("ALTER TABLE change_proposals DISABLE TRIGGER change_proposals_status_transition")
+      await db.client.query("BEGIN")
+      await db.client.query("SET LOCAL ROLE p6_service")
+      await db.client.query(`UPDATE change_proposals SET status = 'rejected' WHERE id = $1`, [rejectedId])
+      await db.client.query("COMMIT")
+      await db.client.query("ALTER TABLE change_proposals ENABLE TRIGGER change_proposals_status_transition")
+
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals
+            SET status = 'pending', decided_by = NULL, decided_kind = NULL, decided_role = NULL
+          WHERE id = $1 AND status = 'applied'`,
+        [cosmeticId],
+        /proposal status transition is refused/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET status = 'rejected' WHERE id = $1 AND status = 'approved'`,
+        [approvedId],
+        /proposal status transition is refused/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals
+            SET status = 'rejected', decided_by = NULL, decided_kind = NULL, decided_role = NULL
+          WHERE id = $1 AND status = 'applied'`,
+        [cosmeticId],
+        /proposal status transition is refused/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET status = 'pending' WHERE id = $1 AND status = 'rejected'`,
+        [rejectedId],
+        /proposal status transition is refused/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET decided_by = 'partner_c' WHERE id = $1 AND status = 'applied'`,
+        [cosmeticId],
+        /proposal status transition is refused/,
+      )
+
+      const kept = await db.client.query<{
+        id: string
+        proposed_by: string
+        firm_id: string
+        requested_class: string
+        change_class: string
+        status: string
+        decided_by: string | null
+      }>(
+        `SELECT id, proposed_by, firm_id, requested_class, change_class, status, decided_by
+           FROM change_proposals WHERE id = ANY($1::uuid[])`,
+        [[substantiveId, firmId, requestedId, relabelId, stampId, cosmeticId]],
+      )
+      const byId = new Map(kept.rows.map((row) => [row.id, row]))
+      expect(byId.get(substantiveId)).toMatchObject({ proposed_by: "partner_a", status: "pending", decided_by: null })
+      expect(byId.get(firmId)).toMatchObject({ firm_id: "firmA", status: "pending" })
+      expect(byId.get(requestedId)).toMatchObject({ requested_class: "substantive", status: "pending" })
+      expect(byId.get(relabelId)).toMatchObject({ change_class: "substantive", status: "pending", decided_by: null })
+      expect(byId.get(stampId)).toMatchObject({ status: "pending", decided_by: null })
+      expect(byId.get(cosmeticId)).toMatchObject({ status: "applied", decided_by: "p6", change_class: "cosmetic" })
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("PARITY-252-R3-002: Postgres refuses Unicode 16 case-pair self-approval", async () => {
+    const db = await freshDb("p6key")
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      const pairs: Array<[string, string]> = [
+        ["\u{16EA0}", "\u{16EBB}"],
+        ["\u{A7CE}", "\u{A7CF}"],
+        ["\u{A7D2}", "\u{A7D3}"],
+      ]
+      for (const [upper, lower] of pairs) {
+        const folded = await db.client.query<{ upper: string; lower: string }>(
+          `SELECT public.p6_actor_key($1) AS upper, public.p6_actor_key($2) AS lower`,
+          [upper, lower],
+        )
+        expect(folded.rows[0]).toEqual({ upper: "", lower: "" })
+      }
+      const ascii = await db.client.query<{ key: string }>(`SELECT public.p6_actor_key($1) AS key`, ["Partner_A"])
+      expect(ascii.rows[0]?.key).toBe("partner_a")
+      await db.client.query("SET ROLE p6_service")
+      for (const [upper, lower] of pairs) {
+        const id = randomUUID()
+        await db.client.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                   '{"wording":"unicode"}'::jsonb, $3, 'pending', 'abc')`,
+          [id, `clause.${id.slice(0, 8)}`, upper],
+        )
+        await expect(
+          db.client.query(
+            `UPDATE change_proposals
+                SET status = 'approved', decided_by = $2, decided_kind = 'partner', decided_role = 'partner'
+              WHERE id = $1 AND status = 'pending'`,
+            [id, lower],
+          ),
+        ).rejects.toThrow(/differ from proposer|partner approval|approval is not a direct status change/)
+        await expect(
+          db.client.query(
+            `UPDATE change_proposals
+                SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+              WHERE id = $1 AND status = 'pending'`,
+            [id],
+          ),
+        ).rejects.toThrow(/differ from proposer|partner approval|approval is not a direct status change/)
+        const kept = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [id])
+        expect(kept.rows[0]?.status).toBe("pending")
+      }
+      await db.client.query("RESET ROLE")
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("DOC-252-R3-003: tx.commitVersion runs the proposal guards", async () => {
+    const db = await freshDb("p6doc")
+    const pool = new pg.Pool({ connectionString: db.url, max: 1 })
+    try {
+      await db.client.query(DDL)
+      await db.client.query(ACTOR_KEY_DDL)
+      await db.client.query(`GRANT p6_service TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`)
+      const store = createPgMasterStore(pool)
+      const pending = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "learner-style",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.doc",
+          payload: { wording: "original" },
+          proposedBy: "partner_a",
+        },
+        store,
+      )
+      const input = {
+        firmId: "firmA",
+        proposalId: pending.id,
+        action: "apply" as const,
+        diff: { key: pending.entryKey, partition: "mutable" as const, before: { entries: {} }, after: { entries: {} } },
+        snapshot: { entries: {} },
+        authorId: "partner_b",
+        authorKind: "partner" as const,
+        restoredFromVersionId: null,
+        classification: "confidential",
+        expectedBaseVersionId: null,
+      }
+      await expect(
+        store.runExclusive((tx) => tx.commitVersion({ ...input, proposal: { ...pending, proposedBy: "other-actor" } })),
+      ).rejects.toThrow(/proposedBy is immutable/)
+      await expect(
+        store.runExclusive((tx) => tx.commitVersion({ ...input, proposal: { ...pending, payload: { wording: "swapped" } } })),
+      ).rejects.toThrow(/frozen/)
+      await expect(
+        store.runExclusive((tx) =>
+          tx.commitVersion({
+            ...input,
+            proposal: { ...pending, id: "00000000-0000-4000-8000-0000000000bb" },
+            proposalId: "00000000-0000-4000-8000-0000000000bb",
+          }),
+        ),
+      ).rejects.toThrow(/proposal not found/)
+      const kept = await db.client.query<{ proposed_by: string; status: string; versions: number }>(
+        `SELECT p.proposed_by, p.status, (SELECT count(*)::int FROM master_versions) AS versions
+           FROM change_proposals p WHERE p.id = $1`,
+        [pending.id],
+      )
+      expect(kept.rows[0]).toEqual({ proposed_by: "partner_a", status: "pending", versions: 0 })
+    } finally {
+      await pool.end()
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("INFO-252-R3: a large legacy set names the first 20 ids and the count", async () => {
+    const db = await freshDb("p6info")
+    try {
+      expect(applyPsqlFile(db.url, MAIN_DDL).status).toBe(0)
+      const ids = Array.from({ length: 25 }, () => randomUUID()).sort()
+      await db.client.query("SET ROLE p6_service")
+      for (const [index, id] of ids.entries()) {
+        await db.client.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, decided_by, decided_kind, decided_role, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                   '{"wording":"legacy"}'::jsonb, 'partner_a', 'approved', NULL, 'partner', 'partner', 'abc')`,
+          [id, `clause.legacy.${index}`],
+        )
+      }
+      await db.client.query("RESET ROLE")
+      const upgraded = applyPsqlFile(db.url, DDL)
+      expect(upgraded.status).not.toBe(0)
+      expect(upgraded.stderr).toMatch(/refusing to replace substantive_partner_approval/)
+      expect(upgraded.stderr).toMatch(/20 of 25/)
+      expect(upgraded.stderr).toContain(ids[0])
+      expect(upgraded.stderr).toContain(ids[19])
+      expect(upgraded.stderr).not.toContain(ids[20])
+    } finally {
+      await dropDb(db.name, db.client)
     }
   }, 60_000)
 })

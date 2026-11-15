@@ -219,8 +219,12 @@ REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
 
 -- Actor key: NFKC, drop default-ignorables, ECMAScript trim, lower-case, fold ß to ss.
 -- Trim is every Unicode White_Space and LineTerminator, the same set as String.prototype.trim.
--- U+0085 NEXT LINE is not in that set. U+A7F1 is mapped to U+0053 because this server's
+-- U+0085 NEXT LINE is not in that set, so it survives trim and the charset then rejects the key.
+-- U+A7F1 is mapped to U+0053 because this server's
 -- normalize(NFKC) leaves it unchanged while ECMAScript NFKC maps it to S.
+-- After folding, a key that is not ^[a-z0-9._@-]+$ is empty. Unicode 16 case pairs are not
+-- given one-off folds: Postgres 16 lower() leaves them distinct, so both sides reject them.
+-- 011_p6_actor_key.sql repeats this function for a database that already applied an older 009.
 CREATE OR REPLACE FUNCTION public.p6_actor_key(value text) RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
@@ -234,6 +238,7 @@ DECLARE
   cp integer;
   ws text := chr(9) || chr(10) || chr(11) || chr(12) || chr(13) || chr(32) || chr(160) || chr(5760);
   n integer := 8192;
+  actor_key text;
 BEGIN
   WHILE i <= char_length(folded) LOOP
     ch := substr(folded, i, 1);
@@ -264,11 +269,15 @@ BEGIN
     n := n + 1;
   END LOOP;
   ws := ws || chr(8232) || chr(8233) || chr(8239) || chr(8287) || chr(12288);
-  RETURN replace(
+  actor_key := replace(
     lower(replace(regexp_replace(out, '^[' || ws || ']+|[' || ws || ']+$', '', 'g'), chr(7838), chr(223))),
     chr(223),
     'ss'
   );
+  IF actor_key !~ '^[a-z0-9._@-]+$' THEN
+    RETURN '';
+  END IF;
+  RETURN actor_key;
 END;
 $fn$;
 
@@ -441,20 +450,28 @@ CREATE TRIGGER change_proposals_freeze_payload
 DO $swap$
 DECLARE
   bad_ids text;
+  bad_count integer;
 BEGIN
-  SELECT string_agg(id::text, ', ' ORDER BY id::text)
-    INTO bad_ids
-    FROM public.change_proposals
-   WHERE status IN ('approved', 'applied')
-     AND change_class = 'substantive'
-     AND (
-       decided_kind IS DISTINCT FROM 'partner'
-       OR decided_role IS DISTINCT FROM 'partner'
-       OR public.p6_actor_key(decided_by) = ''
-       OR public.p6_actor_key(decided_by) = public.p6_actor_key(proposed_by)
-     );
-  IF bad_ids IS NOT NULL THEN
-    RAISE EXCEPTION 'refusing to replace substantive_partner_approval: % has no distinct partner decision', bad_ids
+  -- The message lists the first 20 ids and the count. A large legacy set must not make the error unbounded.
+  WITH bad AS (
+    SELECT id::text AS id
+      FROM public.change_proposals
+     WHERE status IN ('approved', 'applied')
+       AND change_class = 'substantive'
+       AND (
+         decided_kind IS DISTINCT FROM 'partner'
+         OR decided_role IS DISTINCT FROM 'partner'
+         OR public.p6_actor_key(decided_by) = ''
+         OR public.p6_actor_key(decided_by) = public.p6_actor_key(proposed_by)
+       )
+  )
+  SELECT COUNT(*)::int,
+         (SELECT string_agg(listed.id, ', ' ORDER BY listed.id) FROM (SELECT id FROM bad ORDER BY id LIMIT 20) listed)
+    INTO bad_count, bad_ids
+    FROM bad;
+  IF bad_count > 0 THEN
+    RAISE EXCEPTION 'refusing to replace substantive_partner_approval: % has no distinct partner decision (% of %)',
+      bad_ids, LEAST(bad_count, 20), bad_count
       USING ERRCODE = '23514';
   END IF;
   EXECUTE $sql$ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval_next$sql$;

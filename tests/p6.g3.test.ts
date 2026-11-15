@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { FEATURE_FLAGS } from "@/lib/foundation-data"
 import { assertLearnersStopped, learnersMayRun } from "@/platform/p6/learners"
-import { InMemoryMasterStore, type MasterStore } from "@/platform/p6/masterStore"
+import { InMemoryMasterStore, normalizeActorKey, type MasterStore, type PersistedProposal } from "@/platform/p6/masterStore"
 import {
   applyChange,
   approveProposal,
@@ -550,6 +550,122 @@ describe("G3 master owned (Layer 18 §10)", () => {
     const kept = await store.getProposal(pending.id)
     expect(kept?.proposedBy).toBe("learner-1")
     expect(kept?.status).toBe("approved")
+  })
+
+  function versionOf(row: PersistedProposal, proposal: PersistedProposal) {
+    return {
+      firmId: row.firmId,
+      proposalId: proposal.id,
+      action: "apply" as const,
+      diff: { key: row.entryKey, partition: "mutable" as const, before: { entries: {} }, after: { entries: {} } },
+      snapshot: { entries: {} },
+      authorId: "partner_b",
+      authorKind: "partner" as const,
+      restoredFromVersionId: null,
+      classification: "confidential",
+      proposal,
+      expectedBaseVersionId: null,
+    }
+  }
+
+  it("MEM-252-R3-001: save, cas, and commit freeze every trigger-frozen column", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.freeze-cols"), store)
+    const swaps: Array<[keyof PersistedProposal, PersistedProposal[keyof PersistedProposal]]> = [
+      ["changeClass", "cosmetic"],
+      ["requestedClass", "cosmetic"],
+      ["firmId", "firmB"],
+      ["entryKey", "clause.other"],
+      ["classification", "public"],
+      ["sourceModule", "other-module"],
+      ["partition", "immutable"],
+    ]
+    for (const [field, value] of swaps) {
+      await expect(store.saveProposal({ ...pending, [field]: value })).rejects.toThrow(/frozen/)
+      expect((await store.getProposal(pending.id))?.[field]).toBe(pending[field])
+    }
+    await approveProposal(pending.id, PARTNER, store)
+    const approved = await store.getProposal(pending.id)
+    for (const [field, value] of swaps) {
+      await store.runExclusive(async (tx) => {
+        await expect(
+          tx.casProposal({ ...approved!, status: "applied", [field]: value }, "approved"),
+        ).rejects.toThrow(/frozen|immutable|transition is refused/)
+      })
+      const kept = await store.getProposal(pending.id)
+      expect(kept?.[field]).toBe(approved?.[field])
+      expect(kept?.status).toBe("approved")
+    }
+    const fresh = p6Store()
+    const row = await proposeChange(substantive("clause.commit-cols"), fresh)
+    for (const [field, value] of swaps) {
+      await expect(fresh.commitVersion(versionOf(row, { ...row, [field]: value }))).rejects.toThrow(
+        /frozen|immutable/,
+      )
+      expect((await fresh.getProposal(row.id))?.[field]).toBe(row[field])
+      expect(await fresh.listVersions("firmA")).toEqual([])
+    }
+  })
+
+  it("MEM-252-R3-001: commitVersion refuses an unknown proposal id", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.unknown"), store)
+    const missing = { ...pending, id: "00000000-0000-4000-8000-0000000000aa" }
+    await expect(store.commitVersion(versionOf(pending, missing))).rejects.toThrow(/proposal not found/)
+    expect(await store.getProposal(missing.id)).toBeNull()
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    expect(await store.listVersions("firmA")).toEqual([])
+  })
+
+  it("MEM-252-R3-001: commitVersion refuses changed decided fields", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.decided"), store)
+    const stamps: Array<Partial<PersistedProposal>> = [
+      { decidedBy: "partner_b" },
+      { decidedKind: "system" },
+      { decidedRole: "system" },
+    ]
+    for (const stamp of stamps) {
+      await expect(store.commitVersion(versionOf(pending, { ...pending, ...stamp }))).rejects.toThrow(
+        /approval is not a direct status change/,
+      )
+      const kept = await store.getProposal(pending.id)
+      expect(kept?.decidedBy).toBeNull()
+      expect(kept?.decidedKind).toBeNull()
+      expect(kept?.decidedRole).toBeNull()
+      expect(kept?.status).toBe("pending")
+      expect(await store.listVersions("firmA")).toEqual([])
+    }
+  })
+
+  it("PARITY-252-R3-002: actor keys outside ASCII are empty after folding", () => {
+    const pairs = ["\u{16EA0}", "\u{16EBB}", "\u{A7CE}", "\u{A7CF}", "\u{A7D2}", "\u{A7D3}"]
+    for (const value of pairs) expect(normalizeActorKey(value)).toBe("")
+    expect(normalizeActorKey("partner_\u{16EA0}")).toBe("")
+    expect(normalizeActorKey("Partner_A")).toBe("partner_a")
+    expect(normalizeActorKey("straße")).toBe("strasse")
+    expect(normalizeActorKey("a.b@firm")).toBe("a.b@firm")
+    const sql = readFileSync("postgres/ddl/009_p6_master.sql", "utf8")
+    const forward = readFileSync("postgres/ddl/011_p6_actor_key.sql", "utf8")
+    const body = (text: string) => {
+      const match = text.match(/CREATE OR REPLACE FUNCTION public\.p6_actor_key[\s\S]*?\$fn\$;/)
+      if (!match) throw new Error("p6_actor_key body missing")
+      return match[0]
+    }
+    expect(sql).toMatch(/\^\[a-z0-9._@-\]\+\$/)
+    expect(body(forward)).toBe(body(sql))
+  })
+
+  it("PARITY-252-R3-002: a Unicode 16 case pair cannot approve, including a different ASCII partner", async () => {
+    const store = p6Store()
+    const pending = await proposeChange({ ...substantive("clause.unicode"), proposedBy: "\u{16EA0}" }, store)
+    await expect(
+      approveProposal(pending.id, { actorId: "\u{16EBB}", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/substantive proposal requires partner approval/)
+    await expect(
+      approveProposal(pending.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/substantive proposal requires partner approval/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
   it("FA-Q07-R2-006: saveProposal cannot stamp partner approval fields", async () => {
