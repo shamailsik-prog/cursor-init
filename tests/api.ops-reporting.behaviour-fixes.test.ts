@@ -82,8 +82,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   const crashes = onError.mock.calls
-    .map(([err]) => err)
-    .filter((err) => err instanceof TypeError || err instanceof ReferenceError)
+    .map(([err]: readonly unknown[]) => err)
+    .filter((err: unknown) => err instanceof TypeError || err instanceof ReferenceError)
   onError.mockRestore()
   expect(crashes).toEqual([])
 })
