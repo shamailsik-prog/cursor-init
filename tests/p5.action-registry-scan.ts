@@ -114,6 +114,10 @@ const RESOLVED: Record<string, { actions: string[]; note: string }> = {
     actions: ["draft.gate", "draft.approve"],
     note: "rereadDraft forwards `action` to requireStillPermitted. Sources: gateOps.ts:639 draft.gate, :877 draft.approve.",
   },
+  "services/d2-1/dispatch.ts:73": {
+    actions: ["client.read", "draft", "list_matters", "research"],
+    note: "permitWhatsApp forwards `action` to checkPermission. The values are WHATSAPP_WEB_ACTION: matters, hearings, intake and help use list_matters; clients and presence use client.read; drafts uses draft (the per-draft call passes the literal \"draft\"); research uses research.",
+  },
 }
 
 const TEST_ACTION = /"(read_matter|read_firm|read|intimation_register|record_accounts_entry|committee_brain_read|committee_brain)"/g
