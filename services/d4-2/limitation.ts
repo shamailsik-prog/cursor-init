@@ -71,6 +71,8 @@ const NUMBER_WORDS: Record<string, number> = {
   forty: 40,
   fifty: 50,
   sixty: 60,
+  seventy: 70,
+  eighty: 80,
   ninety: 90,
 }
 
@@ -374,48 +376,156 @@ function inForce(versions: readonly LimitationVersion[], sectionId: string, juri
   return { ok: true, row: source }
 }
 
-const NUMBER_WORD =
-  "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|zero|nought|dozen|half|quarter"
-const PERIOD_PHRASE_RE = new RegExp(
-  `(?<![A-Za-z0-9./-])(\\d{1,4}(?!\\d)|(?:${NUMBER_WORD})(?:[ \\t-]+(?:and|${NUMBER_WORD}))*)[ \\t]+(days|day|months|month|years|year)(?![A-Za-z])`,
-  "gi"
-)
-const TRAILING_NUMBER_RE = new RegExp(`(?:^|\\s)(?:and|${NUMBER_WORD})\\s+$`, "i")
-const DECIMAL_PERIOD_RE = /\d+\.\d+\s*(?:days|day|months|month|years|year)\b/i
-const FRACTION_PERIOD_RE = /\d+\s*\/\s*\d+\s*(?:days|day|months|month|years|year)\b/i
-const DIGIT_SEP_PERIOD_RE = /\d[\s,.\u00B7]+\d[\s,.\u00B7\d]*\s*(?:days|day|months|month|years|year)\b/iu
-const ALT_PERIOD_RE =
-  /\b(?:(?:a|an)\s+(?:day|days|month|months|year|years|fortnight|fortnights)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)\s+(?:day|days|month|months|year|years)|fortnights?)\b/i
-
 /** Ruling 4: only a finite number strictly above 0.5 and at most 1. Missing and non-numbers fail. */
 function confidenceAllowsUse(value: unknown): boolean {
   return typeof value === "number" && versionUsable(value)
 }
 
+const TENS_WORDS = new Set(["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"])
+const ONES_WORDS = new Set(["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"])
+const QUANTITY_WORDS = new Set([
+  ...Object.keys(NUMBER_WORDS),
+  "hundred",
+  "thousand",
+  "million",
+  "billion",
+  "trillion",
+  "zero",
+  "nought",
+  "dozen",
+  "half",
+  "quarter",
+  "couple",
+])
+/** N11: fortnights? has to stay. Dropping it lets "three years or fortnights" assess. */
+const UNIT_WORD_RE = /\b(fortnights?|weeks?|months?|years?|hours?|days?|mos|mths|yrs|wks|hrs|mo|yr|wk|hr)\b/gi
+const FILLER_JOIN_RE = /\d(?:\p{Cf}|[\u034F\u3164\u2800])+\d|[A-Za-z](?:\p{Cf}|[\u034F\u3164\u2800])+[A-Za-z]/u
+const BAD_NEIGHBOUR_RE = /[-_;:'\u2019\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u060C\u066B\u066C\u034F\u3164\u2800]/
+
+type NumberToken = { start: number; end: number; value: number | null; raw: string }
+
+/**
+ * A period is assessed only when the provision, after NFKC, Cf stripping and
+ * whitespace collapse, has exactly one quantity and exactly one unit, and the
+ * quantity heads that unit. The reckoning and month-end provisos are not part
+ * of the period clause; they are removed from this scan and still read on the
+ * original text. Any other shape is period_unreadable.
+ */
 function parsePeriod(
   text: string
 ): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
-  const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
-  if (
-    DECIMAL_PERIOD_RE.test(normalized) ||
-    FRACTION_PERIOD_RE.test(normalized) ||
-    DIGIT_SEP_PERIOD_RE.test(normalized) ||
-    ALT_PERIOD_RE.test(normalized)
-  ) {
+  const nfkc = text.normalize("NFKC")
+  if (FILLER_JOIN_RE.test(nfkc)) return { ok: false, reason: "period_unreadable" }
+  const normalized = nfkc.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
+  const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/\s+/gu, " ")
+  const numbers = numberTokens(scan)
+  UNIT_WORD_RE.lastIndex = 0
+  const units = [...scan.matchAll(UNIT_WORD_RE)]
+  if (numbers.length !== 1 || units.length !== 1) return { ok: false, reason: "period_unreadable" }
+  const number = numbers[0]
+  const unitMatch = units[0]
+  if (!number || unitMatch.index === undefined) return { ok: false, reason: "period_unreadable" }
+  if (scan.slice(number.end, unitMatch.index) !== " ") return { ok: false, reason: "period_unreadable" }
+  if (badNeighbour(scan, number.start, number.end)) return { ok: false, reason: "period_unreadable" }
+  const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
+  if (previous === "and" || previous === "or" || previous === "to") return { ok: false, reason: "period_unreadable" }
+  const unit = canonicalUnit(unitMatch[1] ?? "")
+  if (!unit || number.value === null || !Number.isInteger(number.value) || number.value < 1 || number.value > 9999) {
     return { ok: false, reason: "period_unreadable" }
   }
-  PERIOD_PHRASE_RE.lastIndex = 0
-  const phrases = [...normalized.matchAll(PERIOD_PHRASE_RE)]
-  if (phrases.length !== 1) return { ok: false, reason: "period_unreadable" }
-  const phrase = phrases[0]
-  if (TRAILING_NUMBER_RE.test(normalized.slice(0, phrase.index ?? 0))) return { ok: false, reason: "period_unreadable" }
-  const head = phrase[1].toLowerCase()
-  if (head.includes("-") || head.includes(" ")) return { ok: false, reason: "period_unreadable" }
-  const n = /^\d+$/.test(head) ? Number(head) : NUMBER_WORDS[head]
-  if (n === undefined || !Number.isInteger(n) || n < 1 || n > 9999) return { ok: false, reason: "period_unreadable" }
-  const word = phrase[2].toLowerCase()
-  const unit: DateUnit = word.startsWith("day") ? "day" : word.startsWith("month") ? "month" : "year"
-  return { ok: true, n, unit, cited: phrase[0] }
+  return { ok: true, n: number.value, unit, cited: `${number.raw} ${unitMatch[1]}` }
+}
+
+function numberTokens(text: string): NumberToken[] {
+  const tokens: NumberToken[] = []
+  let i = 0
+  while (i < text.length) {
+    const word = readWord(text, i)
+    if (word) {
+      const lower = word.toLowerCase()
+      const compound = compoundToken(text, i, word, lower)
+      if (compound) {
+        tokens.push(compound)
+        i = compound.end
+        continue
+      }
+      if ((lower === "a" || lower === "an") && quantityArticle(text, i + word.length)) {
+        tokens.push({ start: i, end: i + word.length, value: 1, raw: word })
+        i += word.length
+        continue
+      }
+      if (QUANTITY_WORDS.has(lower)) {
+        tokens.push({ start: i, end: i + word.length, value: NUMBER_WORDS[lower] ?? null, raw: word })
+        i += word.length
+        continue
+      }
+      i += word.length
+      continue
+    }
+    if (isDigit(text[i] ?? "")) {
+      let end = i + 1
+      while (end < text.length && isDigit(text[end] ?? "")) end += 1
+      const raw = text.slice(i, end)
+      tokens.push({ start: i, end, value: Number(raw), raw })
+      i = end
+      continue
+    }
+    i += 1
+  }
+  return tokens
+}
+
+function compoundToken(text: string, start: number, word: string, lower: string): NumberToken | null {
+  if (!TENS_WORDS.has(lower)) return null
+  const joiner = text[start + word.length]
+  if (joiner !== "-" && joiner !== " ") return null
+  const ones = readWord(text, start + word.length + 1)
+  if (!ones || !ONES_WORDS.has(ones.toLowerCase())) return null
+  const tens = NUMBER_WORDS[lower]
+  const onesValue = NUMBER_WORDS[ones.toLowerCase()]
+  if (tens === undefined || onesValue === undefined) return null
+  const end = start + word.length + 1 + ones.length
+  return { start, end, value: tens + onesValue, raw: text.slice(start, end) }
+}
+
+function quantityArticle(text: string, after: number): boolean {
+  return /^\s+(?:years?|months?|weeks?|days?|hours?|fortnights?|couple|half|quarter|dozen)\b/i.test(text.slice(after))
+}
+
+function badNeighbour(text: string, start: number, end: number): boolean {
+  for (const index of [start - 1, start - 2, end, end + 1]) {
+    if (index < 0 || index >= text.length) continue
+    const ch = text[index] ?? ""
+    if (BAD_NEIGHBOUR_RE.test(ch)) return true
+    const code = ch.codePointAt(0) ?? 0
+    const asciiPunctuation = code >= 0x21 && code <= 0x7e && !/[A-Za-z0-9]/.test(ch)
+    if (!/[A-Za-z0-9 ]/.test(ch) && !asciiPunctuation) return true
+  }
+  return false
+}
+
+function canonicalUnit(word: string): DateUnit | null {
+  const lower = word.toLowerCase()
+  if (lower === "day" || lower === "days") return "day"
+  if (lower === "month" || lower === "months") return "month"
+  if (lower === "year" || lower === "years") return "year"
+  return null
+}
+
+function readWord(text: string, index: number): string | null {
+  if (!isLetter(text[index] ?? "")) return null
+  if (index > 0 && isLetter(text[index - 1] ?? "")) return null
+  let end = index + 1
+  while (end < text.length && isLetter(text[end] ?? "")) end += 1
+  return text.slice(index, end)
+}
+
+function isLetter(ch: string): boolean {
+  return /[A-Za-z]/.test(ch)
+}
+
+function isDigit(ch: string): boolean {
+  return /[0-9]/.test(ch)
 }
 
 function utcToday(): string {

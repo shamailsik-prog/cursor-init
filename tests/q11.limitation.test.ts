@@ -65,7 +65,8 @@ function version(
 }
 
 function articleText(period: string, extra = ""): string {
-  return `Q11 FIXTURE. The period of limitation is ${period}. ${RECKONING}${extra ? ` ${extra}` : ""}`
+  // No digit in the label: the period reader counts every digit run in the provision.
+  return `LIMITATION FIXTURE. The period of limitation is ${period}. ${RECKONING}${extra ? ` ${extra}` : ""}`
 }
 
 function article(
@@ -177,7 +178,7 @@ describe("Q11 checkLimitation", () => {
   })
 
   it("reads the reckoning sentence from verified section 12 when the article does not state it", () => {
-    const text = "Q11 FIXTURE. The period of limitation is three years."
+    const text = "LIMITATION FIXTURE. The period of limitation is three years."
     const versions = [
       version("limitation-act-1908/article/7", text, "1908-01-01", null, 1),
       version("limitation-act-1908/section/12", `Q11 FIXTURE. ${RECKONING}`, "1908-01-01", null, 1),
@@ -204,7 +205,7 @@ describe("Q11 checkLimitation", () => {
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { reviewStatus: "QUARANTINED" })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", [article("three years", "1908-01-01", null, 1, "", { versionConfidence: 0.5 })])).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified" })
     expect(assessed("2020-01-01", base("three years or one year"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
-    expect(assessed("2020-01-01", base("twenty one days"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
+    expect(assessed("2020-01-01", base("twenty one days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-01-22" })
     expect(assessed("2020-01-01", base("one hundred and twenty years"))).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable", deadline: null })
     expect(assessed("2020-01-01", base("twenty days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-01-21" })
     expect(assessed("2020-01-01", [version("limitation-act-1908/article/7", "Q11 FIXTURE. No period is stated in this text.", "1908-01-01", null, 1)])).toMatchObject({ status: "NOT_ASSESSED", reason: "period_unreadable" })
@@ -214,10 +215,10 @@ describe("Q11 checkLimitation", () => {
     expect(usable.status).toBe("ASSESSED")
   })
 
-  it("FA-Q11-PARSE-001 rejects an unmapped number word and more than one period phrase", () => {
+  it("FA-Q11-PARSE-001 reads a tens-and-ones compound and rejects a second period phrase", () => {
+    expect(assessed("2020-01-01", base("Seventy one years"))).toMatchObject({ status: "ASSESSED", deadline: "2091-01-01" })
+    expect(assessed("2020-01-01", base("Eighty one years"))).toMatchObject({ status: "ASSESSED", deadline: "2101-01-01" })
     for (const period of [
-      "Seventy one years",
-      "Eighty one years",
       "Seventy years. The schedule also says thirty days",
       "three years or one year",
     ]) {
@@ -229,14 +230,95 @@ describe("Q11 checkLimitation", () => {
     }
   })
 
-  it("FA-Q11-PARSE-002 rejects decimals, fractions, and a number split by newline or NBSP", () => {
-    for (const period of ["2.5 years", "1 1/2 years", "Twenty\none years", "Twenty\u00A0one years"]) {
+  it("FA-Q11-PARSE-002 rejects decimals and fractions, and reads a compound split only by space", () => {
+    expect(assessed("2020-01-01", base("Twenty\none years"))).toMatchObject({ status: "ASSESSED", deadline: "2041-01-01" })
+    expect(assessed("2020-01-01", base("Twenty\u00A0one years"))).toMatchObject({ status: "ASSESSED", deadline: "2041-01-01" })
+    for (const period of ["2.5 years", "1 1/2 years"]) {
       expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
         status: "NOT_ASSESSED",
         reason: "period_unreadable",
         deadline: null,
       })
     }
+  })
+
+  it("FA-Q11-PARSE-004 rejects dashes, Arabic separators, and fillers next to a number", () => {
+    const joiners = ["\u2013", "\u2014", "\u2010", "\u2011", "\u2212", "_", "\u034F", "\u3164", "\u2800"]
+    const periods = [
+      ...joiners.map((joiner) => `Twenty${joiner}one years`),
+      `Thirty\u2013one years`,
+      "2\u060C5 years",
+      "2\u066B5 years",
+      "2;5 years",
+      "2:5 years",
+      "2\u20135 years",
+      "1\u066C500 days",
+      "1'500 days",
+      "1\u2019500 days",
+    ]
+    for (const period of periods) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-PARSE-005 rejects a second quantity, an abbreviation, or an extra unit", () => {
+    for (const period of [
+      "One or two years",
+      "Two to five years",
+      "Three or five years",
+      "2 to 5 years",
+      "Three years and a half",
+      "Three years and a quarter",
+      "One year and a half",
+      "Three years and six weeks",
+      "Three years or six weeks",
+      "Three years and some months",
+      "a couple of months",
+      "6 mos",
+      "six mths",
+      "Ninety days and twelve hours",
+    ]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("TEST-R3-001 rejects two fortnights and keeps fortnights in the unit list", () => {
+    expect(assessed("2020-01-01", base("Three years or two fortnights"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("three years or fortnights"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+  })
+
+  it("INFO digits joined only by a stripped format character stay unreadable", () => {
+    expect(assessed("2020-01-01", base("1\u200B500 days"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+  })
+
+  it("R3 regression keeps a single canonical period, including an ASCII compound", () => {
+    expect(assessed("2020-01-01", base("Ninety days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-03-31" })
+    expect(assessed("2020-01-01", base("Eleven years"))).toMatchObject({ status: "ASSESSED", deadline: "2031-01-01" })
+    expect(assessed("2020-01-01", base("period of three years from"))).toMatchObject({ status: "ASSESSED", deadline: "2023-01-01" })
+    expect(assessed("2020-01-01", base("Ninety\u00A0days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-03-31" })
+    expect(assessed("2020-01-01", base("Ninety\r\ndays"))).toMatchObject({ status: "ASSESSED", deadline: "2020-03-31" })
+    expect(assessed("2020-01-01", base("Twenty-one years"))).toMatchObject({ status: "ASSESSED", deadline: "2041-01-01" })
+    expect(assessed("2020-01-01", base("twenty one days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-01-22" })
   })
 
   it("CONF-001 rejects a null version confidence", () => {
