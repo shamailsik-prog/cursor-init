@@ -192,15 +192,14 @@ import {
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import { resolveOpenFollowUpMemory, type FollowUpResolveInput } from "@/platform/persistence/courtOpsFollowUpResolve"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
   auditRowsEqual,
 } from "@/platform/persistence/auditAppendConflictError"
 import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
-
 export { AuditAppendConflictError }
-
 export type MatterRepository = {
   create(row: Matter): Promise<void>
   get(id: string, firmId: string): Promise<Matter | null>
@@ -222,7 +221,6 @@ export type MatterRepository = {
     patch: Pick<Matter, "caseNumber" | "caseNumberStatus"> & { courtId?: string | null }
   ): Promise<Matter | null>
 }
-
 export type MatterConfirmation = { outcome: "confirmed" | "already_live" | "closed"; matter: Matter }
 
 export type UserRepository = {
@@ -681,6 +679,7 @@ export type WorkflowEventRepository = {
 
 export type FollowUpRepository = {
   upsert(row: FollowUp): Promise<void>
+  resolveOpen(input: FollowUpResolveInput): Promise<FollowUp>
   get(id: string, firmId: string): Promise<FollowUp | null>
   listByFirm(firmId: string): Promise<FollowUp[]>
 }
@@ -3203,6 +3202,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         }
         store.followUps.push(row)
       },
+      async resolveOpen(input) { return resolveOpenFollowUpMemory(store, input) },
       async get(id, firmId) {
         return firmScoped(store.followUps.find((row) => row.id === id), firmId)
       },

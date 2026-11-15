@@ -132,7 +132,7 @@ describe("GET/POST /api/d2/court-ops", () => {
       },
       "90501f6d-97f0-4b64-b3dc-568176dd63e2"
     )
-    expect(denied.status).toBe(400)
+    expect(denied.status).toBe(404)
 
     const ok = await post(
       {

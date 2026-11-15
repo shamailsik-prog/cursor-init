@@ -18,6 +18,7 @@ import {
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import { resolveOpenFollowUpFirestore } from "@/platform/persistence/courtOpsFollowUpResolve"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -221,11 +222,9 @@ import {
   AuditAppendConflictError,
   auditRowsEqual,
 } from "@/platform/persistence/auditAppendConflictError"
-
 async function setById<T extends { id: string }>(db: Firestore, collectionName: string, row: T) {
   await setDoc(doc(db, collectionName, row.id), row)
 }
-
 /**
  * A firm-scoped read (F12): the row is returned only when it belongs to the caller's firm. A row with no `firmId`
  * belongs to no firm and is never returned (fail closed), so a malformed or legacy row cannot be read across tenants.
@@ -2229,6 +2228,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         if (payload.resolvedAt === undefined) delete payload.resolvedAt
         await setDoc(doc(db, "follow_ups", row.id), payload)
       },
+      async resolveOpen(input) { return resolveOpenFollowUpFirestore(db, input) },
       async get(id, firmId) {
         return getById<FollowUp>(db, "follow_ups", id, firmId)
       },
