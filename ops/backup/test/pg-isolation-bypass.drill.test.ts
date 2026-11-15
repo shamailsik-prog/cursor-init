@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -59,6 +59,31 @@ describe("postgres restore isolation bypasses", () => {
     await decoy?.stop()
     if (out) rmSync(out, { recursive: true, force: true })
   }, 60_000)
+
+  async function dropDatabase(cluster: PgCluster): Promise<void> {
+    const dropped = await cluster.runAs(
+      psqlArgv("postgres", ["-v", "ON_ERROR_STOP=1", "-c", "DROP DATABASE IF EXISTS legal_scraper;"])
+    )
+    expect(dropped.code, dropped.stderr || dropped.stdout).toBe(0)
+  }
+
+  async function dropExtraRoles(cluster: PgCluster): Promise<void> {
+    const listed = await cluster.runAs(
+      psqlArgv("postgres", [
+        "-t",
+        "-A",
+        "-c",
+        "SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' AND rolname <> 'postgres';",
+      ])
+    )
+    expect(listed.code, listed.stderr || listed.stdout).toBe(0)
+    for (const role of listed.stdout.split("\n").map((name) => name.trim()).filter(Boolean)) {
+      const dropped = await cluster.runAs(
+        psqlArgv("postgres", ["-c", `DROP OWNED BY "${role}" CASCADE; DROP ROLE "${role}";`])
+      )
+      expect(dropped.code, dropped.stderr || dropped.stdout).toBe(0)
+    }
+  }
 
   async function expectDecoyUntouched(res: { ok: boolean; differences: string[] }): Promise<void> {
     expect(res.ok, res.differences.join("\n")).toBe(false)
@@ -215,6 +240,117 @@ exec "\${args[@]}"
     })
     expect(res.ok, res.differences.join("\n")).toBe(false)
     expect(res.differences.join("\n")).toMatch(/system identifier/)
+    expect(await databaseCount(decoy)).toBe(0)
+  }, 120_000)
+
+  it("CLAIM-R2-001 a prefix that forwards only the identity query is refused", async () => {
+    const wrapper = path.join(out, "identity-only.sh")
+    writeFileSync(
+      wrapper,
+      `#!/bin/bash
+set -euo pipefail
+decoy_host="$1"
+decoy_port="$2"
+shift 2
+args=("$@")
+sql=""
+for a in "\${args[@]}"; do
+  if [[ "$a" == *inet_server_addr* ]]; then
+    sql="$a"
+  fi
+done
+if [[ -n "$sql" && "$sql" != *pg_class* && "$sql" != *information_schema* && "$sql" != *pg_namespace* ]]; then
+  exec "\${args[@]}"
+fi
+for i in "\${!args[@]}"; do
+  if [[ "\${args[$i]}" == "-d" ]]; then
+    orig="\${args[$((i+1))]}"
+    dbname="postgres"
+    if [[ "$orig" =~ dbname=([^[:space:]\\']+) ]]; then
+      dbname="\${BASH_REMATCH[1]}"
+    fi
+    args[$((i+1))]="host=\${decoy_host} port=\${decoy_port} dbname=\${dbname} user=postgres"
+  fi
+done
+exec "\${args[@]}"
+`
+    )
+    chmodSync(wrapper, 0o755)
+    try {
+      const res = await restoreLogical({
+        bundleDir,
+        ring,
+        db: "legal_scraper",
+        expectedSystemIdentifier: targetId,
+        env: target.env,
+        pgPrefix: [wrapper, decoy.dir, String(decoy.port)],
+      })
+      expect(res.ok, res.differences.join("\n")).toBe(false)
+      expect(res.differences.join("\n")).toMatch(/system identifier/)
+    } finally {
+      await dropDatabase(decoy)
+    }
+  }, 120_000)
+
+  it("refuses when the socket file is replaced after the identity query", async () => {
+    const wrapper = path.join(out, "swap-socket.sh")
+    const targetSock = path.join(target.dir, `.s.PGSQL.${target.port}`)
+    const decoySock = path.join(decoy.dir, `.s.PGSQL.${decoy.port}`)
+    writeFileSync(
+      wrapper,
+      `#!/bin/bash
+set -euo pipefail
+decoy_sock="$1"
+target_sock="$2"
+shift 2
+args=("$@")
+joined="\${args[*]}"
+if [[ "$joined" == *pg_restore* && ! -L "$target_sock" ]]; then
+  mv "$target_sock" "\${target_sock}.real"
+  ln -s "$decoy_sock" "$target_sock"
+fi
+exec "\${args[@]}"
+`
+    )
+    chmodSync(wrapper, 0o755)
+    const held = `${targetSock}.real`
+    try {
+      const res = await restoreLogical({
+        bundleDir,
+        ring,
+        db: "legal_scraper",
+        expectedSystemIdentifier: targetId,
+        env: target.env,
+        pgPrefix: [wrapper, decoySock, targetSock],
+      })
+      expect(res.ok, res.differences.join("\n")).toBe(false)
+      expect(res.differences.join("\n")).toMatch(/postgres socket is a symlink|postgres socket changed after the restore/)
+    } finally {
+      try {
+        if (lstatSync(targetSock).isSymbolicLink()) rmSync(targetSock)
+      } catch {
+        // the socket path is already gone
+      }
+      try {
+        renameSync(held, targetSock)
+      } catch {
+        // pg_restore never swapped the socket
+      }
+      await dropDatabase(decoy)
+      await dropDatabase(target)
+      await dropExtraRoles(target)
+    }
+  }, 120_000)
+
+  it("F24 refuses a restore that does not name the expected system identifier", async () => {
+    const res = await restoreLogical({
+      bundleDir,
+      ring,
+      db: "legal_scraper",
+      env: target.env,
+    })
+    expect(res.ok, res.differences.join("\n")).toBe(false)
+    expect(res.differences).toEqual(["expected cluster system identifier is required"])
     expect(await databaseCount(decoy)).toBe(0)
   }, 120_000)
 

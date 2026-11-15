@@ -89,18 +89,25 @@ export async function restoreObjects(opts: {
     refused.push("declared object location does not match the writer bucket")
   }
   if (refused.length) return { restored: [], unrecoverable: [], noop: false, refused }
+  if (opts.rows.length === 0) {
+    return {
+      restored: [],
+      unrecoverable: [],
+      noop: false,
+      refused: ["zero-unit object restore is not success"],
+    }
+  }
 
   const restored: string[] = []
   const unrecoverable: string[] = []
   for (const row of opts.rows) {
     const held = await opts.target.listVersions(row.key)
-    let already = false
-    for (const version of held.filter((item) => !item.isDeleteMarker)) {
-      if (await versionIntact(opts.target, row, version, opts.store, opts.check)) {
-        already = true
-        break
-      }
-    }
+    const latest = held.filter((item) => item.isLatest === true)
+    const current = latest.length === 1 ? latest[0] : undefined
+    const already =
+      current !== undefined &&
+      !current.isDeleteMarker &&
+      (await versionIntact(opts.target, row, current, opts.store, opts.check))
     if (already) continue
     const versions = await opts.source.listVersions(row.key)
     let picked: string | undefined

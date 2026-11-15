@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs"
 import path from "node:path"
 
 /** Fixed root. os.tmpdir() and TMPDIR are not consulted. */
@@ -58,11 +58,33 @@ export function loopbackHttpEndpoint(endpoint: string): boolean {
   return port >= 1 && port <= 65535
 }
 
-export function ensureDrillTempRoot(): string {
-  mkdirSync(DRILL_TEMP_ROOT, { recursive: true, mode: 0o700 })
-  if (lstatSync(DRILL_TEMP_ROOT).isSymbolicLink()) throw new Error("drill temp root is a symlink")
-  if (realpathSync(DRILL_TEMP_ROOT) !== DRILL_TEMP_ROOT) throw new Error("drill temp root resolves outside itself")
-  return DRILL_TEMP_ROOT
+/**
+ * Create the root mode 0700 when it is missing, then require that this process owns it,
+ * that group and other have no permissions, and that it is not a symlink.
+ * A pre-existing directory is never chmod'd: a 0777 root or another user's root is refused.
+ */
+export function ensureDrillTempRoot(root: string = DRILL_TEMP_ROOT): string {
+  let created = false
+  try {
+    lstatSync(root)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
+    mkdirSync(root, { recursive: true, mode: 0o700 })
+    created = true
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined
+  if (created && uid !== undefined) {
+    const createdStat = lstatSync(root)
+    if (!createdStat.isSymbolicLink() && createdStat.uid === uid && (createdStat.mode & 0o077) !== 0) {
+      chmodSync(root, 0o700)
+    }
+  }
+  const st = lstatSync(root)
+  if (st.isSymbolicLink()) throw new Error("drill temp root is a symlink")
+  if (uid === undefined || st.uid !== uid) throw new Error("drill temp root is not owned by the drill user")
+  if ((st.mode & 0o077) !== 0) throw new Error("drill temp root is group- or world-accessible")
+  if (realpathSync(root) !== root) throw new Error("drill temp root resolves outside itself")
+  return root
 }
 
 export function drillScratchDir(prefix: string): string {

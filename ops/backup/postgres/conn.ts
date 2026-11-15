@@ -99,8 +99,11 @@ export function connectedTargetProblems(opts: {
     if (!matched) problems.push("connected unix socket directory does not match the explicit target")
   } else {
     const addr = opts.row.inetAddr
-    if ((addr !== "127.0.0.1" && addr !== "::1") || opts.row.inetPort !== opts.port) {
+    if (addr !== "127.0.0.1" && addr !== "::1") {
       problems.push("connected server address does not match the explicit target")
+    }
+    if (opts.row.inetPort !== opts.port) {
+      problems.push("connected server port does not match the explicit target")
     }
   }
   return problems

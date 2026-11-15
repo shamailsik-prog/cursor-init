@@ -6,7 +6,13 @@ import {
   type ObjectVersion,
 } from "@aws-sdk/client-s3"
 
-export type ObjectVersionInfo = { versionId?: string; isDeleteMarker?: boolean; key: string }
+export type ObjectVersionInfo = {
+  versionId?: string
+  isDeleteMarker?: boolean
+  /** True only for the version S3 currently serves. An older intact version is not enough. */
+  isLatest?: boolean
+  key: string
+}
 
 export type ResolvedObjectTarget = { endpoint: string; bucket: string }
 
@@ -44,8 +50,8 @@ export class S3Versioned implements VersionedObjectAccess {
     const versions = (out.Versions ?? []).filter((v) => v.Key === key)
     const markers = (out.DeleteMarkers ?? []).filter((v) => v.Key === key)
     return [
-      ...versions.map((v) => ({ key, versionId: v.VersionId, isDeleteMarker: false })),
-      ...markers.map((v) => ({ key, versionId: v.VersionId, isDeleteMarker: true })),
+      ...versions.map((v) => ({ key, versionId: v.VersionId, isDeleteMarker: false, isLatest: v.IsLatest === true })),
+      ...markers.map((v) => ({ key, versionId: v.VersionId, isDeleteMarker: true, isLatest: v.IsLatest === true })),
     ]
   }
 

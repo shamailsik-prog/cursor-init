@@ -1,4 +1,4 @@
-import { createWriteStream, promises as fsp } from "node:fs"
+import { createWriteStream, lstatSync, realpathSync, promises as fsp } from "node:fs"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { backupPayloadProblems, pgContentUnits, type ContentUnit } from "../drill/content"
@@ -18,7 +18,109 @@ import { runCommand, psqlArgv, PersistentPsqlSession, PsqlSession } from "../lib
 import { recordDrillResult, type DrillContentUnit } from "../lib/results"
 import { assertPgTargetClean } from "./guards"
 import { comparePgManifests, takePgManifest, type PgManifest } from "./manifest"
+import { withManifestPsqlEnv } from "./psqlEnv"
 import { MANIFEST_SESSION_SETTINGS } from "./sql"
+
+type SocketStamp = {
+  dirIno: number
+  dirDev: number
+  dirReal: string
+  fileIno: number
+  fileDev: number
+  fileReal: string
+}
+
+/** lstat the socket directory and the socket file. A symlink or a replaced inode is a different cluster. */
+function captureSocket(host: string, port: string): SocketStamp | null | string {
+  if (!host.startsWith("/")) return null
+  let dirStat: ReturnType<typeof lstatSync>
+  try {
+    dirStat = lstatSync(host)
+  } catch (err) {
+    return `postgres socket directory is missing: ${(err as Error).message}`
+  }
+  if (dirStat.isSymbolicLink()) return "postgres socket directory is a symlink"
+  let dirReal = ""
+  try {
+    dirReal = realpathSync(host)
+  } catch {
+    return "postgres socket directory does not resolve"
+  }
+  if (dirReal !== host) return "postgres socket directory resolves outside the explicit target"
+  const sock = path.join(host, `.s.PGSQL.${port}`)
+  let fileStat: ReturnType<typeof lstatSync>
+  try {
+    fileStat = lstatSync(sock)
+  } catch (err) {
+    return `postgres socket is missing: ${(err as Error).message}`
+  }
+  if (fileStat.isSymbolicLink()) return "postgres socket is a symlink"
+  let fileReal = ""
+  try {
+    fileReal = realpathSync(sock)
+  } catch {
+    return "postgres socket does not resolve"
+  }
+  return {
+    dirIno: dirStat.ino,
+    dirDev: dirStat.dev,
+    dirReal,
+    fileIno: fileStat.ino,
+    fileDev: fileStat.dev,
+    fileReal,
+  }
+}
+
+function socketDrift(host: string, port: string, before: SocketStamp | null): string | null {
+  if (!before) return null
+  const after = captureSocket(host, port)
+  if (typeof after === "string") return after
+  if (!after) return "postgres socket path disappeared"
+  if (after.dirIno !== before.dirIno || after.dirDev !== before.dirDev || after.dirReal !== before.dirReal) {
+    return "postgres socket directory changed after the restore"
+  }
+  if (after.fileIno !== before.fileIno || after.fileDev !== before.fileDev || after.fileReal !== before.fileReal) {
+    return "postgres socket changed after the restore"
+  }
+  return null
+}
+
+/**
+ * Identity and the comparison manifest share one psql process. A prefix that forwards only a
+ * standalone identity query still has to answer this call from the cluster it restores.
+ */
+async function manifestOnCheckedConnection(opts: {
+  pgPrefix?: string[]
+  env: NodeJS.ProcessEnv
+  conninfo: string
+  db: string
+  host: string
+  port: string
+  expectedSystemIdentifier: string
+}): Promise<{ manifest?: PgManifest; problems: string[] }> {
+  const session = await PersistentPsqlSession.open(opts.pgPrefix, withManifestPsqlEnv(opts.env), opts.db, {
+    conninfo: opts.conninfo,
+    exactEnv: true,
+  })
+  try {
+    const line = await session.queryScalar(SERVER_IDENTITY_SQL)
+    const identity = parseServerIdentity(line)
+    if (!identity) return { problems: ["connected server did not report its identity"] }
+    const problems = connectedTargetProblems({
+      host: opts.host,
+      port: opts.port,
+      expectedSystemIdentifier: opts.expectedSystemIdentifier,
+      row: identity,
+    })
+    if (problems.length) return { problems }
+    const manifest = await takePgManifest(session, opts.db)
+    return { manifest, problems: [] }
+  } catch (err) {
+    return { problems: [(err as Error).message] }
+  } finally {
+    session.close()
+  }
+}
 
 export type BackupLogicalOptions = {
   db: string
@@ -211,6 +313,8 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
     row: identity,
   })
   if (identityProblems.length) return fail(identityProblems)
+  const socketStamp = captureSocket(host, port)
+  if (typeof socketStamp === "string") return fail([socketStamp])
 
   let exists = 0
   try {
@@ -218,10 +322,21 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
   } catch (err) {
     return fail([(err as Error).message])
   }
+  const driftedEarly = socketDrift(host, port, socketStamp)
+  if (driftedEarly) return fail([driftedEarly])
   if (exists > 0) {
     try {
-      const targetSession = new PsqlSession(opts.pgPrefix, childEnv, db, databaseConn, true)
-      const actual = await takePgManifest(targetSession, db)
+      const checked = await manifestOnCheckedConnection({
+        pgPrefix: opts.pgPrefix,
+        env: childEnv,
+        conninfo: databaseConn,
+        db,
+        host,
+        port,
+        expectedSystemIdentifier: expectedId,
+      })
+      if (checked.problems.length || !checked.manifest) return fail(checked.problems)
+      const actual = checked.manifest
       const differences = comparePgManifests(expected, actual)
       const plan = planIdempotentRestore({ targetExists: true, contentMatch: differences.length === 0 })
       if (plan.action === "noop") {
@@ -290,12 +405,23 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
       exactEnv: true,
       pgPrefix: opts.pgPrefix,
     })
+    const drifted = socketDrift(host, port, socketStamp)
+    if (drifted) return fail([drifted])
     if (restore.code !== 0) {
       const msg = [restore.stderr, restore.stdout].filter(Boolean).join("\n").trim() || `pg_restore exited ${restore.code}`
       return fail([msg])
     }
-    const targetSession = new PsqlSession(opts.pgPrefix, childEnv, db, databaseConn, true)
-    const actual = await takePgManifest(targetSession, db)
+    const checked = await manifestOnCheckedConnection({
+      pgPrefix: opts.pgPrefix,
+      env: childEnv,
+      conninfo: databaseConn,
+      db,
+      host,
+      port,
+      expectedSystemIdentifier: expectedId,
+    })
+    if (checked.problems.length || !checked.manifest) return fail(checked.problems)
+    const actual = checked.manifest
     const differences = comparePgManifests(expected, actual)
     const rtoMs = Date.now() - started
     const content = matchedUnits(actual, differences.length === 0)

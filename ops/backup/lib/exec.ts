@@ -85,11 +85,14 @@ export class PersistentPsqlSession implements PsqlQueryable {
   private constructor(
     private readonly pgPrefix: string[] | undefined,
     readonly env: NodeJS.ProcessEnv,
-    readonly database: string
+    readonly database: string,
+    conninfo: string | undefined,
+    exactEnv: boolean
   ) {
-    const argv = prefixArgv(pgPrefix, psqlArgv(database, ["-t", "-A"]))
+    const argv = prefixArgv(pgPrefix, psqlArgv(conninfo ?? database, ["-t", "-A"]))
+    const childEnv: NodeJS.ProcessEnv = exactEnv ? { ...env } : { ...process.env, ...env }
     this.proc = spawn(argv[0], argv.slice(1), {
-      env: { ...process.env, ...env },
+      env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
     })
     this.proc.stdout.on("data", (chunk) => {
@@ -110,9 +113,10 @@ export class PersistentPsqlSession implements PsqlQueryable {
   static async open(
     pgPrefix: string[] | undefined,
     env: NodeJS.ProcessEnv,
-    database: string
+    database: string,
+    opts?: { conninfo?: string; exactEnv?: boolean }
   ): Promise<PersistentPsqlSession> {
-    return new PersistentPsqlSession(pgPrefix, env, database)
+    return new PersistentPsqlSession(pgPrefix, env, database, opts?.conninfo, opts?.exactEnv === true)
   }
 
   private failAll(err: Error): void {

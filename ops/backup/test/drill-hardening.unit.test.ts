@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -10,9 +10,9 @@ import {
   resetDocumentObjectStoreForTests,
 } from "@/platform/documents/documentObjectStore"
 import { newStore } from "@/platform/spine/store"
-import { assessContentMatch } from "../drill/content"
+import { acceptRestoreChild, assessContentMatch, backupPayloadProblems } from "../drill/content"
 import { planIdempotentRestore } from "../drill/idempotent"
-import { drillScratchDir, isolationProblems } from "../drill/target"
+import { drillScratchDir, ensureDrillTempRoot, isolationProblems } from "../drill/target"
 import { BundleWriter } from "../lib/bundle"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import * as exec from "../lib/exec"
@@ -21,6 +21,7 @@ import { compareFirestoreManifests, type FirestoreManifest } from "../firestore/
 import { restoreFirestoreEmulator } from "../firestore/emulator"
 import type { VersionedObjectAccess } from "../objects/s3"
 import { restoreObjects } from "../objects/restore"
+import { connectedTargetProblems, scrubLibpqEnv } from "../postgres/conn"
 import { comparePgManifests, type PgManifest, type PgTableStats } from "../postgres/manifest"
 import { preparePitrRestore } from "../postgres/pitr"
 import { restoreLogical } from "../postgres/logical"
@@ -315,13 +316,13 @@ describe("gap: object restore is local-only and idempotent", () => {
     const report = await restoreObjects({
       rows: [{ id: "row1", firmId: "firmA", storagePath: "s3://b/k", contentHash: hash, key: "k" }],
       source: {
-        listVersions: async () => [{ key: "k", versionId: "v1" }],
+        listVersions: async () => [{ key: "k", versionId: "v1", isLatest: true }],
         getVersion: async () => encrypted,
         put: async () => {},
       },
       target: {
         resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
-        listVersions: async () => [{ key: "k", versionId: "current" }],
+        listVersions: async () => [{ key: "k", versionId: "current", isLatest: true }],
         getVersion: async () => encrypted,
         put: async () => {
           puts += 1
@@ -334,6 +335,97 @@ describe("gap: object restore is local-only and idempotent", () => {
     expect(report.restored).toEqual([])
     expect(report.noop).toBe(true)
     expect(report.unrecoverable).toEqual([])
+  })
+
+  it("re-uploads when an older version is intact and the latest version is corrupt", async () => {
+    const { encrypted, hash, store } = await intact()
+    const corrupt = Buffer.from(encrypted)
+    corrupt[corrupt.length - 1] ^= 0x01
+    const bodies: Record<string, Buffer> = { old: encrypted, new: corrupt }
+    let written: Buffer | undefined
+    const report = await restoreObjects({
+      rows: [{ id: "row-overwrite", firmId: "firmA", storagePath: "s3://b/k", contentHash: hash, key: "k" }],
+      source: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [
+          { key: "k", versionId: "old", isLatest: false },
+          { key: "k", versionId: "new", isLatest: true },
+        ],
+        getVersion: async (_key, versionId) => bodies[versionId ?? ""] ?? Buffer.alloc(0),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [
+          { key: "k", versionId: "old", isLatest: false },
+          { key: "k", versionId: "new", isLatest: true },
+        ],
+        getVersion: async (_key, versionId) => bodies[versionId ?? ""] ?? Buffer.alloc(0),
+        put: async (_key, body) => {
+          written = body
+        },
+      },
+      store,
+    })
+    expect(report.refused).toEqual([])
+    expect(report.noop).toBe(false)
+    expect(report.restored).toEqual(["row-overwrite"])
+    expect(written?.equals(encrypted)).toBe(true)
+  })
+
+  it("re-uploads when the latest entry is a delete marker and an older version is intact", async () => {
+    const { encrypted, hash, store } = await intact()
+    let puts = 0
+    const report = await restoreObjects({
+      rows: [{ id: "row-deleted", firmId: "firmA", storagePath: "s3://b/k", contentHash: hash, key: "k" }],
+      source: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [
+          { key: "k", versionId: "old", isLatest: false },
+          { key: "k", versionId: "del", isLatest: true, isDeleteMarker: true },
+        ],
+        getVersion: async () => encrypted,
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [
+          { key: "k", versionId: "old", isLatest: false },
+          { key: "k", versionId: "del", isLatest: true, isDeleteMarker: true },
+        ],
+        getVersion: async () => encrypted,
+        put: async () => {
+          puts += 1
+        },
+      },
+      store,
+    })
+    expect(report.refused).toEqual([])
+    expect(report.noop).toBe(false)
+    expect(report.restored).toEqual(["row-deleted"])
+    expect(puts).toBe(1)
+  })
+
+  it("does not report an empty row set as a no-op success", async () => {
+    const report = await restoreObjects({
+      rows: [],
+      source: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [],
+        getVersion: async () => Buffer.alloc(0),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
+        listVersions: async () => [],
+        getVersion: async () => Buffer.alloc(0),
+        put: async () => {},
+      },
+      store: newStore(),
+    })
+    expect(report.noop).toBe(false)
+    expect(report.restored).toEqual([])
+    expect(report.refused.join("\n")).toMatch(/zero-unit/)
   })
 })
 
@@ -608,6 +700,256 @@ describe("mutants: loopback, endpoint, firestore host, report target, and digest
     } finally {
       rmSync(dataDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("restore guards that a one-line deletion must fail", () => {
+  const identity = {
+    inetAddr: "",
+    inetPort: "",
+    socketDirs: "/tmp/sikander-backup-drill/sock",
+    systemIdentifier: "100",
+  }
+
+  it("F07 refuses a unix-socket target whose connection has an inet address", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-sock-"))
+    try {
+      const problems = connectedTargetProblems({
+        host: dir,
+        port: "5432",
+        expectedSystemIdentifier: "100",
+        row: { ...identity, inetAddr: "127.0.0.1", inetPort: "5432", socketDirs: dir },
+      })
+      expect(problems).toEqual(["connection was not the unix socket that was checked"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("F08 refuses a unix-socket directory that is not the explicit target", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-sock-"))
+    const other = mkdtempSync(path.join(os.tmpdir(), "f33-other-"))
+    try {
+      const problems = connectedTargetProblems({
+        host: dir,
+        port: "5432",
+        expectedSystemIdentifier: "100",
+        row: { ...identity, socketDirs: other },
+      })
+      expect(problems).toEqual(["connected unix socket directory does not match the explicit target"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
+
+  it("F09 refuses a TCP connection that is not loopback", () => {
+    const problems = connectedTargetProblems({
+      host: "127.0.0.1",
+      port: "5432",
+      expectedSystemIdentifier: "100",
+      row: { ...identity, inetAddr: "10.1.2.3", inetPort: "5432", socketDirs: "" },
+    })
+    expect(problems.join("\n")).toMatch(/server address/)
+  })
+
+  it("F10 refuses a TCP connection whose port differs", () => {
+    const problems = connectedTargetProblems({
+      host: "127.0.0.1",
+      port: "5432",
+      expectedSystemIdentifier: "100",
+      row: { ...identity, inetAddr: "127.0.0.1", inetPort: "1", socketDirs: "" },
+    })
+    expect(problems.join("\n")).toMatch(/server port/)
+  })
+
+  it("F04 drops every libpq PG variable, including PGHOSTADDR", () => {
+    const scrubbed = scrubLibpqEnv({
+      NODE_ENV: "test",
+      PATH: "/usr/bin",
+      PGHOST: "/tmp/sock",
+      PGHOSTADDR: "10.9.8.7",
+      PGSERVICE: "prod",
+      PGSERVICEFILE: "/tmp/pg_service.conf",
+      PGPASSFILE: "/tmp/pgpass",
+    })
+    expect(scrubbed.PATH).toBe("/usr/bin")
+    expect(scrubbed.PGHOST).toBeUndefined()
+    expect(scrubbed.PGHOSTADDR).toBeUndefined()
+    expect(scrubbed.PGSERVICE).toBeUndefined()
+    expect(scrubbed.PGSERVICEFILE).toBeUndefined()
+    expect(scrubbed.PGPASSFILE).toBeUndefined()
+  })
+
+  it("F25 and F26 keep exactEnv from inheriting PGHOSTADDR", async () => {
+    const prior = process.env.PGHOSTADDR
+    process.env.PGHOSTADDR = "10.9.8.7"
+    try {
+      const child = await exec.runCommand(["node", "-e", "process.stdout.write(process.env.PGHOSTADDR || '')"], {
+        exactEnv: true,
+        env: { NODE_ENV: "test", PATH: process.env.PATH },
+      })
+      expect(child.code).toBe(0)
+      expect(child.stdout).toBe("")
+    } finally {
+      if (prior === undefined) delete process.env.PGHOSTADDR
+      else process.env.PGHOSTADDR = prior
+    }
+  })
+
+  it("F15 refuses a symlink used as the drill temp root", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-root-real-"))
+    const link = path.join(os.tmpdir(), `f33-root-link-${process.pid}`)
+    symlinkSync(dir, link)
+    try {
+      expect(() => ensureDrillTempRoot(link)).toThrow(/symlink/)
+    } finally {
+      rmSync(link, { force: true })
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("refuses a pre-existing temp root owned by another user and does not chmod it", () => {
+    const before = lstatSync("/root")
+    expect(before.uid).not.toBe(process.getuid?.())
+    expect(() => ensureDrillTempRoot("/root")).toThrow(/not owned/)
+    const after = lstatSync("/root")
+    expect(after.mode).toBe(before.mode)
+    expect(after.uid).toBe(before.uid)
+  })
+
+  it("refuses a pre-existing 0777 temp root and does not chmod it", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f33-root-open-"))
+    chmodSync(dir, 0o777)
+    try {
+      expect(() => ensureDrillTempRoot(dir)).toThrow(/world-accessible/)
+      expect(lstatSync(dir).mode & 0o777).toBe(0o777)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("creates a missing temp root as mode 0700", () => {
+    const dir = path.join(os.tmpdir(), `f33-root-new-${process.pid}-${Date.now()}`)
+    try {
+      expect(ensureDrillTempRoot(dir)).toBe(dir)
+      expect(lstatSync(dir).mode & 0o777).toBe(0o700)
+      expect(lstatSync(dir).uid).toBe(process.getuid?.())
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("F36 refuses a writer bucket outside the drill allowlist", async () => {
+    const report = await restoreObjects({
+      rows: [{ id: "row1", firmId: "firmA", storagePath: "s3://b/k", contentHash: HEX, key: "k" }],
+      source: {
+        listVersions: async () => [],
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "other-bucket" }),
+        listVersions: async () => {
+          throw new Error("list must not run")
+        },
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {
+          throw new Error("put must not run")
+        },
+      },
+      store: newStore(),
+    })
+    expect(report.restored).toEqual([])
+    expect(report.refused.join("\n")).toMatch(/explicit drill target/)
+  })
+
+  it("F37 refuses a writer endpoint that is not an isolated loopback", async () => {
+    let listed = 0
+    const report = await restoreObjects({
+      rows: [{ id: "row1", firmId: "firmA", storagePath: "s3://b/k", contentHash: HEX, key: "k" }],
+      source: {
+        listVersions: async () => [],
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {},
+      },
+      target: {
+        resolvedTarget: async () => ({ endpoint: "https://s3.amazonaws.com", bucket: "f33-vault-drill" }),
+        listVersions: async () => {
+          listed += 1
+          return []
+        },
+        getVersion: async () => Buffer.from("x"),
+        put: async () => {
+          listed += 1
+        },
+      },
+      store: newStore(),
+    })
+    expect(listed).toBe(0)
+    expect(report.refused.join("\n")).toMatch(/endpoint|managed cloud/)
+  })
+
+  it("M28 refuses a content report when the process exit code is non-zero", () => {
+    const accepted = acceptRestoreChild({
+      code: 1,
+      stdout: `DRILL_CONTENT_JSON ${JSON.stringify({
+        ok: true,
+        units: [{ name: "public.t", count: 1, digest: HEX }],
+        problems: [],
+      })}`,
+      stderr: "",
+    })
+    expect(accepted.ok).toBe(false)
+    expect(accepted.problems.join("\n")).toMatch(/exited 1/)
+  })
+
+  it("M29 refuses a content report whose ok flag is not true", () => {
+    const accepted = acceptRestoreChild({
+      code: 0,
+      stdout: `DRILL_CONTENT_JSON ${JSON.stringify({
+        ok: false,
+        units: [{ name: "public.t", count: 1, digest: HEX }],
+        problems: [],
+      })}`,
+      stderr: "",
+    })
+    expect(accepted.ok).toBe(false)
+    expect(accepted.problems.join("\n")).toMatch(/not ok/)
+  })
+
+  it("M27 reports a table row-count difference when the checksum matches", () => {
+    const left = emptyPg()
+    const right = emptyPg()
+    left.tables["public.t"] = { rows: 2, digest: HEX }
+    right.tables["public.t"] = { rows: 9, digest: HEX }
+    expect(comparePgManifests(left, right)).toEqual(["table public.t: rows 2 -> 9"])
+  })
+
+  it("M31 reports a content count difference when the checksum matches", () => {
+    const problems = assessContentMatch(
+      [{ name: "public.t", count: 2, digest: HEX }],
+      [{ name: "public.t", count: 9, digest: HEX }]
+    )
+    expect(problems).toEqual(["public.t: count 2 -> 9"])
+  })
+
+  it("M23 refuses a logical backup with no globals.sql", () => {
+    const problems = backupPayloadProblems({
+      store: "postgres-logical",
+      storeManifest: { tables: { "public.t": { rows: 1, digest: HEX } } },
+      artefacts: [{ name: "database.dump", plaintextBytes: 12 }],
+    })
+    expect(problems).toContain("globals.sql: missing (partial)")
+  })
+
+  it("M24 refuses a zero-byte firestore export.tar", () => {
+    const problems = backupPayloadProblems({
+      store: "firestore-emulator",
+      storeManifest: { collections: { matters: { count: 1, digest: HEX } } },
+      artefacts: [{ name: "export.tar", plaintextBytes: 0 }],
+    })
+    expect(problems).toContain("export.tar: truncated")
   })
 })
 
