@@ -19,8 +19,7 @@ export function setPsqlQueryTimeoutForTests(ms: number): void {
 
 export function commandChildEnv(argv0: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (argv0 !== "docker" && argv0 !== "docker-compose") return env
-  const next: NodeJS.ProcessEnv = { PATH: DOCKER_CLIENT_PATH }
-  if (env.NODE_ENV) next.NODE_ENV = env.NODE_ENV
+  const next: NodeJS.ProcessEnv = { PATH: DOCKER_CLIENT_PATH, NODE_ENV: env.NODE_ENV ?? "production" }
   for (const key of DOCKER_ENV_KEYS) {
     if (env[key]) next[key] = env[key]
   }
