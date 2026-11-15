@@ -15,6 +15,8 @@
 -- with the decision unchanged.
 -- A classification downgrade is refused
 -- unless the transaction set p6.declassify to partner. Learners stay off: this file grants them nothing.
+-- This file manages its own BEGIN/COMMIT around the actor-key install. Do not run it with psql -1.
+-- An outer single transaction would commit or discard that block at the inner COMMIT.
 
 DO $$ BEGIN
   CREATE ROLE p6_service NOLOGIN NOINHERIT;
@@ -230,7 +232,9 @@ REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
 -- The body is created as p6_actor_key_next and installed as p6_actor_key only after the
 -- legacy pre-check in the same transaction. A refusal rolls the new body back.
 -- 011_p6_actor_key.sql repeats this function and the same pre-check.
+-- Do not run this file with psql -1. The block below is its own transaction.
 BEGIN;
+LOCK TABLE public.change_proposals IN SHARE ROW EXCLUSIVE MODE;
 CREATE OR REPLACE FUNCTION public.p6_actor_key_next(value text) RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
@@ -438,7 +442,10 @@ BEGIN
     END IF;
     proposer := public.p6_actor_key(NEW.proposed_by);
     approver := public.p6_actor_key(NEW.decided_by);
-    IF proposer = '' OR approver = '' OR proposer = approver THEN
+    IF proposer = '' THEN
+      RAISE EXCEPTION 'proposer key missing' USING ERRCODE = '42501';
+    END IF;
+    IF approver = '' OR proposer = approver THEN
       RAISE EXCEPTION 'approver must differ from proposer' USING ERRCODE = '42501';
     END IF;
     RETURN NEW;

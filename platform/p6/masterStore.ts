@@ -339,7 +339,8 @@ function assertPartnerApproval(current: PersistedProposal, next: PersistedPropos
   }
   const approver = normalizeActorKey(next.decidedBy ?? "")
   const proposer = normalizeActorKey(current.proposedBy)
-  if (approver === "" || proposer === "") throw new Error("substantive proposal requires partner approval")
+  if (proposer === "") throw new Error("proposer key missing")
+  if (approver === "") throw new Error("substantive proposal requires partner approval")
   if (approver === proposer) throw new Error("approver must differ from proposer")
   if (
     next.proposedBy !== current.proposedBy ||
@@ -908,7 +909,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 function commitError(error: unknown): Error {
   if (
     error instanceof Error &&
-    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal/.test(
+    /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable|proposal not found|approval is not a direct status change|proposal status transition is refused|commit is bound to the proposal|proposer key missing/.test(
       error.message,
     )
   ) {

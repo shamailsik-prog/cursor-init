@@ -3,8 +3,10 @@
 -- has a distinct partner under that body. One transaction: a refusal rolls the
 -- candidate back and leaves the installed function unchanged.
 -- Lists the first 20 ids and the count. Does not rewrite legacy rows.
+-- This file manages its own BEGIN/COMMIT. Do not run it with psql -1.
 
 BEGIN;
+LOCK TABLE public.change_proposals IN SHARE ROW EXCLUSIVE MODE;
 CREATE OR REPLACE FUNCTION public.p6_actor_key_next(value text) RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE

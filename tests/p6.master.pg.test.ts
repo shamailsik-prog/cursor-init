@@ -2,7 +2,7 @@
  * G-3 against a local Postgres (the CI service container or SIKANDER_POSTGRES_URL).
  * Not a staging or production proof. The unit proofs in tests/p6.g3.test.ts do not need a database.
  */
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { randomBytes, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -1198,7 +1198,7 @@ suite("G3 master grants on local Postgres", () => {
               WHERE id = $1 AND status = 'pending'`,
             [id, lower],
           ),
-        ).rejects.toThrow(/differ from proposer|partner approval|approval is not a direct status change/)
+        ).rejects.toThrow(/differ from proposer|partner approval|approval is not a direct status change|proposer key missing/)
         await expect(
           db.client.query(
             `UPDATE change_proposals
@@ -1206,7 +1206,7 @@ suite("G3 master grants on local Postgres", () => {
               WHERE id = $1 AND status = 'pending'`,
             [id],
           ),
-        ).rejects.toThrow(/differ from proposer|partner approval|approval is not a direct status change/)
+        ).rejects.toThrow(/proposer key missing/)
         const kept = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [id])
         expect(kept.rows[0]?.status).toBe("pending")
       }
@@ -1440,6 +1440,285 @@ suite("G3 master grants on local Postgres", () => {
     }
   }
 
+  function startPsqlFile(connectionString: string, sql: string): {
+    finished: Promise<{ status: number; stderr: string }>
+    stop: () => void
+  } {
+    const file = path.join("/tmp", `p6mig-${randomBytes(4).toString("hex")}.sql`)
+    fs.writeFileSync(file, sql)
+    const url = new URL(connectionString)
+    const child = spawn(
+      "psql",
+      [
+        "-v",
+        "ON_ERROR_STOP=1",
+        "--no-psqlrc",
+        "-q",
+        "-h",
+        url.hostname,
+        "-p",
+        url.port || "5432",
+        "-U",
+        decodeURIComponent(url.username),
+        "-d",
+        url.pathname.replace(/^\//, ""),
+        "-f",
+        file,
+      ],
+      { env: { ...process.env, PGPASSWORD: decodeURIComponent(url.password) } },
+    )
+    let stderr = ""
+    child.stderr.setEncoding("utf8")
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk
+    })
+    const finished = new Promise<{ status: number; stderr: string }>((resolve) => {
+      child.on("close", (code) => {
+        fs.rmSync(file, { force: true })
+        resolve({ status: code ?? 1, stderr })
+      })
+    })
+    return {
+      finished,
+      stop: () => {
+        child.kill("SIGTERM")
+      },
+    }
+  }
+
+  async function waitForRelationLock(datname: string): Promise<boolean> {
+    const watcher = new pg.Client({ connectionString: adminUrl })
+    await watcher.connect()
+    const started = Date.now()
+    try {
+      while (Date.now() - started < 8_000) {
+        const found = await watcher.query(
+          `SELECT 1
+             FROM pg_stat_activity
+            WHERE datname = $1
+              AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock'
+              AND wait_event = 'relation'`,
+          [datname],
+        )
+        if ((found.rowCount ?? 0) > 0) return true
+        await new Promise((resolve) => setTimeout(resolve, 40))
+      }
+      return false
+    } finally {
+      await watcher.end()
+    }
+  }
+
+  async function seedTwoGoodApprovals(client: pg.Client): Promise<void> {
+    await client.query("SET ROLE p6_service")
+    for (const key of ["clause.good.1", "clause.good.2"]) {
+      const id = randomUUID()
+      await client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                 '{"wording":"good"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id, key],
+      )
+      await client.query(
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1`,
+        [id],
+      )
+    }
+    await client.query("RESET ROLE")
+  }
+
+  function restoreCustomDump(sourceUrl: string, targetUrl: string): { status: number; stderr: string } {
+    const source = new URL(sourceUrl)
+    const target = new URL(targetUrl)
+    const dump = path.join("/tmp", `p6fc-${randomBytes(4).toString("hex")}.dump`)
+    const env = { ...process.env, PGPASSWORD: decodeURIComponent(source.password) }
+    const base = ["-h", source.hostname, "-p", source.port || "5432", "-U", decodeURIComponent(source.username)]
+    try {
+      execFileSync(
+        "pg_dump",
+        [...base, "-d", source.pathname.replace(/^\//, ""), "-Fc", "--no-owner", "--no-acl", "-f", dump],
+        { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      )
+      execFileSync(
+        "pg_restore",
+        [
+          "--no-owner",
+          "--no-acl",
+          "--exit-on-error",
+          "--single-transaction",
+          "-h",
+          target.hostname,
+          "-p",
+          target.port || "5432",
+          "-U",
+          decodeURIComponent(target.username),
+          "-d",
+          target.pathname.replace(/^\//, ""),
+          dump,
+        ],
+        { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      )
+      return { status: 0, stderr: "" }
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string }
+      return { status: failed.status ?? 1, stderr: failed.stderr ?? String(error) }
+    } finally {
+      fs.rmSync(dump, { force: true })
+    }
+  }
+
+  async function openPartnerBWriter(url: string): Promise<{ client: pg.Client; id: string }> {
+    const client = new pg.Client({ connectionString: url })
+    await client.connect()
+    const id = randomUUID()
+    await client.query("BEGIN")
+    await client.query("SET LOCAL ROLE p6_service")
+    await client.query(
+      `INSERT INTO change_proposals
+         (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+          proposed_by, status, payload_hash)
+       VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.bad',
+               '{"wording":"legacy"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+      [id],
+    )
+    await client.query(
+      `UPDATE change_proposals
+          SET status = 'approved', decided_by = 'Partner B', decided_kind = 'partner', decided_role = 'partner'
+        WHERE id = $1`,
+      [id],
+    )
+    return { client, id }
+  }
+
+  function actorKeyTransaction(sql: string): { preamble: string; transaction: string } {
+    const marker = "CREATE OR REPLACE FUNCTION public.p6_actor_key_next"
+    const at = sql.indexOf(marker)
+    const begin = sql.lastIndexOf("BEGIN;", at)
+    const commit = sql.indexOf("COMMIT;", at)
+    if (at < 0 || begin < 0 || commit < 0) throw new Error("actor key transaction missing")
+    return { preamble: sql.slice(0, begin), transaction: sql.slice(begin, commit + "COMMIT;".length) }
+  }
+
+  async function refuseWhileWriterHoldsPartnerB(sql: string, prefix: string, preamble?: string): Promise<void> {
+    const db = await freshDb(prefix)
+    const restored = await freshDb(`${prefix}r`)
+    let writer: pg.Client | undefined
+    let migration: ReturnType<typeof startPsqlFile> | undefined
+    try {
+      expect(applyPsqlFile(db.url, D8125172_DDL).status).toBe(0)
+      if (preamble) {
+        const prepared = applyPsqlFile(db.url, preamble)
+        expect(prepared.status, prepared.stderr).toBe(0)
+      }
+      await seedTwoGoodApprovals(db.client)
+      const before = await actorKeyMd5(db.client)
+      expect(before).toBeTruthy()
+      const open = await openPartnerBWriter(db.url)
+      writer = open.client
+      migration = startPsqlFile(db.url, sql)
+      const waited = await waitForRelationLock(db.name)
+      expect(waited).toBe(true)
+      await writer.query("COMMIT")
+      await writer.end()
+      writer = undefined
+      const upgraded = await migration.finished
+      migration = undefined
+      expect(upgraded.status).not.toBe(0)
+      expect(upgraded.stderr).toMatch(/refusing to replace substantive_partner_approval/)
+      expect(upgraded.stderr).toContain(open.id)
+      expect(await actorKeyMd5(db.client)).toBe(before)
+      const leftover = await db.client.query<{ present: string | null }>(
+        `SELECT to_regprocedure('public.p6_actor_key_next(text)')::text AS present`,
+      )
+      expect(leftover.rows[0]?.present ?? null).toBeNull()
+      const kept = await db.client.query<{ n: number }>(`SELECT count(*)::int AS n FROM change_proposals`)
+      expect(kept.rows[0]?.n).toBe(3)
+      const round = restoreCustomDump(db.url, restored.url)
+      expect(round.status, round.stderr).toBe(0)
+      const restoredCount = await restored.client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM change_proposals`,
+      )
+      expect(restoredCount.rows[0]?.n).toBe(3)
+    } finally {
+      if (writer) await writer.query("ROLLBACK").catch(() => undefined)
+      await writer?.end()
+      migration?.stop()
+      await dropDb(db.name, db.client)
+      await dropDb(restored.name, restored.client)
+    }
+  }
+
+  it("TEST-258-R2-002: 011 installs the narrower key when every substantive row still has a distinct partner", async () => {
+    const db = await freshDb("p6inst")
+    try {
+      expect(applyPsqlFile(db.url, D8125172_DDL).status).toBe(0)
+      await seedTwoGoodApprovals(db.client)
+      const before = await actorKeyMd5(db.client)
+      const installed = applyPsqlFile(db.url, ACTOR_KEY_DDL)
+      expect(installed.status, installed.stderr).toBe(0)
+      expect(await actorKeyMd5(db.client)).not.toBe(before)
+      const keys = await db.client.query<{ spaced: string; plus: string; colon: string; sharp: string }>(
+        `SELECT public.p6_actor_key('Partner B') AS spaced,
+                public.p6_actor_key('partner+1@x') AS plus,
+                public.p6_actor_key('partner:1') AS colon,
+                public.p6_actor_key('straße') AS sharp`,
+      )
+      expect(keys.rows[0]).toEqual({ spaced: "", plus: "", colon: "", sharp: "strasse" })
+      const gone = await db.client.query<{ present: string | null }>(
+        `SELECT to_regprocedure('public.p6_actor_key_next(text)')::text AS present`,
+      )
+      expect(gone.rows[0]?.present ?? null).toBeNull()
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("MIG-258-R2-001: 009 waits for an open Partner B writer, then refuses, and restore keeps 3/3", async () => {
+    const parts = actorKeyTransaction(DDL)
+    await refuseWhileWriterHoldsPartnerB(parts.transaction, "p6r2009", parts.preamble)
+    await refuseWhileWriterHoldsPartnerB(DDL, "p6r2009f")
+  }, 90_000)
+
+  it("MIG-258-R2-001: 011 waits for an open Partner B writer, then refuses, and restore keeps 3/3", async () => {
+    await refuseWhileWriterHoldsPartnerB(ACTOR_KEY_DDL, "p6r2011")
+  }, 60_000)
+
+  it("MSG-258-R2-004: an empty or whitespace proposer key is not an approver mismatch", async () => {
+    const db = await freshDb("p6msg")
+    try {
+      await db.client.query(DDL)
+      await db.client.query("SET ROLE p6_service")
+      for (const proposedBy of ["", "   ", " \t "]) {
+        const id = randomUUID()
+        await db.client.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                   '{"wording":"missing"}'::jsonb, $3, 'pending', 'abc')`,
+          [id, `clause.msg.${id.slice(0, 8)}`, proposedBy],
+        )
+        await expect(
+          db.client.query(
+            `UPDATE change_proposals
+                SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+              WHERE id = $1`,
+            [id],
+          ),
+        ).rejects.toThrow(/proposer key missing/)
+        const kept = await db.client.query<{ status: string }>(`SELECT status FROM change_proposals WHERE id = $1`, [id])
+        expect(kept.rows[0]?.status).toBe("pending")
+      }
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
   it("MIG-258-001: narrowing p6_actor_key refuses legacy rows and keeps the installed function", async () => {
     const chain = await freshDb("p6mig258")
     const forward = await freshDb("p6mig258b")
@@ -1604,18 +1883,20 @@ suite("G3 master grants on local Postgres", () => {
     const db = await freshDb("p6parity")
     try {
       await db.client.query(DDL)
-      const keys = await db.client.query<{ dotted: string; start: string; mid: string; end: string; sharp: string }>(
+      const keys = await db.client.query<{ dotted: string; start: string; mid: string; end: string; sharp: string; wide: string }>(
         `SELECT public.p6_actor_key(chr(304)) AS dotted,
                 public.p6_actor_key(chr(117974)) AS start,
                 public.p6_actor_key(chr(117984)) AS mid,
                 public.p6_actor_key(chr(118009)) AS end,
-                public.p6_actor_key('straße') AS sharp`,
+                public.p6_actor_key('straße') AS sharp,
+                public.p6_actor_key(chr(65328) || chr(65313)) AS wide`,
       )
       expect(keys.rows[0]?.dotted).toBe("")
       expect(keys.rows[0]?.start).toBe("")
       expect(keys.rows[0]?.mid).toBe("")
       expect(keys.rows[0]?.end).toBe("")
       expect(keys.rows[0]?.sharp).toBe("strasse")
+      expect(keys.rows[0]?.wide).toBe("pa")
     } finally {
       await dropDb(db.name, db.client)
     }

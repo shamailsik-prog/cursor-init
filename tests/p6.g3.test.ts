@@ -664,8 +664,37 @@ describe("G3 master owned (Layer 18 §10)", () => {
     ).rejects.toThrow(/substantive proposal requires partner approval/)
     await expect(
       approveProposal(pending.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store),
-    ).rejects.toThrow(/substantive proposal requires partner approval/)
+    ).rejects.toThrow(/proposer key missing/)
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
+  it("MSG-258-R2-004: an empty or whitespace proposer key has its own error", async () => {
+    const store = p6Store()
+    for (const [index, proposedBy] of ["Partner B", "partner+1@x", "partner:1"].entries()) {
+      const pending = await proposeChange({ ...substantive(`clause.missing.${index}`), proposedBy }, store)
+      await expect(
+        approveProposal(pending.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store),
+      ).rejects.toThrow(/^proposer key missing$/)
+      expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    }
+    for (const [index, proposedBy] of ["", "   ", " \t "].entries()) {
+      const pending = await store.insertProposal({
+        ...substantive(`clause.blank.${index}`),
+        id: `prop-blank-${index}`,
+        proposedBy,
+        status: "pending",
+        requestedClass: "substantive",
+        decidedBy: null,
+        decidedKind: null,
+        decidedRole: null,
+        declassify: false,
+        payloadHash: "pending",
+      })
+      await expect(
+        approveProposal(pending.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store),
+      ).rejects.toThrow(/^proposer key missing$/)
+      expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    }
   })
 
   it("TEST-258-002: space, plus, and colon are not actor keys", () => {
@@ -705,6 +734,16 @@ describe("G3 master owned (Layer 18 §10)", () => {
   })
 
   it("PARITY-258-005: U+0130 and U+1CCD6-U+1CCF9 are empty before lower", () => {
+    for (const file of ["postgres/ddl/009_p6_master.sql", "postgres/ddl/011_p6_actor_key.sql"]) {
+      const sql = readFileSync(file, "utf8")
+      const start = sql.indexOf("CREATE OR REPLACE FUNCTION public.p6_actor_key_next")
+      const end = sql.indexOf("$fn$;", start)
+      const body = sql.slice(start, end)
+      const gate = body.indexOf("raw_cp > 127")
+      expect(gate).toBeGreaterThan(0)
+      const branch = body.slice(gate, body.indexOf("raw_i := raw_i + 1", gate))
+      expect(branch).toMatch(/THEN\s+RETURN ''/)
+    }
     expect(normalizeActorKey("\u0130")).toBe("")
     expect(normalizeActorKey("\u{1CCD6}")).toBe("")
     expect(normalizeActorKey("\u{1CCE0}")).toBe("")
@@ -878,6 +917,12 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect(sql).toMatch(/new proposals are pending/)
     expect(sql).toMatch(/approval is not a direct status change/)
     expect(sql).toMatch(/approver must differ from proposer/)
+    expect(sql).toMatch(/proposer key missing/)
+    expect(sql).toMatch(/Do not run it with psql -1/)
+    expect(sql).toMatch(/LOCK TABLE public\.change_proposals IN SHARE ROW EXCLUSIVE MODE;/)
+    expect(readFileSync("postgres/ddl/011_p6_actor_key.sql", "utf8")).toMatch(
+      /LOCK TABLE public\.change_proposals IN SHARE ROW EXCLUSIVE MODE;/,
+    )
     expect(sql).toMatch(/proposal status transition is refused/)
     expect(sql).toMatch(
       /CREATE TRIGGER change_proposals_status_transition[\s\S]*?p6_enforce_proposal_transition\s*\(/,
