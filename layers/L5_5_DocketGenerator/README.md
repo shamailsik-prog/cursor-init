@@ -29,15 +29,17 @@ Output, only when the flag is on and nothing is queued:
 |---|---|
 | Reads from | The in-memory filing set passed by the caller. No folder, vault, or draft store. |
 | Writes to | PDF and DOCX bytes on the return value. No table and no file. |
-| Calls / triggers | None. `routes.ts` is not registered. |
+| Calls / triggers | None. `routes.ts` is not registered. A mount requires a P5 `decide()` guard. |
 | Flag | `L5_5_DOCKET_GENERATOR`, default off. `disable()` drops no subscriptions. |
 | Core edits | None. |
 
 ## Ambiguity queue
 
-Order, label, or reference that the rule and the filing set do not settle is queued (`order_unresolved`, `label_unresolved`, `ref_unresolved`). The generator does not reorder, pick between `A, B, C` and `P/1`, or invent a page size. An assigned label on a two-scheme rule is the human's choice of series; a body citation that is not one of those labels is still queued. Final PDF and DOCX are refused.
+Order, label, or reference that the rule and the filing set do not settle is queued (`order_unresolved`, `label_unresolved`, `ref_unresolved`). The generator does not reorder, pick between `A, B, C` and `P/1`, or invent a page size. Citations are matched after normalising case, `/` `-` and spaces, and the abbreviations Annex, Annexure, Annexures, Enclosure, Enclosures and Encl. A plural or conjoined list is checked label by label. `P/01` is not `P/1`. An assigned label on a two-scheme rule must be one series; mixing letters with P, D or R marks is queued. A body citation that is not one of the resolved labels is queued. An annexure whose status is `pending` or `blocked` is queued. Final PDF and DOCX are refused.
 
-DOCX created and modified stamps, and zip entry times, are fixed. Text in the draft and the annexures is left as written.
+DOCX created and modified stamps are fixed. Zip entry times use local midnight on 2026-01-01 so the bytes do not depend on the time zone. Text in the draft and the annexures is left as written. Each plan page is its own section, with the PDF page size, the content-box margins, exact line spacing, and a PAGE field on a content leaf.
+
+`routes.ts` is not mounted. A later mount needs a P5 `decide()` guard in front of the route.
 
 `migration.sql` is not applied and creates nothing.
 
