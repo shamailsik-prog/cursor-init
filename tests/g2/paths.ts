@@ -419,6 +419,8 @@ export const OUT_OF_SCOPE_MODULES: Record<string, string> = {
   "/api/p1/committee-brain": "P1 AI gateway",
   "/api/g0/monitor": "G-0 public health (no tenant data)",
   "/api/g0/normalise": "G-0 case-number normaliser (no tenant data)",
+  "/api/d2/whatsapp":
+    "D2-1 §8 webhook, flag D2_WHATSAPP_GRAMMAR default off; refuses before any tenant read and has no phone-to-user binding. Re-run G-2 when the flag is on and binding exists.",
 }
 
 /**
@@ -509,10 +511,10 @@ export const NOT_BUILT: Array<{ service: Service; channel: Channel; path: string
   { service: "D1-2", channel: "web", path: "/api/d1/matter/* read by id; relevant_law_dates (L17.1); entity resolution views (L17.2)", note: "only list exists" },
   { service: "D3-1", channel: "web", path: "/api/d3/vault/* document read/download by id, versions, exports, share links, Ghost Archive, loose vault view", note: "document_versions has rules but no read route" },
   { service: "D5-1", channel: "web", path: "/api/d5/research/* search, arguments, compendium, precedent discovery, authority viewer", note: "searchCorpus is reached only through WhatsApp /research (D2-1); no /api/d5 route exists" },
-  { service: "D2-1", channel: "whatsapp", path: "/api/d2/whatsapp/* inbound webhook with phone-number to user binding", note: "commands run as an authenticated session via /api/d2/court-ops; re-run G-2 when the webhook lands" },
-  { service: "D2-1", channel: "whatsapp", path: "/matters <Query|CaseRef>", note: "grammar accepts bare /matters only" },
-  { service: "D2-1", channel: "whatsapp", path: "/hearings [Date]", note: "not in the command grammar" },
-  { service: "D2-1", channel: "whatsapp", path: "/clients [Query]", note: "not in the command grammar" },
-  { service: "D2-1", channel: "whatsapp", path: "/drafts [CaseRef]", note: "not in the command grammar" },
-  { service: "D2-1", channel: "whatsapp", path: "open N (numbered-list reply)", note: "not in the command grammar" },
+  { service: "D2-1", channel: "whatsapp", path: "/api/d2/whatsapp/* inbound webhook with phone-number to user binding", note: "the §8 webhook is behind D2_WHATSAPP_GRAMMAR (default off). It does not read a user id from the body; with no phone binding it fail-closes. Court-ops still runs the historical three commands. Re-run G-2 when the flag is on and binding exists." },
+  { service: "D2-1", channel: "whatsapp", path: "/matters <Query|CaseRef>", note: "the §8 parser accepts Query and CaseRef behind the flag; court-ops still accepts bare /matters only" },
+  { service: "D2-1", channel: "whatsapp", path: "/hearings [Date]", note: "in the flagged §8 grammar; not in the court-ops WHATSAPP_COMMANDS table" },
+  { service: "D2-1", channel: "whatsapp", path: "/clients [Query]", note: "in the flagged §8 grammar; not in the court-ops WHATSAPP_COMMANDS table" },
+  { service: "D2-1", channel: "whatsapp", path: "/drafts [CaseRef]", note: "in the flagged §8 grammar; not in the court-ops WHATSAPP_COMMANDS table" },
+  { service: "D2-1", channel: "whatsapp", path: "open N (numbered-list reply)", note: "reply in the flagged §8 grammar (open / kholo / کھولیں); not in the court-ops WHATSAPP_COMMANDS table" },
 ]

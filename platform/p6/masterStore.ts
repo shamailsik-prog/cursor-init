@@ -105,8 +105,14 @@ export interface MasterSession {
   currentClassification(firmId: string): Promise<Classification>
   /** Locks the firm and returns the current version id, or null when the firm has none. */
   lockFirm(firmId: string): Promise<string | null>
-  /** Status transition. False when the row is not in `fromStatus` (lost the race). */
+  /**
+   * Status transition from the CAS table only: pending → applied (cosmetic, system) and
+   * approved → applied (decision fields unchanged). A transition into approved is refused.
+   * False when the row is not in `fromStatus` (lost the race).
+   */
   casProposal(row: PersistedProposal, fromStatus: PersistedProposal["status"]): Promise<boolean>
+  /** The only pending → approved transition. Requires a different actor and partner attestation. */
+  recordApproval(row: PersistedProposal): Promise<boolean>
   commitVersion(input: CommitVersionInput): Promise<CommitVersionResult>
   allowDeclassify(on: boolean): Promise<void>
 }
@@ -173,6 +179,122 @@ function assertPayloadFrozen(current: PersistedProposal, next: PersistedProposal
   }
 }
 
+/**
+ * CAS edges. pending → approved is not one of them.
+ * That edge is recordApproval: partner kind, partner role, and an actor key that differs from the proposer.
+ */
+const PROPOSAL_CAS_TRANSITIONS: Record<PersistedProposal["status"], readonly PersistedProposal["status"][]> = {
+  pending: ["applied"],
+  approved: ["applied"],
+  applied: [],
+  rejected: [],
+}
+
+/** NFKC, strip default-ignorables, trim, then lower-case with ß folded to ss. */
+export function normalizeActorKey(value: string): string {
+  return value.normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").trim().toLowerCase().replace(/\u00df/g, "ss")
+}
+
+function isDirectApproval(current: PersistedProposal | undefined, next: PersistedProposal): boolean {
+  if (next.status === "approved") return true
+  if (next.decidedKind === "partner" && current?.decidedKind !== "partner") return true
+  if (next.decidedRole === "partner" && current?.decidedRole !== "partner") return true
+  if (next.declassify && current?.declassify !== true) return true
+  return false
+}
+
+function assertNewProposal(row: PersistedProposal): void {
+  if (row.status !== "pending" || row.decidedBy !== null || row.decidedKind !== null || row.decidedRole !== null || row.declassify) {
+    throw new Error("new proposals are pending")
+  }
+}
+
+function assertNoApprovalStamp(row: PersistedProposal): void {
+  if (row.decidedBy !== null || row.decidedKind !== null || row.decidedRole !== null || row.declassify) {
+    throw new Error("approval is not a direct status change")
+  }
+}
+
+function assertProposedByUnchanged(current: PersistedProposal, row: PersistedProposal): void {
+  if (row.proposedBy !== current.proposedBy) throw new Error("proposedBy is immutable")
+}
+
+function assertCasShape(current: PersistedProposal, next: PersistedProposal): void {
+  if (current.status === "pending" && next.status === "applied") {
+    if (
+      current.changeClass !== "cosmetic" ||
+      next.changeClass !== "cosmetic" ||
+      next.decidedKind !== "system" ||
+      next.decidedRole !== "system" ||
+      next.decidedBy !== "p6" ||
+      next.declassify
+    ) {
+      throw new Error("proposal status transition is refused")
+    }
+    return
+  }
+  if (current.status === "approved" && next.status === "applied") {
+    const approver = normalizeActorKey(current.decidedBy ?? "")
+    if (
+      next.decidedBy !== current.decidedBy ||
+      next.decidedKind !== current.decidedKind ||
+      next.decidedRole !== current.decidedRole ||
+      next.declassify !== current.declassify ||
+      next.changeClass !== current.changeClass ||
+      (current.changeClass === "substantive" &&
+        (current.decidedKind !== "partner" ||
+          current.decidedRole !== "partner" ||
+          approver === "" ||
+          approver === normalizeActorKey(current.proposedBy)))
+    ) {
+      throw new Error("proposal status transition is refused")
+    }
+    return
+  }
+  throw new Error("proposal status transition is refused")
+}
+
+function assertPartnerApproval(current: PersistedProposal, next: PersistedProposal): void {
+  assertPayloadFrozen(current, next)
+  if (current.status !== "pending" || next.status !== "approved") throw new Error("proposal is not pending")
+  if (current.changeClass !== "substantive" || next.changeClass !== "substantive") {
+    throw new Error("cosmetic proposals are not partner-approved")
+  }
+  if (next.decidedKind !== "partner" || next.decidedRole !== "partner") {
+    throw new Error("substantive proposal requires partner approval")
+  }
+  const approver = normalizeActorKey(next.decidedBy ?? "")
+  const proposer = normalizeActorKey(current.proposedBy)
+  if (approver === "" || proposer === "") throw new Error("substantive proposal requires partner approval")
+  if (approver === proposer) throw new Error("approver must differ from proposer")
+  if (
+    next.proposedBy !== current.proposedBy ||
+    next.firmId !== current.firmId ||
+    next.entryKey !== current.entryKey ||
+    next.partition !== current.partition ||
+    next.classification !== current.classification ||
+    next.sourceModule !== current.sourceModule
+  ) {
+    throw new Error("approved proposal payload is frozen")
+  }
+}
+
+function assertCommitLeavesApprovalAlone(current: PersistedProposal | undefined, next: PersistedProposal): void {
+  if (isDirectApproval(current, next)) throw new Error("approval is not a direct status change")
+  if (!current) {
+    if (next.status !== "pending") throw new Error("new proposals are pending")
+    return
+  }
+  if (current.status !== next.status) throw new Error("proposal status transition is refused")
+}
+
+function refuseDirectCas(current: PersistedProposal | undefined, row: PersistedProposal, fromStatus: PersistedProposal["status"]): void {
+  if (isDirectApproval(current, row)) throw new Error("approval is not a direct status change")
+  if (!PROPOSAL_CAS_TRANSITIONS[fromStatus].includes(row.status)) {
+    throw new Error("proposal status transition is refused")
+  }
+}
+
 type MemoryState = {
   proposals: Map<string, PersistedProposal>
   versions: VersionRow[]
@@ -226,9 +348,25 @@ export class InMemoryMasterStore implements MasterStore {
   async casProposal(row: PersistedProposal, fromStatus: PersistedProposal["status"]): Promise<boolean> {
     this.assertRole()
     const current = this.state.proposals.get(row.id)
+    refuseDirectCas(current, row, fromStatus)
     if (!current || current.status !== fromStatus) return false
+    assertCasShape(current, row)
+    assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
     const next = structuredClone(row)
+    next.payload = structuredClone(current.payload)
+    next.payloadHash = current.payloadHash
+    this.state.proposals.set(row.id, next)
+    return true
+  }
+
+  async recordApproval(row: PersistedProposal): Promise<boolean> {
+    this.assertRole()
+    const current = this.state.proposals.get(row.id)
+    if (!current || current.status !== "pending") return false
+    assertPartnerApproval(current, row)
+    const next = structuredClone(row)
+    next.status = "approved"
     next.payload = structuredClone(current.payload)
     next.payloadHash = current.payloadHash
     this.state.proposals.set(row.id, next)
@@ -247,6 +385,8 @@ export class InMemoryMasterStore implements MasterStore {
 
   async insertProposal(row: PersistedProposal): Promise<PersistedProposal> {
     this.assertRole()
+    assertNewProposal(row)
+    if (this.state.proposals.has(row.id)) throw new Error(`proposal id already exists: ${row.id}`)
     const saved = structuredClone(row)
     saved.payloadHash = payloadDigest(saved.payload)
     this.state.proposals.set(saved.id, saved)
@@ -261,9 +401,11 @@ export class InMemoryMasterStore implements MasterStore {
   async saveProposal(row: PersistedProposal): Promise<void> {
     this.assertRole()
     if (row.status !== "pending") throw new Error("save refuses a status other than pending")
+    assertNoApprovalStamp(row)
     const current = this.state.proposals.get(row.id)
     if (!current) throw new Error("proposal not found")
     if (current.status !== "pending") throw new Error("save refuses a status other than pending")
+    assertProposedByUnchanged(current, row)
     assertPayloadFrozen(current, row)
     const next = structuredClone(row)
     next.payload = structuredClone(current.payload)
@@ -288,6 +430,12 @@ export class InMemoryMasterStore implements MasterStore {
     this.assertRole()
     const snap = cloneState(this.state)
     try {
+      const currentProposal = input.proposal ? this.state.proposals.get(input.proposal.id) : undefined
+      if (input.proposal) assertCommitLeavesApprovalAlone(currentProposal, input.proposal)
+      if (input.proposal && currentProposal) {
+        assertProposedByUnchanged(currentProposal, input.proposal)
+        assertPayloadFrozen(currentProposal, input.proposal)
+      }
       const firmVersions = this.state.versions.filter((row) => row.firmId === input.firmId)
       const parent = firmVersions[firmVersions.length - 1] ?? null
       if ((parent?.id ?? null) !== input.expectedBaseVersionId) {
@@ -432,7 +580,10 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
     role: P6_ROLE,
 
     async insertProposal(row) {
+      assertNewProposal(row)
       await withRole(async (client) => {
+        const existing = await client.query(`SELECT 1 FROM change_proposals WHERE id = $1`, [row.id])
+        if ((existing.rowCount ?? 0) > 0) throw new Error(`proposal id already exists: ${row.id}`)
         await client.query(
           `INSERT INTO change_proposals
              (id, firm_id, source_module, classification, change_class, partition, entry_key,
@@ -475,6 +626,7 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
 
     async saveProposal(row) {
       if (row.status !== "pending") throw new Error("save refuses a status other than pending")
+      assertNoApprovalStamp(row)
       const updated = await withRole(async (client) => {
         const found = await client.query<ProposalQueryRow>(
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
@@ -483,7 +635,9 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
         const current = found.rows[0]
         if (!current) return 0
         if (current.status !== "pending") throw new Error("save refuses a status other than pending")
-        assertPayloadFrozen(proposalFromRow(current), row)
+        const stored = proposalFromRow(current)
+        assertProposedByUnchanged(stored, row)
+        assertPayloadFrozen(stored, row)
         const result = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5
@@ -538,6 +692,17 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
       const versionId = randomUUID()
       try {
         await withRole(async (client) => {
+          if (input.proposal) {
+            const found = await client.query<ProposalQueryRow>(
+              `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+              [input.proposal.id],
+            )
+            const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+            if (current) {
+              assertProposedByUnchanged(current, input.proposal)
+              assertPayloadFrozen(current, input.proposal)
+            }
+          }
           await writeVersion(client, input, versionId)
         })
       } catch (error) {
@@ -600,15 +765,35 @@ export function createPgMasterStore(pool: pg.Pool): MasterStore {
           `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
           [row.id],
         )
-        const current = found.rows[0]
+        const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+        refuseDirectCas(current, row, fromStatus)
         if (!current || current.status !== fromStatus) return false
-        assertPayloadFrozen(proposalFromRow(current), row)
+        assertCasShape(current, row)
+        assertProposedByUnchanged(current, row)
+        assertPayloadFrozen(current, row)
         const updated = await client.query(
           `UPDATE change_proposals
               SET status = $2, decided_by = $3, decided_kind = $4, decided_role = $5,
                   change_class = $6, declassify = $7
             WHERE id = $1 AND status = $8`,
           [row.id, row.status, row.decidedBy, row.decidedKind, row.decidedRole, row.changeClass, row.declassify, fromStatus],
+        )
+        return (updated.rowCount ?? 0) === 1
+      },
+      async recordApproval(row) {
+        const found = await client.query<ProposalQueryRow>(
+          `SELECT ${PROPOSAL_COLUMNS} FROM change_proposals WHERE id = $1 FOR UPDATE`,
+          [row.id],
+        )
+        const current = found.rows[0] ? proposalFromRow(found.rows[0]) : undefined
+        if (!current || current.status !== "pending") return false
+        assertPartnerApproval(current, row)
+        const updated = await client.query(
+          `UPDATE change_proposals
+              SET status = 'approved', decided_by = $2, decided_kind = 'partner', decided_role = 'partner',
+                  declassify = $3
+            WHERE id = $1 AND status = 'pending'`,
+          [row.id, row.decidedBy, row.declassify],
         )
         return (updated.rowCount ?? 0) === 1
       },
@@ -638,7 +823,7 @@ async function readClassification(client: pg.PoolClient, firmId: string): Promis
 }
 
 function commitError(error: unknown): Error {
-  if (error instanceof Error && /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen/.test(error.message)) {
+  if (error instanceof Error && /did not commit|non-P6 writer refused|master version conflict|proposal already has a version|declassify|frozen|proposedBy is immutable/.test(error.message)) {
     return error
   }
   return new Error("master write did not commit", { cause: error })
