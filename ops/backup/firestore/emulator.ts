@@ -3,11 +3,12 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore, type Firestore } from "firebase-admin/firestore"
+import { acceptRestoreChild, backupPayloadProblems, type ContentUnit } from "../drill/content"
+import { drillScratchDir, firestoreEmulatorTarget, isolationProblems } from "../drill/target"
 import { BundleWriter, openBundleFile, verifyBundle } from "../lib/bundle"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { runCommand } from "../lib/exec"
-import { recordDrillResult } from "../lib/results"
-import { collectFirestoreManifest, compareFirestoreManifests } from "./manifest"
+import { collectFirestoreManifest } from "./manifest"
 import { assertFirestoreEmulatorPortFree } from "./guards"
 
 const FIRESTORE_DRILL_PROJECT = "f33-backup-drill"
@@ -66,16 +67,40 @@ export async function restoreFirestoreEmulator(opts: {
   host: string
   port: number
   importDir: string
-}): Promise<{ ok: boolean; differences: string[]; rtoMs: number; stop: () => void }> {
+}): Promise<{
+  ok: boolean
+  differences: string[]
+  rtoMs: number
+  stop: () => void
+  idempotent: boolean
+  content: Array<ContentUnit & { match: boolean }>
+}> {
   const started = Date.now()
-  await assertFirestoreEmulatorPortFree(opts.host, opts.port)
+  const fail = (differences: string[], content: Array<ContentUnit & { match: boolean }> = []) => ({
+    ok: false,
+    differences,
+    rtoMs: Date.now() - started,
+    stop: () => {},
+    idempotent: false,
+    content,
+  })
+  const targetProblems = isolationProblems(
+    firestoreEmulatorTarget({ host: opts.host, projectId: FIRESTORE_DRILL_PROJECT, importDir: opts.importDir })
+  )
+  if (targetProblems.length) return fail(targetProblems)
   const verify = await verifyBundle(opts.bundleDir, opts.ring)
-  if (!verify.ok || !verify.manifest) {
-    return { ok: false, differences: verify.problems, rtoMs: Date.now() - started, stop: () => {} }
-  }
+  if (!verify.ok || !verify.manifest || !verify.bundle) return fail(verify.problems)
+  const payloadProblems = backupPayloadProblems({
+    store: verify.bundle.store,
+    storeManifest: verify.manifest.store,
+    artefacts: verify.manifest.artefacts,
+  })
+  if (payloadProblems.length) return fail(payloadProblems)
+  await assertFirestoreEmulatorPortFree(opts.host, opts.port)
   const expected = verify.manifest.store
   await fsp.mkdir(opts.importDir, { recursive: true })
-  const exportTar = path.join(opts.importDir, ".export.tar.part")
+  const scratch = drillScratchDir("f33-fs-plain-")
+  const exportTar = path.join(scratch, "export.tar")
   const exportExpect = verify.manifest.artefacts.find((a) => a.name === "export.tar")
   try {
     await pipeline(
@@ -83,10 +108,8 @@ export async function restoreFirestoreEmulator(opts: {
       createWriteStream(exportTar)
     )
     const extract = await runCommand(["tar", "-xf", exportTar, "-C", opts.importDir])
-    if (extract.code !== 0) {
-      return { ok: false, differences: [extract.stderr || extract.stdout], rtoMs: Date.now() - started, stop: () => {} }
-    }
-    const manifestPath = path.join(opts.importDir, ".expected-manifest.json")
+    if (extract.code !== 0) return fail([extract.stderr || extract.stdout])
+    const manifestPath = path.join(scratch, "expected-manifest.json")
     await fsp.writeFile(manifestPath, JSON.stringify(expected), "utf8")
     const inner = `npx vite-node ops/backup/test/helpers/firestore-verify-import.ts ${JSON.stringify(manifestPath)}`
     const importRun = await runCommand(firestoreEmulatorImportArgv(opts.importDir, inner), {
@@ -97,14 +120,11 @@ export async function restoreFirestoreEmulator(opts: {
         FIRESTORE_DRILL_PROJECT: FIRESTORE_DRILL_PROJECT,
       },
     })
-    if (importRun.code !== 0) {
-      const msg = [importRun.stderr, importRun.stdout].filter(Boolean).join("\n").trim() || "firestore import failed"
-      return { ok: false, differences: [msg], rtoMs: Date.now() - started, stop: () => {} }
-    }
-    return { ok: true, differences: [], rtoMs: Date.now() - started, stop: () => {} }
+    const accepted = acceptRestoreChild({ code: importRun.code, stdout: importRun.stdout, stderr: importRun.stderr })
+    if (!accepted.ok) return fail(accepted.problems, accepted.units)
+    return { ok: true, differences: [], rtoMs: Date.now() - started, stop: () => {}, idempotent: false, content: accepted.units }
   } finally {
-    await fsp.rm(exportTar, { force: true })
-    await fsp.rm(path.join(opts.importDir, ".expected-manifest.json"), { force: true })
+    await fsp.rm(scratch, { recursive: true, force: true })
   }
 }
 

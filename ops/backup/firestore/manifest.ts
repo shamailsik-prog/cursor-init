@@ -1,4 +1,5 @@
 import type { CollectionReference, Firestore } from "firebase-admin/firestore"
+import { checksumOk } from "../drill/content"
 import { MultisetDigest } from "../lib/digest"
 import { diffRecords, diffSets } from "../lib/diff"
 import { canonicalEncode, collectionPattern, docHash } from "./canonical"
@@ -66,8 +67,28 @@ export async function collectFirestoreManifest(db: Firestore): Promise<Firestore
   return { collections, firms, relationships }
 }
 
+function flagChecksums(
+  prefix: string,
+  expected: Record<string, { count?: number; digest?: string }>,
+  actual: Record<string, { count?: number; digest?: string }>,
+  lines: string[]
+): void {
+  const keys = new Set([...Object.keys(expected), ...Object.keys(actual)])
+  for (const key of [...keys].sort()) {
+    const sides = [expected[key], actual[key]].filter((side) => side !== undefined)
+    if (sides.some((side) => typeof side.count !== "number" || !checksumOk(side.digest))) {
+      lines.push(`${prefix}.${key}: checksum missing`)
+    }
+  }
+}
+
 export function compareFirestoreManifests(expected: FirestoreManifest, actual: FirestoreManifest): string[] {
   const lines: string[] = []
+  flagChecksums("collections", expected.collections, actual.collections, lines)
+  const firmPatterns = new Set([...Object.keys(expected.firms), ...Object.keys(actual.firms)])
+  for (const pattern of [...firmPatterns].sort()) {
+    flagChecksums(`firms.${pattern}`, expected.firms[pattern] ?? {}, actual.firms[pattern] ?? {}, lines)
+  }
   lines.push(...diffRecords("collections", expected.collections, actual.collections))
   lines.push(...diffRecords("firms", expected.firms, actual.firms))
   lines.push(...diffRecords("relationships", expected.relationships, actual.relationships))

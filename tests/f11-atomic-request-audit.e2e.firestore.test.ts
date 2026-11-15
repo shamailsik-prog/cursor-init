@@ -142,7 +142,11 @@ function instanceDies(dbA: FirestoreType, at: At): Death {
 
   const spy = <T extends object, K extends keyof T & string>(proto: T, name: K, impl: (original: (...a: unknown[]) => unknown) => (this: unknown, ...a: unknown[]) => unknown) => {
     const original = proto[name] as unknown as (...a: unknown[]) => unknown
-    const s = vi.spyOn(proto as never, name as never).mockImplementation(impl(original) as never)
+    // Vitest 5's `spyOn` returns `never` when both arguments are `never`, so the
+    // prototype is widened to a method map. The implementation is unchanged.
+    const s = vi.spyOn(proto as unknown as Record<string, (...a: unknown[]) => unknown>, name).mockImplementation(
+      impl(original) as (...a: unknown[]) => unknown,
+    )
     restorers.push(() => s.mockRestore())
   }
 
