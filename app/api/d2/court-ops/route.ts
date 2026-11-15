@@ -28,8 +28,10 @@ import {
   acknowledgeCourtOpsItem,
   CourtOpsItemNotFoundError,
   listCourtOpsQueue,
+  recordResolvedFollowUp,
+  requireCourtOpsActor,
   resolveCourtOpsAckItem,
-  resolveFollowUp,
+  courtOpsCanAccessMatter,
   resolveWorkflowBlocker,
   type CourtOpsAckTarget,
 } from "@/services/d2-2/courtOps"
@@ -39,6 +41,7 @@ import {
   courtOpsAckItemIdProblem,
   isCourtOpsAckQueueType,
 } from "@/platform/persistence/courtOpsAcknowledgement"
+import { FollowUpResolveRefusedError } from "@/platform/persistence/courtOpsFollowUpResolve"
 
 
 type WhatsAppBody = {
@@ -346,30 +349,72 @@ async function handlePost(request: Request) {
         )
       }
       const repos = await syncCourtOpsState(store, parsed.actorId)
-      resolveFollowUp(store, {
-        actorId: parsed.actorId,
-        followUpId: parsed.followUpId,
-        reason: parsed.reason,
-      })
-      const updated = store.followUps.find((row) => row.id === parsed.followUpId)
-      if (updated) {
-        await repos.followUps.upsert(updated)
-        await repos.workflowOpsActivity.upsert(
-          buildCourtOpsActivityRow({
-            id: `ops:court_ops:follow_up:${updated.id}`,
-            firmId: updated.firmId,
-            action: "court_ops_resolve_follow_up",
-            actorId: parsed.actorId,
-            classification: "internal",
-            matterId: updated.matterId,
-            documentId: null,
-            followUpId: updated.id,
-            queueType: "follow_up",
-            status: updated.status ?? "resolved",
-            detail: parsed.reason ?? updated.raw,
-          })
-        )
+      const actor = requireCourtOpsActor(store, parsed.actorId)
+      // A retried transaction must not record the matter decision twice.
+      const matterDecisions = new Map<string, boolean>()
+      let resolved
+      try {
+        resolved = await repos.followUps.resolveOpen({
+          id: parsed.followUpId,
+          firmId: actor.firmId,
+          actorId: actor.id,
+          resolvedAt: Date.now(),
+          matterAllowed: (matterId) => {
+            const seen = matterDecisions.get(matterId)
+            if (seen !== undefined) return seen
+            const allow = courtOpsCanAccessMatter(store, actor.id, matterId)
+            matterDecisions.set(matterId, allow)
+            return allow
+          },
+        })
+      } catch (err) {
+        if (err instanceof FollowUpResolveRefusedError) {
+          if (err.reason === "missing") {
+            return NextResponse.json(
+              { error: "unknown follow_up id", code: err.code, reason: err.reason },
+              { status: 400 }
+            )
+          }
+          if (err.reason === "wrong_firm") {
+            return NextResponse.json(
+              { error: "cross-firm follow_up denied", code: err.code, reason: err.reason },
+              { status: 400 }
+            )
+          }
+          if (err.reason === "wrong_matter") {
+            return NextResponse.json(
+              { error: "actor cannot resolve this follow_up", code: err.code, reason: err.reason },
+              { status: 400 }
+            )
+          }
+          return NextResponse.json(
+            {
+              error: err.reason === "already_resolved" ? "follow_up is already resolved" : "follow_up is not resolvable",
+              code: err.code,
+              reason: err.reason,
+            },
+            { status: 409 }
+          )
+        }
+        throw err
       }
+      // The transaction committed. The audit row is pushed only now, so a refusal leaves none.
+      recordResolvedFollowUp(store, { actorId: actor.id, followUp: resolved, reason: parsed.reason })
+      await repos.workflowOpsActivity.upsert(
+        buildCourtOpsActivityRow({
+          id: `ops:court_ops:follow_up:${resolved.id}`,
+          firmId: resolved.firmId,
+          action: "court_ops_resolve_follow_up",
+          actorId: actor.id,
+          classification: "internal",
+          matterId: resolved.matterId,
+          documentId: null,
+          followUpId: resolved.id,
+          queueType: "follow_up",
+          status: resolved.status ?? "resolved",
+          detail: parsed.reason ?? resolved.raw,
+        })
+      )
       const payload = { action: "resolve_follow_up", followUpId: parsed.followUpId }
       claim.complete(payload)
       return NextResponse.json({ result: payload, idempotencyKey: key, reused: false })

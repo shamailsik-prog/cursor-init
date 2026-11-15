@@ -1,7 +1,7 @@
 import { checkPermission } from "@/platform/p5/checkPermission"
 import { canReadDocument } from "@/platform/p5/documentAccess"
 import { PublicError } from "@/platform/http/publicError"
-import type { SpineStore, WorkflowStatus } from "@/platform/spine/store"
+import type { FollowUp, SpineStore, WorkflowStatus } from "@/platform/spine/store"
 import { transitionWorkflowStatus } from "@/services/d1-7/documentWorkflow"
 
 type OpsActor = {
@@ -166,24 +166,32 @@ export function acknowledgeCourtOpsItem(
   })
 }
 
-export function resolveFollowUp(
+/** The court-ops actor. Unknown and disallowed roles refuse before any follow-up read. */
+export function requireCourtOpsActor(store: SpineStore, userId: string): OpsActor {
+  return requireOpsActor(store, userId)
+}
+
+/** Whether this actor may resolve a follow-up of `matterId` (the queue's own matter gate). */
+export function courtOpsCanAccessMatter(store: SpineStore, actorId: string, matterId: string): boolean {
+  return canAccessMatter(store, actorId, matterId)
+}
+
+/**
+ * FA-D4-001-FU1-002: mirror a resolution the repository has already committed, and record its audit row.
+ * Called only after `followUps.resolveOpen` returns. A refusal never reaches this.
+ */
+export function recordResolvedFollowUp(
   store: SpineStore,
-  input: { actorId: string; followUpId: string; reason?: string }
-) {
+  input: { actorId: string; followUp: FollowUp; reason?: string }
+): void {
   const actor = requireOpsActor(store, input.actorId)
-  const follow = store.followUps.find((row) => row.id === input.followUpId)
-  if (!follow) throw new PublicError("unknown follow_up id")
-  if (follow.firmId !== actor.firmId) throw new PublicError("cross-firm follow_up denied")
-  if (!canAccessMatter(store, actor.id, follow.matterId)) {
-    throw new PublicError("actor cannot resolve this follow_up")
-  }
-  follow.status = "resolved"
-  follow.resolvedBy = actor.id
-  follow.resolvedAt = Date.now()
+  const idx = store.followUps.findIndex((row) => row.id === input.followUp.id)
+  if (idx < 0) store.followUps.push(input.followUp)
+  else store.followUps[idx] = { ...store.followUps[idx], ...input.followUp }
   store.audit.push({
     action: "court_ops_resolve_follow_up",
     actorId: actor.id,
-    target: follow.id,
+    target: input.followUp.id,
     classification: "internal",
     reason: input.reason,
   })
