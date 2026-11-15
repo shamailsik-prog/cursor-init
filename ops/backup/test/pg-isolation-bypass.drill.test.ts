@@ -532,12 +532,32 @@ exec "\${args[@]}"
         swapped = false
       }
     }
-    const seesPlaintext = (name: string | null): boolean => {
-      if (!name) return false
-      return name.endsWith("globals.sql") || name.endsWith("database.dump")
+    const preexisting = new Set<string>()
+    const collectPlaintext = (dir: string) => {
+      let entries: string[] = []
+      try {
+        entries = readdirSync(dir)
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry)
+        if (entry === "globals.sql" || entry === "database.dump") preexisting.add(full)
+        try {
+          if (lstatSync(full).isDirectory() && !lstatSync(full).isSymbolicLink()) collectPlaintext(full)
+        } catch {
+          // the directory disappeared while it was listed
+        }
+      }
+    }
+    collectPlaintext("/tmp/sikander-backup-drill")
+    const isNewPlaintext = (full: string): boolean => {
+      const base = path.basename(full)
+      return (base === "globals.sql" || base === "database.dump") && !preexisting.has(full)
     }
     const watcher = watch("/tmp/sikander-backup-drill", { recursive: true }, (_event, filename) => {
-      if (seesPlaintext(filename ? String(filename) : null)) swap()
+      if (!filename) return
+      if (isNewPlaintext(path.join("/tmp/sikander-backup-drill", String(filename)))) swap()
     })
     await dropDatabase(target)
     await dropExtraRoles(target)
@@ -551,7 +571,7 @@ exec "\${args[@]}"
         }
         for (const entry of entries) {
           const full = path.join(dir, entry)
-          if (entry === "globals.sql" || entry === "database.dump") {
+          if (isNewPlaintext(full)) {
             swap()
             return
           }
