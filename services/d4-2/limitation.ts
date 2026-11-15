@@ -341,7 +341,11 @@ function versionsFromStore(rows: readonly StatuteSectionVersion[]): LimitationVe
   })
 }
 
-/** Limitation Act, 1908. Not an article period. A later text in force raises the floor to its effectiveFrom. */
+/**
+ * Engine floor for a year 0001–0099 that Date.UTC would mis-read, and for a text
+ * that starts later. 1908-01-01 is not a finding that every article commenced that
+ * day. [REQUIRES VERIFICATION] before a lawyer treats it as the Act's commencement.
+ */
 const ACT_FLOOR = "1908-01-01"
 
 function accrualFloor(versions: readonly LimitationVersion[], sectionId: string, jurisdiction: string): string {
@@ -498,7 +502,21 @@ const BOUND_PHRASES = [
   "and over",
   "up to",
   "kam az kam",
+  "kam se kam",
   "zyada se zyada",
+  "maximum period",
+  "minimum period",
+  "give or take",
+  "upwards of",
+  "or any longer",
+  "or fewer",
+  "or greater",
+  "or lower",
+  "or higher",
+  "zyada",
+  "ziyada",
+  "taqriban",
+  "lagbhag",
   "not",
   "about",
   "above",
@@ -532,6 +550,8 @@ const BOUND_PHRASES = [
   "or so",
 ]
 const BOUND_TOKEN_PHRASES = BOUND_PHRASES.map((phrase) => phrase.split(" ")).sort((a, b) => b.length - a.length)
+const BOUND_STEMS = ["maxim", "minim", "exceed", "approx", "upward", "extens", "extend", "estimat", "tripl", "trebl"]
+const COMPARATIVES = new Set(["fewer", "greater", "lower", "higher", "longer", "shorter", "smaller", "larger", "bigger", "lesser", "older", "newer", "later", "earlier"])
 
 type NumberToken = { start: number; end: number; value: number | null; raw: string }
 
@@ -541,20 +561,21 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * The reckoning and month-end provisos are removed only when they are the
  * canonical sentences; a number or an extra unit inside either span is unreadable.
  * A bound lexeme anywhere in that quantity's clause is period_ambiguous.
- * Clauses split on . ; : em-dash and newline. Parentheses are transparent.
- * A following clause that is only a bound is the same refusal.
+ * Clauses split on . ; : and a blank line. A single newline is a space.
+ * A previous clause that ends in a bound, and a next clause that starts with one, refuse.
+ * Parentheses are transparent. A unicode dash between letters is a word break
+ * for a bound phrase. It is not a number joiner.
  * "within one year" stays one year. A spaced dash, dot, or tilde is unreadable
  * only as a prefix of a digit. A colon label stays readable. A count above the
  * engine ceiling is period_exceeds_engine_cap.
  */
 function normalizeSource(text: string): string {
   let out = text.replace(/\p{Cf}/gu, "").replace(/\r\n?/g, "\n")
-  out = out.replace(
-    /\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\n(one|two|three|four|five|six|seven|eight|nine)\b/gi,
-    "$1 $2"
-  )
-  out = out.replace(/\b([A-Za-z]+|\d+)\n(years?|months?|days?)\b/gi, "$1 $2")
-  return out.replace(/[^\S\n]+/gu, " ")
+  out = out.replace(/[\u2028\u2029\u0085\u000B]/g, "\n")
+  out = out.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "\u0001")
+  while (/\n[ \t]*\n/.test(out)) out = out.replace(/\n[ \t]*\n/g, "\u0000")
+  out = out.replace(/\n/g, " ")
+  return out.replace(/[^\S\n\u0000]+/gu, " ")
 }
 
 function parsePeriod(
@@ -584,7 +605,7 @@ function parsePeriod(
   const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
   if (previous === "and" || previous === "or" || previous === "to") return { ok: false, reason: "period_unreadable" }
   const unit = canonicalUnit(unitMatch[1] ?? "")
-  if (!unit || number.value === null || !Number.isInteger(number.value) || number.value < 1 || number.value > 9999) {
+  if (!unit || number.value === null || !Number.isSafeInteger(number.value) || number.value < 1) {
     return { ok: false, reason: "period_unreadable" }
   }
   if (!spanAllowed(number.value, unit)) return { ok: false, reason: "period_exceeds_engine_cap" }
@@ -623,8 +644,10 @@ function boundInScope(text: string, numberStart: number, unitEnd: number): boole
   if (!current) return true
   const origin = current.start
   if (clauseHasBound(text.slice(current.start, current.end), numberStart - origin, unitEnd - origin)) return true
+  const previous = index > 0 ? clauses[index - 1] : undefined
+  if (previous && previousEndsInBound(text.slice(previous.start, previous.end))) return true
   const next = clauses[index + 1]
-  return next !== undefined && boundOnly(text.slice(next.start, next.end))
+  return next !== undefined && nextStartsWithBound(text.slice(next.start, next.end))
 }
 
 function splitClauses(text: string): { start: number; end: number }[] {
@@ -632,7 +655,7 @@ function splitClauses(text: string): { start: number; end: number }[] {
   let start = 0
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i] ?? ""
-    if (ch === "." || ch === ";" || ch === ":" || ch === "\n" || ch === "\u2014") {
+    if (ch === "." || ch === ";" || ch === ":" || ch === "\u0000") {
       clauses.push({ start, end: i })
       start = i + 1
     }
@@ -642,20 +665,61 @@ function splitClauses(text: string): { start: number; end: number }[] {
 }
 
 function clauseHasBound(clause: string, numberStart: number, unitEnd: number): boolean {
-  if (clause.includes("~")) return true
+  if (clause.includes("~") || /[<>+=\u00B1]/.test(clause) || hasNonAsciiLetter(clause)) return true
   const left = clauseTokens(clause.slice(0, numberStart))
   const right = clauseTokens(clause.slice(unitEnd))
-  if (tokensHaveBound(left)) return true
-  if (tokensHaveBound(right)) return true
+  const tokens = [...left, ...right]
+  if (tokensHaveBound(left) || tokensHaveBound(right)) return true
+  if (tokens.some(tokenStem)) return true
+  if (orComparative(tokens)) return true
   const trailing = right[0]
   return trailing === "more" || trailing === "less" || trailing === "plus"
 }
 
-function boundOnly(clause: string): boolean {
-  if (clause.includes("~") && clauseTokens(clause).length === 0) return true
+function previousEndsInBound(clause: string): boolean {
   const tokens = clauseTokens(clause)
   if (tokens.length === 0) return false
-  return tokensHaveBound(tokens) && stripBounds(tokens).length === 0
+  if (BOUND_TOKEN_PHRASES.some((phrase) => tokensEndWith(tokens, phrase))) return true
+  return tokenStem(tokens[tokens.length - 1] ?? "")
+}
+
+function nextStartsWithBound(clause: string): boolean {
+  const tokens = clauseTokens(clause)
+  if (tokens.length === 0) return false
+  if (BOUND_TOKEN_PHRASES.some((phrase) => tokensStartWith(tokens, phrase))) return true
+  return tokenStem(tokens[0] ?? "")
+}
+
+function tokensEndWith(tokens: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length > tokens.length) return false
+  return phrase.every((word, offset) => tokens[tokens.length - phrase.length + offset] === word)
+}
+
+function tokensStartWith(tokens: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length > tokens.length) return false
+  return phrase.every((word, offset) => tokens[offset] === word)
+}
+
+function tokenStem(token: string): boolean {
+  if (token === "max" || token === "min") return true
+  return BOUND_STEMS.some((stem) => token.startsWith(stem))
+}
+
+function orComparative(tokens: readonly string[]): boolean {
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] !== "or") continue
+    for (let step = 1; step <= 3 && index + step < tokens.length; step += 1) {
+      if (COMPARATIVES.has(tokens[index + step] ?? "")) return true
+    }
+  }
+  return false
+}
+
+function hasNonAsciiLetter(text: string): boolean {
+  for (const char of text) {
+    if (char.charCodeAt(0) > 127 && /\p{L}/u.test(char)) return true
+  }
+  return false
 }
 
 function tokensHaveBound(tokens: string[]): boolean {
@@ -669,27 +733,12 @@ function tokenIncludes(tokens: string[], phrase: readonly string[]): boolean {
   return false
 }
 
-function stripBounds(tokens: string[]): string[] {
-  const kept: string[] = []
-  let index = 0
-  while (index < tokens.length) {
-    const hit = BOUND_TOKEN_PHRASES.find((phrase) => phrase.every((word, offset) => tokens[index + offset] === word))
-    if (hit) {
-      index += hit.length
-      continue
-    }
-    kept.push(tokens[index] ?? "")
-    index += 1
-  }
-  return kept
-}
-
 /** Commas are spaces so "or, more" and "in, excess of" stay one phrase. G4. */
 function clauseTokens(text: string): string[] {
   const normalized = text
     .toLowerCase()
     .replace(/[()[\]]/g, " ")
-    .replace(/([a-z])-([a-z])/g, "$1 $2")
+    .replace(/([a-z])[-\u0001]([a-z])/g, "$1 $2")
     .replace(/,/g, " ")
   return normalized
     .split(/\s+/)
@@ -713,10 +762,15 @@ function spacedMark(text: string, start: number): boolean {
   return (mark === "-" || mark === "." || mark === "~") && isDigit(text[start] ?? "")
 }
 
+function provisoNegated(span: string): boolean {
+  return /\bnever\b|\bcannot\b|n't|\bincluded\b|\bunless\b|\bexcept\b|\bsave\b/i.test(span)
+}
+
 function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]): boolean {
   const match = text.match(re)
   if (!match) return false
   const span = match[0]
+  if (provisoNegated(span)) return true
   if (numberTokens(span).length > 0) return true
   if (spanHasBound(span)) return true
   UNIT_WORD_RE.lastIndex = 0
@@ -785,10 +839,12 @@ function badNeighbour(text: string, start: number, end: number): boolean {
   const before = start === 0 ? "" : (text[start - 1] ?? "")
   const after = end >= text.length ? "" : (text[end] ?? "")
   if (after !== " ") return true
-  if (before !== "" && before !== " " && before !== "(") return true
+  if (before !== "" && before !== " " && before !== "\n" && before !== "(") return true
   for (const index of [start - 1, start - 2, end, end + 1]) {
     if (index < 0 || index >= text.length) continue
-    if ((text.codePointAt(index) ?? 0) > 0x7e) return true
+    const code = text.codePointAt(index) ?? 0
+    if (code === 0x00b1) continue
+    if (code > 0x7e) return true
   }
   return false
 }
