@@ -18,7 +18,7 @@ import {
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
-import { decideFollowUpResolution, FollowUpResolveRefusedError } from "@/platform/persistence/courtOpsFollowUpResolve"
+import { resolveOpenFollowUpFirestore } from "@/platform/persistence/courtOpsFollowUpResolve"
 import { markAuditRowPersisted, type AuditDeadLetter } from "@/platform/audit/requestAudit"
 import {
   deleteDoc,
@@ -222,11 +222,9 @@ import {
   AuditAppendConflictError,
   auditRowsEqual,
 } from "@/platform/persistence/auditAppendConflictError"
-
 async function setById<T extends { id: string }>(db: Firestore, collectionName: string, row: T) {
   await setDoc(doc(db, collectionName, row.id), row)
 }
-
 /**
  * A firm-scoped read (F12): the row is returned only when it belongs to the caller's firm. A row with no `firmId`
  * belongs to no firm and is never returned (fail closed), so a malformed or legacy row cannot be read across tenants.
@@ -2230,31 +2228,7 @@ export function createFirestoreRepositories(db: Firestore): SpineRepositories {
         if (payload.resolvedAt === undefined) delete payload.resolvedAt
         await setDoc(doc(db, "follow_ups", row.id), payload)
       },
-      // FA-D4-001-FU1-002: one transaction reads the stored follow-up and updates it only when it is open,
-      // the caller's firm, and a matter the caller may access. `update` does not create a missing document.
-      // Not set, and not set-with-merge.
-      async resolveOpen(input) {
-        const firmId = requireCallerFirmId(input.firmId, "followUps.resolveOpen")
-        if (typeof input.id !== "string" || input.id === "" || input.id.includes("/")) {
-          throw new FollowUpResolveRefusedError(String(input.id), "missing")
-        }
-        const ref = doc(db, "follow_ups", input.id)
-        return runTransaction(db, async (tx) => {
-          const snap = await tx.get(ref)
-          const next = decideFollowUpResolution(input.id, snap.exists() ? snap.data() : null, {
-            firmId,
-            actorId: input.actorId,
-            resolvedAt: input.resolvedAt,
-            matterAllowed: input.matterAllowed,
-          })
-          tx.update(ref, {
-            status: "resolved",
-            resolvedBy: input.actorId,
-            resolvedAt: input.resolvedAt,
-          })
-          return next
-        })
-      },
+      async resolveOpen(input) { return resolveOpenFollowUpFirestore(db, input) },
       async get(id, firmId) {
         return getById<FollowUp>(db, "follow_ups", id, firmId)
       },

@@ -192,16 +192,14 @@ import {
   readWorkflowOpsActivityRow,
   refuseBlindCourtOpsAckWrite,
 } from "@/platform/persistence/courtOpsAcknowledgement"
-import { decideFollowUpResolution } from "@/platform/persistence/courtOpsFollowUpResolve"
+import { resolveOpenFollowUpMemory, type FollowUpResolveInput } from "@/platform/persistence/courtOpsFollowUpResolve"
 import { MatterClosedError } from "@/platform/d1/matterDocument"
 import {
   AuditAppendConflictError,
   auditRowsEqual,
 } from "@/platform/persistence/auditAppendConflictError"
 import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
-
 export { AuditAppendConflictError }
-
 export type MatterRepository = {
   create(row: Matter): Promise<void>
   get(id: string, firmId: string): Promise<Matter | null>
@@ -223,7 +221,6 @@ export type MatterRepository = {
     patch: Pick<Matter, "caseNumber" | "caseNumberStatus"> & { courtId?: string | null }
   ): Promise<Matter | null>
 }
-
 export type MatterConfirmation = { outcome: "confirmed" | "already_live" | "closed"; matter: Matter }
 
 export type UserRepository = {
@@ -682,18 +679,7 @@ export type WorkflowEventRepository = {
 
 export type FollowUpRepository = {
   upsert(row: FollowUp): Promise<void>
-  /**
-   * FA-D4-001-FU1-002: resolve one existing open follow-up. Reads the stored row, refuses a missing,
-   * foreign, inaccessible, already-resolved or otherwise unresolvable row, and writes nothing on refusal.
-   * The write is the resolution fields of that same row, not a blind upsert.
-   */
-  resolveOpen(input: {
-    id: string
-    firmId: string
-    actorId: string
-    resolvedAt: number
-    matterAllowed: (matterId: string) => boolean
-  }): Promise<FollowUp>
+  resolveOpen(input: FollowUpResolveInput): Promise<FollowUp>
   get(id: string, firmId: string): Promise<FollowUp | null>
   listByFirm(firmId: string): Promise<FollowUp[]>
 }
@@ -3216,23 +3202,7 @@ export function createMemoryRepositories(store: SpineStore): SpineRepositories {
         }
         store.followUps.push(row)
       },
-      // FA-D4-001-FU1-002: read, decide and write with no await in between, so two resolves of one row cannot both pass.
-      async resolveOpen(input) {
-        const firmId = requireCallerFirmId(input.firmId, "followUps.resolveOpen")
-        const idx = store.followUps.findIndex((entry) => entry.id === input.id)
-        const next = decideFollowUpResolution(input.id, idx < 0 ? null : store.followUps[idx], {
-          firmId,
-          actorId: input.actorId,
-          resolvedAt: input.resolvedAt,
-          matterAllowed: input.matterAllowed,
-        })
-        const row = store.followUps[idx]
-        if (!row) throw new Error("follow-up resolve lost the row it had just accepted")
-        row.status = "resolved"
-        row.resolvedBy = input.actorId
-        row.resolvedAt = input.resolvedAt
-        return { ...row, ...next }
-      },
+      async resolveOpen(input) { return resolveOpenFollowUpMemory(store, input) },
       async get(id, firmId) {
         return firmScoped(store.followUps.find((row) => row.id === id), firmId)
       },

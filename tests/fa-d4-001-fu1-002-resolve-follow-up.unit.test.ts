@@ -10,7 +10,10 @@ import { addMember, createMatter } from "@/services/d1-2/matters"
 import { uploadDocument } from "@/services/d1-6/uploadDocument"
 import { recordCaseNumber } from "@/services/d6-1/caseNumber"
 import { transitionWorkflowStatus } from "@/services/d1-7/documentWorkflow"
+import { decideFollowUpResolution, FollowUpResolveRefusedError } from "@/platform/persistence/courtOpsFollowUpResolve"
 import type { FollowUp } from "@/platform/spine/store"
+
+const NOT_FOUND_BODY = { error: "follow_up not found", code: "follow_up_not_found" }
 
 afterEach(() => {
   resetRuntimeStoreForTests()
@@ -98,9 +101,8 @@ describe("FA-D4-001-FU1-002 resolve_follow_up (memory)", () => {
     await seedOpenFollowUp()
     const before = getRuntimeStore().followUps.map((row) => ({ ...row }))
     const res = await post(resolveBody("fu_does_not_exist"))
-    expect(res.status).toBe(400)
-    const body = (await res.json()) as { error?: string }
-    expect(body.error).toBe("unknown follow_up id")
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual(NOT_FOUND_BODY)
     expect(getRuntimeStore().followUps.map((row) => ({ ...row }))).toEqual(before)
     expect(resolutionAudits()).toHaveLength(0)
     expect(activityOf("fu_does_not_exist")).toBeUndefined()
@@ -109,9 +111,8 @@ describe("FA-D4-001-FU1-002 resolve_follow_up (memory)", () => {
   it("refuses a resolver from another firm and does not resolve the row", async () => {
     const follow = await seedOpenFollowUp()
     const res = await post(resolveBody(follow.id, "partner_b", "not yours"))
-    expect(res.status).toBe(400)
-    const body = (await res.json()) as { error?: string }
-    expect(body.error).toBe("cross-firm follow_up denied")
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual(NOT_FOUND_BODY)
     const stored = getRuntimeStore().followUps.find((row) => row.id === follow.id)
     expect(stored?.status).toBe("open")
     expect(stored?.resolvedBy ?? null).toBeNull()
@@ -141,9 +142,8 @@ describe("FA-D4-001-FU1-002 resolve_follow_up (memory)", () => {
     }
     store.followUps.push(follow)
     const res = await post(resolveBody(follow.id, "partner_a", "no"))
-    expect(res.status).toBe(400)
-    const body = (await res.json()) as { error?: string }
-    expect(body.error).toBe("actor cannot resolve this follow_up")
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual(NOT_FOUND_BODY)
     const stored = store.followUps.find((row) => row.id === follow.id)
     expect(stored).toMatchObject({ status: "open", raw: "do not touch", matterId: matter.id, resolvedBy: null, resolvedAt: null })
     expect(resolutionAudits()).toHaveLength(0)
@@ -190,5 +190,152 @@ describe("FA-D4-001-FU1-002 resolve_follow_up (memory)", () => {
     const loserBody = (await loser.json()) as { code?: string; reason?: string }
     expect(loserBody.code).toBe("follow_up_already_resolved")
     expect(loserBody.reason).toBe("already_resolved")
+  })
+
+  it("answers a missing row, another firm, and a hidden matter with one identical 404", async () => {
+    const follow = await seedOpenFollowUp()
+    const hiddenMatter = createMatter(getRuntimeStore(), {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Hidden",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    getRuntimeStore().followUps.push({
+      id: "fu_hidden_same_body",
+      firmId: "firmA",
+      matterId: hiddenMatter.id,
+      courtId: "SHC",
+      raw: "hidden",
+      kind: "case_number_reject",
+      status: "open",
+    })
+    const missing = await (await post(resolveBody("fu_absent"))).json()
+    const foreign = await (await post(resolveBody(follow.id, "partner_b"))).json()
+    const hidden = await (await post(resolveBody("fu_hidden_same_body"))).json()
+    expect(missing).toEqual(NOT_FOUND_BODY)
+    expect(foreign).toEqual(missing)
+    expect(hidden).toEqual(missing)
+  })
+
+  it("answers a hidden follow-up that is already resolved with the same 404", async () => {
+    const store = getRuntimeStore()
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client_a",
+      title: "Hidden resolved",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    store.followUps.push({
+      id: "fu_hidden_resolved",
+      firmId: "firmA",
+      matterId: matter.id,
+      courtId: "SHC",
+      raw: "keep",
+      kind: "case_number_reject",
+      status: "resolved",
+      resolvedBy: "earlier-actor",
+      resolvedAt: 111,
+    })
+    const missing = await post(resolveBody("fu_absent_hidden"))
+    const hidden = await post(resolveBody("fu_hidden_resolved", "partner_a", "leak"))
+    expect(hidden.status).toBe(missing.status)
+    expect(hidden.status).toBe(404)
+    expect(await hidden.json()).toEqual(await missing.json())
+    expect(store.followUps.find((row) => row.id === "fu_hidden_resolved")).toMatchObject({
+      status: "resolved",
+      resolvedBy: "earlier-actor",
+      resolvedAt: 111,
+      raw: "keep",
+    })
+    expect(resolutionAudits()).toHaveLength(0)
+    expect(activityOf("fu_hidden_resolved")).toBeUndefined()
+  })
+
+  it("resolves a legacy follow-up that has no status", async () => {
+    const follow = await seedOpenFollowUp()
+    const stored = getRuntimeStore().followUps.find((row) => row.id === follow.id)
+    if (!stored) throw new Error("seeded follow-up missing")
+    delete stored.status
+    const res = await post(resolveBody(follow.id, "partner_a", "legacy"))
+    expect(res.status).toBe(200)
+    expect(stored.status).toBe("resolved")
+    expect(stored.resolvedBy).toBe("partner_a")
+    expect(activityOf(follow.id)?.detail).toBe("legacy")
+  })
+
+  it("refuses an unknown kind and does not resolve the row", async () => {
+    const follow = await seedOpenFollowUp()
+    const stored = getRuntimeStore().followUps.find((row) => row.id === follow.id)
+    if (!stored) throw new Error("seeded follow-up missing")
+    ;(stored as { kind: string }).kind = "not_a_kind"
+    const res = await post(resolveBody(follow.id, "partner_a", "no"))
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { code?: string; reason?: string }
+    expect(body.code).toBe("follow_up_not_resolvable")
+    expect(body.reason).toBe("not_resolvable")
+    expect(stored.status).toBe("open")
+    expect(resolutionAudits()).toHaveLength(0)
+    expect(activityOf(follow.id)).toBeUndefined()
+  })
+
+  it("writes the activity row again when the same resolver retries and the row is missing", async () => {
+    const follow = await seedOpenFollowUp()
+    const first = await post(resolveBody(follow.id, "partner_a", "first"))
+    expect(first.status).toBe(200)
+    const resolvedAt = getRuntimeStore().followUps.find((row) => row.id === follow.id)?.resolvedAt
+    getRuntimeStore().workflowOpsActivity.delete(`ops:court_ops:follow_up:${follow.id}`)
+    const retry = await post(resolveBody(follow.id, "partner_a", "again"))
+    expect(retry.status).toBe(200)
+    const stored = getRuntimeStore().followUps.find((row) => row.id === follow.id)
+    expect(stored?.resolvedAt).toBe(resolvedAt)
+    expect(stored?.resolvedBy).toBe("partner_a")
+    expect(activityOf(follow.id)?.detail).toBe("again")
+    expect(resolutionAudits()).toHaveLength(1)
+  })
+})
+
+describe("FA-D4-001-FU1-002 decideFollowUpResolution", () => {
+  const caller = {
+    firmId: "firmA",
+    actorId: "partner_a",
+    resolvedAt: 5,
+    matterAllowed: () => true,
+  }
+  const openRow = {
+    id: "fu_decide",
+    firmId: "firmA",
+    matterId: "matter_a",
+    courtId: "SHC",
+    raw: "raw",
+    kind: "case_number_reject",
+    status: "open",
+  }
+
+  it("refuses a stored id that is not the document id", () => {
+    expect(() => decideFollowUpResolution("fu_decide", { ...openRow, id: "other-id" }, caller)).toThrow(
+      FollowUpResolveRefusedError
+    )
+    try {
+      decideFollowUpResolution("fu_decide", { ...openRow, id: "other-id" }, caller)
+    } catch (err) {
+      expect(err).toBeInstanceOf(FollowUpResolveRefusedError)
+      expect((err as FollowUpResolveRefusedError).reason).toBe("not_resolvable")
+    }
+  })
+
+  it("refuses a blank actor and a non-finite resolvedAt", () => {
+    expect(() => decideFollowUpResolution("fu_decide", openRow, { ...caller, actorId: "" })).toThrow(
+      FollowUpResolveRefusedError
+    )
+    try {
+      decideFollowUpResolution("fu_decide", openRow, { ...caller, actorId: "" })
+    } catch (err) {
+      expect((err as FollowUpResolveRefusedError).reason).toBe("not_resolvable")
+    }
+    expect(() => decideFollowUpResolution("fu_decide", openRow, { ...caller, resolvedAt: Number.NaN })).toThrow(
+      FollowUpResolveRefusedError
+    )
   })
 })

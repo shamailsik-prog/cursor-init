@@ -217,7 +217,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1-002 resolve_follow_u
       resolvedAt: null,
     })
     const res = await resolve(a, id, "invent")
-    expect(res.status, JSON.stringify(res.body)).not.toBe(200)
+    expect(res.status, JSON.stringify(res.body)).toBe(404)
+    expect(refusalCode(res.body)).toBe("follow_up_not_found")
     expect(await storedFollowUp(id)).toBeUndefined()
     expect(await activityOf(id)).toBeUndefined()
     expect(await resolveAudits(a.uid)).toHaveLength(0)
@@ -251,7 +252,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1-002 resolve_follow_u
       resolvedAt: null,
     })
     const res = await resolve(a, id, "take B")
-    expect(res.status, JSON.stringify(res.body)).not.toBe(200)
+    expect(res.status, JSON.stringify(res.body)).toBe(404)
+    expect(refusalCode(res.body)).toBe("follow_up_not_found")
     expect(await storedFollowUp(id)).toEqual({ id, ...original })
     expect(await activityOf(id)).toBeUndefined()
     expect(await resolveAudits(a.uid)).toHaveLength(0)
@@ -285,7 +287,8 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1-002 resolve_follow_u
     }
     await followUpDoc(id, original)
     const res = await resolve(a, id, "no membership")
-    expect(res.status, JSON.stringify(res.body)).not.toBe(200)
+    expect(res.status, JSON.stringify(res.body)).toBe(404)
+    expect(refusalCode(res.body)).toBe("follow_up_not_found")
     expect(await storedFollowUp(id)).toEqual({ id, ...original })
     expect(await activityOf(id)).toBeUndefined()
     expect(await resolveAudits(a.uid)).toHaveLength(0)
@@ -371,5 +374,166 @@ describe.runIf(HAS_AUTH_FIRESTORE_EMULATORS)("FA-D4-001-FU1-002 resolve_follow_u
     expect(await resolveAudits(a.uid)).toHaveLength(1)
     const loser = left.status === 409 ? left : right
     expect(refusalCode(loser.body)).toBe("follow_up_already_resolved")
+  })
+
+  it("answers a missing row, another firm, a hidden matter, and a hidden resolved row with one body", async () => {
+    const [a, b] = [await provisionActor(), await provisionActor()]
+    const foreignId = `fu_${randomUUID()}`
+    await followUpDoc(foreignId, {
+      firmId: b.firmId,
+      matterId: a.matterId,
+      courtId: "SHC",
+      raw: "B-SECRET",
+      kind: "case_number_reject",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
+    })
+    const hiddenMatter = `fu1002-hidden-${short()}`
+    await adminDb().collection("matters").doc(hiddenMatter).set({
+      id: hiddenMatter,
+      firmId: a.firmId,
+      clientId: "other",
+      title: "hidden",
+      courtId: "SHC",
+      caseNumber: null,
+      caseNumberStatus: "pending",
+      status: "live",
+      classification: "internal",
+    })
+    const hiddenId = `fu_${randomUUID()}`
+    const hiddenResolvedId = `fu_${randomUUID()}`
+    await followUpDoc(hiddenId, {
+      firmId: a.firmId,
+      matterId: hiddenMatter,
+      courtId: "SHC",
+      raw: "hidden-open",
+      kind: "case_number_reject",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
+    })
+    const hiddenResolved = {
+      firmId: a.firmId,
+      matterId: hiddenMatter,
+      courtId: "SHC",
+      raw: "hidden-resolved",
+      kind: "case_number_reject",
+      status: "resolved",
+      resolvedBy: "earlier-actor",
+      resolvedAt: 111,
+      marker: "hidden-resolved-keep",
+    }
+    await followUpDoc(hiddenResolvedId, hiddenResolved)
+    const missing = await resolve(a, `fu_${randomUUID()}`, "missing")
+    const foreign = await resolve(a, foreignId, "foreign")
+    const hidden = await resolve(a, hiddenId, "hidden")
+    const hiddenDone = await resolve(a, hiddenResolvedId, "leak")
+    for (const res of [missing, foreign, hidden, hiddenDone]) {
+      expect(res.status, JSON.stringify(res.body)).toBe(404)
+      expect(res.body).toEqual(missing.body)
+      expect(refusalCode(res.body)).toBe("follow_up_not_found")
+    }
+    expect(await storedFollowUp(hiddenResolvedId)).toEqual({ id: hiddenResolvedId, ...hiddenResolved })
+    expect(await activityOf(hiddenResolvedId)).toBeUndefined()
+    expect(await resolveAudits(a.uid)).toHaveLength(0)
+  })
+
+  it("resolves a legacy follow-up that has no status", async () => {
+    const a = await provisionActor()
+    const id = `fu_${randomUUID()}`
+    await followUpDoc(id, {
+      firmId: a.firmId,
+      matterId: a.matterId,
+      courtId: "SHC",
+      raw: "legacy",
+      kind: "l4_10_silence",
+      marker: "legacy-keep",
+    })
+    const res = await resolve(a, id, "open the legacy row")
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(await storedFollowUp(id)).toMatchObject({
+      status: "resolved",
+      resolvedBy: a.uid,
+      marker: "legacy-keep",
+      raw: "legacy",
+      kind: "l4_10_silence",
+    })
+    expect(await activityOf(id)).toMatchObject({ detail: "open the legacy row" })
+  })
+
+  it("does not resolve a follow-up whose stored id is not the document id", async () => {
+    const a = await provisionActor()
+    const id = `fu_${randomUUID()}`
+    const original = {
+      id: `${id}-other`,
+      firmId: a.firmId,
+      matterId: a.matterId,
+      courtId: "SHC",
+      raw: "mismatch",
+      kind: "case_number_reject",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
+      marker: "id-keep",
+    }
+    await adminDb().collection("follow_ups").doc(id).set(original)
+    const res = await resolve(a, id, "rename")
+    expect(res.status, JSON.stringify(res.body)).toBe(409)
+    expect(refusalCode(res.body)).toBe("follow_up_not_resolvable")
+    expect(await storedFollowUp(id)).toEqual(original)
+    expect(await activityOf(id)).toBeUndefined()
+  })
+
+  it("does not resolve a follow-up of an unknown kind", async () => {
+    const a = await provisionActor()
+    const id = `fu_${randomUUID()}`
+    const original = {
+      firmId: a.firmId,
+      matterId: a.matterId,
+      courtId: "SHC",
+      raw: "odd",
+      kind: "not_a_kind",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
+      marker: "kind-keep",
+    }
+    await followUpDoc(id, original)
+    const res = await resolve(a, id, "force")
+    expect(res.status, JSON.stringify(res.body)).toBe(409)
+    expect(refusalCode(res.body)).toBe("follow_up_not_resolvable")
+    expect(await storedFollowUp(id)).toEqual({ id, ...original })
+    expect(await activityOf(id)).toBeUndefined()
+  })
+
+  it("writes the missing activity row when the same resolver retries", async () => {
+    const a = await provisionActor()
+    const id = `fu_${randomUUID()}`
+    await followUpDoc(id, {
+      firmId: a.firmId,
+      matterId: a.matterId,
+      courtId: "SHC",
+      raw: "retry",
+      kind: "limitation_alert",
+      status: "open",
+      resolvedBy: null,
+      resolvedAt: null,
+      marker: "retry-keep",
+    })
+    const first = await resolve(a, id, "first")
+    expect(first.status).toBe(200)
+    const resolvedAt = (await storedFollowUp(id))?.resolvedAt
+    await adminDb().collection(ACTIVITY).doc(`ops:court_ops:follow_up:${id}`).delete()
+    const retry = await resolve(a, id, "again")
+    expect(retry.status, JSON.stringify(retry.body)).toBe(200)
+    expect(await storedFollowUp(id)).toMatchObject({
+      status: "resolved",
+      resolvedBy: a.uid,
+      resolvedAt,
+      marker: "retry-keep",
+    })
+    expect(await activityOf(id)).toMatchObject({ detail: "again", actorId: a.uid })
+    expect(await resolveAudits(a.uid)).toHaveLength(1)
   })
 })

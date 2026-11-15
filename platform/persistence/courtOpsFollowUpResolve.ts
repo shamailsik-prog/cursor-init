@@ -1,22 +1,24 @@
-import type { FollowUp } from "@/platform/spine/store"
+import { requireCallerFirmId } from "@/platform/persistence/callerFirm"
+import { doc, runTransaction, type Firestore } from "@/platform/persistence/firestoreDbModular"
+import { buildCourtOpsActivityRow } from "@/platform/persistence/workflowOpsActivity"
+import type { FollowUp, SpineStore } from "@/platform/spine/store"
 
 /**
- * FA-D4-001-FU1-002: `resolve_follow_up` used to `setDoc` the in-memory follow-up. That creates a row
- * the database does not have and overwrites a row that is already resolved, another firm's, or on a
- * matter the caller cannot access. Both repositories call `decideFollowUpResolution` on the row they
- * just read, then `update` that row (never `set`, never merge). A refusal throws before any write.
+ * FA-D4-001-FU1-002: `resolve_follow_up` reads the stored row and updates it only when the caller may
+ * resolve it and it is open. A missing row, another firm, and a matter the caller cannot access are one
+ * refusal, so the route can answer them with one body. The activity row is written in that same commit.
  */
 
-export type FollowUpResolveRefusal = "missing" | "already_resolved" | "wrong_firm" | "wrong_matter" | "not_resolvable"
+export type FollowUpResolveRefusal = "not_found" | "already_resolved" | "not_resolvable"
 
-/**
- * One code per refusal. The F02 router forwards a single `code` and drops every other field, so the
- * reason has to be the code (`functions/src/http/f02NextAuthority.ts` `errorCodeOf`).
- */
+/** One body for a missing, foreign, or hidden follow-up. The F02 router forwards `code` and drops the rest. */
+export const FOLLOW_UP_NOT_FOUND_BODY = {
+  error: "follow_up not found",
+  code: "follow_up_not_found",
+} as const
+
 export const FOLLOW_UP_RESOLVE_CODES = {
-  missing: "follow_up_not_found",
-  wrong_firm: "follow_up_wrong_firm",
-  wrong_matter: "follow_up_wrong_matter",
+  not_found: "follow_up_not_found",
   already_resolved: "follow_up_already_resolved",
   not_resolvable: "follow_up_not_resolvable",
 } as const satisfies Record<FollowUpResolveRefusal, string>
@@ -33,11 +35,20 @@ export class FollowUpResolveRefusedError extends Error {
   }
 }
 
-export type FollowUpResolveCaller = {
+export type FollowUpResolveInput = {
+  id: string
   firmId: string
   actorId: string
   resolvedAt: number
   /** True when this caller may resolve a follow-up of this matter. */
+  matterAllowed: (matterId: string) => boolean
+  reason?: string
+}
+
+export type FollowUpResolveCaller = {
+  firmId: string
+  actorId: string
+  resolvedAt: number
   matterAllowed: (matterId: string) => boolean
 }
 
@@ -49,25 +60,24 @@ function isFollowUpKind(value: unknown): value is FollowUpKind {
 }
 
 /**
- * The resolved follow-up, or a refusal. `stored` is the persisted document (`null` when there is none).
- * A resolvable row is `open`, or has no status (the legacy open shape). `resolved` and any other status refuse.
- * Firm is checked before matter: a foreign row whose matter the caller could otherwise access still refuses.
+ * The resolved follow-up, or a refusal. Firm and matter are decided before any 409, so a hidden row that
+ * is already resolved is still not_found. A resolvable row is `open`, or has no status (the legacy shape).
  */
 export function decideFollowUpResolution(followUpId: string, stored: unknown, caller: FollowUpResolveCaller): FollowUp {
   if (stored === null || stored === undefined || typeof stored !== "object" || Array.isArray(stored)) {
-    throw new FollowUpResolveRefusedError(followUpId, "missing")
+    throw new FollowUpResolveRefusedError(followUpId, "not_found")
   }
   const row = stored as Record<string, unknown>
-  if (typeof row.id === "string" && row.id !== followUpId) {
-    throw new FollowUpResolveRefusedError(followUpId, "not_resolvable")
-  }
   const firmId = typeof row.firmId === "string" ? row.firmId : ""
   if (firmId === "" || firmId !== caller.firmId) {
-    throw new FollowUpResolveRefusedError(followUpId, "wrong_firm")
+    throw new FollowUpResolveRefusedError(followUpId, "not_found")
   }
   const matterId = typeof row.matterId === "string" ? row.matterId : ""
   if (matterId === "" || !caller.matterAllowed(matterId)) {
-    throw new FollowUpResolveRefusedError(followUpId, "wrong_matter")
+    throw new FollowUpResolveRefusedError(followUpId, "not_found")
+  }
+  if (typeof row.id === "string" && row.id !== followUpId) {
+    throw new FollowUpResolveRefusedError(followUpId, "not_resolvable")
   }
   if (row.status === "resolved") {
     throw new FollowUpResolveRefusedError(followUpId, "already_resolved")
@@ -75,7 +85,10 @@ export function decideFollowUpResolution(followUpId: string, stored: unknown, ca
   if (row.status !== undefined && row.status !== null && row.status !== "open") {
     throw new FollowUpResolveRefusedError(followUpId, "not_resolvable")
   }
-  if (!isFollowUpKind(row.kind) || !Number.isFinite(caller.resolvedAt) || caller.actorId === "") {
+  if (!isFollowUpKind(row.kind)) {
+    throw new FollowUpResolveRefusedError(followUpId, "not_resolvable")
+  }
+  if (!Number.isFinite(caller.resolvedAt) || caller.actorId === "") {
     throw new FollowUpResolveRefusedError(followUpId, "not_resolvable")
   }
   return {
@@ -89,4 +102,72 @@ export function decideFollowUpResolution(followUpId: string, stored: unknown, ca
     resolvedBy: caller.actorId,
     resolvedAt: caller.resolvedAt,
   }
+}
+
+export function courtOpsResolveActivityId(followUpId: string): string {
+  return `ops:court_ops:follow_up:${followUpId}`
+}
+
+function resolutionActivity(follow: FollowUp, actorId: string, reason: string | undefined) {
+  return buildCourtOpsActivityRow({
+    id: courtOpsResolveActivityId(follow.id),
+    firmId: follow.firmId,
+    action: "court_ops_resolve_follow_up",
+    actorId,
+    classification: "internal",
+    matterId: follow.matterId,
+    documentId: null,
+    followUpId: follow.id,
+    queueType: "follow_up",
+    status: follow.status ?? "resolved",
+    detail: reason ?? follow.raw,
+  })
+}
+
+/** Memory: read, decide, and write the row and its activity with no await between them. */
+export async function resolveOpenFollowUpMemory(store: SpineStore, input: FollowUpResolveInput): Promise<FollowUp> {
+  const firmId = requireCallerFirmId(input.firmId, "followUps.resolveOpen")
+  const idx = store.followUps.findIndex((entry) => entry.id === input.id)
+  const next = decideFollowUpResolution(input.id, idx < 0 ? null : store.followUps[idx], {
+    firmId,
+    actorId: input.actorId,
+    resolvedAt: input.resolvedAt,
+    matterAllowed: input.matterAllowed,
+  })
+  const row = store.followUps[idx]
+  if (!row) throw new Error("follow-up resolve lost the row it had just accepted")
+  row.status = "resolved"
+  row.resolvedBy = input.actorId
+  row.resolvedAt = input.resolvedAt
+  const resolved = { ...row, ...next }
+  store.workflowOpsActivity.set(courtOpsResolveActivityId(resolved.id), resolutionActivity(resolved, input.actorId, input.reason))
+  return resolved
+}
+
+/**
+ * Firestore: one transaction reads the document and updates only the resolution fields. `update` does not
+ * create a missing document. The activity row is set in that same transaction, not with a later upsert.
+ */
+export async function resolveOpenFollowUpFirestore(db: Firestore, input: FollowUpResolveInput): Promise<FollowUp> {
+  const firmId = requireCallerFirmId(input.firmId, "followUps.resolveOpen")
+  if (typeof input.id !== "string" || input.id === "" || input.id.includes("/")) {
+    throw new FollowUpResolveRefusedError(String(input.id), "not_found")
+  }
+  const ref = doc(db, "follow_ups", input.id)
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref)
+    const next = decideFollowUpResolution(input.id, snap.exists() ? snap.data() : null, {
+      firmId,
+      actorId: input.actorId,
+      resolvedAt: input.resolvedAt,
+      matterAllowed: input.matterAllowed,
+    })
+    tx.update(ref, {
+      status: "resolved",
+      resolvedBy: input.actorId,
+      resolvedAt: input.resolvedAt,
+    })
+    tx.set(doc(db, "workflow_ops_activity", courtOpsResolveActivityId(next.id)), resolutionActivity(next, input.actorId, input.reason))
+    return next
+  })
 }
