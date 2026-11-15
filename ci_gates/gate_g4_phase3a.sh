@@ -32,26 +32,21 @@ REG_TESTS=(
 
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
+  # Vitest 5 matches -t against "suite > test", not the space-joined JSON fullName.
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suites are skipped, so the
-  # JSON result must show exactly the seven named tests passed and nothing failed. The tests are
-  # selected by their exact full names (anchored, escaped), and the JSON check repeats the names,
-  # so a renamed or swapped test fails the gate. G4C_FILTER exists only to prove this can fail.
+  # JSON result must show exactly the seven named tests passed and nothing failed. A pattern that
+  # selects 0 tests fails the gate. G4C_FILTER exists only to prove this can fail.
   json="$2/invariants.json"
-  esc() { printf '%s' "$1" | sed 's/[][\\.*^$()+?{}|]/\\&/g'; }
   names=()
-  filter=""
   for t in "${INV_TESTS[@]}"; do names+=("$INV_SUITE $t"); done
   for t in "${REG_TESTS[@]}"; do names+=("$REG_SUITE $t"); done
-  for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
+  printf '%s\n' "${names[@]}" > "$2/names.txt"
+  filter="$(node "$ROOT/ci_gates/vitest5_name.mjs" filter --names "$2/names.txt" \
+    --file "$ROOT/functions/test/p2.jobs-invariants.emu.test.ts" \
+    --file "$ROOT/functions/test/p2.registry-discipline.emu.test.ts")"
+  if [ "${3:-}" = "--filter-only" ]; then printf '%s\n' "$filter"; exit 0; fi
   npx vitest run test/p2.jobs-invariants.emu.test.ts test/p2.registry-discipline.emu.test.ts -t "${G4C_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
-  EXPECTED="$(printf '%s\n' "${names[@]}")" node -e '
-    const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
-    console.log(`job-engine invariants: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
-    const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
-    const want = process.env.EXPECTED.split("\n").sort()
-    const exact = passed.length === want.length && passed.every((n, i) => n === want[i])
-    if (!exact) console.log("passed tests are not exactly the seven named invariants:", JSON.stringify(passed))
-    process.exit(r.numPassedTests === 7 && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+  EXPECTED="$(printf '%s\n' "${names[@]}")" LABEL="job-engine invariants" node "$ROOT/ci_gates/check_vitest_json_selection.mjs" "$json"
   exit $?
 fi
 

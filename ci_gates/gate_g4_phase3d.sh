@@ -118,27 +118,31 @@ GW_TESTS=(
   # G-1 forensic test 7 (L8505-8506)
   'G-1 forensic 7 equivalent a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output'
 )
-# The refusal table is an it.each: vitest titles each row "'<name, cut to 40 characters>' → blocked '<reason>', <tail>".
-# One row per block reason variant (kill_switch_platform, kill_switch_firm, policy_denied, model_unpriced,
-# budget_not_set, budget_exhausted, no_credentials); not_minimised is the separate test above.
+# The refusal table is it.each("$name → blocked $reason, <tail>"). Vitest 5 prints a string
+# value with no quotes and, when it is longer than 40 characters, keeps 39 and adds "…".
+# Vitest 3 quoted the value and truncated that quoted form ("'the platform switch with
+# disableAll (…'"), which matches none of these 15 rows, so the gate's -t selected 0 of them
+# and the JSON check failed closed (178 passed against 193 names). One row per block reason
+# (kill_switch_platform, kill_switch_firm, policy_denied, model_unpriced, budget_not_set,
+# budget_exhausted, no_credentials); not_minimised is the separate test above.
 REFUSAL_PREFIX='refusals (P3-61 steps 2 to 8)'
 REFUSAL_TAIL=', no provider call, a blocked row, event and deny audit row'
 REFUSAL_TESTS=(
-  "'the platform switch with disableAll (…' → blocked 'kill_switch_platform'"
-  "'the platform switch naming the routed…' → blocked 'kill_switch_platform'"
-  "'the firm switch with disableAll' → blocked 'kill_switch_firm'"
-  "'the firm switch naming the routed mod…' → blocked 'kill_switch_firm'"
-  "'confidential with no DPA' → blocked 'policy_denied'"
-  "'a model with no price' → blocked 'model_unpriced'"
-  "'no ai_config at all' → blocked 'budget_not_set'"
-  "'an ai_config with no budget' → blocked 'budget_not_set'"
-  "'a zero budget' → blocked 'budget_not_set'"
-  "'a negative budget' → blocked 'budget_not_set'"
-  "'a fractional budget' → blocked 'budget_not_set'"
-  "'a string budget' → blocked 'budget_not_set'"
-  "'spend exactly at the budget' → blocked 'budget_exhausted'"
-  "'spend over the budget' → blocked 'budget_exhausted'"
-  "'no transport and no key' → blocked 'no_credentials'"
+  'the platform switch with disableAll (th… → blocked kill_switch_platform'
+  'the platform switch naming the routed m… → blocked kill_switch_platform'
+  'the firm switch with disableAll → blocked kill_switch_firm'
+  'the firm switch naming the routed model → blocked kill_switch_firm'
+  'confidential with no DPA → blocked policy_denied'
+  'a model with no price → blocked model_unpriced'
+  'no ai_config at all → blocked budget_not_set'
+  'an ai_config with no budget → blocked budget_not_set'
+  'a zero budget → blocked budget_not_set'
+  'a negative budget → blocked budget_not_set'
+  'a fractional budget → blocked budget_not_set'
+  'a string budget → blocked budget_not_set'
+  'spend exactly at the budget → blocked budget_exhausted'
+  'spend over the budget → blocked budget_exhausted'
+  'no transport and no key → blocked no_credentials'
 )
 
 # --- audit F07 and F08 end to end (functions/test/f07-f08-ai-spend.e2e.emu.test.ts) ---------------------------
@@ -340,15 +344,13 @@ EXPORTER_TESTS=(
 
 if [ "${1:-}" = "--inner" ]; then
   cd "$ROOT/functions"
+  # Vitest 5 matches -t against "suite > test", not the space-joined JSON fullName.
   # vitest exits 0 when -t matches nothing (renamed test) or the emulator suites are skipped, so the
   # JSON result must show exactly the named tests passed (as many as the arrays above hold, so no
-  # literal count can drift) and nothing failed. The tests are selected by their exact full names
-  # (anchored, escaped), and the JSON check repeats the names, so a renamed or swapped test fails the
-  # gate. G4D_FILTER exists only to prove this can fail.
+  # literal count can drift) and nothing failed. A pattern that selects 0 tests fails the gate.
+  # G4D_FILTER exists only to prove this can fail.
   json="$2/p1.json"
-  esc() { printf '%s' "$1" | sed 's/[][\\.*^$()+?{}|]/\\&/g'; }
   names=()
-  filter=""
   for t in "${GW_TESTS[@]}"; do names+=("$GW_SUITE $t"); done
   for t in "${REFUSAL_TESTS[@]}"; do names+=("$GW_SUITE $REFUSAL_PREFIX $t$REFUSAL_TAIL"); done
   for t in "${API_TESTS[@]}"; do names+=("$API_SUITE $t"); done
@@ -364,17 +366,17 @@ if [ "${1:-}" = "--inner" ]; then
   for t in "${DEPLOY_TESTS[@]}"; do names+=("$DEPLOY_SUITE $t"); done
   for t in "${SPEND_TESTS[@]}"; do names+=("$SPEND_SUITE $t"); done
   for t in "${QUEUE_TESTS[@]}"; do names+=("$QUEUE_SUITE $t"); done
-  for n in "${names[@]}"; do filter="${filter:+$filter|}^$(esc "$n")\$"; done
+  printf '%s\n' "${names[@]}" > "$2/names.txt"
+  filter="$(node "$ROOT/ci_gates/vitest5_name.mjs" filter --names "$2/names.txt" \
+    --file "$ROOT/functions/test/p1.units.test.ts" \
+    --file "$ROOT/functions/test/p1.transport.test.ts" \
+    --file "$ROOT/functions/test/p1.gateway.emu.test.ts" \
+    --file "$ROOT/functions/test/p1.api.emu.test.ts" \
+    --file "$ROOT/functions/test/f07-f08-ai-spend.e2e.emu.test.ts" \
+    --file "$ROOT/functions/test/deploy.test.ts")"
+  if [ "${3:-}" = "--filter-only" ]; then printf '%s\n' "$filter"; exit 0; fi
   npx vitest run test/p1.units.test.ts test/p1.transport.test.ts test/p1.gateway.emu.test.ts test/p1.api.emu.test.ts test/f07-f08-ai-spend.e2e.emu.test.ts test/deploy.test.ts -t "${G4D_FILTER:-$filter}" --reporter=json --outputFile="$json" || true
-  EXPECTED="$(printf '%s\n' "${names[@]}")" EXPECTED_COUNT="${#names[@]}" node -e '
-    const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
-    console.log(`P1 gateway, routes and units: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
-    const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
-    const want = process.env.EXPECTED.split("\n").sort()
-    const count = Number(process.env.EXPECTED_COUNT)
-    const exact = want.length === count && passed.length === count && passed.every((n, i) => n === want[i])
-    if (!exact) console.log(`passed tests are not exactly the ${count} named tests:`, JSON.stringify(passed))
-    process.exit(r.numPassedTests === count && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+  EXPECTED="$(printf '%s\n' "${names[@]}")" LABEL="P1 gateway, routes and units" node "$ROOT/ci_gates/check_vitest_json_selection.mjs" "$json"
   exit $?
 fi
 
