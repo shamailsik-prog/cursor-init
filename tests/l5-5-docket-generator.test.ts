@@ -2131,6 +2131,148 @@ describe("L5.5 fail-closed reference allowlist", () => {
     expect(result.queue.some((entry) => entry.detail.includes("D"))).toBe(true)
   })
 
+  it("REF-R10-001 refuses a dropped letter or an abbreviation period after a bare head", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "See Annexures filed herewith É.",
+      "See Annexures on É.",
+      "See Annexures filed herewith É and Ë.",
+      "See Annexures on record, cf. D.",
+      "See Annexures on record, esp. D.",
+      "See Annexures attached hereto, etc. D.",
+      "Annexure ABCD is the deed.",
+      "Annexure IN is the deed.",
+      "Annexure NO is the deed.",
+      "Annexure É is the deed.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), sentence).toBe(true)
+    }
+  })
+
+  it("ORDER-R10-001 enforces order unless the line is exactly a heading", async () => {
+    const reversed = "The petitioner relies on Annexure C, then Annexure B and Annexure A."
+    const bodies = [
+      `LIST OF ANNEXURES ${reversed}`,
+      `**LIST OF ANNEXURES**\n${reversed}`,
+      `(LIST OF ANNEXURES)\n${reversed}`,
+      `"LIST OF ANNEXURES"\n${reversed}`,
+      `1 LIST OF ANNEXURES\n${reversed}`,
+      `- LIST OF ANNEXURES\n${reversed}`,
+      `LIST-OF-ANNEXURES\n${reversed}`,
+      `LIST OF\nANNEXURES\n${reversed}`,
+      `LIST OF ANNEXURES\u000B${reversed}`,
+      `LIST OF ANNEXURES\u000C${reversed}`,
+      `LIST OF ANNEXURES\u0085${reversed}`,
+      "Index of documents Annexure C is the receipt; Annexure B is the deed; Annexure A is the plaint.",
+    ]
+    for (const body of bodies) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body } })
+      expect(result.ok, JSON.stringify(body)).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), JSON.stringify(body)).toBe(true)
+    }
+    const third = exhibits.annexures[1]!
+    const withThird = {
+      ...exhibits,
+      annexures: [
+        ...exhibits.annexures,
+        { ...third, assignedLabel: "P-3", metadata: { ...third.metadata, artifactId: "ex-3", label: "Map", sourceRef: "doc-map" } },
+      ],
+    }
+    enableFlag()
+    const marks = await generateDocket({
+      ...withThird,
+      draft: { body: "Exhibit: P-1. Exhibit: P-3. Exhibit: P-2." },
+    })
+    expect(marks.ok).toBe(false)
+    expect(marks.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+    enableFlag()
+    const split = await generateDocket({
+      ...withThird,
+      draft: { body: "EXHIBITS:\nP-1 is the deed. P-3 is the map. P-2 is the receipt." },
+    })
+    expect(split.ok).toBe(false)
+    expect(split.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+  })
+
+  it("OVER-R9-001 generates the brief index with a blank line and an in-order body", async () => {
+    await expectGeneration(
+      {
+        ...petition,
+        draft: {
+          body: "ANNEXURES:\n\nA - Plaint\nB - Deed\nC - Receipt\n\nThe petitioner relies on Annexure A, then Annexure B and Annexure C.",
+        },
+      },
+      "ME OVER-R9-001",
+    )
+  })
+
+  it("OVER-R10-001 generates a head followed only by stopwords", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of [
+      "The petitioner relies on Annexures filed herewith.",
+      "The petitioner relies on annexures on record.",
+    ]) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("LOW refuses relies upon and see also before a bare letter", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of ["The petitioner relies upon D.", "See also D."]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("D")), sentence).toBe(true)
+    }
+  })
+
+  it("TEST-R10 keeps heading labels out of order and reads viz and abbreviation tails", async () => {
+    const reversed = "The petitioner relies on Annexure C, then Annexure B and Annexure A."
+    for (const body of [`LIST OF ANNEXURES: A, B, C.\n${reversed}`, `LIST OF ANNEXURES: A, B, C.\u2029${reversed}`]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body } })
+      expect(result.ok, JSON.stringify(body)).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "order_unresolved"), JSON.stringify(body)).toBe(true)
+    }
+    const cited = "The petitioner relies on Annexures A, B and C."
+    for (const sentence of [
+      "Annexures, viz., D and E are filed.",
+      "annexures, viz., d and e are filed.",
+      "See Annexures filed herewith, i.e. D.",
+      "See Annexures filed herewith, i.e., D and E.",
+      "See Annexures filed herewith, i.",
+      "See Annexures filed herewith, viz.",
+      "The petitioner relies on Annexures, viz., D.",
+    ]) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.code === "ref_unresolved"), sentence).toBe(true)
+    }
+    enableFlag()
+    const colonLabel = await generateDocket({ ...petition, draft: { body: "ANNEXURES:\nD." } })
+    expect(colonLabel.queue.some((entry) => entry.detail.includes("D"))).toBe(true)
+    await expectGeneration(
+      {
+        ...exhibits,
+        draft: { body: "LIST OF DOCUMENTS: P-2, P-1. The witness proved P-1 and then P-2." },
+      },
+      "heading marks stay out of the order",
+    )
+    await expectGeneration(
+      {
+        ...petition,
+        draft: { body: "LIST OF DOCUMENTS: See C, B and A." },
+      },
+      "heading opener stays out of the order",
+    )
+  })
+
   it("keeps the three-dot refusal after NFKC and does not keep a U+2026 branch", () => {
     const source = readFileSync(
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../layers/L5_5_DocketGenerator/references.ts"),

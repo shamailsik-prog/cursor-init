@@ -7,10 +7,13 @@
  * separator is a newline. A hyphen split by a newline, including a blank line,
  * is rejoined. A single newline is a space. A blank line ends a sentence,
  * except after and, a comma, to, a hyphen, or a slash, and except after a
- * citation keyword. A heading ends at the line break. It is a list or index of
- * exhibits, annexures, or documents, or a keyword-only colon line whose labels
- * stay on that line. A bare annexure head is prose only when a stopword follows
- * it. No. before a letter-dash-digits code is
+ * citation keyword. A vertical tab, form feed, or next-line character is a
+ * newline. A heading counts only when the line, with decoration removed, is
+ * exactly list or index of exhibits, annexures, or documents. A bare head is
+ * prose only when every following character is an allowlisted stopword. A
+ * letter the tokeniser does not keep, or an abbreviation period before a label,
+ * refuses the citation. upon and also delay a bare label the same way on does.
+ * No. before a letter-dash-digits code is
  * a case number when of YYYY or /YYYY follows. AIR plus a year is a law report.
  */
 
@@ -45,7 +48,7 @@ const KEYWORD_FAMILY: Readonly<Record<string, CitationFamily>> = {
   marks: "mark",
 }
 
-const CITATION_OPENERS = new Set(["relies", "see", "refer"])
+const CITATION_OPENERS = new Set(["relies", "see", "refer", "placed"])
 
 const GLUE_KEYWORDS = ["annexures", "annexure", "enclosures", "enclosure", "exhibits", "exhibit"]
 
@@ -58,7 +61,7 @@ const NON_LABEL_WORDS = new Set([
 
 const OPENER_HEADS = new Set(["annexure", "annexures", "exhibit", "exhibits", "enclosure", "enclosures", "mark", "marks"])
 
-const HEAD_STOPWORDS = new Set(["on", "filed", "herewith", "thereto", "above", "below", "attached", "annexed", "hereto"])
+const HEAD_STOPWORDS = new Set(["on", "upon", "to", "also", "filed", "herewith", "thereto", "above", "below", "attached", "annexed", "hereto"])
 
 const NO_PREFIXES = new Set(["house", "plot", "flat", "shop", "street", "gali", "suit", "appeal", "petition", "case", "c.p", "cr.misc"])
 
@@ -103,6 +106,20 @@ const HEADING_LIST = /^(list|index)\s+of\s+(exhibits|annexures|documents)\b/i
 const KEYWORD_COLON = /^(?:annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?)\s*:\s*$/i
 const LABEL_CONTINUATION = /^\s*(?:annex(?:ure)?s?|annexe|exhibits?|enclosures?|marks?|[PDR]\s*[/-]\s*\d|[A-Za-z](?:\s*[-/]|\b))/i
 
+function headingLine(line: string): string {
+  const bare = line
+    .trim()
+    .replace(/[*_]+/g, " ")
+    .replace(/[()[\]{}"“”‘’'«»]/g, " ")
+    .replace(/^\s*\d+[.)]?\s+/, "")
+    .replace(/^\s*[-–—]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  return bare
+    .replace(/^list-of-(exhibits|annexures|documents)$/i, "list of $1")
+    .replace(/^index-of-(exhibits|annexures|documents)$/i, "index of $1")
+}
+
 function closeHeadingLines(input: string): string {
   const lines = input.split("\n")
   const nextContent = (start: number): string | undefined => {
@@ -113,7 +130,7 @@ function closeHeadingLines(input: string): string {
   }
   return lines
     .map((line, index) => {
-      const trimmed = line.trim()
+      const trimmed = headingLine(line)
       const following = nextContent(index + 1)
       if (!following || /[.!?]\s*$/.test(trimmed)) return line
       const list = HEADING_LIST.test(trimmed)
@@ -126,7 +143,7 @@ function closeHeadingLines(input: string): string {
 }
 
 function foldNewlines(input: string): string {
-  const unified = input.replace(/\r\n/g, "\n").replace(/[\r\u2028\u2029]/g, "\n")
+  const unified = input.replace(/\r\n/g, "\n").replace(/[\r\u2028\u2029]/g, "\n").replace(/[\u000b\u000c\u0085]/g, "\n")
   const rejoined = unified
     .replace(/([A-Za-z])-[ \t]*\n+[ \t]*([A-Za-z])/g, "$1$2")
     .replace(/([A-Za-z])-[ \t]*\n+[ \t]*(\d)/g, "$1-$2")
@@ -213,6 +230,16 @@ function tokenise(text: string): Token[] {
     if (".,/-#:&+;".includes(character)) {
       tokens.push({ kind: "punct", value: character, from: index, to: index + 1 })
       index += 1
+      continue
+    }
+    if ((character.codePointAt(0) ?? 0) > 127 && /\p{L}/u.test(character)) {
+      const from = index
+      let raw = ""
+      while (index < text.length && /\p{L}/u.test(text[index] ?? "") && (text.codePointAt(index) ?? 0) > 127) {
+        raw += text[index]
+        index += 1
+      }
+      tokens.push({ kind: "word", value: raw.toLowerCase(), from, to: index, caps: "mixed" })
       continue
     }
     index += 1
@@ -525,11 +552,21 @@ function labelShaped(tokens: readonly Token[], index: number, skippedWord: boole
   return parseAtom(tokens, index) !== null
 }
 
+function abbreviationHolds(tokens: readonly Token[], dot: number): boolean {
+  const previous = tokens[dot - 1]
+  const next = tokens[dot + 1]
+  if (previous?.kind !== "word" || previous.caps !== "lower" || previous.value === "no" || previous.value === "viz") return false
+  if (next?.kind === "word" && next.caps === "lower" && next.value.length === 1) return true
+  if (next?.kind === "word" && next.caps === "upper" && next.value.length >= 1 && next.value.length <= 4 && !(next.value in KEYWORD_FAMILY)) return true
+  return parseMark(tokens, dot + 1) !== null
+}
+
 function sentenceEnd(tokens: readonly Token[], index: number): number {
   for (let cursor = index; cursor < tokens.length; cursor += 1) {
     const token = tokens[cursor]
     if (token?.value !== ".") continue
     if (tokens[cursor + 1]?.value === "." || tokens[cursor - 1]?.value === "no" || tokens[cursor - 1]?.value === "viz") continue
+    if (abbreviationHolds(tokens, cursor)) continue
     return cursor
   }
   return tokens.length
@@ -564,6 +601,16 @@ function orphanLabel(tokens: readonly Token[], from: number): boolean {
   return false
 }
 
+function describedLabel(tokens: readonly Token[], index: number): { labels: Label[]; next: number } | null {
+  if (tokens[index]?.value !== "-") return null
+  const word = tokens[index + 1]
+  if (!word || word.kind !== "word" || parseAtom(tokens, index + 1)) return null
+  const cursor = index + 2
+  const item = parseItem(tokens, cursor)
+  if (item && !("error" in item)) return { labels: item.labels, next: item.next }
+  return { labels: [], next: cursor }
+}
+
 function parseExpression(tokens: readonly Token[], index: number): { labels: Label[]; next: number } | null {
   let cursor = skipLead(tokens, index)
   let skippedWord = false
@@ -596,10 +643,16 @@ function parseExpression(tokens: readonly Token[], index: number): { labels: Lab
   cursor = first.next
   while (cursor < tokens.length) {
     const continuation = readContinuation(tokens, cursor)
-    if (!continuation) break
-    if ("error" in continuation) return null
-    labels.push(...continuation.labels)
-    cursor = continuation.next
+    if (continuation) {
+      if ("error" in continuation) return null
+      labels.push(...continuation.labels)
+      cursor = continuation.next
+      continue
+    }
+    const described = describedLabel(tokens, cursor)
+    if (!described) break
+    labels.push(...described.labels)
+    cursor = described.next
   }
   if (orphanLabel(tokens, cursor)) return null
   return { labels, next: cursor }
@@ -730,6 +783,17 @@ function labelAfterStopwords(tokens: readonly Token[], index: number): number | 
   return null
 }
 
+function tailHasUnreadLabel(tokens: readonly Token[], start: number): boolean {
+  const end = sentenceEnd(tokens, start)
+  for (let cursor = start; cursor < end; cursor += 1) {
+    const token = tokens[cursor]
+    if (!token || token.kind !== "word") continue
+    if (/[^\u0000-\u007f]/.test(token.value)) return true
+    if (token.caps === "upper" && /^[a-z]{2,4}$/.test(token.value) && !(token.value in KEYWORD_FAMILY)) return true
+  }
+  return false
+}
+
 function bareHeadProse(tokens: readonly Token[], start: number): boolean {
   const end = sentenceEnd(tokens, start)
   if (start >= end) return false
@@ -801,7 +865,7 @@ function headingSentence(tokens: readonly Token[], index: number): boolean {
   }
   const listed = words[0] === "list" || words[0] === "index"
   const kind = words[2] === "exhibits" || words[2] === "annexures" || words[2] === "documents"
-  if (listed && words[1] === "of" && kind) return true
+  if (listed && words[1] === "of" && kind && words.length === 3) return true
   if (!(colon && words.length > 0 && words.every((word) => word in KEYWORD_FAMILY))) return false
   let colonAt = -1
   const start = sentenceStart(tokens, index)
@@ -822,7 +886,7 @@ function headingSentence(tokens: readonly Token[], index: number): boolean {
     if (token.kind === "num" || parseAtom(tokens, cursor) || parseMark(tokens, cursor)) continue
     return false
   }
-  return true
+  return false
 }
 
 function extendedMark(tokens: readonly Token[], mark: { key: string; next: number }): { key: string; next: number } | null {
@@ -968,18 +1032,19 @@ export function scanCitations(
         ? (tokens[delayed]?.kind === "word" && OPENER_HEADS.has(tokens[delayed].value) ? delayed + 1 : delayed)
         : citationStart(tokens, index)
       const parsed = parseExpression(tokens, start)
-      const head = tokens[openedAt + 1]
+      const headAt = delayed !== null && tokens[delayed]?.kind === "word" && OPENER_HEADS.has(tokens[delayed].value) ? delayed : openedAt + 1
+      const head = tokens[headAt]
       const openedHead = head?.kind === "word" && OPENER_HEADS.has(head.value)
       const startedPastHead = !tokens[start] || !OPENER_HEADS.has(tokens[start].value)
-      const prose = openedHead && startedPastHead && parsed?.labels.length === 0 && bareHeadProse(tokens, start)
-      if (!parsed || (parsed.labels.length === 0 && !prose)) {
+      const prose = openedHead && startedPastHead && bareHeadProse(tokens, start)
+      if (prose) {
+        index += 1
+        continue
+      }
+      if (!parsed || parsed.labels.length === 0) {
         unparsed.push(`body cites ${token.value} without a label expression that can be read`)
         const end = sentenceEnd(tokens, index)
         index = end < tokens.length ? end + 1 : tokens.length
-        continue
-      }
-      if (prose) {
-        index += 1
         continue
       }
       for (const label of parsed.labels) consider(label, null, !headingSentence(tokens, index))
@@ -994,6 +1059,9 @@ export function scanCitations(
         continue
       }
       if (parsed.labels.length === 0) {
+        if (tailHasUnreadLabel(tokens, index + 1)) {
+          unparsed.push(`body cites ${token.value} without a label expression that can be read`)
+        }
         index += 1
         continue
       }
