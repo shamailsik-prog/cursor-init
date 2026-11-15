@@ -2,6 +2,8 @@ import { createWriteStream, promises as fsp } from "node:fs"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { createGunzip } from "node:zlib"
+import { backupPayloadProblems } from "../drill/content"
+import { isolationProblems, RestoreTargetRefused } from "../drill/target"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle } from "../lib/bundle"
 import { runCommand, psqlArgv } from "../lib/exec"
@@ -36,13 +38,29 @@ export async function preparePitrRestore(opts: {
   target: string
   pgWalScript: string
 }): Promise<void> {
+  const targetProblems = isolationProblems({
+    kind: "temp",
+    engine: "postgres",
+    host: "127.0.0.1",
+    database: "postgres",
+    dataDir: opts.dataDir,
+  })
+  if (targetProblems.length) throw new RestoreTargetRefused(targetProblems)
   await assertPitrDataDirClean(opts.dataDir)
   const verify = await verifyBundle(opts.bundleDir, opts.ring)
-  if (!verify.ok) throw new Error(verify.problems.join("; "))
+  if (!verify.ok || !verify.manifest || !verify.bundle) throw new Error(verify.problems.join("; "))
+  const payloadProblems = backupPayloadProblems({
+    store: verify.bundle.store,
+    storeManifest: verify.manifest.store,
+    artefacts: verify.manifest.artefacts,
+  })
+  if (payloadProblems.length) throw new Error(payloadProblems.join("; "))
+  const base = verify.manifest.artefacts.find((artefact) => artefact.name === "base.tar.gz")
+  if (!base) throw new Error("base.tar.gz: missing (partial)")
   await fsp.mkdir(opts.dataDir, { recursive: true, mode: 0o700 })
   const tarPath = path.join(opts.dataDir, "base.tar")
   await pipeline(
-    openBundleFile(opts.bundleDir, "base.tar.gz", opts.ring),
+    openBundleFile(opts.bundleDir, "base.tar.gz", opts.ring, base),
     createGunzip(),
     createWriteStream(tarPath)
   )

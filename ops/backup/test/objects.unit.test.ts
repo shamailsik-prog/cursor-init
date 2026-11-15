@@ -10,10 +10,10 @@ import {
   resetDocumentObjectStoreForTests,
 } from "@/platform/documents/documentObjectStore"
 import { newStore } from "@/platform/spine/store"
+import { S3Client } from "@aws-sdk/client-s3"
 import { pickIntactVersion, restoreObjects } from "../objects/restore"
 import { validateR2LockRules } from "../objects/protection"
-import type { ObjectVersionInfo } from "../objects/s3"
-import type { VersionedObjectAccess } from "../objects/s3"
+import { S3Versioned, type ObjectVersionInfo, type VersionedObjectAccess } from "../objects/s3"
 
 let objectRoot: string
 
@@ -79,6 +79,7 @@ describe("restoreObjects", () => {
     }
     let putCalled = false
     const target: VersionedObjectAccess = {
+      resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
       listVersions: async () => [],
       getVersion: async () => Buffer.alloc(0),
       put: async () => {
@@ -91,6 +92,7 @@ describe("restoreObjects", () => {
       source,
       target,
       store,
+      location: { kind: "temp", root: objectRoot, bucket: "f33-vault-drill" },
     })
     expect(report.restored).toEqual([])
     expect(report.unrecoverable).toEqual(["row1"])
@@ -114,12 +116,14 @@ describe("restoreObjects", () => {
 
     const report = await restoreObjects({
       rows: [{ id: "row2", firmId: "firmA", storagePath: put.storagePath, contentHash: wrongHash, key: "k" }],
+      location: { kind: "temp", root: objectRoot, bucket: "f33-vault-drill" },
       source: {
         listVersions: async () => [{ key: "k", versionId: "v1" }],
         getVersion: async () => encrypted,
         put: async () => {},
       },
       target: {
+        resolvedTarget: async () => ({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" }),
         listVersions: async () => [],
         getVersion: async () => Buffer.alloc(0),
         put: async () => {
@@ -130,6 +134,28 @@ describe("restoreObjects", () => {
     })
     expect(report.restored).toEqual([])
     expect(report.unrecoverable).toEqual(["row2"])
+  })
+
+  it("reads the S3 client endpoint and bucket, and refuses a declared location that disagrees", async () => {
+    const client = new S3Client({
+      region: "us-east-1",
+      endpoint: "http://127.0.0.1:19021",
+      forcePathStyle: true,
+      credentials: { accessKeyId: "minioadmin", secretAccessKey: "minioadmin" },
+    })
+    const writer = new S3Versioned(client, "f33-vault-drill")
+    const actual = await writer.resolvedTarget()
+    expect(actual).toEqual({ endpoint: "http://127.0.0.1:19021", bucket: "f33-vault-drill" })
+    const store = newStore()
+    const report = await restoreObjects({
+      rows: [],
+      source: writer,
+      target: writer,
+      store,
+      location: { kind: "local", endpoint: "https://s3.amazonaws.com", bucket: "prod" },
+    })
+    expect(report.restored).toEqual([])
+    expect(report.refused.join("\n")).toMatch(/writer endpoint|managed cloud|explicit drill target/)
   })
 })
 

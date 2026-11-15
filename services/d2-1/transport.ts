@@ -22,6 +22,8 @@ export type WhatsAppSendOptions = {
   now?: number
   /** How long a recorded key suppresses another send. Omitted means the key does not expire. */
   idempotencyTtlMs?: number
+  /** Fires once the provider has accepted this send, even if the promise is still pending. */
+  onAccepted?: () => void
 }
 
 export interface WhatsAppTransport {
@@ -42,11 +44,13 @@ export class StubWhatsAppTransport implements WhatsAppTransport {
     const now = options?.now ?? Date.now()
     const key = options?.idempotencyKey
     if (key !== undefined && this.keyLive(key, now, options?.idempotencyTtlMs)) {
+      options?.onAccepted?.()
       return { delivered: false, transport: "stub" }
     }
     const result: WhatsAppSendResult = { delivered: false, transport: "stub" }
     if (key !== undefined) this.deliveredKeys.set(key, now)
     this.sent.push({ ...message, ...result })
+    options?.onAccepted?.()
     return result
   }
 

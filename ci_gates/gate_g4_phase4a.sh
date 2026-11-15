@@ -471,39 +471,47 @@ VERDICT_TESTS=(
 )
 
 if [ "${1:-}" = "--inner" ]; then
+  # Vitest 5 matches -t against "suite > nested > test", not the space-joined JSON fullName.
   # vitest exits 0 when -t matches nothing (a renamed test) or the emulator suites are skipped, so the JSON result
   # must show exactly the named tests passed (as many as the arrays above hold, so no literal count can drift) and
-  # nothing failed. The tests are selected by their exact full names (anchored, escaped), and the JSON check repeats
-  # the names, so a renamed or swapped test fails the gate. G4A_FILTER exists only to prove this can fail.
-  esc() { printf '%s' "$1" | sed 's/[][\\.*^$()+?{}|]/\\&/g'; }
-  filter_of() {
-    local f="" n
-    for n in "$@"; do f="${f:+$f|}^$(esc "$n")\$"; done
-    printf '%s' "$f"
+  # nothing failed. A pattern that selects 0 tests fails the gate. G4A_FILTER exists only to prove this can fail.
+  filter_of() { # <names-file> <test-file>...
+    local names_file="$1"
+    shift
+    local args=()
+    local file
+    for file in "$@"; do args+=(--file "$file"); done
+    node "$ROOT/ci_gates/vitest5_name.mjs" filter --names "$names_file" "${args[@]}"
   }
   verify() { # <json> <label> <name>...
     local json="$1" label="$2"
     shift 2
-    EXPECTED="$(printf '%s\n' "$@")" EXPECTED_COUNT="$#" LABEL="$label" node -e '
-      const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
-      console.log(`${process.env.LABEL}: ${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests} skipped`)
-      const passed = r.testResults.flatMap((f) => f.assertionResults).filter((a) => a.status === "passed").map((a) => a.fullName).sort()
-      const want = process.env.EXPECTED.split("\n").sort()
-      const count = Number(process.env.EXPECTED_COUNT)
-      const exact = want.length === count && passed.length === count && passed.every((n, i) => n === want[i])
-      if (!exact) console.log(`passed tests are not exactly the ${count} named tests:`, JSON.stringify(passed))
-      process.exit(r.numPassedTests === count && r.numFailedTests === 0 && exact ? 0 : 1)' "$json"
+    EXPECTED="$(printf '%s\n' "$@")" LABEL="$label" node "$ROOT/ci_gates/check_vitest_json_selection.mjs" "$json"
   }
   out="$2"
   rc=0
 
   fn_names=("${D4_BOOT_TESTS[@]}" "${GATE_UNIT_TESTS[@]}" "${DOCTYPE_TESTS[@]}" "${DRAFT_TESTS[@]}" "${GATEOPS_TESTS[@]}")
-  fn_filter="$(filter_of "${fn_names[@]}")"
+  printf '%s\n' "${fn_names[@]}" > "$out/fn.names"
+  fn_filter="$(filter_of "$out/fn.names" \
+    "$ROOT/functions/test/d4.boot.test.ts" \
+    "$ROOT/functions/test/d4.gate.test.ts" \
+    "$ROOT/functions/test/d4.doctypes.test.ts" \
+    "$ROOT/functions/test/d4.drafts.emu.test.ts" \
+    "$ROOT/functions/test/d4.gate.emu.test.ts")"
+  root_names=("${RULES_TESTS[@]}" "${VERDICT_TESTS[@]}")
+  printf '%s\n' "${root_names[@]}" > "$out/root.names"
+  root_filter="$(filter_of "$out/root.names" \
+    "$ROOT/tests/firestore.rules.d4-phase4a.test.ts" \
+    "$ROOT/tests/citationVerdict.test.ts")"
+  if [ "${3:-}" = "--filter-only" ]; then
+    printf 'fn %s\n' "$fn_filter"
+    printf 'root %s\n' "$root_filter"
+    exit 0
+  fi
   (cd "$ROOT/functions" && npx vitest run test/d4.boot.test.ts test/d4.gate.test.ts test/d4.doctypes.test.ts test/d4.drafts.emu.test.ts test/d4.gate.emu.test.ts -t "${G4A_FILTER:-$fn_filter}" --reporter=json --outputFile="$out/d4.fn.json") || true
   verify "$out/d4.fn.json" "D4 gate, store and routes (functions)" "${fn_names[@]}" || rc=1
 
-  root_names=("${RULES_TESTS[@]}" "${VERDICT_TESTS[@]}")
-  root_filter="$(filter_of "${root_names[@]}")"
   # The rules suite reads firestore.rules from the working directory and is excluded by vitest.config.ts unless
   # FIRESTORE_EMULATOR_HOST is set (emulators:exec sets it).
   (cd "$ROOT" && npx vitest run --no-file-parallelism tests/firestore.rules.d4-phase4a.test.ts tests/citationVerdict.test.ts -t "${G4A_FILTER:-$root_filter}" --reporter=json --outputFile="$out/d4.root.json") || true

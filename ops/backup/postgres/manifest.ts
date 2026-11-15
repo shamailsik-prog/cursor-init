@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { checksumOk } from "../drill/content"
 import { MultisetDigest } from "../lib/digest"
 import { diffRecords, diffSets } from "../lib/diff"
 import type { PsqlQueryable } from "../lib/exec"
@@ -178,10 +179,14 @@ export function comparePgManifests(expected: PgManifest, actual: PgManifest): st
   lines.push(...diffRecords("meta", metaExpected, metaActual))
   for (const [table, exp] of Object.entries(expected.tables).sort()) {
     const act = actual.tables[table]
-    if (!act) lines.push(`table ${table}: missing`)
-    else {
-      if (exp.rows !== act.rows) lines.push(`table ${table}: rows ${exp.rows} -> ${act.rows}`)
-      if (exp.digest !== act.digest) lines.push(`table ${table}: digest differs`)
+    if (!checksumOk(exp.digest) || (act && !checksumOk(act.digest))) lines.push(`table ${table}: checksum missing`)
+    if (!act) {
+      lines.push(`table ${table}: missing`)
+      continue
+    }
+    if (exp.rows !== act.rows) lines.push(`table ${table}: rows ${exp.rows} -> ${act.rows}`)
+    if (checksumOk(exp.digest) && checksumOk(act.digest) && exp.digest !== act.digest) {
+      lines.push(`table ${table}: digest differs`)
     }
   }
   for (const table of Object.keys(actual.tables).sort()) {

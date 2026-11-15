@@ -5,6 +5,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { makeKeyRing } from "../lib/envelope.mjs"
 import { runCommand } from "../lib/exec"
+import { drillScratchDir } from "../drill/target"
 import { restoreFirestoreEmulator, firestoreEmulatorExecArgv } from "../firestore/emulator"
 import { recordDrillResult } from "../lib/results"
 
@@ -22,7 +23,7 @@ describe("firestore SKB1 bundle drill", () => {
       const exportDir = path.join(tmp, "export")
       const outRoot = path.join(tmp, "bundles")
       const bundleMarker = path.join(tmp, "bundle-dir.txt")
-      const importDir = path.join(tmp, "import")
+      const importDir = drillScratchDir("f33-fs-import-")
       try {
         const inner = `npx vite-node ops/backup/test/helpers/firestore-bundle-backup.ts ${JSON.stringify(exportDir)} ${JSON.stringify(outRoot)} ${key.toString("hex")} ${JSON.stringify(bundleMarker)}`
         const backup = await runCommand(firestoreEmulatorExecArgv(inner), {
@@ -39,9 +40,17 @@ describe("firestore SKB1 bundle drill", () => {
           importDir,
         })
         expect(res.ok, res.differences.join("\n")).toBe(true)
-        recordDrillResult({ store: "firestore-emulator-bundle", rtoMs: Date.now() - started, details: { ok: true } })
+        expect(res.content.length).toBeGreaterThan(0)
+        expect(res.content.every((unit) => unit.match && /^[0-9a-f]{64}$/.test(unit.digest))).toBe(true)
+        recordDrillResult({
+          store: "firestore-emulator-bundle",
+          rtoMs: Date.now() - started,
+          target: { kind: "emulator", engine: "firestore", isolated: true },
+          details: { ok: true, contentUnits: res.content },
+        })
       } finally {
         rmSync(tmp, { recursive: true, force: true })
+        rmSync(importDir, { recursive: true, force: true })
       }
     },
     300_000

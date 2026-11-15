@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { acceptRestoreChild } from "../drill/content"
 import { runCommand } from "../lib/exec"
 import { recordDrillResult } from "../lib/results"
 
@@ -32,11 +33,15 @@ describe("firestore emulator drill", () => {
           cwd: REPO,
           env: { ...process.env, NPM_CONFIG_LOGLEVEL: "error" },
         })
-        expect(verify.code, (verify.stderr || verify.stdout).trim()).toBe(0)
+        const accepted = acceptRestoreChild({ code: verify.code, stdout: verify.stdout, stderr: verify.stderr })
+        expect(accepted.ok, accepted.problems.join("\n")).toBe(true)
+        expect(accepted.units.length).toBeGreaterThan(0)
+        expect(accepted.units.every((unit) => unit.match && /^[0-9a-f]{64}$/.test(unit.digest))).toBe(true)
         recordDrillResult({
           store: "firestore-emulator",
           rtoMs: Date.now() - started,
-          details: { exportDir: exportDir.length },
+          target: { kind: "emulator", engine: "firestore", isolated: true },
+          details: { ok: true, contentUnits: accepted.units },
         })
       } finally {
         rmSync(tmp, { recursive: true, force: true })
