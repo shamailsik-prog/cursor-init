@@ -45,7 +45,7 @@ export type ObservabilityOptions = {
   traceSink?: SignalSink
 }
 
-const NAME = /^[a-z][a-z0-9_.]{0,63}$/
+const NAME = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 
 export function exporterEnabled(env: NodeJS.ProcessEnv, flag: string): boolean {
   return env[flag] === OBS_EXPORTER_ENABLED_VALUE
@@ -64,11 +64,21 @@ function safeName(name: string): string {
  * On: build, redact and deliver inside one try. A throwing getter, proxy or sink
  * drops the record and does not reach the caller.
  */
-function deliver(enabled: boolean, sink: SignalSink | undefined, build: () => Record<string, unknown>): void {
+type BuiltRecord = {
+  record: Record<string, unknown>
+  errorName?: unknown
+  errorCode?: unknown
+}
+
+function deliver(enabled: boolean, sink: SignalSink | undefined, build: () => BuiltRecord): void {
   if (!enabled || sink === undefined) return
   try {
-    const redacted = redactForObservability(build())
-    if (isRecord(redacted)) sink(redacted)
+    const built = build()
+    const redacted = redactForObservability(built.record)
+    if (!isRecord(redacted)) return
+    if (typeof built.errorName === "string") redacted.errorName = built.errorName
+    if (typeof built.errorCode === "string" || typeof built.errorCode === "number") redacted.errorCode = built.errorCode
+    sink(redacted)
   } catch {
     // Drop the record. The caller is not told.
   }
@@ -83,11 +93,13 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
   function metric(unit: "count" | "ms", name: string, value: number, attributes?: Record<string, unknown>): void {
     const metricName = safeName(name)
     deliver(metricsOn, options.metricsSink, () => ({
-      ...attributes,
-      signal: "metric",
-      metric: metricName,
-      unit,
-      value,
+      record: {
+        ...attributes,
+        signal: "metric",
+        metric: metricName,
+        unit,
+        value,
+      },
     }))
   }
 
@@ -96,10 +108,12 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
       const safeLevel = level === "debug" || level === "info" || level === "warn" || level === "error" ? level : "error"
       const eventName = safeName(event)
       deliver(logOn, options.logSink, () => ({
-        ...fields,
-        signal: "log",
-        level: safeLevel,
-        event: eventName,
+        record: {
+          ...fields,
+          signal: "log",
+          level: safeLevel,
+          event: eventName,
+        },
       }))
     },
     counter(name, value = 1, attributes) {
@@ -134,23 +148,27 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
           deliver(traceOn, options.traceSink, () => {
             const merged: Record<string, unknown> = { ...(attributes ?? {}) }
             for (const [key, value] of overrides) merged[key] = value
-            const errFields: Record<string, unknown> = {}
+            let errorName: unknown
+            let errorCode: unknown
             if (exception !== undefined) {
               const redactedErr = redactForObservability(exception)
               if (isRecord(redactedErr)) {
-                if (redactedErr.errorName !== undefined) errFields.errorName = redactedErr.errorName
-                if (redactedErr.errorCode !== undefined) errFields.errorCode = redactedErr.errorCode
+                errorName = redactedErr.errorName
+                errorCode = redactedErr.errorCode
               }
             }
             return {
-              ...merged,
-              signal: "trace",
-              event: eventName,
-              traceId,
-              spanId,
-              status: status === "error" ? "error" : "ok",
-              durationMs: Math.max(0, Math.round(performance.now() - started)),
-              ...errFields,
+              record: {
+                ...merged,
+                signal: "trace",
+                event: eventName,
+                traceId,
+                spanId,
+                status: status === "error" ? "error" : "ok",
+                durationMs: Math.max(0, Math.round(performance.now() - started)),
+              },
+              errorName,
+              errorCode,
             }
           })
         },

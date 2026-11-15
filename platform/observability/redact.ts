@@ -64,21 +64,40 @@ const CANONICAL = new Map<string, ObservabilityField>(
 const NUMERIC = new Set<ObservabilityField>(["durationMs", "count", "attempt", "value", "statusCode"])
 
 /**
- * A value is kept only when it proves it is safe for that field. Everything else is
- * `[redacted]`. There is no catalogue of secret spellings to keep in sync.
+ * A value is kept only when it proves it is safe for that field.
  *
- * Non-id strings must be short operational tokens: lowercase, under 20 characters,
- * no 10-digit run, not a 13-digit CNIC or a Pakistani mobile once separators are
- * stripped, and not a known key prefix. Id fields must be a UUID or a letter-led
- * opaque id, with the same digit and prefix refusal. `errorName` is an error class
- * and nothing else.
+ * Non-id strings must be one case of snake case (`not_minimised`, `OVERRIDE_FORBIDDEN`),
+ * at most 19 characters unless an underscore lets a repo code run to 40, with at most
+ * six digits and no secret prefix. Id fields must be a UUID or a single-case opaque id,
+ * and a digit window on the folded text refuses an embedded CNIC, mobile (including
+ * `0092`), or landline. `errorName` is a PascalCase class name copied only off a real
+ * Error, never off a caller field.
  */
-const ERROR_NAME = /^[A-Z][A-Za-z0-9]{0,40}$/
+const ERROR_NAME = /^[A-Z][a-z]+(?:[A-Z][a-z]+)*$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const OPAQUE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
-const NON_ID = /^[a-z0-9][a-z0-9_.:-]{0,63}$/
-const PHONE_DIGITS = /^(?:92|0)?3\d{9}$/
-const SECRET_PREFIXES = ["aiza", "akia", "github_pat_", "whsec_", "sk-", "eyj", "basic_"]
+const LOWER_SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
+const UPPER_SNAKE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/
+const CNIC_WINDOW = /\d{5}\D{0,2}\d{7}\D{0,2}\d/
+const MOBILE_WINDOW = /(?:\+|00)?92\D{0,2}3\d{2}\D{0,2}\d{7}|0?3\d{2}\D{0,2}\d{3}\D{0,2}\d{4}/
+const LANDLINE_WINDOW = /0\d{2,3}\D{0,2}\d{7,8}/
+const SECRET_PREFIXES = [
+  "aiza",
+  "akia",
+  "asia",
+  "github_pat_",
+  "whsec_",
+  "sk-",
+  "sk_live_",
+  "rk_live_",
+  "eyj",
+  "basic_",
+  "ghp_",
+  "gho_",
+  "glpat-",
+  "xoxb-",
+  "xoxp-",
+]
 
 function folded(raw: string): string {
   return detectionView(raw).text.toLowerCase()
@@ -88,8 +107,8 @@ function digitRun(raw: string): boolean {
   return /\d{10,}/.test(folded(raw))
 }
 
-function onlyDigits(raw: string): string {
-  return folded(raw).replace(/\D/g, "")
+function digitCount(raw: string): number {
+  return folded(raw).replace(/\D/g, "").length
 }
 
 function hasSecretPrefix(raw: string): boolean {
@@ -97,23 +116,31 @@ function hasSecretPrefix(raw: string): boolean {
   return SECRET_PREFIXES.some((prefix) => text.startsWith(prefix))
 }
 
+function hasDigitWindow(raw: string): boolean {
+  const text = folded(raw)
+  return CNIC_WINDOW.test(text) || MOBILE_WINDOW.test(text) || LANDLINE_WINDOW.test(text)
+}
+
+function hasMixedCase(raw: string): boolean {
+  return /[a-z]/.test(raw) && /[A-Z]/.test(raw)
+}
+
 function provenSafeNonId(raw: string): boolean {
-  if (raw.length >= 20) return false
   if (hasSecretPrefix(raw)) return false
-  if (!NON_ID.test(raw)) return false
-  if (digitRun(raw)) return false
-  const digits = onlyDigits(raw)
-  if (digits.length === 13 || PHONE_DIGITS.test(digits)) return false
+  if (!LOWER_SNAKE.test(raw) && !UPPER_SNAKE.test(raw)) return false
+  if (digitCount(raw) > 6) return false
+  const max = raw.includes("_") ? 40 : 19
+  if (raw.length > max) return false
   return true
 }
 
 function provenSafeId(raw: string): boolean {
   if (UUID.test(raw)) return true
   if (hasSecretPrefix(raw)) return false
+  if (hasMixedCase(raw)) return false
   if (!OPAQUE_ID.test(raw)) return false
   if (digitRun(raw)) return false
-  const digits = onlyDigits(raw)
-  if (digits.length === 13 || PHONE_DIGITS.test(digits)) return false
+  if (hasDigitWindow(raw)) return false
   return true
 }
 
@@ -176,7 +203,7 @@ function redactObject(value: object): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, child] of Object.entries(value)) {
     const canonical = CANONICAL.get(normalizeFieldKey(key))
-    if (canonical === undefined) continue
+    if (canonical === undefined || canonical === "errorName" || canonical === "errorCode") continue
     if (canonical === "ok") {
       if (typeof child === "boolean") out.ok = child
       continue

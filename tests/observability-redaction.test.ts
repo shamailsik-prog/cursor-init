@@ -50,7 +50,7 @@ describe("Q15a redaction allowlist", () => {
         matterId: "matter_1",
         documentId: "doc_1",
         jobId: "job_1",
-        event: "job.done",
+        event: "job_done",
         code: "not_minimised",
         reason: "lease_lost",
         outcome: "ok",
@@ -69,7 +69,7 @@ describe("Q15a redaction allowlist", () => {
       matterId: "matter_1",
       documentId: "doc_1",
       jobId: "job_1",
-      event: "job.done",
+      event: "job_done",
       code: "not_minimised",
       reason: "lease_lost",
       outcome: "ok",
@@ -313,19 +313,35 @@ describe("Q15a fail-closed value shapes", () => {
     expect(JSON.stringify(out)).not.toContain(value)
   }
 
-  it("keeps a 19-character operational token and a 9-digit code", () => {
+  it("keeps a 19-character operational token and six digits", () => {
     keep("code", "abcdefghijklmnopqrs")
-    keep("code", "123456789")
+    keep("code", "ab123456")
+    keep("code", "OVERRIDE_FORBIDDEN")
+    keep("reason", "matter_event_without_matter")
+  })
+
+  it("redacts a seventh digit in a non-id field", () => {
+    drop("code", "ab1234567")
+    drop("reason", "123456789")
   })
 
   it("redacts a 20-character non-id string by length", () => {
     drop("code", "abcdefghijklmnopqrst")
     keep("firmId", "abcdefghijklmnopqrst")
+    keep("code", "a_" + "b".repeat(38))
+    drop("code", "a_" + "b".repeat(39))
   })
 
-  it("redacts a non-id value that is not an operational token", () => {
+  it("redacts a non-id value that is not lower or upper snake", () => {
     drop("code", "Not_Ok")
     drop("code", "ab/cd")
+    drop("code", "pwd:hunter2")
+    drop("reason", "token:abc123")
+    drop("code", "access_token.abcdef")
+    drop("reason", "jd.at.gmail.com")
+    drop("status", "ayesha.khan")
+    drop("event", "job.done")
+    keep("code", "hunter2")
   })
 
   it("redacts any run of 10 or more digits", () => {
@@ -467,5 +483,88 @@ describe("Q15a fail-closed value shapes", () => {
     expect(redactForObservability({ code: true })).toEqual({})
     expect(redactForObservability(null)).toBeUndefined()
     expect(redactForObservability(["secret"])).toBe(REDACTED)
+    expect(redactForObservability("pwd:hunter2")).toBe(REDACTED)
+    expect(redactForObservability("not_minimised")).toBe("not_minimised")
+    expect(redactForObservability({ count: "42101-1234567-1", firmId: "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ value: "12" })).toEqual({})
+  })
+
+  it("redacts an embedded CNIC, mobile, 0092 prefix or landline", () => {
+    const cnic = "c1-42101-1234567-1"
+    const mobile = "v1-0300-1234567"
+    const intl = "0092-300-1234567"
+    const land = "021-34567890"
+    for (const field of ["code", "reason", "outcome", "status", "classification"]) {
+      drop(field, cnic)
+      drop(field, mobile)
+      drop(field, intl)
+      drop(field, land)
+    }
+    drop("firmId", cnic)
+    drop("matterId", "matter-7-42101-1234567-1")
+    drop("documentId", mobile)
+    drop("jobId", "n" + intl)
+    drop("firmId", "line" + land)
+  })
+
+  it("redacts token prefixes in an id, including a bare Basic token and a JWT signature", () => {
+    const basic = "dXNl" + "cjpwYXNz" + "d29yZA"
+    const signature = "SflKxwRJ" + "SMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    drop("firmId", "ghp_" + "abcdefgh")
+    drop("firmId", "gho_" + "abcdefgh")
+    drop("firmId", "glpat-" + "abcdefgh")
+    drop("actorId", "sk_live_" + "abcdefgh")
+    drop("actorId", "rk_live_" + "abcdefgh")
+    drop("requestId", "xoxb-" + "abcdefgh")
+    drop("requestId", "xoxp-" + "abcdefgh")
+    drop("firmId", "ASIA" + "IOSFODNN7EXAMPLE")
+    drop("firmId", "AKIA" + "IOSFODNN7EXAMPLE")
+    drop("spanId", basic)
+    drop("spanId", "Basic " + basic)
+    drop("parentSpanId", signature)
+    expect(basic).toMatch(/[a-z]/)
+    expect(basic).toMatch(/[A-Z]/)
+    expect(signature).toMatch(/[a-z]/)
+    expect(signature).toMatch(/[A-Z]/)
+  })
+
+  it("keeps a UUID and drops a dashed id that is not one", () => {
+    keep("traceId", "A1B2C3D4-E5F6-4789-8ABC-1111111111AB")
+    drop("firmId", "1234-5678")
+    drop("traceId", "ab/cd")
+    drop("traceId", "ab.cd")
+    drop("traceId", "ab:cd")
+    drop("traceId", "ab@cd")
+  })
+
+  it("does not take errorName or errorCode from caller fields", () => {
+    const leaked = "AyeshaKhan" + "4210112345671"
+    const key = "AKIA" + "IOSFODNN7EXAMPLE"
+    const google = "AIzaSy" + "ShortKey12"
+    expect(redactForObservability({ errorName: leaked, errorCode: "grpc_3", firmId: "firm_1" })).toEqual({
+      firmId: "firm_1",
+    })
+    expect(redactForObservability({ error_name: leaked, error_code: key, code: "not_minimised" })).toEqual({
+      code: "not_minimised",
+    })
+    const ayesha = new Error("boom")
+    ayesha.name = leaked
+    expect((redactForObservability(ayesha) as { errorName?: string }).errorName).toBe(REDACTED)
+    const akia = new Error("boom")
+    akia.name = key
+    expect((redactForObservability(akia) as { errorName?: string }).errorName).toBe(REDACTED)
+    const aiza = new Error("boom")
+    aiza.name = google
+    expect((redactForObservability(aiza) as { errorName?: string }).errorName).toBe(REDACTED)
+    expect(JSON.stringify(redactForObservability(ayesha))).not.toContain("Ayesha")
+    expect(JSON.stringify(redactForObservability(akia))).not.toContain("AKIA")
+    expect(JSON.stringify(redactForObservability(aiza))).not.toContain("AIza")
+  })
+
+  it("folds case, separators and confusable letters in field names", () => {
+    expect(redactForObservability({ Code: "not_minimised" })).toEqual({ code: "not_minimised" })
+    expect(redactForObservability({ firm_id: "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ "FIRM-ID": "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ ["f\u0456rmId"]: "firm_1" })).toEqual({ firmId: "firm_1" })
   })
 })

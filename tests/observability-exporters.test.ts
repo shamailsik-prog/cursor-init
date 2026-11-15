@@ -31,10 +31,10 @@ function sinks(): { log: SignalSink; metrics: SignalSink; trace: SignalSink; lin
 }
 
 function exercise(obs: ReturnType<typeof createObservability>): void {
-  obs.log("info", "job.done", { firmId: "firm_1", password, email })
-  obs.counter("job.done", 1, { firmId: "firm_1", password })
-  obs.histogram("job.duration_ms", 12, { email })
-  const span = obs.startSpan("job.run", { firmId: "firm_1", documentText: "SECRET_PLEADING" })
+  obs.log("info", "job_done", { firmId: "firm_1", password, email })
+  obs.counter("job_done", 1, { firmId: "firm_1", password })
+  obs.histogram("job_duration_ms", 12, { email })
+  const span = obs.startSpan("job_run", { firmId: "firm_1", documentText: "SECRET_PLEADING" })
   span.setAttribute("note", "MATTER_NOTE")
   span.recordException(new Error("password=" + password))
   span.end("ok")
@@ -93,7 +93,7 @@ describe("Q15a exporter flags", () => {
     expect(leaked).not.toContain(password)
     expect(leaked).not.toContain(email)
     expect(leaked).not.toContain("SECRET_PLEADING")
-    expect(leaked).not.toContain("job.done")
+    expect(leaked).not.toContain("job_done")
     expect(fetches).toBe(0)
     expect(info).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
@@ -131,7 +131,7 @@ describe("Q15a exporter flags", () => {
     )
     expect(captured.lines.map((line) => line.sink)).toEqual(["log"])
     const record = captured.lines[0]?.record as Record<string, unknown>
-    expect(record).toMatchObject({ signal: "log", level: "info", event: "job.done", firmId: "firm_1" })
+    expect(record).toMatchObject({ signal: "log", level: "info", event: "job_done", firmId: "firm_1" })
     expect(JSON.stringify(record)).not.toContain(password)
     expect(JSON.stringify(record)).not.toContain(email)
 
@@ -161,7 +161,7 @@ describe("Q15a exporter flags", () => {
     expect(traces.lines).toHaveLength(1)
     expect(traces.lines[0]?.sink).toBe("trace")
     const span = traces.lines[0]?.record as Record<string, unknown>
-    expect(span).toMatchObject({ signal: "trace", event: "job.run", firmId: "firm_1", status: "ok" })
+    expect(span).toMatchObject({ signal: "trace", event: "job_run", firmId: "firm_1", status: "ok" })
     expect(typeof span.traceId).toBe("string")
     expect(typeof span.spanId).toBe("string")
     expect(JSON.stringify(span)).not.toContain(password)
@@ -178,7 +178,7 @@ describe("Q15a exporter flags", () => {
     })
     obs.log("INFO" as "info", "Job Done", { firmId: "firm_1" })
     expect(captured.lines[0]?.record).toMatchObject({ level: "error", event: "invalid", firmId: "firm_1" })
-    const span = obs.startSpan("job.run", { firmId: "firm_1" })
+    const span = obs.startSpan("job_run", { firmId: "firm_1" })
     span.end("ok")
     span.end("error")
     const traces = captured.lines.filter((line) => line.sink === "trace")
@@ -201,7 +201,7 @@ describe("Q15a exporter flags", () => {
       createObservability({
         env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
         logSink: captured.log,
-      }).log("info", "job.done", { firmId: "firm_1", code: child }),
+      }).log("info", "job_done", { firmId: "firm_1", code: child }),
     ).not.toThrow()
     expect(reads).toBe(0)
     expect(captured.lines[0]?.record).toMatchObject({ firmId: "firm_1", code: REDACTED })
@@ -213,10 +213,10 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
       metricsSink: captured.metrics,
-    }).counter("job.done", Number(digits), { firmId: "firm_1" })
+    }).counter("job_done", Number(digits), { firmId: "firm_1" })
     expect(captured.lines).toHaveLength(1)
     expect(JSON.stringify(captured.lines[0]?.record)).not.toContain(digits)
-    expect(captured.lines[0]?.record).toMatchObject({ metric: "job.done", firmId: "firm_1" })
+    expect(captured.lines[0]?.record).toMatchObject({ metric: "job_done", firmId: "firm_1" })
   })
 
   it("does not export a line writer", () => {
@@ -260,8 +260,8 @@ describe("Q15a exporter flags", () => {
         throw new Error("sink")
       },
     })
-    expect(() => off.log("info", "job.done", fields)).not.toThrow()
-    const span = off.startSpan("job.run", attrs)
+    expect(() => off.log("info", "job_done", fields)).not.toThrow()
+    const span = off.startSpan("job_run", attrs)
     expect(() => span.setAttribute("code", err)).not.toThrow()
     expect(() => span.recordException(err)).not.toThrow()
     expect(() => span.end("error")).not.toThrow()
@@ -273,8 +273,8 @@ describe("Q15a exporter flags", () => {
       logSink: (record) => lines.push(record),
       traceSink: (record) => lines.push(record),
     })
-    expect(() => on.log("info", "job.done", fields)).not.toThrow()
-    const live = on.startSpan("job.run", attrs)
+    expect(() => on.log("info", "job_done", fields)).not.toThrow()
+    const live = on.startSpan("job_run", attrs)
     expect(() => live.recordException(err)).not.toThrow()
     expect(() => live.end("error")).not.toThrow()
     expect(lines).toEqual([])
@@ -285,7 +285,7 @@ describe("Q15a exporter flags", () => {
         logSink: () => {
           throw new Error("sink")
         },
-      }).log("info", "job.done", { firmId: "firm_1" }),
+      }).log("info", "job_done", { firmId: "firm_1" }),
     ).not.toThrow()
   })
 
@@ -315,7 +315,7 @@ describe("Q15a exporter flags", () => {
     })
     for (const leak of leaks) {
       captured.lines.length = 0
-      obs.log("info", "job.done", { code: leak, reason: leak, firmId: "firm_1" })
+      obs.log("info", "job_done", { code: leak, reason: leak, firmId: "firm_1" })
       expect(captured.lines).toHaveLength(1)
       const text = JSON.stringify(captured.lines[0]?.record)
       expect(text).not.toContain(leak)
@@ -327,7 +327,7 @@ describe("Q15a exporter flags", () => {
     const span = createObservability({
       env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
       traceSink: traces.trace,
-    }).startSpan("job.run")
+    }).startSpan("job_run")
     span.recordException(named)
     span.end("error")
     const spanText = JSON.stringify(traces.lines)
@@ -339,9 +339,79 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
       metricsSink: metrics.metrics,
-    }).histogram("job.duration_ms", 4210112345.671, { firmId: "firm_1" })
+    }).histogram("job_duration_ms", 4210112345.671, { firmId: "firm_1" })
     expect(JSON.stringify(metrics.lines)).not.toContain("4210112345")
-    expect(metrics.lines[0]?.record).toMatchObject({ metric: "job.duration_ms", firmId: "firm_1" })
+    expect(metrics.lines[0]?.record).toMatchObject({ metric: "job_duration_ms", firmId: "firm_1" })
+  })
+
+  it("does not let caller fields replace signal, level, metric or value", () => {
+    const logs = sinks()
+    createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+      logSink: logs.log,
+    }).log("info", "job_done", { signal: "metric", level: "debug", event: "other_event", value: 5, firmId: "firm_1" })
+    expect(logs.lines[0]?.record).toMatchObject({
+      signal: "log",
+      level: "info",
+      event: "job_done",
+      firmId: "firm_1",
+    })
+
+    const metrics = sinks()
+    createObservability({
+      env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
+      metricsSink: metrics.metrics,
+    }).histogram("job_duration_ms", 12, { signal: "log", metric: "other_metric", unit: "count", value: 999 })
+    expect(metrics.lines[0]?.record).toMatchObject({
+      signal: "metric",
+      metric: "job_duration_ms",
+      unit: "ms",
+      value: 12,
+    })
+  })
+
+  it("does not write to the console when a record is dropped", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined)
+    const fields: Record<string, unknown> = {}
+    Object.defineProperty(fields, "code", {
+      enumerable: true,
+      get() {
+        throw new Error("getter")
+      },
+    })
+    expect(() =>
+      createObservability({
+        env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+        logSink: () => {
+          throw new Error("sink")
+        },
+      }).log("info", "job_done", fields),
+    ).not.toThrow()
+    expect(log).not.toHaveBeenCalled()
+    expect(info).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(debug).not.toHaveBeenCalled()
+  })
+
+  it("does not copy caller errorName onto a span", () => {
+    const leaked = "AyeshaKhan" + "4210112345671"
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job_run", { errorName: leaked, errorCode: "grpc_3", firmId: "firm_1" })
+    span.end("ok")
+    const text = JSON.stringify(traces.lines)
+    expect(text).not.toContain("Ayesha")
+    expect(text).not.toContain(leaked)
+    expect(traces.lines[0]?.record).toMatchObject({ firmId: "firm_1", event: "job_run" })
+    expect(traces.lines[0]?.record).not.toHaveProperty("errorName")
+    expect(traces.lines[0]?.record).not.toHaveProperty("errorCode")
   })
 
   it("has no network exporter in the observability sources", () => {
