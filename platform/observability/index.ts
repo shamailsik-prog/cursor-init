@@ -11,7 +11,6 @@ export {
   OBS_LOG_EXPORTER_FLAG,
   OBS_METRICS_EXPORTER_FLAG,
   OBS_TRACE_EXPORTER_FLAG,
-  createLineSink,
   createObservability,
   exporterEnabled,
   type LogLevel,

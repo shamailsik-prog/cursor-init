@@ -62,7 +62,7 @@ describe("Q15a redaction allowlist", () => {
         attempt: 1,
         statusCode: 200,
         ok: true,
-        traceId: "11111111-1111-4111-8111-111111111111",
+        traceId: "a1b2c3d4-e5f6-4789-8abc-1111111111ab",
       }),
     ).toMatchObject({
       firmId: "firm_1",
@@ -81,7 +81,7 @@ describe("Q15a redaction allowlist", () => {
       attempt: 1,
       statusCode: 200,
       ok: true,
-      traceId: "11111111-1111-4111-8111-111111111111",
+      traceId: "a1b2c3d4-e5f6-4789-8abc-1111111111ab",
     })
   })
 
@@ -239,6 +239,8 @@ describe("Q15a redaction of nested values, errors and Unicode", () => {
     expect(redactForObservability({ firmId: "firm_1", message: email, stack: "at " + note })).toMatchObject({
       firmId: "firm_1",
     })
+    const disguised = { name: "Ayesha_" + "Khan", message: email, firmId: "firm_1" }
+    expect(redactForObservability(disguised)).toEqual({ firmId: "firm_1" })
   })
 
   it("redacts error messages and stack traces", () => {
@@ -298,5 +300,172 @@ describe("Q15a redaction of nested values, errors and Unicode", () => {
     record.self = record
     expectAbsent(record, email)
     expect(redactForObservability(record)).toMatchObject({ firmId: "firm_1" })
+  })
+})
+
+describe("Q15a fail-closed value shapes", () => {
+  const keep = (field: string, value: string) => {
+    expect(redactForObservability({ [field]: value })).toEqual({ [field]: value })
+  }
+  const drop = (field: string, value: string) => {
+    const out = redactForObservability({ [field]: value }) as Record<string, unknown>
+    expect(out[field]).toBe(REDACTED)
+    expect(JSON.stringify(out)).not.toContain(value)
+  }
+
+  it("keeps a 19-character operational token and a 9-digit code", () => {
+    keep("code", "abcdefghijklmnopqrs")
+    keep("code", "123456789")
+  })
+
+  it("redacts a 20-character non-id string by length", () => {
+    drop("code", "abcdefghijklmnopqrst")
+    keep("firmId", "abcdefghijklmnopqrst")
+  })
+
+  it("redacts a non-id value that is not an operational token", () => {
+    drop("code", "Not_Ok")
+    drop("code", "ab/cd")
+  })
+
+  it("redacts any run of 10 or more digits", () => {
+    drop("code", "ab1234567890")
+    drop("code", "1234567890")
+    drop("firmId", "id1234567890")
+  })
+
+  it("redacts a 13-digit CNIC after separators are stripped", () => {
+    const underscored = "42101" + "_1234567_" + "1"
+    const colon = "42101" + ":1234567:" + "1"
+    const embedded = "user" + "4210112345671"
+    const inId = "cnic" + "42101_1234567_1"
+    drop("code", underscored)
+    drop("code", colon)
+    drop("code", embedded)
+    drop("firmId", inId)
+    expect(JSON.stringify(redactForObservability({ code: underscored }))).not.toContain("4210112345671")
+  })
+
+  it("redacts Pakistani mobiles after separators are stripped", () => {
+    drop("code", "92-300-1234567")
+    drop("code", "0300-123-4567")
+    drop("code", "3001234567")
+    drop("firmId", "tel0_300_1234567")
+  })
+
+  it("redacts secret prefixes that would otherwise be short tokens", () => {
+    drop("code", "aiza" + "shortkey12")
+    drop("code", "akia" + "examplekey1")
+    drop("code", "github_pat_" + "abc")
+    drop("code", "whsec_" + "abcdef")
+    drop("code", "sk-" + "shortkey")
+    drop("code", "eyj" + "hbciabcdef")
+    drop("code", "basic_" + "shortcred")
+  })
+
+  it("redacts a 64-hex string, an AWS secret, a Basic credential and JWT segments", () => {
+    const hex = "0123456789abcdef".repeat(4)
+    const awsSecret = "wJalr" + "XUtnFEMI" + "/K7MDENG" + "/bPxRfiCY" + "EXAMPLEKEY"
+    const basic = "Basic " + "dXNlcjpw"
+    const header = "eyJ" + "hbGciOiJub25lIn0"
+    const payload = "eyJ" + "ImEiOjF9abcd"
+    const signature = "c2ln" + "YXR1cmVhYmNkZWZnaA"
+    drop("code", hex)
+    drop("reason", awsSecret)
+    drop("code", basic)
+    drop("code", header)
+    drop("reason", payload)
+    drop("status", signature)
+    expect(awsSecret.length).toBeGreaterThanOrEqual(20)
+    expect(hex).toHaveLength(64)
+  })
+
+  it("keeps a UUID id even when it contains a 10-digit run", () => {
+    keep("traceId", "a1b2c3d4-e5f6-4789-8abc-1111111111ab")
+  })
+
+  it("redacts an id that does not match an id shape", () => {
+    drop("firmId", "1firm")
+    drop("matterId", "bad id")
+    drop("firmId", "akia" + "examplekey1")
+    keep("firmId", "f" + "a".repeat(63))
+    drop("firmId", "f" + "a".repeat(64))
+  })
+
+  it("keeps an error class name and replaces any other name", () => {
+    const typed = new Error("boom")
+    typed.name = "TypeError"
+    expect(redactForObservability(typed)).toMatchObject({ errorName: "TypeError" })
+    const named = new Error("boom")
+    named.name = "Ayesha_Khan_" + "4210112345671"
+    const out = redactForObservability(named) as { errorName?: string }
+    expect(out.errorName).toBe(REDACTED)
+    expect(JSON.stringify(out)).not.toContain("Ayesha")
+    expect(JSON.stringify(out)).not.toContain("4210112345671")
+    const lower = new Error("boom")
+    lower.name = "error"
+    expect((redactForObservability(lower) as { errorName?: string }).errorName).toBe(REDACTED)
+  })
+
+  it("drops metric values outside the magnitude and decimal bounds", () => {
+    expect(redactForObservability({ value: 12 })).toEqual({ value: 12 })
+    expect(redactForObservability({ value: 1.5 })).toEqual({ value: 1.5 })
+    expect(redactForObservability({ value: 1_000_000 })).toEqual({ value: 1_000_000 })
+    expect(redactForObservability({ value: 1_000_001 })).toEqual({})
+    expect(redactForObservability({ value: 1.2345 })).toEqual({})
+    expect(redactForObservability({ value: 1e-7 })).toEqual({})
+    const disguised = 4210112345.671
+    expect(JSON.stringify(redactForObservability({ value: disguised }))).not.toContain("4210112345")
+  })
+
+  it("keeps a small integer error code and drops an identifier-sized one", () => {
+    const small = new Error("boom")
+    ;(small as Error & { code: number }).code = 0
+    expect(redactForObservability(small)).toMatchObject({ errorName: "Error", errorCode: 0 })
+    const top = new Error("boom")
+    ;(top as Error & { code: number }).code = 16
+    expect(redactForObservability(top)).toMatchObject({ errorCode: 16 })
+    const over = new Error("boom")
+    ;(over as Error & { code: number }).code = 17
+    expect((redactForObservability(over) as { errorCode?: unknown }).errorCode).toBeUndefined()
+    const negative = new Error("boom")
+    ;(negative as Error & { code: number }).code = -1
+    expect((redactForObservability(negative) as { errorCode?: unknown }).errorCode).toBeUndefined()
+    const named = new Error("boom")
+    ;(named as Error & { code: string }).code = "grpc_3"
+    expect(redactForObservability(named)).toMatchObject({ errorCode: "grpc_3" })
+    const shaped = new Error("boom")
+    ;(shaped as Error & { code: string }).code = "Not_Ok"
+    expect((redactForObservability(shaped) as { errorCode?: unknown }).errorCode).toBeUndefined()
+    const huge = new Error("boom")
+    ;(huge as Error & { code: number }).code = Number("42101" + "1234567" + "1")
+    expect(JSON.stringify(redactForObservability(huge))).not.toContain("4210112345671")
+  })
+
+  it("keeps bounded counts and drops a 10-digit count, a non-boolean ok and a root array", () => {
+    expect(redactForObservability({ count: 999_999_999, durationMs: 86_400_000, attempt: 100, statusCode: 599 })).toEqual({
+      count: 999_999_999,
+      durationMs: 86_400_000,
+      attempt: 100,
+      statusCode: 599,
+    })
+    expect(redactForObservability({ count: -1 })).toEqual({})
+    expect(redactForObservability({ count: 1.5 })).toEqual({})
+    expect(redactForObservability({ value: Number.NaN })).toEqual({})
+    expect(redactForObservability({ count: 1_000_000_000 })).toEqual({})
+    expect(redactForObservability({ count: 1_000_000_001 })).toEqual({})
+    expect(redactForObservability({ durationMs: 86_400_001 })).toEqual({})
+    expect(redactForObservability({ durationMs: -1 })).toEqual({})
+    expect(redactForObservability({ attempt: 0 })).toEqual({ attempt: 0 })
+    expect(redactForObservability({ attempt: -1 })).toEqual({})
+    expect(redactForObservability({ attempt: 101 })).toEqual({})
+    expect(redactForObservability({ statusCode: 0 })).toEqual({ statusCode: 0 })
+    expect(redactForObservability({ statusCode: -1 })).toEqual({})
+    expect(redactForObservability({ statusCode: 600 })).toEqual({})
+    expect(redactForObservability({ ok: true })).toEqual({ ok: true })
+    expect(redactForObservability({ ok: "true" })).toEqual({})
+    expect(redactForObservability({ code: true })).toEqual({})
+    expect(redactForObservability(null)).toBeUndefined()
+    expect(redactForObservability(["secret"])).toBe(REDACTED)
   })
 })

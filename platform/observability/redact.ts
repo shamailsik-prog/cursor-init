@@ -63,55 +63,88 @@ const CANONICAL = new Map<string, ObservabilityField>(
 
 const NUMERIC = new Set<ObservabilityField>(["durationMs", "count", "attempt", "value", "statusCode"])
 
-/** Operational tokens only: no spaces, no '@', no '='; long enough for a UUID, short of a document. */
-const TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$/
+/**
+ * A value is kept only when it proves it is safe for that field. Everything else is
+ * `[redacted]`. There is no catalogue of secret spellings to keep in sync.
+ *
+ * Non-id strings must be short operational tokens: lowercase, under 20 characters,
+ * no 10-digit run, not a 13-digit CNIC or a Pakistani mobile once separators are
+ * stripped, and not a known key prefix. Id fields must be a UUID or a letter-led
+ * opaque id, with the same digit and prefix refusal. `errorName` is an error class
+ * and nothing else.
+ */
+const ERROR_NAME = /^[A-Z][A-Za-z0-9]{0,40}$/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const OPAQUE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+const NON_ID = /^[a-z0-9][a-z0-9_.:-]{0,63}$/
+const PHONE_DIGITS = /^(?:92|0)?3\d{9}$/
+const SECRET_PREFIXES = ["aiza", "akia", "github_pat_", "whsec_", "sk-", "eyj", "basic_"]
 
-const SENSITIVE = [
-  /[^\s@]+@[^\s@]+\.[^\s@]{2,}/,
-  /\b\d{5}[-.\s]+\d{7}[-.\s]+\d\b/,
-  /\b\d{13}\b/,
-  /\b(?:\+?92|0092|0)3\d{2}[\s.-]*\d{7}\b/,
-  /\b03\d{9}\b/,
-  /\bpk\d{2}[a-z0-9]{10,}\b/i,
-  /eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/,
-  /\b(?:sk|pk|rk)[-_][A-Za-z0-9]/,
-  /\bAKIA[0-9A-Z]{8,}/,
-  /\bgh[pousr]_[A-Za-z0-9]{8,}/,
-  /\bxox[baprs]-[A-Za-z0-9-]{8,}/,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\b(?:password|passwd|pwd|secret|token|apikey|api key|authorization|cookie)\b\s*[:=]/i,
-  /\bbearer\s+\S{6,}/i,
-  /\b(?:cnic|nic|phone|email|address)\b/i,
-  /\b(?:house|street|road|mohalla|mohallah|colony|sector)\b/i,
-]
+function folded(raw: string): string {
+  return detectionView(raw).text.toLowerCase()
+}
+
+function digitRun(raw: string): boolean {
+  return /\d{10,}/.test(folded(raw))
+}
+
+function onlyDigits(raw: string): string {
+  return folded(raw).replace(/\D/g, "")
+}
+
+function hasSecretPrefix(raw: string): boolean {
+  const text = folded(raw)
+  return SECRET_PREFIXES.some((prefix) => text.startsWith(prefix))
+}
+
+function provenSafeNonId(raw: string): boolean {
+  if (raw.length >= 20) return false
+  if (hasSecretPrefix(raw)) return false
+  if (!NON_ID.test(raw)) return false
+  if (digitRun(raw)) return false
+  const digits = onlyDigits(raw)
+  if (digits.length === 13 || PHONE_DIGITS.test(digits)) return false
+  return true
+}
+
+function provenSafeId(raw: string): boolean {
+  if (UUID.test(raw)) return true
+  if (hasSecretPrefix(raw)) return false
+  if (!OPAQUE_ID.test(raw)) return false
+  if (digitRun(raw)) return false
+  const digits = onlyDigits(raw)
+  if (digits.length === 13 || PHONE_DIGITS.test(digits)) return false
+  return true
+}
+
+function redactString(field: ObservabilityField, raw: string): string {
+  if (field === "errorName") return ERROR_NAME.test(raw) ? raw : REDACTED
+  if (field.endsWith("Id")) return provenSafeId(raw) ? raw : REDACTED
+  return provenSafeNonId(raw) ? raw : REDACTED
+}
 
 /** Fold a field name the way F15 folds a party name, then drop separators. */
 export function normalizeFieldKey(key: string): string {
   return foldName(key).replace(/[^a-z0-9]/g, "")
 }
 
-function sensitive(value: string): boolean {
-  const folded = detectionView(value).text
-  return SENSITIVE.some((re) => re.test(folded) || re.test(value))
-}
-
-function redactString(raw: string): string {
-  if (!TOKEN.test(raw) || sensitive(raw)) return REDACTED
-  return raw
+function redactMetric(n: number): number | undefined {
+  if (!Number.isFinite(n)) return undefined
+  const text = String(n)
+  if (/[eE]/.test(text)) return undefined
+  if (Math.abs(n) > 1_000_000) return undefined
+  const fraction = text.split(".")[1]
+  if (fraction !== undefined && fraction.length > 3) return undefined
+  return n
 }
 
 function redactNumber(n: number, field: ObservabilityField): number | undefined {
-  if (!Number.isFinite(n)) return undefined
-  // A metric may be fractional. Eleven or more integer digits is an identifier, not a measurement.
-  if (field === "value") {
-    if (Number.isInteger(n) && String(Math.abs(n)).length >= 11) return undefined
-    if (Math.abs(n) > 1_000_000_000_000) return undefined
-    return n
-  }
-  if (!Number.isInteger(n)) return undefined
+  if (field === "value") return redactMetric(n)
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return undefined
+  if (/\d{10,}/.test(String(Math.abs(n)))) return undefined
   if (field === "statusCode") return n >= 0 && n <= 599 ? n : undefined
   if (field === "attempt") return n >= 0 && n <= 100 ? n : undefined
-  if (field === "count") return n >= 0 && n <= 1_000_000_000 ? n : undefined
+  if (field === "count") return n >= 0 ? n : undefined
   if (field === "durationMs") return n >= 0 && n <= 86_400_000 ? n : undefined
   return undefined
 }
@@ -129,28 +162,16 @@ function isErrorLike(value: object): boolean {
  */
 function redactError(err: object): Record<string, unknown> {
   const name = "name" in err && typeof err.name === "string" ? err.name : "Error"
-  const out: Record<string, unknown> = {}
-  const safeName = redactString(name)
-  if (safeName !== REDACTED) out.errorName = safeName
+  const out: Record<string, unknown> = { errorName: redactString("errorName", name) }
   if ("code" in err) {
     const code = (err as { code?: unknown }).code
     if (typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 16) out.errorCode = code
-    else if (typeof code === "string") {
-      const safe = redactString(code)
-      if (safe !== REDACTED) out.errorCode = safe
-    }
+    else if (typeof code === "string" && provenSafeNonId(code)) out.errorCode = code
   }
   return out
 }
 
-function redactArray(values: readonly unknown[], depth: number, seen: WeakSet<object>): unknown[] {
-  return values.map((item) => {
-    const next = redactValue(item, depth + 1, seen)
-    return next === undefined ? REDACTED : next
-  })
-}
-
-function redactObject(value: object, depth: number, seen: WeakSet<object>): Record<string, unknown> {
+function redactObject(value: object): Record<string, unknown> {
   if (isErrorLike(value)) return redactError(value)
   const out: Record<string, unknown> = {}
   for (const [key, child] of Object.entries(value)) {
@@ -168,39 +189,24 @@ function redactObject(value: object, depth: number, seen: WeakSet<object>): Reco
       continue
     }
     if (typeof child === "string") {
-      out[canonical] = redactString(child)
+      out[canonical] = redactString(canonical, child)
       continue
     }
-    if (Array.isArray(child)) {
-      out[canonical] = redactArray(child, depth, seen)
-      continue
-    }
-    if (typeof child === "object" && child !== null) {
-      const nested = redactValue(child, depth + 1, seen)
-      if (nested !== undefined) out[canonical] = nested
-    }
+    if (child !== null && typeof child === "object") out[canonical] = REDACTED
   }
   return out
 }
 
-function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
-  if (depth > 8) return REDACTED
+function redactValue(value: unknown): unknown {
   if (value === null || value === undefined) return undefined
-  if (typeof value === "string") return redactString(value)
-  if (typeof value === "number") return undefined
-  if (typeof value === "boolean") return value
+  if (typeof value === "string") return provenSafeNonId(value) ? value : REDACTED
+  if (typeof value === "number" || typeof value === "boolean") return REDACTED
   if (typeof value !== "object") return REDACTED
-  if (seen.has(value)) return REDACTED
-  seen.add(value)
-  try {
-    if (Array.isArray(value)) return redactArray(value, depth, seen)
-    return redactObject(value, depth, seen)
-  } finally {
-    seen.delete(value)
-  }
+  if (Array.isArray(value)) return REDACTED
+  return redactObject(value)
 }
 
 /** Return a value that is safe to serialise onto a log line, a metric or a span. */
 export function redactForObservability(input: unknown): unknown {
-  return redactValue(input, 0, new WeakSet())
+  return redactValue(input)
 }

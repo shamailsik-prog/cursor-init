@@ -1,12 +1,13 @@
 import { readFileSync, readdirSync } from "node:fs"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import * as observability from "@/platform/observability"
 import {
   OBS_EXPORTER_ENABLED_VALUE,
   OBS_LOG_EXPORTER_FLAG,
   OBS_METRICS_EXPORTER_FLAG,
   OBS_TRACE_EXPORTER_FLAG,
-  createLineSink,
+  REDACTED,
   createObservability,
   type SignalSink,
 } from "@/platform/observability"
@@ -101,8 +102,9 @@ describe("Q15a exporter flags", () => {
     expect(log).not.toHaveBeenCalled()
   })
 
-  it("treats true, 1, on, yes and ENABLED as off", () => {
-    for (const value of ["true", "1", "on", "yes", "ENABLED", "enable", ""]) {
+  it("treats true, 1, on, yes, ENABLED and padded values as off", () => {
+    const nbsp = "\u00A0"
+    for (const value of ["true", "1", "on", "yes", "ENABLED", "enable", "", " enabled", "enabled\n", " enabled ", nbsp + "enabled", "enabled" + nbsp, nbsp + "enabled" + nbsp]) {
       const captured = sinks()
       const env = Object.fromEntries(FLAGS.map((flag) => [flag, value]))
       exercise(
@@ -121,7 +123,7 @@ describe("Q15a exporter flags", () => {
     const captured = sinks()
     exercise(
       createObservability({
-        env: { [OBS_LOG_EXPORTER_FLAG]: " enabled " },
+        env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
         logSink: captured.log,
         metricsSink: captured.metrics,
         traceSink: captured.trace,
@@ -167,6 +169,44 @@ describe("Q15a exporter flags", () => {
     expect(JSON.stringify(span)).not.toContain("MATTER_NOTE")
   })
 
+  it("replaces an unsafe event name and does not emit a span twice", () => {
+    const captured = sinks()
+    const obs = createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled", [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      logSink: captured.log,
+      traceSink: captured.trace,
+    })
+    obs.log("INFO" as "info", "Job Done", { firmId: "firm_1" })
+    expect(captured.lines[0]?.record).toMatchObject({ level: "error", event: "invalid", firmId: "firm_1" })
+    const span = obs.startSpan("job.run", { firmId: "firm_1" })
+    span.end("ok")
+    span.end("error")
+    const traces = captured.lines.filter((line) => line.sink === "trace")
+    expect(traces).toHaveLength(1)
+    expect(traces[0]?.record).toMatchObject({ status: "ok" })
+  })
+
+  it("does not walk a nested value on an allowlisted field", () => {
+    let reads = 0
+    const child: Record<string, unknown> = {}
+    Object.defineProperty(child, "email", {
+      enumerable: true,
+      get() {
+        reads += 1
+        throw new Error("nested")
+      },
+    })
+    const captured = sinks()
+    expect(() =>
+      createObservability({
+        env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+        logSink: captured.log,
+      }).log("info", "job.done", { firmId: "firm_1", code: child }),
+    ).not.toThrow()
+    expect(reads).toBe(0)
+    expect(captured.lines[0]?.record).toMatchObject({ firmId: "firm_1", code: REDACTED })
+  })
+
   it("does not export an identifier-length number as a metric value", () => {
     const digits = "35202" + "1234567" + "1"
     const captured = sinks()
@@ -179,17 +219,129 @@ describe("Q15a exporter flags", () => {
     expect(captured.lines[0]?.record).toMatchObject({ metric: "job.done", firmId: "firm_1" })
   })
 
-  it("writes a line sink only when the matching flag is enabled", () => {
+  it("does not export a line writer", () => {
+    expect(observability).not.toHaveProperty("createLineSink")
+    const dir = path.resolve(__dirname, "../platform/observability")
+    for (const name of readdirSync(dir).filter((file) => file.endsWith(".ts"))) {
+      expect(readFileSync(path.join(dir, name), "utf8")).not.toContain("createLineSink")
+    }
     const lines: string[] = []
-    const sink = createLineSink((line) => lines.push(line))
+    const sink: SignalSink = (record) => lines.push(JSON.stringify(record))
     exercise(createObservability({ env: {}, logSink: sink }))
     expect(lines).toEqual([])
     exercise(createObservability({ env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" }, logSink: sink }))
     expect(lines).toHaveLength(1)
-    const parsed = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>
-    expect(parsed.event).toBe("job.done")
     expect(lines[0]).not.toContain(password)
     expect(lines[0]).not.toContain(email)
+  })
+
+  it("does not read caller data when the exporter is off, and drops a throwing record when it is on", () => {
+    let reads = 0
+    const boom = () => {
+      reads += 1
+      throw new Error("getter")
+    }
+    const fields: Record<string, unknown> = {}
+    Object.defineProperty(fields, "code", { enumerable: true, get: boom })
+    const attrs = new Proxy(
+      { firmId: "firm_1" },
+      {
+        ownKeys() {
+          reads += 1
+          throw new Error("ownKeys")
+        },
+        get: boom,
+      },
+    )
+    const err = new Proxy(new Error("x"), { get: boom })
+    const off = createObservability({
+      env: {},
+      logSink: () => {
+        throw new Error("sink")
+      },
+    })
+    expect(() => off.log("info", "job.done", fields)).not.toThrow()
+    const span = off.startSpan("job.run", attrs)
+    expect(() => span.setAttribute("code", err)).not.toThrow()
+    expect(() => span.recordException(err)).not.toThrow()
+    expect(() => span.end("error")).not.toThrow()
+    expect(reads).toBe(0)
+
+    const lines: unknown[] = []
+    const on = createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled", [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      logSink: (record) => lines.push(record),
+      traceSink: (record) => lines.push(record),
+    })
+    expect(() => on.log("info", "job.done", fields)).not.toThrow()
+    const live = on.startSpan("job.run", attrs)
+    expect(() => live.recordException(err)).not.toThrow()
+    expect(() => live.end("error")).not.toThrow()
+    expect(lines).toEqual([])
+
+    expect(() =>
+      createObservability({
+        env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+        logSink: () => {
+          throw new Error("sink")
+        },
+      }).log("info", "job.done", { firmId: "firm_1" }),
+    ).not.toThrow()
+  })
+
+  it("redacts the audited token-shaped leaks before they reach a sink", () => {
+    const leaks = [
+      "42101" + "_1234567_" + "1",
+      "42101" + ":1234567:" + "1",
+      "user" + "4210112345671",
+      "92-300-1234567",
+      "0300-123-4567",
+      "3001234567",
+      "AIza" + "SyShortKey12",
+      "akia" + "examplekey1",
+      "wJalr" + "XUtnFEMI" + "/K7MDENG" + "/bPxRfiCY" + "EXAMPLEKEY",
+      "github_pat_" + "abc",
+      "whsec_" + "abcdef",
+      "0123456789abcdef".repeat(4),
+      "eyJ" + "hbGciOiJub25lIn0",
+      "eyJ" + "ImEiOjF9abcd",
+      "c2ln" + "YXR1cmVhYmNkZWZnaA",
+      "Basic " + "dXNlcjpw",
+    ]
+    const captured = sinks()
+    const obs = createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+      logSink: captured.log,
+    })
+    for (const leak of leaks) {
+      captured.lines.length = 0
+      obs.log("info", "job.done", { code: leak, reason: leak, firmId: "firm_1" })
+      expect(captured.lines).toHaveLength(1)
+      const text = JSON.stringify(captured.lines[0]?.record)
+      expect(text).not.toContain(leak)
+      expect(text).toContain("firm_1")
+    }
+    const named = new Error("boom")
+    named.name = "Ayesha_Khan_" + "4210112345671"
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job.run")
+    span.recordException(named)
+    span.end("error")
+    const spanText = JSON.stringify(traces.lines)
+    expect(spanText).not.toContain("Ayesha")
+    expect(spanText).not.toContain("4210112345671")
+    expect(traces.lines[0]?.record).toMatchObject({ errorName: REDACTED })
+
+    const metrics = sinks()
+    createObservability({
+      env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
+      metricsSink: metrics.metrics,
+    }).histogram("job.duration_ms", 4210112345.671, { firmId: "firm_1" })
+    expect(JSON.stringify(metrics.lines)).not.toContain("4210112345")
+    expect(metrics.lines[0]?.record).toMatchObject({ metric: "job.duration_ms", firmId: "firm_1" })
   })
 
   it("has no network exporter in the observability sources", () => {
