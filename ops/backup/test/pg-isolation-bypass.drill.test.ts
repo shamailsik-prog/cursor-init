@@ -5,12 +5,10 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
-  watch,
   writeFileSync,
 } from "node:fs"
 import os from "node:os"
@@ -446,9 +444,9 @@ exec "\${args[@]}"
       expectedSystemIdentifier: targetId,
       env: decoy.env,
     })
+    await expectClusterUnwritten(decoy)
     expect(res.ok, res.differences.join("\n")).toBe(false)
     expect(res.differences.join("\n")).toMatch(/system identifier/)
-    await expectClusterUnwritten(decoy)
   }, 120_000)
 
   it("R4-L2 refuses a tee prefix that would copy writes onto the decoy", async () => {
@@ -532,58 +530,9 @@ exec "\${args[@]}"
         swapped = false
       }
     }
-    const preexisting = new Set<string>()
-    const collectPlaintext = (dir: string) => {
-      let entries: string[] = []
-      try {
-        entries = readdirSync(dir)
-      } catch {
-        return
-      }
-      for (const entry of entries) {
-        const full = path.join(dir, entry)
-        if (entry === "globals.sql" || entry === "database.dump") preexisting.add(full)
-        try {
-          if (lstatSync(full).isDirectory() && !lstatSync(full).isSymbolicLink()) collectPlaintext(full)
-        } catch {
-          // the directory disappeared while it was listed
-        }
-      }
-    }
-    collectPlaintext("/tmp/sikander-backup-drill")
-    const isNewPlaintext = (full: string): boolean => {
-      const base = path.basename(full)
-      return (base === "globals.sql" || base === "database.dump") && !preexisting.has(full)
-    }
-    const watcher = watch("/tmp/sikander-backup-drill", { recursive: true }, (_event, filename) => {
-      if (!filename) return
-      if (isNewPlaintext(path.join("/tmp/sikander-backup-drill", String(filename)))) swap()
-    })
     await dropDatabase(target)
     await dropExtraRoles(target)
-    const poll = setInterval(() => {
-      const walk = (dir: string) => {
-        let entries: string[] = []
-        try {
-          entries = readdirSync(dir)
-        } catch {
-          return
-        }
-        for (const entry of entries) {
-          const full = path.join(dir, entry)
-          if (isNewPlaintext(full)) {
-            swap()
-            return
-          }
-          try {
-            if (lstatSync(full).isDirectory() && !lstatSync(full).isSymbolicLink()) walk(full)
-          } catch {
-            // the directory was replaced while we walked it
-          }
-        }
-      }
-      walk("/tmp/sikander-backup-drill")
-    }, 5)
+    const seen: string[] = []
     try {
       const res = await restoreLogical({
         bundleDir,
@@ -591,14 +540,18 @@ exec "\${args[@]}"
         db: "legal_scraper",
         expectedSystemIdentifier: targetId,
         env: target.env,
+        onPlaintext: async (file) => {
+          seen.push(path.basename(file))
+          swap()
+        },
       })
       expect(swapped).toBe(true)
+      expect(seen).toContain("globals.sql")
+      expect(seen).not.toContain("globals-applied.sql")
       expect(res.ok, res.differences.join("\n")).toBe(false)
       expect(res.differences.join("\n")).toMatch(/socket directory/)
       await expectClusterUnwritten(decoy)
     } finally {
-      clearInterval(poll)
-      watcher.close()
       try {
         if (existsSync(target.socketDir) && lstatSync(target.socketDir).isSymbolicLink()) rmSync(target.socketDir)
       } catch {
@@ -633,10 +586,12 @@ exec "\${args[@]}"
     const bin = path.join(out, "docker-bin")
     mkdirSync(bin, { recursive: true })
     const docker = path.join(bin, "docker")
+    const sentinel = path.join(out, "path-docker-ran")
     writeFileSync(
       docker,
       `#!/bin/bash
 set -euo pipefail
+touch ${JSON.stringify(sentinel)}
 [[ "\${1:-}" == "exec" ]]
 shift
 while [[ $# -gt 0 ]]; do
@@ -650,20 +605,29 @@ exec "$@"
     )
     chmodSync(docker, 0o755)
     const prefix = ["docker", "exec", "-i", "drill-pg"]
+    await dropDatabase(target)
+    await dropExtraRoles(target)
     const res = await restoreLogical({
       bundleDir,
       ring,
       db: "legal_scraper",
       expectedSystemIdentifier: targetId,
-      env: { ...target.env, PATH: `${bin}:${target.env.PATH ?? ""}` },
+      env: {
+        ...target.env,
+        PATH: `${bin}:${target.env.PATH ?? ""}`,
+        DOCKER_HOST: "tcp://127.0.0.1:1",
+        DOCKER_CONTEXT: "not-a-context",
+      },
       pgPrefix: prefix,
       recordStore: "postgres-logical-prefix",
     })
-    expect(res.ok, res.differences.join("\n")).toBe(true)
+    expect(existsSync(sentinel)).toBe(false)
+    expect(res.ok, res.differences.join("\n")).toBe(false)
     const body = JSON.parse(readFileSync(path.resolve(__dirname, "../.results/postgres-logical-prefix.json"), "utf8")) as {
       commandPrefix?: string[]
     }
     expect(body.commandPrefix).toEqual(prefix)
     await expectClusterUnwritten(decoy)
+    await expectClusterUnwritten(target)
   }, 180_000)
 })

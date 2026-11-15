@@ -6,7 +6,7 @@ import { DRILL_POSTGRES_DATABASE, ensureDrillTempRoot, isolationProblems } from 
 import { drillDatabaseConninfo, postgresRedirectProblems, scrubLibpqEnv } from "./conn"
 import type { KeyRing } from "../lib/envelope.mjs"
 import { BundleWriter, openBundleFile, verifyBundle, type ArtefactInfo, type BundleManifest } from "../lib/bundle"
-import { writePlaintextExclusive, writePlaintextExclusiveStream } from "../lib/plaintext"
+import { writePlaintextExclusiveStream } from "../lib/plaintext"
 import { runCommand, PersistentPsqlSession } from "../lib/exec"
 import { recordDrillResult, type DrillContentUnit } from "../lib/results"
 import { assertPgTargetClean } from "./guards"
@@ -96,6 +96,8 @@ export type RestoreLogicalOptions = {
   recordStore?: string
   /** system_identifier of the cluster this restore is allowed to write. Read it from that cluster before connecting. */
   expectedSystemIdentifier?: string
+  /** Called after each decrypted plaintext file is on disk and before the next socket check or write. */
+  onPlaintext?: (file: string) => void | Promise<void>
 }
 
 function envOf(opts: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
@@ -137,6 +139,10 @@ export function identityGuardSql(opts: { expectedSystemIdentifier: string; host:
     END LOOP;
     IF NOT ok THEN
       RAISE EXCEPTION 'connected unix socket directory does not match the explicit target';
+    END IF;
+    -- inet_server_port() is null on a unix socket. current_setting('port') is the postmaster port.
+    IF current_setting('port') IS DISTINCT FROM '${opts.port}' THEN
+      RAISE EXCEPTION 'connected server port does not match the explicit target';
     END IF;`
     : `IF addr <> '127.0.0.1' AND addr <> '::1' THEN
       RAISE EXCEPTION 'connected server address does not match the explicit target';
@@ -183,14 +189,9 @@ export function withIdentityGuards(sql: string, guard: string): string {
       inCopy = true
       continue
     }
-    if (/^\\(?:connect|c)(?:\s|$)/i.test(line.trim())) out += block
+    if (/(?:^|[\s;])\\(?:connect|c)(?:\s|$)/i.test(line)) out += block
   }
   return out
-}
-
-/** Let a concurrent drill watcher observe plaintext before the next statement is sent. */
-async function observePlaintextWindow(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 40))
 }
 
 async function scriptError(session: PersistentPsqlSession, sql: string): Promise<string | null> {
@@ -400,17 +401,16 @@ export async function restoreLogical(opts: RestoreLogicalOptions): Promise<Logic
 
     scratch = await fsp.mkdtemp(path.join(ensureDrillTempRoot(), "f33-pg-plain-"))
     const globalsTmp = path.join(scratch, "globals.sql")
-    const appliedTmp = path.join(scratch, "globals-applied.sql")
     const dumpTmp = path.join(scratch, "database.dump")
     await decryptToFile(opts.bundleDir, "globals.sql", opts.ring, globalsTmp, artefactExpect(bundleManifest, "globals.sql"))
-    await observePlaintextWindow()
+    if (opts.onPlaintext) await opts.onPlaintext(globalsTmp)
     const driftedPlain = socketDrift(host, port, socketStamp)
     if (driftedPlain) return fail([driftedPlain])
 
     const globalsSql = stripBootstrapSuperuser(await fsp.readFile(globalsTmp, "utf8"))
-    await writePlaintextExclusive(appliedTmp, globalsSql)
     await assertPgTargetClean(session, db, parseRolesFromGlobals(globalsSql), expected.meta.serverVersion)
     await decryptToFile(opts.bundleDir, "database.dump", opts.ring, dumpTmp, artefactExpect(bundleManifest, "database.dump"))
+    if (opts.onPlaintext) await opts.onPlaintext(dumpTmp)
     const dumped = await runCommand(logicalPgRestoreArgv(dumpTmp), {
       env: childEnv,
       exactEnv: true,
