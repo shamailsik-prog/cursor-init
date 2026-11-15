@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { redactForObservability } from "@/platform/observability/redact"
+import { normalizeFieldKey, redactForObservability } from "@/platform/observability/redact"
 
 export const OBS_LOG_EXPORTER_FLAG = "LEGAL_OS_OBS_LOG_EXPORTER"
 export const OBS_METRICS_EXPORTER_FLAG = "LEGAL_OS_OBS_METRICS_EXPORTER"
@@ -55,7 +55,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function safeName(name: string): string {
+const LOG_RESERVED = ["signal", "level", "event"] as const
+const METRIC_RESERVED = ["signal", "metric", "unit", "value"] as const
+const TRACE_RESERVED = ["signal", "event", "traceId", "spanId", "status", "durationMs"] as const
+
+function omitReserved(
+  fields: Record<string, unknown> | undefined,
+  reserved: readonly string[],
+): Record<string, unknown> {
+  const blocked = new Set(reserved.map((field) => normalizeFieldKey(field)))
+  const out: Record<string, unknown> = {}
+  if (fields === undefined) return out
+  for (const [key, value] of Object.entries(fields)) {
+    if (blocked.has(normalizeFieldKey(key))) continue
+    out[key] = value
+  }
+  return out
+}
+
+function safeName(name: unknown): string {
+  if (typeof name !== "string") return "invalid"
   return NAME.test(name) ? name : "invalid"
 }
 
@@ -91,12 +110,11 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
   const traceOn = exporterEnabled(env, OBS_TRACE_EXPORTER_FLAG)
 
   function metric(unit: "count" | "ms", name: string, value: number, attributes?: Record<string, unknown>): void {
-    const metricName = safeName(name)
     deliver(metricsOn, options.metricsSink, () => ({
       record: {
-        ...attributes,
+        ...omitReserved(attributes, METRIC_RESERVED),
         signal: "metric",
-        metric: metricName,
+        metric: safeName(name),
         unit,
         value,
       },
@@ -106,13 +124,12 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
   return {
     log(level, event, fields) {
       const safeLevel = level === "debug" || level === "info" || level === "warn" || level === "error" ? level : "error"
-      const eventName = safeName(event)
       deliver(logOn, options.logSink, () => ({
         record: {
-          ...fields,
+          ...omitReserved(fields, LOG_RESERVED),
           signal: "log",
           level: safeLevel,
-          event: eventName,
+          event: safeName(event),
         },
       }))
     },
@@ -126,7 +143,6 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
       const started = performance.now()
       const traceId = randomUUID()
       const spanId = randomUUID()
-      const eventName = safeName(name)
       const overrides = new Map<string, unknown>()
       let exception: unknown
       let ended = false
@@ -146,8 +162,12 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
           if (ended) return
           ended = true
           deliver(traceOn, options.traceSink, () => {
-            const merged: Record<string, unknown> = { ...(attributes ?? {}) }
-            for (const [key, value] of overrides) merged[key] = value
+            const merged = omitReserved(attributes, TRACE_RESERVED)
+            const blocked = new Set(TRACE_RESERVED.map((field) => normalizeFieldKey(field)))
+            for (const [key, value] of overrides) {
+              if (blocked.has(normalizeFieldKey(key))) continue
+              merged[key] = value
+            }
             let errorName: unknown
             let errorCode: unknown
             if (exception !== undefined) {
@@ -161,7 +181,7 @@ export function createObservability(options: ObservabilityOptions = {}): Observa
               record: {
                 ...merged,
                 signal: "trace",
-                event: eventName,
+                event: safeName(name),
                 traceId,
                 spanId,
                 status: status === "error" ? "error" : "ok",

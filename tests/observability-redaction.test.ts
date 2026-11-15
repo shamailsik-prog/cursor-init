@@ -561,6 +561,92 @@ describe("Q15a fail-closed value shapes", () => {
     expect(JSON.stringify(redactForObservability(aiza))).not.toContain("AIza")
   })
 
+  it("redacts a non-uuid id with more than eight digits", () => {
+    const cnicWide = "x42101---1234567---1"
+    const cnicPairs = "c42101--1234567--1"
+    const iban = "PK36-SCBL-0000-0011-2345-6702"
+    drop("firmId", "l021-3456-7890")
+    drop("firmId", "l92-21-34567890")
+    drop("firmId", "l0092-21-34567890")
+    drop("firmId", "l051-2345678")
+    drop("matterId", iban)
+    drop("documentId", cnicWide)
+    drop("jobId", cnicPairs)
+    drop("actorId", "id-4210-1123-4567-1")
+    drop("requestId", "m0300_123_45_67")
+    drop("firmId", "ab123456789")
+    keep("firmId", "ab12345678")
+    keep("firmId", "firm_1")
+    expect(JSON.stringify(redactForObservability({ matterId: iban }))).not.toContain("SCBL")
+  })
+
+  it("keeps a 20-character Firestore auto-id under the digit cap", () => {
+    keep("firmId", "AbCdEfGhIjKlMnOpQrSt")
+    keep("matterId", "AbCdEf12345678GhJklm")
+    drop("actorId", "AbCdEf123456789GhJkl")
+    drop("firmId", "ASIA" + "IOSFODNN7EXAMPLE")
+  })
+
+  it("redacts secret prefixes at a boundary and refused segments in an id", () => {
+    drop("firmId", "xghp_" + "abcdefgh")
+    drop("firmId", "req_ghp_" + "abcdefgh")
+    drop("firmId", "req-ghp_" + "abcdefgh")
+    drop("actorId", "KEY_" + "AKIA" + "IOSFODNN7EXAMPLE")
+    drop("actorId", "X_" + "ASIA" + "IOSFODNN7EXAMPLE")
+    drop("requestId", "sess-" + "abcdefgh")
+    drop("requestId", "passwd_hunter2")
+    drop("documentId", "house-12-street-5")
+    drop("spanId", "PK36-SCBL-0000-0011-2345-6702")
+    drop("firmId", "ghs_" + "abcdefgh")
+    drop("firmId", "ghu_" + "abcdefgh")
+    drop("firmId", "npm_" + "abcdefgh")
+    drop("actorId", "sk_test_" + "abcdefgh")
+    drop("actorId", "rk_test_" + "abcdefgh")
+    drop("actorId", "pk_live_" + "abcdefgh")
+    drop("actorId", "pk_test_" + "abcdefgh")
+    drop("requestId", "xoxa-" + "abcdefgh")
+    drop("requestId", "xoxr-" + "abcdefgh")
+    drop("requestId", "xoxs-" + "abcdefgh")
+    drop("jobId", "key-" + "abcdefgh")
+    for (const segment of ["password", "passwd", "pwd", "secret", "token", "apikey", "api_key", "bearer", "authorization", "credential"]) {
+      drop("code", segment + "_hunter2")
+    }
+    keep("code", "hunter2")
+  })
+
+  it("rejects kebab-case non-id values", () => {
+    drop("code", "not-minimised")
+    drop("event", "job-done")
+    keep("code", "not_minimised")
+  })
+
+  it("keeps only a short error class ending in Error or Exception", () => {
+    const caps = new Error("boom")
+    caps.name = "TYPEERROR"
+    expect((redactForObservability(caps) as { errorName?: string }).errorName).toBe(REDACTED)
+    const plain = new Error("boom")
+    plain.name = "AyeshaKhan"
+    expect((redactForObservability(plain) as { errorName?: string }).errorName).toBe(REDACTED)
+    const long = new Error("boom")
+    long.name = "A" + "b".repeat(35) + "Error"
+    expect(long.name).toHaveLength(41)
+    expect((redactForObservability(long) as { errorName?: string }).errorName).toBe(REDACTED)
+    const ok = new Error("boom")
+    ok.name = "A" + "b".repeat(34) + "Error"
+    expect(ok.name).toHaveLength(40)
+    expect((redactForObservability(ok) as { errorName?: string }).errorName).toBe(ok.name)
+    const custom = new Error("boom")
+    custom.name = "HttpException"
+    expect((redactForObservability(custom) as { errorName?: string }).errorName).toBe("HttpException")
+  })
+
+  it("redacts a top-level bigint", () => {
+    const cnic = BigInt("42101" + "1234567" + "1")
+    expect(redactForObservability(cnic)).toBe(REDACTED)
+    expect(String(redactForObservability(cnic))).not.toContain("4210112345671")
+    expect(redactForObservability({ count: cnic, firmId: "firm_1" })).toEqual({ firmId: "firm_1" })
+  })
+
   it("folds case, separators and confusable letters in field names", () => {
     expect(redactForObservability({ Code: "not_minimised" })).toEqual({ code: "not_minimised" })
     expect(redactForObservability({ firm_id: "firm_1" })).toEqual({ firmId: "firm_1" })

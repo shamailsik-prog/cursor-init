@@ -414,6 +414,79 @@ describe("Q15a exporter flags", () => {
     expect(traces.lines[0]?.record).not.toHaveProperty("errorCode")
   })
 
+  it("does not let a folded caller key replace a reserved field", () => {
+    const logs = sinks()
+    createObservability({
+      env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+      logSink: logs.log,
+    }).log("info", "job_done", { level: "x", LEVEL: "debug", firmId: "firm_1" })
+    expect(logs.lines[0]?.record).toMatchObject({ level: "info", signal: "log", event: "job_done", firmId: "firm_1" })
+
+    const metrics = sinks()
+    createObservability({
+      env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
+      metricsSink: metrics.metrics,
+    }).counter("job_done", 0, { value: 0, VALUE: 999, firmId: "firm_1" })
+    expect(metrics.lines[0]?.record).toMatchObject({ value: 0, signal: "metric", metric: "job_done", firmId: "firm_1" })
+
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job_run", { traceId: "x", Trace_Id: "not-the-real-trace", firmId: "firm_1" })
+    span.setAttribute("STATUS", "error")
+    span.setAttribute("status", "error")
+    span.end("ok")
+    expect(traces.lines[0]?.record).toMatchObject({
+      traceId: span.traceId,
+      spanId: span.spanId,
+      status: "ok",
+      signal: "trace",
+      event: "job_run",
+      firmId: "firm_1",
+    })
+    expect(JSON.stringify(traces.lines)).not.toContain("not-the-real-trace")
+  })
+
+  it("does not read a throwing name while every exporter is off", () => {
+    const bad = {
+      toString() {
+        throw new Error("name")
+      },
+    }
+    const off = createObservability()
+    expect(() => off.log("info", bad as unknown as string)).not.toThrow()
+    expect(() => off.counter(bad as unknown as string)).not.toThrow()
+    expect(() => off.histogram(bad as unknown as string, 1)).not.toThrow()
+    const span = off.startSpan(bad as unknown as string)
+    expect(() => span.end("ok")).not.toThrow()
+
+    const logs = sinks()
+    expect(() =>
+      createObservability({
+        env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
+        logSink: logs.log,
+      }).log("info", bad as unknown as string, { firmId: "firm_1" }),
+    ).not.toThrow()
+    expect(logs.lines[0]?.record).toMatchObject({ event: "invalid", firmId: "firm_1" })
+  })
+
+  it("does not copy an identifier-sized error code onto a span", () => {
+    const cnic = "42101" + "1234567" + "1"
+    const err = new Error("boom")
+    ;(err as Error & { code: string }).code = cnic
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job_run", { firmId: "firm_1" })
+    span.recordException(err)
+    span.end("error")
+    expect(traces.lines[0]?.record).not.toHaveProperty("errorCode")
+    expect(JSON.stringify(traces.lines)).not.toContain(cnic)
+    expect(traces.lines[0]?.record).toMatchObject({ status: "error", firmId: "firm_1" })
+  })
+
   it("has no network exporter in the observability sources", () => {
     const dir = path.resolve(__dirname, "../platform/observability")
     const files = readdirSync(dir).filter((name) => name.endsWith(".ts"))
