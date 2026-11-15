@@ -98,6 +98,22 @@ function signed(payload: unknown, secret = SECRET): Request {
   })
 }
 
+function settleWithin(pending: Promise<Response>, ms: number): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("hung")), ms)
+    pending.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    )
+  })
+}
+
 function deps(store: SpineStore, transport: StubWhatsAppTransport, extra: Partial<WebhookDeps> = {}): WebhookDeps {
   return {
     store: () => store,
@@ -297,7 +313,11 @@ describe("dispatcher: eight commands through decide()", () => {
       expect(result.clients?.map((row) => row.name)).toEqual(["Alpha Client"])
     }
     if (name === "drafts") expect(result.drafts?.map((row) => row.title)).toEqual(["Plea"])
-    if (name === "hearings") expect(result.hearings?.date).toBe("2026-11-15")
+    if (name === "hearings") {
+      expect(result.text).toBe("hearings not available yet")
+      expect(result.hearings).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain('"items":[]')
+    }
     if (name === "presence") expect(result.presence).toEqual({ direction: "in", recorded: false })
     if (name === "intake") {
       expect(result.intake).toEqual({ accepted: true, persisted: false })
@@ -635,7 +655,167 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
     expect(transport.sent).toEqual([])
   })
 
-  it("a valid signed command dispatches once, the stub records the reply, and a replay does not dispatch again", async () => {
+  it("FA-Q14A-AUTH-001 ignores a body userId and returns no command output", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const store = newStore()
+    user(store, "partnerB", "partner")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "partnerB",
+      title: "FIRM-B-SECRET-TITLE",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "partnerB", "firmA")
+    const transport = new StubWhatsAppTransport()
+    let executed = 0
+    const response = await handleWhatsAppWebhook(
+      signed({ messageId: "wamid.auth", userId: "partnerB", text: "/matters" }),
+      {
+        ...deps(store, transport),
+        execute: async () => {
+          executed += 1
+          return dispatchWhatsApp(store, "partnerB", "/matters")
+        },
+      }
+    )
+    const body = await response.json()
+    expect(executed).toBe(0)
+    expect(body).toEqual({ ok: false })
+    expect(JSON.stringify(body)).not.toContain("FIRM-B-SECRET-TITLE")
+    expect(transport.sent.map((row) => row.text).join("\n")).not.toContain("FIRM-B-SECRET-TITLE")
+  })
+
+  it("FA-Q14A-DEDUPE-002 frees the slot when the store throws", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const transport = new StubWhatsAppTransport()
+    let reads = 0
+    const payload = { messageId: "wamid.store", userId: "clerk1", text: "/help" }
+    const call = () =>
+      handleWhatsAppWebhook(signed(payload), {
+        ...deps(newStore(), transport),
+        store: () => {
+          reads += 1
+          if (reads === 1) throw new Error("store down")
+          return newStore()
+        },
+      })
+    const first = await settleWithin(call(), 500)
+    const second = await settleWithin(call(), 500)
+    expect(first.status).toBe(503)
+    expect(await first.json()).toEqual({ ok: false })
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({ ok: false })
+    expect(reads).toBeGreaterThan(1)
+  })
+
+  it("FA-Q14A-DEDUPE-002 frees the slot when the transport throws", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const store = newStore()
+    user(store, "clerk1", "clerk")
+    let sends = 0
+    const transport = new StubWhatsAppTransport()
+    const original = transport.send.bind(transport)
+    transport.send = async (message) => {
+      sends += 1
+      if (sends === 1) throw new Error("send down")
+      return original(message)
+    }
+    const payload = { messageId: "wamid.send", userId: "clerk1", text: "/help" }
+    const first = await settleWithin(handleWhatsAppWebhook(signed(payload), deps(store, transport)), 500)
+    const second = await settleWithin(handleWhatsAppWebhook(signed(payload), deps(store, transport)), 500)
+    expect(first.status).toBe(503)
+    expect(await first.json()).toEqual({ ok: false })
+    expect(second.status).toBe(200)
+    expect(sends).toBeGreaterThan(1)
+  })
+
+  it("FA-Q14A-DEDUPE-002 bounds a stalled dispatch and frees the slot", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const store = newStore()
+      user(store, "clerk1", "clerk")
+      const transport = new StubWhatsAppTransport()
+      const original = transport.send.bind(transport)
+      let hang = true
+      transport.send = (message) => (hang ? new Promise(() => {}) : original(message))
+      const payload = { messageId: "wamid.stall", userId: "clerk1", text: "/matters" }
+      const pending = handleWhatsAppWebhook(signed(payload), deps(store, transport))
+      const duplicate = handleWhatsAppWebhook(signed(payload), deps(store, transport))
+      await vi.advanceTimersByTimeAsync(5_000)
+      const outcome = await new Promise<string>((resolve) => {
+        realSetTimeout(() => {
+          let settled = 0
+          const mark = () => {
+            settled += 1
+          }
+          pending.then(mark, mark)
+          duplicate.then(mark, mark)
+          realSetTimeout(() => resolve(settled === 2 ? "settled" : "hung"), 30)
+        }, 20)
+      })
+      expect(outcome).toBe("settled")
+      hang = false
+      const retry = await handleWhatsAppWebhook(signed(payload), deps(store, transport))
+      expect(retry.status).toBe(200)
+      expect(await retry.json()).toEqual({ ok: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("FA-Q14A-SIG-005 rejects an oversized body before the signature and a whitespace secret", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const transport = new StubWhatsAppTransport()
+    const huge = "x".repeat(9000)
+    const raw = JSON.stringify({ messageId: "wamid.huge", userId: "clerk1", text: huge })
+    const oversized = new Request("http://127.0.0.1/api/d2/whatsapp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(raw)),
+        "X-Hub-Signature-256": sign(SECRET, raw),
+      },
+      body: raw,
+    })
+    const tooBig = await handleWhatsAppWebhook(oversized, deps(newStore(), transport))
+    expect(tooBig.status).toBe(413)
+    expect(transport.sent).toEqual([])
+    const blank = await handleWhatsAppWebhook(signed({ messageId: "wamid.ws", userId: "clerk1", text: "/help" }), {
+      ...deps(newStore(), transport),
+      secret: () => "   ",
+    })
+    expect(blank.status).toBe(401)
+  })
+
+  it("FA-Q14A-DEDUPE-004 keys a replay on the payload and expires it", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const store = newStore()
+    const transport = new StubWhatsAppTransport()
+    const payload = { messageId: "wamid.ttl", userId: "clerk1", text: "/help" }
+    const first = await handleWhatsAppWebhook(signed(payload), { ...deps(store, transport), now: NOW })
+    expect(await first.json()).toEqual({ ok: false })
+    const other = await handleWhatsAppWebhook(
+      signed({ messageId: "wamid.ttl", userId: "partnerB", text: "/matters" }),
+      { ...deps(store, transport), now: NOW }
+    )
+    expect(transport.sent).toHaveLength(2)
+    expect(await other.json()).toEqual({ ok: false })
+    const replay = await handleWhatsAppWebhook(signed(payload), { ...deps(store, transport), now: NOW })
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ ok: false })
+    expect(transport.sent).toHaveLength(2)
+    const later = await handleWhatsAppWebhook(signed(payload), {
+      ...deps(store, transport),
+      now: NOW + 24 * 60 * 60 * 1000,
+    })
+    expect(later.status).toBe(200)
+    expect(transport.sent.length).toBeGreaterThan(2)
+  })
+
+  it("a signed command does not dispatch, the stub records not linked, and the same bytes replay once", async () => {
     vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
     const store = newStore()
     user(store, "clerk1", "clerk")
@@ -645,121 +825,94 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
     const payload = { messageId: "wamid.1", userId: "clerk1", text: "/help" }
     const first = await handleWhatsAppWebhook(signed(payload), {
       ...deps(store, transport),
-      execute: async (current, userId, text) => {
+      execute: async () => {
         executed += 1
-        return dispatchWhatsApp(current, userId, text, { now: NOW })
+        throw new Error("body identity must not dispatch")
       },
     })
     expect(first.status).toBe(200)
-    const body = (await first.json()) as { ok: boolean; transport: string }
-    expect(body.ok).toBe(true)
-    expect(body.transport).toBe("stub")
-    expect(executed).toBe(1)
+    expect(await first.json()).toEqual({ ok: false })
+    expect(executed).toBe(0)
     expect(transport.sent).toHaveLength(1)
+    expect(transport.sent[0]?.text).toBe("not linked")
     expect(transport.sent[0]?.delivered).toBe(false)
-    const replay = await handleWhatsAppWebhook(
-      signed({ messageId: "wamid.1", userId: "clerk1", text: "/matters" }),
-      {
-        ...deps(store, transport),
-        execute: async () => {
-          executed += 1
-          throw new Error("replay must not execute")
-        },
-      }
-    )
+    const replay = await handleWhatsAppWebhook(signed(payload), deps(store, transport))
     expect(replay.status).toBe(200)
-    expect(await replay.json()).toEqual(body)
-    expect(executed).toBe(1)
+    expect(await replay.json()).toEqual({ ok: false })
     expect(transport.sent).toHaveLength(1)
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()
   })
 
-  it("does not send or cache a result when the permission audit cannot be persisted", async () => {
+  it("does not persist a permission audit or return command output when no phone is linked", async () => {
     vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
     const store = newStore()
     user(store, "clerk1", "clerk")
     const transport = new StubWhatsAppTransport()
-    let executed = 0
-    const payload = { messageId: "wamid.audit", userId: "clerk1", text: "/help" }
-    const refused = await handleWhatsAppWebhook(signed(payload), {
+    let audited = 0
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.audit", userId: "clerk1", text: "/help" }), {
       ...deps(store, transport),
       persistAudit: async () => {
+        audited += 1
         throw new Error("audit store down")
       },
-      execute: async (current, userId, text) => {
-        executed += 1
-        return dispatchWhatsApp(current, userId, text, { now: NOW })
-      },
     })
-    expect(refused.status).toBe(503)
-    expect(await refused.json()).toEqual({ error: "audit_unavailable" })
-    expect(transport.sent).toEqual([])
-    const retried = await handleWhatsAppWebhook(signed(payload), {
-      ...deps(store, transport),
-      execute: async (current, userId, text) => {
-        executed += 1
-        return dispatchWhatsApp(current, userId, text, { now: NOW })
-      },
-    })
-    expect(retried.status).toBe(200)
-    expect(executed).toBe(2)
-    expect(transport.sent).toHaveLength(1)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: false })
+    expect(audited).toBe(0)
+    expect(transport.sent.map((row) => row.text)).toEqual(["not linked"])
   })
 
-  it("overlapping deliveries of one message id dispatch and send once", async () => {
+  it("overlapping deliveries of the same bytes send the unbound reply once", async () => {
     vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
     const store = newStore()
-    user(store, "clerk1", "clerk")
     const transport = new StubWhatsAppTransport()
     let executed = 0
-    let release!: () => void
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let entered!: () => void
-    const started = new Promise<void>((resolve) => {
-      entered = resolve
-    })
     const payload = { messageId: "wamid.race", userId: "clerk1", text: "/help" }
     const call = () =>
       handleWhatsAppWebhook(signed(payload), {
         ...deps(store, transport),
-        execute: async (current, userId, text) => {
+        execute: async () => {
           executed += 1
-          entered()
-          await gate
-          return dispatchWhatsApp(current, userId, text, { now: NOW })
+          throw new Error("body identity must not dispatch")
         },
       })
-    const first = call()
-    await started
-    const second = call()
-    release()
-    const [left, right] = await Promise.all([first, second])
+    const [left, right] = await Promise.all([call(), call()])
+    const leftBody = await left.json()
+    const rightBody = await right.json()
     expect(left.status).toBe(200)
     expect(right.status).toBe(200)
-    expect(await right.json()).toEqual(await left.json())
-    expect(executed).toBe(1)
+    expect(rightBody).toEqual(leftBody)
+    expect(leftBody).toEqual({ ok: false })
+    expect(executed).toBe(0)
     expect(transport.sent).toHaveLength(1)
   })
 
-  it("the route persists the permission audit before it returns a result", async () => {
+  it("the route returns only ok and does not leak a permission decision", async () => {
     vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
     vi.stubEnv("WHATSAPP_APP_SECRET", SECRET)
     resetRuntimeStoreForTests()
     const store = getRuntimeStore()
     user(store, "clerk1", "clerk")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "clerk1",
+      title: "ROUTE-SECRET-TITLE",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "clerk1", "firmA")
     const seen: string[] = []
     setRequestAuditSinkForTests(async (rows) => {
-      expect(webhookStub.sent).toHaveLength(0)
       seen.push(...rows.map((row) => row.action))
     })
     try {
-      const response = await whatsAppPost(signed({ messageId: "wamid.route", userId: "clerk1", text: "/help" }))
+      const response = await whatsAppPost(signed({ messageId: "wamid.route", userId: "clerk1", text: "/matters" }))
       expect(response.status).toBe(200)
-      expect(seen).toContain("permission_check")
-      expect(webhookStub.sent).toHaveLength(1)
+      expect(await response.json()).toEqual({ ok: false })
+      expect(seen).not.toContain("permission_check")
+      expect(JSON.stringify(webhookStub.sent)).not.toContain("ROUTE-SECRET-TITLE")
+      expect(webhookStub.sent.map((row) => row.text)).toEqual(["not linked"])
     } finally {
       setRequestAuditSinkForTests(null)
       resetRuntimeStoreForTests()

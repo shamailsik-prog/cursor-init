@@ -4,7 +4,6 @@ import { rankOf, rankOfStoredOrMax, type SpineStore } from "@/platform/spine/sto
 import {
   INCLUDED_WHATSAPP_COMMANDS,
   commandUsage,
-  parseHearingDate,
   parseWhatsAppMessage,
   type IncludedCommand,
 } from "./grammar"
@@ -21,8 +20,9 @@ import {
  * - research: the action already passed to checkPermission for /research
  *
  * hearings, intake and help have no web decide() call. They reuse list_matters
- * so a client can see own hearings (L8.1), start intake, and read help, and an
- * accounts user stays denied. presence has no web decide() call; it reuses
+ * so a client may ask and an accounts user stays denied. Hearings do not read
+ * D6-1 in this slice, so the reply says the list is not available yet.
+ * presence has no web decide() call; it reuses
  * client.read so a client is denied and staff, including an intern, are not.
  * Adding a new action string would be a separate allow path.
  */
@@ -185,13 +185,11 @@ export async function dispatchWhatsApp(
   }
 
   if (parsed.name === "hearings") {
-    const date = parseHearingDate(parsed.args, now) ?? new Date(now).toISOString().slice(0, 10)
     return {
       ok: true,
       command: parsed.name,
       permission,
-      hearings: { date, items: [] },
-      text: `hearings ${date}`,
+      text: "hearings not available yet",
     }
   }
 

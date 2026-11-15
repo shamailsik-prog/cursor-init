@@ -1,24 +1,33 @@
-import { createHmac, timingSafeEqual } from "node:crypto"
-import { runWithRequestAudit } from "@/platform/audit/requestAudit"
-import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
+import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import type { AuditEntry, SpineStore } from "@/platform/spine/store"
-import { dispatchWhatsApp, resetD2WhatsAppThreadsForTests, type WhatsAppDispatch } from "./dispatch"
+import { resetD2WhatsAppThreadsForTests, type WhatsAppDispatch } from "./dispatch"
 import { D2_WHATSAPP_GRAMMAR_FLAG, isD2WhatsAppGrammarEnabled } from "./grammar"
 import { webhookStub, type WhatsAppTransport } from "./transport"
 
 /**
  * Inbound WhatsApp webhook. The secret is read from the env name
  * WHATSAPP_APP_SECRET only. Callers pass that value in; this module does not
- * log it. Message ids are the dedupe key. The transport is the stub.
+ * log it. There is no phone-to-user binding, so a signed body is never an
+ * identity: every command fail-closes with "not linked" and the HTTP body is
+ * only { ok }. Dedupe is the unbound sender plus a hash of the raw bytes.
+ * The transport is the stub.
  */
 
 const SIGNATURE_HEADER = "X-Hub-Signature-256"
 const DEDUPE_LIMIT = 1000
+const IN_FLIGHT = 0
 
-type Cached = { status: number; body: unknown }
+export const WHATSAPP_BODY_CAP_BYTES = 8192
+export const WHATSAPP_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000
+export const WHATSAPP_PROCESSING_TIMEOUT_MS = 5_000
+export const WHATSAPP_NOT_LINKED_TEXT = "not linked"
+
+type Cached = { status: number; body: { ok: false } }
 
 type Slot = {
   promise: Promise<Cached>
+  /** 0 while the delivery is in flight. A positive value is the expiry. */
+  expiresAt: number
 }
 
 const seen = new Map<string, Slot>()
@@ -38,8 +47,9 @@ export type WebhookDeps = {
   now?: number
   requireIdempotencyKey?: (request: Request) => string
   readResearch?: (query: string) => Promise<{ title: string }[]>
+  /** Ignored. Identity is not taken from the body, so nothing is dispatched. */
   execute?: (store: SpineStore, userId: string, text: string) => Promise<WhatsAppDispatch>
-  /** Persists the request's permission-audit rows. Defaults to flushRequestAudit. */
+  /** Ignored. No permission decision is made until a phone is linked. */
   persistAudit?: (rows: readonly AuditEntry[]) => Promise<void>
 }
 
@@ -50,7 +60,11 @@ function json(status: number, body: unknown): Response {
   })
 }
 
-function signaturesMatch(secret: string, raw: string, header: string | null): boolean {
+function secretUsable(secret: string | undefined): secret is string {
+  return typeof secret === "string" && secret.length > 0 && secret === secret.trim()
+}
+
+function signaturesMatch(secret: string, raw: Buffer, header: string | null): boolean {
   if (!header) return false
   const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`
   const left = Buffer.from(expected)
@@ -59,14 +73,84 @@ function signaturesMatch(secret: string, raw: string, header: string | null): bo
   return timingSafeEqual(left, right)
 }
 
-function isToken(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value)
+function payloadKey(raw: Buffer): string {
+  return `unbound\0${createHash("sha256").update(raw).digest("hex")}`
 }
 
-function statusOf(result: WhatsAppDispatch): number {
-  if (result.ok) return 200
-  if (result.denied) return 403
-  return 400
+function withTimeout<T>(pending: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("whatsapp_timeout")), ms)
+    pending.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    )
+  })
+}
+
+function drop(key: string): void {
+  seen.delete(key)
+  const at = settled.indexOf(key)
+  if (at >= 0) settled.splice(at, 1)
+}
+
+function keepSettled(key: string): void {
+  settled.push(key)
+  while (settled.length > DEDUPE_LIMIT) {
+    const oldest = settled.shift()
+    if (oldest) seen.delete(oldest)
+  }
+}
+
+function reserve(key: string, now: number): { wait: Promise<Cached> } | { settle: (cached: Cached, retain: boolean) => void } {
+  const existing = seen.get(key)
+  if (existing && existing.expiresAt !== IN_FLIGHT && existing.expiresAt <= now) drop(key)
+  const current = seen.get(key)
+  if (current) return { wait: current.promise }
+
+  let settle!: (cached: Cached, retain: boolean) => void
+  let once = false
+  const promise = new Promise<Cached>((resolve) => {
+    settle = (cached, retain) => {
+      if (once) return
+      once = true
+      if (retain) {
+        const slot = seen.get(key)
+        if (slot) slot.expiresAt = now + WHATSAPP_DEDUPE_TTL_MS
+        keepSettled(key)
+      } else {
+        drop(key)
+      }
+      resolve(cached)
+    }
+  })
+  seen.set(key, { promise, expiresAt: IN_FLIGHT })
+  return { settle }
+}
+
+/** Touch the store, then refuse. The body is not parsed for a user id. */
+async function acknowledgeUnbound(deps: WebhookDeps): Promise<Cached> {
+  deps.store()
+  await deps.transport.send({ toUserId: "unbound", text: WHATSAPP_NOT_LINKED_TEXT })
+  return { status: 200, body: { ok: false } }
+}
+
+async function readCapped(request: Request): Promise<Buffer | Response> {
+  const declared = request.headers.get("content-length")
+  if (declared !== null) {
+    const size = Number(declared)
+    if (!Number.isFinite(size) || size < 0 || size > WHATSAPP_BODY_CAP_BYTES) {
+      return json(413, { error: "payload_too_large" })
+    }
+  }
+  const raw = Buffer.from(await request.arrayBuffer())
+  if (raw.byteLength > WHATSAPP_BODY_CAP_BYTES) return json(413, { error: "payload_too_large" })
+  return raw
 }
 
 export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps): Promise<Response> {
@@ -75,10 +159,11 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
   }
 
   const secret = deps.secret()
-  if (!secret) return json(401, { error: "webhook_not_configured" })
+  if (!secretUsable(secret)) return json(401, { error: "webhook_not_configured" })
 
-  const raw = await request.text()
-  if (!signaturesMatch(secret, raw, request.headers.get(SIGNATURE_HEADER))) {
+  const capped = await readCapped(request)
+  if (capped instanceof Response) return capped
+  if (!signaturesMatch(secret, capped, request.headers.get(SIGNATURE_HEADER))) {
     return json(401, { error: "bad_signature" })
   }
 
@@ -90,79 +175,25 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
     }
   }
 
-  let payload: unknown
-  try {
-    payload = JSON.parse(raw) as unknown
-  } catch {
-    return json(400, { error: "invalid_json" })
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return json(400, { error: "invalid_message" })
-  }
-  const record = payload as Record<string, unknown>
-  const messageId = record.messageId
-  const userId = record.userId
-  const text = record.text
-  if (!isToken(messageId) || !isToken(userId) || typeof text !== "string" || text.length === 0 || text.length > 2000) {
-    return json(400, { error: "invalid_message" })
-  }
-
-  const existing = seen.get(messageId)
-  if (existing) {
-    const cached = await existing.promise
-    return json(cached.status, cached.body)
-  }
-
-  let finish!: (cached: Cached, retain: boolean) => void
-  const promise = new Promise<Cached>((resolve) => {
-    finish = (cached, retain) => {
-      if (!retain) seen.delete(messageId)
-      else keepSettled(messageId)
-      resolve(cached)
+  const now = deps.now ?? Date.now()
+  const key = payloadKey(capped)
+  const reserved = reserve(key, now)
+  if ("wait" in reserved) {
+    try {
+      const cached = await withTimeout(reserved.wait, WHATSAPP_PROCESSING_TIMEOUT_MS)
+      return json(cached.status, cached.body)
+    } catch {
+      return json(503, { ok: false })
     }
-  })
-  seen.set(messageId, { promise })
-
-  const store = deps.store()
-  const outcome = await runWithRequestAudit(() =>
-    deps.execute
-      ? deps.execute(store, userId, text)
-      : dispatchWhatsApp(store, userId, text, { now: deps.now, readResearch: deps.readResearch })
-  )
-  if ("error" in outcome) {
-    const failed = { status: 500, body: { error: "webhook_failed" } }
-    finish(failed, false)
-    return json(failed.status, failed.body)
   }
 
   try {
-    await (deps.persistAudit ?? flushRequestAudit)(outcome.rows)
+    const cached = await withTimeout(acknowledgeUnbound(deps), WHATSAPP_PROCESSING_TIMEOUT_MS)
+    reserved.settle(cached, true)
+    return json(cached.status, cached.body)
   } catch {
-    const unavailable = { status: 503, body: { error: "audit_unavailable" } }
-    finish(unavailable, false)
-    return json(unavailable.status, unavailable.body)
-  }
-
-  const result = outcome.value
-  const sent = await deps.transport.send({ toUserId: userId, text: result.text })
-  const body = {
-    ok: result.ok,
-    denied: result.denied === true,
-    error: result.error,
-    command: result.command,
-    result,
-    transport: sent.transport,
-  }
-  const status = statusOf(result)
-  const cached = { status, body }
-  finish(cached, true)
-  return json(status, body)
-}
-
-function keepSettled(messageId: string): void {
-  settled.push(messageId)
-  while (settled.length > DEDUPE_LIMIT) {
-    const oldest = settled.shift()
-    if (oldest) seen.delete(oldest)
+    const failed: Cached = { status: 503, body: { ok: false } }
+    reserved.settle(failed, false)
+    return json(failed.status, failed.body)
   }
 }
