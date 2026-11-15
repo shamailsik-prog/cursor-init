@@ -262,6 +262,7 @@ const CORE_CALLS: CoreCall[] = [
     init: () => ({ body: { action: "whatsapp_command", command: "/matters" } }),
     expect: 200,
   },
+  { route: "d2/whatsapp", method: "POST", init: () => ({ body: {} }), expect: 403 },
   { route: "d4/drafts", method: "GET", init: ({ matterId }) => ({ query: { matterId, ...page } }), expect: 200 },
   {
     route: "d4/drafts",

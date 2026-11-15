@@ -1,9 +1,9 @@
 {
   "base": "bb8fcc3f02b0fc0a6bcc1c705bcbc270ad3c7961",
-  "inventoryCount": 279,
+  "inventoryCount": 280,
   "uniqueLiveActionCount": 50,
   "literalCount": 261,
-  "parameterCount": 18,
+  "parameterCount": 19,
   "genericActions": [
     "research",
     "draft",
@@ -3082,6 +3082,20 @@
         "committee_brain"
       ],
       "note": "resolveCommitteeScope calls canAccessMatter with no action argument, so the default \"committee_brain\" is what reaches checkPermission."
+    },
+    {
+      "file": "services/d2-1/dispatch.ts",
+      "line": 73,
+      "via": "checkPermission",
+      "binding": "parameter",
+      "action": null,
+      "actions": [
+        "client.read",
+        "draft",
+        "list_matters",
+        "research"
+      ],
+      "note": "permitWhatsApp forwards `action` to checkPermission. The values are WHATSAPP_WEB_ACTION: matters, hearings, intake and help use list_matters; clients and presence use client.read; drafts uses draft (the per-draft call passes the literal \"draft\"); research uses research."
     },
     {
       "file": "services/d2-1/whatsapp.ts",
