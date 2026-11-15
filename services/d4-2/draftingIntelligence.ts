@@ -132,6 +132,9 @@ export function seedSection(
     effectiveFrom: string
     effectiveTo: string | null
     text: string
+    jurisdiction?: string
+    reviewStatus?: "VERIFIED" | "UNVERIFIED" | "QUARANTINED"
+    versionConfidence?: number | null
   }[]
 ) {
   for (const v of versions) {

@@ -20,9 +20,20 @@ vi.mock("firebase-admin/auth", () => ({
 // 401 means the handler is reachable without authentication. The regex checks
 // below are a secondary lint.
 // Every exported HTTP handler under app/api must go through withSession, and
-// only the reviewed allow-list may opt out of authentication.
+// only the reviewed allow-list may opt out of a Firebase session.
+// The health route is public through withSession({ public: true }).
+// The WhatsApp webhook POST has no Firebase session: Meta signs the raw body
+// (X-Hub-Signature-256, services/d2-1/webhook.ts). FA-Q14A-GUARD-007: any other
+// exported method on that file still goes through withSession. With the grammar
+// flag off, POST refuses before any read. POST must not be wrapped in withSession.
 const PUBLIC_ROUTES = new Set(["app/api/g0/monitor/route.ts"])
+const HMAC_WEBHOOKS = new Set(["app/api/d2/whatsapp/route.ts"])
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+/** FA-Q14A-GUARD-007: only POST on the HMAC webhook skips the Firebase session. */
+export function hmacWebhookExempt(file: string, method: string): boolean {
+  return HMAC_WEBHOOKS.has(file) && method === "POST"
+}
 
 function routeFiles(dir: string): string[] {
   const out: string[] = []
@@ -42,6 +53,12 @@ describe("app/api route authentication coverage", () => {
     expect(files.length).toBeGreaterThan(0)
   })
 
+  it("FA-Q14A-GUARD-007 exempts only POST on the WhatsApp webhook file", () => {
+    expect(hmacWebhookExempt("app/api/d2/whatsapp/route.ts", "POST")).toBe(true)
+    expect(hmacWebhookExempt("app/api/d2/whatsapp/route.ts", "GET")).toBe(false)
+    expect(hmacWebhookExempt("app/api/d1/clients/route.ts", "POST")).toBe(false)
+  })
+
   for (const file of files) {
     it(`${file} wraps every exported handler with withSession`, () => {
       const source = readFileSync(path.join(root, file), "utf8")
@@ -50,6 +67,11 @@ describe("app/api route authentication coverage", () => {
           `export\\s+(?:async\\s+)?(?:function\\s+${method}\\b|const\\s+${method}\\b)`
         ).test(source)
         if (!exported) continue
+        if (hmacWebhookExempt(file, method)) {
+          expect(source.includes("withSession"), `${file} authenticates by HMAC, not a session`).toBe(false)
+          expect(source).toContain("handleWhatsAppWebhook")
+          continue
+        }
         const wrapped = new RegExp(
           `export\\s+async\\s+function\\s+${method}\\(request: Request\\)\\s*\\{\\s*return withSession\\(request, handle\\w+(?:, [^)]+)?\\)\\s*\\}`
         ).test(source)
@@ -90,7 +112,7 @@ describe("app/api routes reject unauthenticated calls (behavioural)", () => {
           body: hasBody ? JSON.stringify({ actorId: "partner_a", firmId: "firmA", action: "create" }) : undefined,
         })
         const res = await handler(req)
-        if (PUBLIC_ROUTES.has(file)) {
+        if (PUBLIC_ROUTES.has(file) || hmacWebhookExempt(file, method)) {
           expect(res.status, `${file} ${method}`).not.toBe(401)
         } else {
           expect(res.status, `${file} ${method}`).toBe(401)
