@@ -18,6 +18,7 @@ import {
   type CourtCalendar,
   type LimitationVersion,
 } from "@/services/d4-2/limitation"
+import { addUnit } from "@/services/d4-2/limitationDates"
 import { coveringVersion, type SectionVersionRow } from "@/services/d4-2/sectionInForce"
 import { AuthorityUnavailableError } from "@/functions/src/d4/authorityErrors"
 import { coveringVersion as corpusCoveringVersion } from "@/functions/src/d4/corpusAuthorityStore"
@@ -83,6 +84,13 @@ function article(
 
 function base(period = "three years", extra = ""): LimitationVersion[] {
   return [article(period, "1908-01-01", null, 1, extra), version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1)]
+}
+
+function provision(text: string): LimitationVersion[] {
+  return [
+    version("limitation-act-1908/article/7", text, "1908-01-01", null, 1),
+    version("limitation-act-1908/section/4", SECTION_4, "1908-01-01", null, 1),
+  ]
 }
 
 function assessed(
@@ -395,7 +403,7 @@ describe("Q11 checkLimitation", () => {
     for (const period of ["three years or more", "at least three years", "twice three years", "five years or more", "at least 5 years"]) {
       expect(assessed("2020-01-01", base(period)), period).toMatchObject({
         status: "NOT_ASSESSED",
-        reason: "period_unreadable",
+        reason: "period_ambiguous",
         deadline: null,
       })
     }
@@ -607,6 +615,151 @@ describe("Q11 checkLimitation", () => {
       reason: "court_closed_unresolved",
       deadline: null,
     })
+  })
+
+  it("FA-Q11-PARSE-009 reads a full sentence when the word does not bound the period", () => {
+    const decree = `Within one year from the date of the decree. ${RECKONING}`
+    const decreeResult = assessed("2020-01-01", provision(decree))
+    expect(decreeResult, "within").toMatchObject({
+      status: "ASSESSED",
+      deadline: "2021-01-01",
+      governing: { periodCited: "one year" },
+    })
+    const withinWhich = `The period of limitation is three years within which a suit shall be instituted. ${RECKONING}`
+    expect(assessed("2020-01-01", provision(withinWhich)), "within which").toMatchObject({
+      status: "ASSESSED",
+      deadline: "2023-01-01",
+      governing: { periodCited: "three years" },
+    })
+    const aside: Array<{ word: string; sentence: string }> = [
+      { word: "within", sentence: "The objection was taken within the grounds." },
+      { word: "under", sentence: "The plaint was filed under the decree." },
+      { word: "over", sentence: "The court read over the record." },
+      { word: "some", sentence: "The plaint seeks some relief." },
+      { word: "another", sentence: "The plaintiff filed another suit." },
+      { word: "several", sentence: "The plaint raises several grounds." },
+      { word: "about", sentence: "The order is about costs." },
+      { word: "not less than", sentence: "The debt is not less than the claim." },
+      { word: "or less", sentence: "The costs are nominal or less material." },
+      { word: "not exceeding", sentence: "The narrative is not exceeding the record." },
+      { word: "upto", sentence: "The note says upto the annexure." },
+      { word: "up to", sentence: "The note runs up to the annexure." },
+      { word: "maximum of", sentence: "State the maximum of the claim." },
+      { word: "minimum of", sentence: "State the minimum of the claim." },
+      { word: "at least", sentence: "Serve at least the defendant." },
+      { word: "thrice", sentence: "The witness repeated the date thrice." },
+      { word: "and upwards", sentence: "The column is marked and upwards." },
+      { word: "or more", sentence: "The plaint adds interest or more detail." },
+      { word: "not more than", sentence: "The fee is not more than the schedule." },
+      { word: "less than", sentence: "The delay was less than expected." },
+      { word: "more than", sentence: "The delay was more than expected." },
+      { word: "at most", sentence: "Allow at most a hearing." },
+      { word: "approximately", sentence: "The note says approximately the same thing." },
+      { word: "twice", sentence: "The clerk checked the annexure twice." },
+      { word: "or above", sentence: "The rank is counsel or above." },
+      { word: "no less than", sentence: "The duty is no less than the oath." },
+      { word: "no more than", sentence: "The duty is no more than the oath." },
+    ]
+    for (const row of aside) {
+      expect(assessed("2020-01-01", base("three years", row.sentence)), row.word).toMatchObject({
+        status: "ASSESSED",
+        deadline: "2023-01-01",
+        governing: { periodCited: "three years" },
+      })
+    }
+  })
+
+  it("FA-Q11-PARSE-009 refuses a full sentence when a bound touches the period", () => {
+    const bounds = [
+      "not within three years",
+      "under three years",
+      "over three years",
+      "some three years",
+      "another three years",
+      "several three years",
+      "about three years",
+      "not less than three years",
+      "three years or less",
+      "not exceeding three years",
+      "upto three years",
+      "up to three years",
+      "maximum of three years",
+      "minimum of three years",
+      "at least three years",
+      "thrice three years",
+      "three years and upwards",
+      "three years or more",
+      "not more than three years",
+      "less than three years",
+      "more than three years",
+      "at most three years",
+      "approximately three years",
+      "twice three years",
+      "three years or above",
+      "no less than three years",
+      "no more than three years",
+      "three years and above",
+      "above three years",
+      "below three years",
+    ]
+    for (const period of bounds) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_ambiguous",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-TEST-R5-001 rejects half, 6mos, and vi months inside the reckoning span", () => {
+    for (const poison of ["half", "6mos", "vi months"]) {
+      const reckoning = `In computing the period of limitation the day from which ${poison} is to be reckoned shall be excluded.`
+      const text = `LIMITATION FIXTURE. The period of limitation is three years. ${reckoning}`
+      expect(assessed("2020-01-01", provision(text)), poison).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-ROBUST-001 caps the span and returns NOT_ASSESSED when the date would overflow", () => {
+    expect(assessed("2020-01-01", base("100 years"))).toMatchObject({ status: "ASSESSED", deadline: "2120-01-01" })
+    expect(assessed("2020-01-01", base("101 years"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("1200 months"))).toMatchObject({ status: "ASSESSED", deadline: "2120-01-01" })
+    expect(assessed("2020-01-01", base("1201 months"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    for (const period of ["7979 years", "7980 years", "9999 years"]) {
+      expect(() => assessed("2020-01-01", base(period)), period).not.toThrow()
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    expect(() => addUnit("2020-01-01", 7979, "year", false)).not.toThrow()
+    expect(addUnit("2020-01-01", 7979, "year", false)).toBe("9999-01-01")
+    expect(() => addUnit("2020-01-01", 7980, "year", false)).not.toThrow()
+    expect(addUnit("2020-01-01", 7980, "year", false)).toBeNull()
+    expect(() => addUnit("2020-01-01", 9999, "year", false)).not.toThrow()
+    expect(addUnit("2020-01-01", 9999, "year", false)).toBeNull()
+  })
+
+  it("INFO a spaced dash, dot, or tilde before a number is not a period", () => {
+    for (const period of ["- 5 years", ". 5 years", "~ 5 years"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
   })
 })
 

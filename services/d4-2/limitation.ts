@@ -207,7 +207,14 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (!reckoning.ok) return notAssessed(reckoning.reason)
 
   const clamp = MONTH_END_RE.test(article.row.text)
-  let deadline = addUnit(accrualDate, period.n, period.unit, clamp)
+  if (calendarOverflow(accrualDate, period.n, period.unit)) return notAssessed("period_unreadable")
+  let deadline: string | null
+  try {
+    deadline = addUnit(accrualDate, period.n, period.unit, clamp)
+  } catch {
+    return notAssessed("period_unreadable")
+  }
+  if (deadline && !isCalendarDate(deadline)) return notAssessed("period_unreadable")
   if (!deadline) return notAssessed("anniversary_does_not_exist")
 
   const exclusions: ExclusionApplied[] = [
@@ -240,6 +247,14 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (!closed.ok) return notAssessed(closed.reason)
   if (closed.exclusion) exclusions.push(closed.exclusion)
 
+  let alerts: LimitationAlert[]
+  try {
+    alerts = limitationAlertSchedule(closed.deadline)
+  } catch {
+    return notAssessed("period_unreadable")
+  }
+  if (alerts.some((row) => !isCalendarDate(row.dueOn))) return notAssessed("period_unreadable")
+
   return {
     status: "ASSESSED",
     reason: null,
@@ -256,7 +271,7 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
       periodCited: period.cited,
     },
     exclusionsApplied: exclusions,
-    alerts: limitationAlertSchedule(closed.deadline),
+    alerts,
     courtClosed: closed.finding,
   }
 }
@@ -403,7 +418,76 @@ const QUANTITY_ARTICLE_RE = new RegExp(
 /** N11: fortnights? has to stay. Dropping it lets "three years or fortnights" assess. */
 const UNIT_WORD_RE = /\b(fortnights?|weeks?|months?|years?|hours?|days?|mos|mths|yrs|wks|hrs|mo|yr|wk|hr)\b/gi
 const FILLER_JOIN_RE = /\d(?:\p{Cf}|[\u034F\u3164\u2800])+\d|[A-Za-z](?:\p{Cf}|[\u034F\u3164\u2800])+[A-Za-z]/u
-const QUALIFIER_RE = /\b(?:more|least|twice|about|approximately|within|over|under|some|another|several)\b/i
+/**
+ * Engine ceiling, not a Limitation Act article. 81 years and 9999 days still assess.
+ * A longer span is not read as a period: it cannot be a four-digit deadline.
+ */
+const SPAN_LIMIT_YEARS = 100
+/** Words that change the length, only when they touch the number and its unit. "within" does not: "within one year" is one year. */
+const BOUND_BEFORE = [
+  "not less than",
+  "not more than",
+  "no less than",
+  "no more than",
+  "not exceeding",
+  "not within",
+  "not above",
+  "not below",
+  "less than",
+  "more than",
+  "at the maximum",
+  "at the minimum",
+  "at the least",
+  "at the most",
+  "maximum of",
+  "minimum of",
+  "at least",
+  "at most",
+  "up to",
+  "upto",
+  "approximately",
+  "not",
+  "about",
+  "above",
+  "below",
+  "under",
+  "over",
+  "another",
+  "several",
+  "some",
+  "twice",
+  "thrice",
+  "exceeding",
+  "around",
+  "roughly",
+  "nearly",
+  "almost",
+  "circa",
+  "least",
+  "plus",
+  "minus",
+]
+const BOUND_AFTER = [
+  "and upwards",
+  "or upwards",
+  "and upward",
+  "or upward",
+  "or more",
+  "or less",
+  "and more",
+  "and less",
+  "or above",
+  "or below",
+  "and above",
+  "and below",
+  "or over",
+  "and over",
+  "or longer",
+  "or shorter",
+  "at least",
+  "at most",
+  "or so",
+]
 
 type NumberToken = { start: number; end: number; value: number | null; raw: string }
 
@@ -412,7 +496,8 @@ type NumberToken = { start: number; end: number; value: number | null; raw: stri
  * exactly one day, month, or year. Superscripts and subscripts are not digits.
  * The reckoning and month-end provisos are removed only when they are the
  * canonical sentences; a number or an extra unit inside either span is unreadable.
- * A qualifier such as "or more", "at least", or "twice" is unreadable.
+ * A range or bound is period_ambiguous only when it touches that quantity.
+ * "within one year" stays one year. A count above the engine ceiling is unreadable.
  */
 function parsePeriod(
   text: string
@@ -420,7 +505,6 @@ function parsePeriod(
   if (/\p{No}/u.test(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
   const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
-  if (QUALIFIER_RE.test(normalized)) return { ok: false, reason: "period_unreadable" }
   if (provisoUnsafe(normalized, RECKONING_RE, ["day"])) return { ok: false, reason: "period_unreadable" }
   if (provisoUnsafe(normalized, MONTH_END_RE, ["day", "month"])) return { ok: false, reason: "period_unreadable" }
   const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/\s+/gu, " ")
@@ -431,15 +515,91 @@ function parsePeriod(
   const number = numbers[0]
   const unitMatch = units[0]
   if (!number || unitMatch.index === undefined) return { ok: false, reason: "period_unreadable" }
+  const unitEnd = unitMatch.index + (unitMatch[0]?.length ?? 0)
   if (scan.slice(number.end, unitMatch.index) !== " ") return { ok: false, reason: "period_unreadable" }
-  if (badNeighbour(scan, number.start, number.end)) return { ok: false, reason: "period_unreadable" }
+  if (badNeighbour(scan, number.start, number.end) || spacedMark(scan, number.start)) {
+    return { ok: false, reason: "period_unreadable" }
+  }
+  if (boundTouches(scan, number.start, unitEnd)) return { ok: false, reason: "period_ambiguous" }
   const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
   if (previous === "and" || previous === "or" || previous === "to") return { ok: false, reason: "period_unreadable" }
   const unit = canonicalUnit(unitMatch[1] ?? "")
   if (!unit || number.value === null || !Number.isInteger(number.value) || number.value < 1 || number.value > 9999) {
     return { ok: false, reason: "period_unreadable" }
   }
+  if (!spanAllowed(number.value, unit)) return { ok: false, reason: "period_unreadable" }
   return { ok: true, n: number.value, unit, cited: `${number.raw} ${unitMatch[1]}` }
+}
+
+function spanAllowed(n: number, unit: DateUnit): boolean {
+  if (unit === "year") return n <= SPAN_LIMIT_YEARS
+  if (unit === "month") return n <= SPAN_LIMIT_YEARS * 12
+  return n <= 9999
+}
+
+function calendarOverflow(iso: string, n: number, unit: DateUnit): boolean {
+  const year = Number(iso.slice(0, 4))
+  const month = Number(iso.slice(5, 7))
+  const day = Number(iso.slice(8, 10))
+  try {
+    if (unit === "day") {
+      const utc = Date.UTC(year, month - 1, day + n)
+      if (!Number.isFinite(utc)) return true
+      const end = new Date(utc).getUTCFullYear()
+      return !Number.isInteger(end) || end < 1 || end > 9999
+    }
+    const months = unit === "year" ? n * 12 : n
+    const end = year + Math.floor((month - 1 + months) / 12)
+    return !Number.isInteger(end) || end < 1 || end > 9999
+  } catch {
+    return true
+  }
+}
+
+function boundTouches(text: string, numberStart: number, unitEnd: number): boolean {
+  const left = text.slice(0, numberStart).trimEnd().toLowerCase()
+  const right = text.slice(unitEnd).toLowerCase()
+  if (BOUND_BEFORE.some((phrase) => endsWithPhrase(left, phrase))) return true
+  return BOUND_AFTER.some((phrase) => startsWithPhrase(right, phrase))
+}
+
+function endsWithPhrase(left: string, phrase: string): boolean {
+  if (!left.endsWith(phrase)) return false
+  const at = left.length - phrase.length
+  if (at === 0) return true
+  return !isLetter(left[at - 1] ?? "")
+}
+
+function startsWithPhrase(right: string, phrase: string): boolean {
+  let index = 0
+  while (index < right.length && (right[index] === " " || right[index] === ",")) index += 1
+  if (!right.startsWith(phrase, index)) return false
+  const after = right[index + phrase.length] ?? ""
+  return after === "" || !isLetter(after)
+}
+
+function spanHasBound(span: string): boolean {
+  const lower = span.toLowerCase()
+  return [...BOUND_BEFORE, ...BOUND_AFTER].some((phrase) => phrase !== "not" && hasPhrase(lower, phrase))
+}
+
+function hasPhrase(text: string, phrase: string): boolean {
+  let from = 0
+  while (from <= text.length) {
+    const at = text.indexOf(phrase, from)
+    if (at < 0) return false
+    const before = at === 0 ? "" : (text[at - 1] ?? "")
+    const after = text[at + phrase.length] ?? ""
+    if ((before === "" || !isLetter(before)) && (after === "" || !isLetter(after))) return true
+    from = at + phrase.length
+  }
+  return false
+}
+
+function spacedMark(text: string, start: number): boolean {
+  if (start < 2 || text[start - 1] !== " ") return false
+  const mark = text[start - 2] ?? ""
+  return mark !== "" && mark !== "(" && mark !== " " && !isLetter(mark) && !isDigit(mark)
 }
 
 function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]): boolean {
@@ -447,6 +607,7 @@ function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]
   if (!match) return false
   const span = match[0]
   if (numberTokens(span).length > 0) return true
+  if (spanHasBound(span)) return true
   UNIT_WORD_RE.lastIndex = 0
   const units = [...span.matchAll(UNIT_WORD_RE)].map((hit) => (hit[1] ?? "").toLowerCase()).sort()
   const expected = [...allowedUnits].sort()
@@ -545,6 +706,15 @@ function isDigit(ch: string): boolean {
   return /[0-9]/.test(ch)
 }
 
+function shiftDays(iso: string, days: number): string | null {
+  try {
+    const next = addDays(iso, days)
+    return isCalendarDate(next) ? next : null
+  } catch {
+    return null
+  }
+}
+
 function utcToday(): string {
   const now = new Date()
   const month = String(now.getUTCMonth() + 1).padStart(2, "0")
@@ -593,9 +763,11 @@ function applyDayExclusion(
   const row = inForce(versions, `limitation-act-1908/section/${section}`, jurisdiction, asAt)
   if (!row.ok) return { ok: false, reason: row.reason === "no_history" ? "exclusion_unsupported" : row.reason }
   if (!phrase.test(row.row.text)) return { ok: false, reason: "exclusion_unsupported" }
+  const shifted = shiftDays(deadline, days)
+  if (!shifted) return { ok: false, reason: "period_unreadable" }
   return {
     ok: true,
-    deadline: addDays(deadline, days),
+    deadline: shifted,
     exclusion: {
       section,
       sectionId: row.row.sectionId,
@@ -627,7 +799,9 @@ function applyCourtClosed(
   let steps = 0
   while (calendar.isClosed(forumId, cursor)) {
     if (steps >= CLOSED_ROLL_LIMIT) return { ok: false, reason: "court_closed_unresolved" }
-    cursor = addDays(cursor, 1)
+    const next = shiftDays(cursor, 1)
+    if (!next) return { ok: false, reason: "period_unreadable" }
+    cursor = next
     steps += 1
   }
   return {
