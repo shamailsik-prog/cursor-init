@@ -1671,7 +1671,6 @@ describe("L5.5 fail-closed reference allowlist", () => {
       "The witness proved P-1/2 and then P-2/3.",
       "The witness proved P-1.5 and then P-2.5.",
       "See www.example.com/P-1 and file_P-2.",
-      "LIST OF EXHIBITS: P-1, P-2.",
       "The witness proved P-10 and then P-2.",
       "The witness proved CP-1 and then P-2.",
       "The witness proved P-1-A and then P-2.",
@@ -1786,9 +1785,144 @@ describe("L5.5 fail-closed reference allowlist", () => {
 
   it("OVER-021 generates a case number with of and a year", async () => {
     const cited = "The petitioner relies on Annexures A, B and C."
-    for (const sentence of ["C.P. No. D-1234 of 2023", "Cr. Misc. 45-B of 2024"]) {
+    for (const sentence of [
+      "C.P. No. D-1234 of 2023",
+      "CP No. D-1234 of 2023",
+      "Execution No. D-45 of 2024",
+      "Crl. Rev. No. D-45 of 2024",
+      "Crl. A. No. D-45 of 2024",
+      "H.C.A. No. D-45 of 2024",
+      "Const. P. No. D-45 of 2024",
+      "R.F.A. No. D-45 of 2024",
+      "Execution No. D-45/2024",
+    ]) {
       await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
     }
+  })
+
+  it("REF-023 reads a label or mark split by one newline", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const letters = [
+      "See Annexures A, B and\nD.",
+      "See Annexures A, B,\nC and D.",
+      "A,\nD",
+      "A to\nD",
+      "See Annexure\n\nD.",
+      "See Annexure\r\n\r\nD.",
+      "ANNEXURES:\nD - Bank statement",
+      "ANNEXURE:\nD",
+    ]
+    for (const sentence of letters) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("D")), sentence).toBe(true)
+    }
+    const marks = ["The deed P-\n9 is relied on.", "P/\n9", "P\n/9", "P-\r\n9"]
+    for (const sentence of marks) {
+      enableFlag()
+      const result = await generateDocket({ ...marked(["P-1", "P-2"]), draft: { body: `Relies on P/1 and P/2. ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("P/9")), sentence).toBe(true)
+    }
+  })
+
+  it("REF-024 refuses an unreadable short label without a sentence end", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "See Annexures AB and AC.",
+      "See Annexures viz. D.",
+      "viz. D and E",
+      "Annexure AB is the deed.",
+      "See Annexure AB, the deed.",
+      "See Annexure ab.",
+    ]
+    for (const sentence of sentences) {
+      enableFlag()
+      const result = await generateDocket({ ...petition, draft: { body: `${cited} ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      if (sentence.includes("viz")) expect(result.queue.some((entry) => entry.detail.includes("D")), sentence).toBe(true)
+    }
+  })
+
+  it("REF-018-R counts a heading mark and leaves the heading out of the order", async () => {
+    for (const sentence of ["LIST OF EXHIBITS: P-1, P-2, P-9.", "List of exhibits P/9 relied upon."]) {
+      enableFlag()
+      const result = await generateDocket({ ...marked(["P-1", "P-2"]), draft: { body: sentence } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("P/9")), sentence).toBe(true)
+    }
+    enableFlag()
+    const unfiled = await generateDocket({
+      ...exhibits,
+      draft: { body: "LIST OF EXHIBITS: P-1, P-2, P-3.\nThe witness proved P-1 and then P-2." },
+    })
+    expect(unfiled.ok).toBe(false)
+    expect(unfiled.queue.some((entry) => entry.detail.includes("P/3"))).toBe(true)
+    expect(unfiled.queue.some((entry) => entry.detail.includes("different order"))).toBe(false)
+    await expectGeneration({ ...exhibits, draft: { body: "LIST OF EXHIBITS: P-1, P-2." } }, "assigned heading")
+    await expectGeneration(
+      { ...exhibits, draft: { body: "LIST OF EXHIBITS: P-2, P-1. The witness proved P-1 and then P-2." } },
+      "heading order ignored",
+    )
+  })
+
+  it("refuses an exhibit body that cites the assigned marks out of order", async () => {
+    enableFlag()
+    const result = await generateDocket({ ...exhibits, draft: { body: "The witness proved P-2 and then P-1." } })
+    expect(result.ok).toBe(false)
+    expect(result.queue.some((entry) => entry.code === "order_unresolved")).toBe(true)
+  })
+
+  it("OVER-020-R keeps an agency, a report citation, and a bare year", async () => {
+    const cited = "The petitioner relies on Annexures A, B and C."
+    const sentences = [
+      "Annexure A was issued by NAB.",
+      "Annexure A was issued by the SHC.",
+      "Annexure A was issued from KDA.",
+      "Annexure A was issued from the ECP.",
+      "Annexure A was issued by IT.",
+      "Annexure A was issued by the FBR.",
+      "Annexure A was issued by the CDA.",
+      "Annexure A was issued by LDA.",
+      "Annexure A was issued with the SHO.",
+      "Annexure A was issued by the DSP.",
+      "See PW-1's deposition.",
+      "See ECP.",
+      "See I. Ahmed v. State.",
+      "See 2010 NLR 45.",
+      "2010 KLR 45",
+      "2015 PLJ 45",
+      "2015 PLC (C.S.) 45",
+      "(2010) 5 SCC 45",
+      "See 2010.",
+    ]
+    for (const sentence of sentences) {
+      await expectGeneration({ ...petition, draft: { body: `${cited} ${sentence}` } }, sentence)
+    }
+  })
+
+  it("reads a spaced name or a one-dot path as a mark", async () => {
+    for (const sentence of ["Mr. Ali/P-9", "record.file/P-9"]) {
+      enableFlag()
+      const result = await generateDocket({ ...marked(["P-1", "P-2"]), draft: { body: `Relies on P/1 and P/2. ${sentence}` } })
+      expect(result.ok, sentence).toBe(false)
+      expect(result.queue.some((entry) => entry.detail.includes("P/9")), sentence).toBe(true)
+    }
+  })
+
+  it("reads a single letter after See", async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: "The petitioner relies on Annexures A, B and C. See D." },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.queue.some((entry) => entry.detail.includes("D"))).toBe(true)
+  })
+
+  it("reads Annexures after See as one citation", async () => {
+    await expectGeneration({ ...petition, draft: { body: "See Annexures A, B and C." } }, "See Annexures")
   })
 
   it("does not treat para A or a parenthesised list marker as Annexure A", async () => {
