@@ -668,6 +668,57 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
+  it("TEST-258-002: space, plus, and colon are not actor keys", () => {
+    expect(normalizeActorKey("Partner B")).toBe("")
+    expect(normalizeActorKey("partner+1@x")).toBe("")
+    expect(normalizeActorKey("partner:1")).toBe("")
+  })
+
+  it("TEST-258-002: commitVersion refuses a declassify stamp or a status-only write", async () => {
+    const store = p6Store()
+    const row = await proposeChange(substantive("clause.commit-pin"), store)
+    await expect(store.commitVersion(versionOf(row, { ...row, declassify: true }))).rejects.toThrow(
+      /approval is not a direct status change/,
+    )
+    await expect(store.commitVersion(versionOf(row, { ...row, status: "applied" }))).rejects.toThrow(
+      /proposal status transition is refused/,
+    )
+    expect((await store.getProposal(row.id))?.status).toBe("pending")
+    expect((await store.getProposal(row.id))?.declassify).toBe(false)
+    expect(await store.listVersions("firmA")).toEqual([])
+  })
+
+  it("MEM-258-004: commitVersion binds proposalId and firmId to the proposal", async () => {
+    const store = p6Store()
+    const row = await proposeChange(substantive("clause.bind"), store)
+    const other = "00000000-0000-4000-8000-0000000000cc"
+    await expect(store.commitVersion({ ...versionOf(row, row), proposalId: other })).rejects.toThrow(
+      /commit is bound to the proposal/,
+    )
+    await expect(store.commitVersion({ ...versionOf(row, row), firmId: "firmB" })).rejects.toThrow(
+      /commit is bound to the proposal/,
+    )
+    expect((await store.getProposal(row.id))?.firmId).toBe("firmA")
+    expect((await store.getProposal(row.id))?.status).toBe("pending")
+    expect(await store.listVersions("firmA")).toEqual([])
+    expect(await store.listVersions("firmB")).toEqual([])
+  })
+
+  it("PARITY-258-005: U+0130 and U+1CCD6-U+1CCF9 are empty before lower", () => {
+    expect(normalizeActorKey("\u0130")).toBe("")
+    expect(normalizeActorKey("\u{1CCD6}")).toBe("")
+    expect(normalizeActorKey("\u{1CCE0}")).toBe("")
+    expect(normalizeActorKey("\u{1CCF9}")).toBe("")
+    expect(normalizeActorKey("partner_\u{1CCD6}")).toBe("")
+    expect(normalizeActorKey("straße")).toBe("strasse")
+    const sql = readFileSync("postgres/ddl/009_p6_master.sql", "utf8")
+    const body = sql.match(/CREATE OR REPLACE FUNCTION public\.p6_actor_key_next[\s\S]*?\$fn\$;/)?.[0] ?? ""
+    const asciiAt = body.indexOf("[^[:ascii:]]")
+    const lowerAt = body.indexOf("actor_key := lower")
+    expect(asciiAt).toBeGreaterThan(-1)
+    expect(lowerAt).toBeGreaterThan(asciiAt)
+  })
+
   it("FA-Q07-R2-006: saveProposal cannot stamp partner approval fields", async () => {
     const store = p6Store()
     const pending = await proposeChange(substantive("clause.stamp"), store)

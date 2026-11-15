@@ -20,6 +20,7 @@ const suite = postgresUrl ? describe : describe.skip
 const DDL = fs.readFileSync(path.join(process.cwd(), "postgres/ddl/009_p6_master.sql"), "utf8")
 const ACTOR_KEY_DDL = fs.readFileSync(path.join(process.cwd(), "postgres/ddl/011_p6_actor_key.sql"), "utf8")
 const MAIN_DDL = fs.readFileSync(path.join(process.cwd(), "tests/fixtures/p6/009_p6_master_main.sql"), "utf8")
+const D8125172_DDL = fs.readFileSync(path.join(process.cwd(), "tests/fixtures/p6/009_p6_master_d8125172.sql"), "utf8")
 
 function applyPsqlFile(connectionString: string, sql: string): { status: number; stderr: string } {
   const file = path.join("/tmp", `p6mig-${randomBytes(4).toString("hex")}.sql`)
@@ -1299,6 +1300,322 @@ suite("G3 master grants on local Postgres", () => {
       expect(upgraded.stderr).toContain(ids[0])
       expect(upgraded.stderr).toContain(ids[19])
       expect(upgraded.stderr).not.toContain(ids[20])
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  async function actorKeyMd5(client: pg.Client): Promise<string | null> {
+    const found = await client.query<{ digest: string | null }>(
+      `SELECT CASE
+                WHEN to_regprocedure('public.p6_actor_key(text)') IS NULL THEN NULL
+                ELSE md5(pg_get_functiondef('public.p6_actor_key(text)'::regprocedure))
+              END AS digest`,
+    )
+    return found.rows[0]?.digest ?? null
+  }
+
+  async function insertLegacyApprovals(client: pg.Client): Promise<{ badIds: string[]; allIds: string[] }> {
+    const bad = [
+      ["Partner B", "clause.space"],
+      ["partner+1@x", "clause.plus"],
+      ["partner_é", "clause.acute"],
+      ["partner:1", "clause.colon"],
+    ] as const
+    const badIds: string[] = []
+    const allIds: string[] = []
+    await client.query("SET ROLE p6_service")
+    for (const [approver, key] of bad) {
+      const id = randomUUID()
+      badIds.push(id)
+      allIds.push(id)
+      await client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                 '{"wording":"legacy"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id, key],
+      )
+      await client.query(
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = $2, decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1`,
+        [id, approver],
+      )
+    }
+    for (let index = 0; index < 3; index += 1) {
+      const id = randomUUID()
+      allIds.push(id)
+      await client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', $2,
+                 '{"wording":"good"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id, `clause.good.${index}`],
+      )
+      await client.query(
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1`,
+        [id],
+      )
+    }
+    for (let index = 0; index < 3; index += 1) {
+      const id = randomUUID()
+      allIds.push(id)
+      await client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'cosmetic', 'mutable', $2,
+                 '{"wording":"pending"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id, `clause.pending.${index}`],
+      )
+    }
+    await client.query("RESET ROLE")
+    return { badIds, allIds }
+  }
+
+  function restoreDump(sourceUrl: string, targetUrl: string): { status: number; stderr: string } {
+    const source = new URL(sourceUrl)
+    const target = new URL(targetUrl)
+    const dump = path.join("/tmp", `p6dump-${randomBytes(4).toString("hex")}.sql`)
+    const env = { ...process.env, PGPASSWORD: decodeURIComponent(source.password) }
+    try {
+      execFileSync(
+        "pg_dump",
+        [
+          "-h",
+          source.hostname,
+          "-p",
+          source.port || "5432",
+          "-U",
+          decodeURIComponent(source.username),
+          "-d",
+          source.pathname.replace(/^\//, ""),
+          "--no-owner",
+          "--no-acl",
+          "-f",
+          dump,
+        ],
+        { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      )
+      const wrapped = path.join("/tmp", `p6restore-${randomBytes(4).toString("hex")}.sql`)
+      fs.writeFileSync(
+        wrapped,
+        `BEGIN;\nSET session_replication_role = replica;\n\\i ${dump}\nCOMMIT;\n`,
+      )
+      try {
+        execFileSync(
+          "psql",
+          [
+            "-v",
+            "ON_ERROR_STOP=1",
+            "--no-psqlrc",
+            "-q",
+            "-h",
+            target.hostname,
+            "-p",
+            target.port || "5432",
+            "-U",
+            decodeURIComponent(target.username),
+            "-d",
+            target.pathname.replace(/^\//, ""),
+            "-f",
+            wrapped,
+          ],
+          { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        )
+        return { status: 0, stderr: "" }
+      } catch (error) {
+        const failed = error as { status?: number; stderr?: string }
+        return { status: failed.status ?? 1, stderr: failed.stderr ?? String(error) }
+      } finally {
+        fs.rmSync(wrapped, { force: true })
+      }
+    } finally {
+      fs.rmSync(dump, { force: true })
+    }
+  }
+
+  it("MIG-258-001: narrowing p6_actor_key refuses legacy rows and keeps the installed function", async () => {
+    const chain = await freshDb("p6mig258")
+    const forward = await freshDb("p6mig258b")
+    const restored = await freshDb("p6mig258r")
+    try {
+      expect(applyPsqlFile(chain.url, D8125172_DDL).status).toBe(0)
+      const seeded = await insertLegacyApprovals(chain.client)
+      expect(seeded.allIds).toHaveLength(10)
+      const before = await actorKeyMd5(chain.client)
+      expect(before).toBeTruthy()
+      const upgraded = applyPsqlFile(chain.url, DDL)
+      expect(upgraded.status).not.toBe(0)
+      expect(upgraded.stderr).toMatch(/refusing to replace substantive_partner_approval/)
+      expect(upgraded.stderr).toMatch(/4 of 4/)
+      for (const id of seeded.badIds) expect(upgraded.stderr).toContain(id)
+      expect(await actorKeyMd5(chain.client)).toBe(before)
+      const leftover = await chain.client.query<{ present: string | null }>(
+        `SELECT to_regprocedure('public.p6_actor_key_next(text)')::text AS present`,
+      )
+      expect(leftover.rows[0]?.present ?? null).toBeNull()
+      const kept = await chain.client.query<{ n: number }>(`SELECT count(*)::int AS n FROM change_proposals`)
+      expect(kept.rows[0]?.n).toBe(10)
+
+      const round = restoreDump(chain.url, restored.url)
+      expect(round.status, round.stderr).toBe(0)
+      const restoredCount = await restored.client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM change_proposals`,
+      )
+      expect(restoredCount.rows[0]?.n).toBe(10)
+
+      expect(applyPsqlFile(forward.url, D8125172_DDL).status).toBe(0)
+      const forwardRows = await insertLegacyApprovals(forward.client)
+      const forwardBefore = await actorKeyMd5(forward.client)
+      const forwarded = applyPsqlFile(forward.url, ACTOR_KEY_DDL)
+      expect(forwarded.status).not.toBe(0)
+      expect(forwarded.stderr).toMatch(/refusing to replace substantive_partner_approval/)
+      expect(forwarded.stderr).toMatch(/4 of 4/)
+      for (const id of forwardRows.badIds) expect(forwarded.stderr).toContain(id)
+      expect(await actorKeyMd5(forward.client)).toBe(forwardBefore)
+    } finally {
+      await dropDb(chain.name, chain.client)
+      await dropDb(forward.name, forward.client)
+      await dropDb(restored.name, restored.client)
+    }
+  }, 60_000)
+
+  it("TEST-258-002: pending raw SQL refuses identity rewrites, stamps, and non-charset actor keys", async () => {
+    const db = await freshDb("p6pin")
+    try {
+      await db.client.query(DDL)
+      await db.client.query("SET ROLE p6_service")
+      const id = randomUUID()
+      await db.client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.pin',
+                 '{"wording":"pin"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id],
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET entry_key = 'clause.other' WHERE id = $1`,
+        [id],
+        /frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET source_module = 'other' WHERE id = $1`,
+        [id],
+        /frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET classification = 'public' WHERE id = $1`,
+        [id],
+        /frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET decided_kind = 'partner' WHERE id = $1`,
+        [id],
+        /approval is not a direct status change/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET decided_role = 'partner' WHERE id = $1`,
+        [id],
+        /approval is not a direct status change/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET declassify = true WHERE id = $1`,
+        [id],
+        /approval is not a direct status change/,
+      )
+      const keys = await db.client.query<{ spaced: string; plus: string; colon: string }>(
+        `SELECT public.p6_actor_key('Partner B') AS spaced,
+                public.p6_actor_key('partner+1@x') AS plus,
+                public.p6_actor_key('partner:1') AS colon`,
+      )
+      expect(keys.rows[0]).toEqual({ spaced: "", plus: "", colon: "" })
+      const kept = await db.client.query<{ entry_key: string; source_module: string; classification: string; declassify: boolean }>(
+        `SELECT entry_key, source_module, classification, declassify FROM change_proposals WHERE id = $1`,
+        [id],
+      )
+      expect(kept.rows[0]).toEqual({
+        entry_key: "clause.pin",
+        source_module: "learner",
+        classification: "confidential",
+        declassify: false,
+      })
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("FREEZE-258-003: a pending row cannot change id or created_at", async () => {
+    const db = await freshDb("p6freeze")
+    try {
+      await db.client.query(DDL)
+      await db.client.query("SET ROLE p6_service")
+      const id = randomUUID()
+      await db.client.query(
+        `INSERT INTO change_proposals
+           (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+            proposed_by, status, payload_hash)
+         VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.freeze-id',
+                 '{"wording":"id"}'::jsonb, 'partner_a', 'pending', 'abc')`,
+        [id],
+      )
+      const before = await db.client.query<{ created_at: Date }>(
+        `SELECT created_at FROM change_proposals WHERE id = $1`,
+        [id],
+      )
+      const nextId = randomUUID()
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET id = $2 WHERE id = $1`,
+        [id, nextId],
+        /frozen/,
+      )
+      await expectRefused(
+        db.client,
+        `UPDATE change_proposals SET created_at = created_at + interval '1 day' WHERE id = $1`,
+        [id],
+        /frozen/,
+      )
+      const kept = await db.client.query<{ id: string; created_at: Date }>(
+        `SELECT id, created_at FROM change_proposals WHERE id = $1 OR id = $2`,
+        [id, nextId],
+      )
+      expect(kept.rows).toHaveLength(1)
+      expect(kept.rows[0]?.id).toBe(id)
+      expect(kept.rows[0]?.created_at.toISOString()).toBe(before.rows[0]?.created_at.toISOString())
+    } finally {
+      await dropDb(db.name, db.client)
+    }
+  }, 60_000)
+
+  it("PARITY-258-005: Postgres rejects U+0130 and U+1CCD6-U+1CCF9 before lower", async () => {
+    const db = await freshDb("p6parity")
+    try {
+      await db.client.query(DDL)
+      const keys = await db.client.query<{ dotted: string; start: string; mid: string; end: string; sharp: string }>(
+        `SELECT public.p6_actor_key(chr(304)) AS dotted,
+                public.p6_actor_key(chr(117974)) AS start,
+                public.p6_actor_key(chr(117984)) AS mid,
+                public.p6_actor_key(chr(118009)) AS end,
+                public.p6_actor_key('straße') AS sharp`,
+      )
+      expect(keys.rows[0]?.dotted).toBe("")
+      expect(keys.rows[0]?.start).toBe("")
+      expect(keys.rows[0]?.mid).toBe("")
+      expect(keys.rows[0]?.end).toBe("")
+      expect(keys.rows[0]?.sharp).toBe("strasse")
     } finally {
       await dropDb(db.name, db.client)
     }
