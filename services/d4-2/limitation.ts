@@ -313,7 +313,7 @@ function versionsFromStore(rows: readonly StatuteSectionVersion[]): LimitationVe
         effectiveTo: row.effectiveTo,
         text: row.text,
         reviewStatus: row.reviewStatus ?? "UNVERIFIED",
-        versionConfidence: row.versionConfidence,
+        versionConfidence: row.versionConfidence ?? null,
       },
     ]
   })
@@ -370,35 +370,52 @@ function inForce(versions: readonly LimitationVersion[], sectionId: string, juri
   if (!hit) return { ok: false, reason: "no_history" }
   const source = rows.find((row) => row.versionNo === hit.versionNo && row.effectiveFrom === hit.effectiveFrom)
   if (!source || source.reviewStatus !== "VERIFIED") return { ok: false, reason: "text_not_verified" }
-  if (source.versionConfidence === null || (typeof source.versionConfidence === "number" && !versionUsable(source.versionConfidence))) {
-    return { ok: false, reason: "text_not_verified" }
-  }
+  if (!confidenceAllowsUse(source.versionConfidence)) return { ok: false, reason: "text_not_verified" }
   return { ok: true, row: source }
 }
 
 const NUMBER_WORD =
   "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|zero|nought|dozen|half|quarter"
 const PERIOD_PHRASE_RE = new RegExp(
-  `(?<![A-Za-z0-9./-])(?<!\\b(?:and|${NUMBER_WORD})[ \\t])(\\d{1,4}(?!\\d)|(?:${NUMBER_WORD})(?:[ \\t-]+(?:and|${NUMBER_WORD}))*)[ \\t]+(days|day|months|month|years|year)(?![A-Za-z])`,
+  `(?<![A-Za-z0-9./-])(\\d{1,4}(?!\\d)|(?:${NUMBER_WORD})(?:[ \\t-]+(?:and|${NUMBER_WORD}))*)[ \\t]+(days|day|months|month|years|year)(?![A-Za-z])`,
   "gi"
 )
+const TRAILING_NUMBER_RE = new RegExp(`(?:^|\\s)(?:and|${NUMBER_WORD})\\s+$`, "i")
 const DECIMAL_PERIOD_RE = /\d+\.\d+\s*(?:days|day|months|month|years|year)\b/i
 const FRACTION_PERIOD_RE = /\d+\s*\/\s*\d+\s*(?:days|day|months|month|years|year)\b/i
+const DIGIT_SEP_PERIOD_RE = /\d[\s,.\u00B7]+\d[\s,.\u00B7\d]*\s*(?:days|day|months|month|years|year)\b/iu
+const ALT_PERIOD_RE =
+  /\b(?:(?:a|an)\s+(?:day|days|month|months|year|years|fortnight|fortnights)|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)\s+(?:day|days|month|months|year|years)|fortnights?)\b/i
+
+/** Ruling 4: only a finite number strictly above 0.5 and at most 1. Missing and non-numbers fail. */
+function confidenceAllowsUse(value: unknown): boolean {
+  return typeof value === "number" && versionUsable(value)
+}
 
 function parsePeriod(
   text: string
 ): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
-  const normalized = text.replace(/\s+/gu, " ")
-  if (DECIMAL_PERIOD_RE.test(normalized) || FRACTION_PERIOD_RE.test(normalized)) return { ok: false, reason: "period_unreadable" }
+  const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
+  if (
+    DECIMAL_PERIOD_RE.test(normalized) ||
+    FRACTION_PERIOD_RE.test(normalized) ||
+    DIGIT_SEP_PERIOD_RE.test(normalized) ||
+    ALT_PERIOD_RE.test(normalized)
+  ) {
+    return { ok: false, reason: "period_unreadable" }
+  }
+  PERIOD_PHRASE_RE.lastIndex = 0
   const phrases = [...normalized.matchAll(PERIOD_PHRASE_RE)]
   if (phrases.length !== 1) return { ok: false, reason: "period_unreadable" }
-  const head = phrases[0][1].toLowerCase()
+  const phrase = phrases[0]
+  if (TRAILING_NUMBER_RE.test(normalized.slice(0, phrase.index ?? 0))) return { ok: false, reason: "period_unreadable" }
+  const head = phrase[1].toLowerCase()
   if (head.includes("-") || head.includes(" ")) return { ok: false, reason: "period_unreadable" }
   const n = /^\d+$/.test(head) ? Number(head) : NUMBER_WORDS[head]
   if (n === undefined || !Number.isInteger(n) || n < 1 || n > 9999) return { ok: false, reason: "period_unreadable" }
-  const word = phrases[0][2].toLowerCase()
+  const word = phrase[2].toLowerCase()
   const unit: DateUnit = word.startsWith("day") ? "day" : word.startsWith("month") ? "month" : "year"
-  return { ok: true, n, unit, cited: phrases[0][0] }
+  return { ok: true, n, unit, cited: phrase[0] }
 }
 
 function utcToday(): string {

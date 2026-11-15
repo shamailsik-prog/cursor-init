@@ -59,6 +59,7 @@ function version(
     effectiveTo: to,
     text,
     reviewStatus: "VERIFIED",
+    versionConfidence: 0.9,
     ...overrides,
   }
 }
@@ -244,6 +245,87 @@ describe("Q11 checkLimitation", () => {
     ).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified", deadline: null })
   })
 
+  it("FA-Q11-PARSE-001-R2 rejects a year and months joined by and", () => {
+    for (const period of ["One year and six months", "Three years and six months"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("P6 a number word after and is not a period when the lookbehind guard is removed", () => {
+    expect(assessed("2020-01-01", base("and twenty years"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+  })
+
+  it("FA-Q11-PARSE-002-R2 rejects separated digits and format-character splits", () => {
+    for (const period of [
+      "2,5 years",
+      "2 . 5 years",
+      "2\u00B75 years",
+      "1,500 days",
+      "1 500 days",
+      "3 1 years",
+      "Twenty\u00ADone years",
+      "Twenty\u200Bone years",
+      "Twenty\u200Done years",
+      "Twenty\u2060one years",
+    ]) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("PARSE-003 rejects a second period expression, a fortnight, or an ordinal month", () => {
+    for (const period of [
+      "Three years; a year after the accrual",
+      "Three years or a fortnight",
+      "Three years in the twelfth month",
+    ]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("CONF-001 rejects a missing or non-numeric version confidence", () => {
+    const bad: unknown[] = [undefined, "0.9", "abc", true, {}]
+    for (const value of bad) {
+      const row = article("three years")
+      Object.assign(row, { versionConfidence: value })
+      expect(assessed("2020-01-01", [row]), JSON.stringify(value)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "text_not_verified",
+        deadline: null,
+      })
+    }
+    const store = newStore()
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "c1",
+      title: "Q11 confidence",
+      courtId: "LHC",
+      classification: "internal",
+    })
+    const stored = article("three years")
+    delete stored.versionConfidence
+    store.sectionVersions.push({ ...stored })
+    expect(
+      applyLimitation(store, { matterId: matter.id, article: "7", accrualDate: "2020-01-01", filingForum: "LHC", calendar: OPEN })
+    ).toMatchObject({ status: "NOT_ASSESSED", reason: "text_not_verified", deadline: null })
+    expect(store.followUps).toHaveLength(0)
+  })
+
   it("DATE-001 refuses an accrual date after today", () => {
     const accrual = `${new Date().getUTCFullYear() + 1}-01-01`
     expect(assessed(accrual, base())).toMatchObject({
@@ -252,6 +334,20 @@ describe("Q11 checkLimitation", () => {
       deadline: null,
       governing: null,
       alerts: [],
+    })
+  })
+
+  it("D2 assesses an accrual on today's UTC date and refuses tomorrow", () => {
+    const now = new Date()
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+    const iso = (date: Date) =>
+      `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`
+    expect(assessed(iso(today), base()).status).toBe("ASSESSED")
+    expect(assessed(iso(tomorrow), base())).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "accrual_in_future",
+      deadline: null,
     })
   })
 
