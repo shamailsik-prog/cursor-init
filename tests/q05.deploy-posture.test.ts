@@ -38,10 +38,14 @@ function annexFileLists(script: string): { loop: string[]; psql: string[] } {
   return { loop, psql }
 }
 
+// 002 is the platform application database. 009 is P6 master knowledge on that same
+// database (Layer 18 §5.4). Neither file is Annex A, so the corpus apply script does not list them.
+const PLATFORM_DDL = new Set(["002_platform.sql", "009_p6_master.sql", "010_p6_learners_flag.sql"])
+
 function ddlMinusPlatform(): string[] {
   return fs
     .readdirSync(path.join(REPO, "postgres/ddl"))
-    .filter((name) => name.endsWith(".sql") && name !== "002_platform.sql")
+    .filter((name) => name.endsWith(".sql") && !PLATFORM_DDL.has(name))
     .sort()
 }
 
