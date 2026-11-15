@@ -311,6 +311,96 @@ describe("Q11 checkLimitation", () => {
     })
   })
 
+  it("FA-Q11-PARSE-006 rejects superscript and subscript digits", () => {
+    for (const period of ["3\u00B9 years", "90\u00B2 days", "3\u2081 years", "3\u00B2 years"]) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
+  it("FA-Q11-PARSE-007 rejects a number or unit hidden inside a proviso", () => {
+    const reckoning =
+      "LIMITATION FIXTURE. The period of limitation is three years. In computing the period of limitation the day from which the period of six months is to be reckoned shall be excluded."
+    const monthEnd =
+      "If the corresponding date does not exist, add thirty days, the period expires on the last day of that month."
+    expect(assessed("2020-01-01", base("three years").map((row, index) => (index === 0 ? { ...row, text: reckoning } : row)))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("one month", monthEnd))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+  })
+
+  it("FA-Q11-PARSE-008 allows only a space or an opening parenthesis before a number", () => {
+    for (const period of [".5 years", "~5 years", "+5 years", "#5 years", "$5 years", "@5 years", "*5 years", "/5 years"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    expect(assessed("2020-01-01", base("(5 years)"))).toMatchObject({ status: "ASSESSED", deadline: "2025-01-01" })
+    expect(assessed("2020-01-01", base("(three years)"))).toMatchObject({ status: "ASSESSED", deadline: "2023-01-01" })
+  })
+
+  it("TEST-R4-001 pins the gap, neighbour, to, half, and range checks", () => {
+    for (const period of ["three of years", "years three from"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    for (const period of ["\u00A75 years", "\u00A7 5 years", "5\u00A7 years"]) {
+      expect(assessed("2020-01-01", base(period)), JSON.stringify(period)).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    for (const period of ["to five years", "to 5 years"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+    expect(assessed("2020-01-01", base("half a year"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("10000 years"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("0 years"))).toMatchObject({
+      status: "NOT_ASSESSED",
+      reason: "period_unreadable",
+      deadline: null,
+    })
+    expect(assessed("2020-01-01", base("9999 days"))).toMatchObject({ status: "ASSESSED", deadline: "2047-05-18" })
+    expect(assessed("2020-01-01", base("1 year"))).toMatchObject({ status: "ASSESSED", deadline: "2021-01-01" })
+  })
+
+  it("INFO a qualifier is not the plain period", () => {
+    for (const period of ["three years or more", "at least three years", "twice three years", "five years or more", "at least 5 years"]) {
+      expect(assessed("2020-01-01", base(period)), period).toMatchObject({
+        status: "NOT_ASSESSED",
+        reason: "period_unreadable",
+        deadline: null,
+      })
+    }
+  })
+
   it("R3 regression keeps a single canonical period, including an ASCII compound", () => {
     expect(assessed("2020-01-01", base("Ninety days"))).toMatchObject({ status: "ASSESSED", deadline: "2020-03-31" })
     expect(assessed("2020-01-01", base("Eleven years"))).toMatchObject({ status: "ASSESSED", deadline: "2031-01-01" })

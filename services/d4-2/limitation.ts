@@ -383,6 +383,8 @@ function confidenceAllowsUse(value: unknown): boolean {
 
 const TENS_WORDS = new Set(["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"])
 const ONES_WORDS = new Set(["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"])
+/** M14: half is listed once. Both scanners read this array. */
+const FRACTION_WORDS = ["dozen", "half", "quarter", "couple"]
 const QUANTITY_WORDS = new Set([
   ...Object.keys(NUMBER_WORDS),
   "hundred",
@@ -392,31 +394,35 @@ const QUANTITY_WORDS = new Set([
   "trillion",
   "zero",
   "nought",
-  "dozen",
-  "half",
-  "quarter",
-  "couple",
+  ...FRACTION_WORDS,
 ])
+const QUANTITY_ARTICLE_RE = new RegExp(
+  `^\\s+(?:years?|months?|weeks?|days?|hours?|fortnights?|${FRACTION_WORDS.join("|")})\\b`,
+  "i"
+)
 /** N11: fortnights? has to stay. Dropping it lets "three years or fortnights" assess. */
 const UNIT_WORD_RE = /\b(fortnights?|weeks?|months?|years?|hours?|days?|mos|mths|yrs|wks|hrs|mo|yr|wk|hr)\b/gi
 const FILLER_JOIN_RE = /\d(?:\p{Cf}|[\u034F\u3164\u2800])+\d|[A-Za-z](?:\p{Cf}|[\u034F\u3164\u2800])+[A-Za-z]/u
-const BAD_NEIGHBOUR_RE = /[-_;:'\u2019\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u060C\u066B\u066C\u034F\u3164\u2800]/
+const QUALIFIER_RE = /\b(?:more|least|twice|about|approximately|within|over|under|some|another|several)\b/i
 
 type NumberToken = { start: number; end: number; value: number | null; raw: string }
 
 /**
- * A period is assessed only when the provision, after NFKC, Cf stripping and
- * whitespace collapse, has exactly one quantity and exactly one unit, and the
- * quantity heads that unit. The reckoning and month-end provisos are not part
- * of the period clause; they are removed from this scan and still read on the
- * original text. Any other shape is period_unreadable.
+ * A period is assessed only when the provision has exactly one quantity heading
+ * exactly one day, month, or year. Superscripts and subscripts are not digits.
+ * The reckoning and month-end provisos are removed only when they are the
+ * canonical sentences; a number or an extra unit inside either span is unreadable.
+ * A qualifier such as "or more", "at least", or "twice" is unreadable.
  */
 function parsePeriod(
   text: string
 ): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
-  const nfkc = text.normalize("NFKC")
-  if (FILLER_JOIN_RE.test(nfkc)) return { ok: false, reason: "period_unreadable" }
-  const normalized = nfkc.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
+  if (/\p{No}/u.test(text)) return { ok: false, reason: "period_unreadable" }
+  if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
+  const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
+  if (QUALIFIER_RE.test(normalized)) return { ok: false, reason: "period_unreadable" }
+  if (provisoUnsafe(normalized, RECKONING_RE, ["day"])) return { ok: false, reason: "period_unreadable" }
+  if (provisoUnsafe(normalized, MONTH_END_RE, ["day", "month"])) return { ok: false, reason: "period_unreadable" }
   const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/\s+/gu, " ")
   const numbers = numberTokens(scan)
   UNIT_WORD_RE.lastIndex = 0
@@ -434,6 +440,17 @@ function parsePeriod(
     return { ok: false, reason: "period_unreadable" }
   }
   return { ok: true, n: number.value, unit, cited: `${number.raw} ${unitMatch[1]}` }
+}
+
+function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]): boolean {
+  const match = text.match(re)
+  if (!match) return false
+  const span = match[0]
+  if (numberTokens(span).length > 0) return true
+  UNIT_WORD_RE.lastIndex = 0
+  const units = [...span.matchAll(UNIT_WORD_RE)].map((hit) => (hit[1] ?? "").toLowerCase()).sort()
+  const expected = [...allowedUnits].sort()
+  return units.length !== expected.length || units.some((unit, index) => unit !== expected[index])
 }
 
 function numberTokens(text: string): NumberToken[] {
@@ -489,17 +506,17 @@ function compoundToken(text: string, start: number, word: string, lower: string)
 }
 
 function quantityArticle(text: string, after: number): boolean {
-  return /^\s+(?:years?|months?|weeks?|days?|hours?|fortnights?|couple|half|quarter|dozen)\b/i.test(text.slice(after))
+  return QUANTITY_ARTICLE_RE.test(text.slice(after))
 }
 
 function badNeighbour(text: string, start: number, end: number): boolean {
+  const before = start === 0 ? "" : (text[start - 1] ?? "")
+  const after = end >= text.length ? "" : (text[end] ?? "")
+  if (after !== " ") return true
+  if (before !== "" && before !== " " && before !== "(") return true
   for (const index of [start - 1, start - 2, end, end + 1]) {
     if (index < 0 || index >= text.length) continue
-    const ch = text[index] ?? ""
-    if (BAD_NEIGHBOUR_RE.test(ch)) return true
-    const code = ch.codePointAt(0) ?? 0
-    const asciiPunctuation = code >= 0x21 && code <= 0x7e && !/[A-Za-z0-9]/.test(ch)
-    if (!/[A-Za-z0-9 ]/.test(ch) && !asciiPunctuation) return true
+    if ((text.codePointAt(index) ?? 0) > 0x7e) return true
   }
   return false
 }
