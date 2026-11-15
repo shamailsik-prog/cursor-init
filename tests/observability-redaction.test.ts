@@ -3,9 +3,17 @@ import { detectionView } from "@/platform/p1/piiText"
 import {
   OBSERVABILITY_FIELDS,
   REDACTED,
+  mintDatedId,
+  mintFirestoreId,
+  mintHyphenatedId,
+  mintMatterSerial,
+  mintUlid,
+  mintUuid,
   normalizeFieldKey,
   redactForObservability,
 } from "@/platform/observability"
+
+const firm = mintUuid()
 
 /**
  * Q15a: the central redaction layer. Operational ids, codes and counts may pass.
@@ -43,13 +51,18 @@ const bearer = "Bearer " + "fixture-token-value"
 const cookie = "session=" + "fixture-cookie-value"
 
 describe("Q15a redaction allowlist", () => {
-  it("keeps operational ids, codes and counts", () => {
+  it("keeps minted ids, operational codes and counts", () => {
+    const matter = mintUuid()
+    const document = mintFirestoreId()
+    const job = mintHyphenatedId("job", "123")
+    const trace = mintUuid()
+    expect(job?.text).toBe("job-123")
     expect(
       redactForObservability({
-        firmId: "firm_1",
-        matterId: "matter_1",
-        documentId: "doc_1",
-        jobId: "job_1",
+        firmId: firm,
+        matterId: matter,
+        documentId: document,
+        jobId: job,
         event: "job_done",
         code: "not_minimised",
         reason: "lease_lost",
@@ -62,13 +75,13 @@ describe("Q15a redaction allowlist", () => {
         attempt: 1,
         statusCode: 200,
         ok: true,
-        traceId: "a1b2c3d4-e5f6-4789-8abc-1111111111ab",
+        traceId: trace,
       }),
-    ).toMatchObject({
-      firmId: "firm_1",
-      matterId: "matter_1",
-      documentId: "doc_1",
-      jobId: "job_1",
+    ).toEqual({
+      firmId: firm.text,
+      matterId: matter.text,
+      documentId: document.text,
+      jobId: job?.text,
       event: "job_done",
       code: "not_minimised",
       reason: "lease_lost",
@@ -81,7 +94,7 @@ describe("Q15a redaction allowlist", () => {
       attempt: 1,
       statusCode: 200,
       ok: true,
-      traceId: "a1b2c3d4-e5f6-4789-8abc-1111111111ab",
+      traceId: trace.text,
     })
   })
 
@@ -234,13 +247,13 @@ describe("Q15a redaction of nested values, errors and Unicode", () => {
       password,
       "CLIENT_MESSAGE",
     )
-    expect(redactForObservability({ firmId: "firm_1", context: { email } })).toMatchObject({ firmId: "firm_1" })
+    expect(redactForObservability({ firmId: firm, context: { email } })).toEqual({ firmId: firm.text })
     expectAbsent({ firmId: { email, note } }, email, note)
-    expect(redactForObservability({ firmId: "firm_1", message: email, stack: "at " + note })).toMatchObject({
-      firmId: "firm_1",
+    expect(redactForObservability({ firmId: firm, message: email, stack: "at " + note })).toEqual({
+      firmId: firm.text,
     })
-    const disguised = { name: "Ayesha_" + "Khan", message: email, firmId: "firm_1" }
-    expect(redactForObservability(disguised)).toEqual({ firmId: "firm_1" })
+    const disguised = { name: "Ayesha_" + "Khan", message: email, firmId: firm }
+    expect(redactForObservability(disguised)).toEqual({ firmId: firm.text })
   })
 
   it("redacts error messages and stack traces", () => {
@@ -296,10 +309,10 @@ describe("Q15a redaction of nested values, errors and Unicode", () => {
   })
 
   it("does not follow a cyclic object", () => {
-    const record: Record<string, unknown> = { firmId: "firm_1", email }
+    const record: Record<string, unknown> = { firmId: firm, email }
     record.self = record
     expectAbsent(record, email)
-    expect(redactForObservability(record)).toMatchObject({ firmId: "firm_1" })
+    expect(redactForObservability(record)).toEqual({ firmId: firm.text })
   })
 })
 
@@ -327,7 +340,7 @@ describe("Q15a fail-closed value shapes", () => {
 
   it("redacts a 20-character non-id string by length", () => {
     drop("code", "abcdefghijklmnopqrst")
-    keep("firmId", "abcdefghijklmnopqrst")
+    drop("firmId", "abcdefghijklmnopqrst")
     keep("code", "a_" + "b".repeat(38))
     drop("code", "a_" + "b".repeat(39))
   })
@@ -396,15 +409,15 @@ describe("Q15a fail-closed value shapes", () => {
     expect(hex).toHaveLength(64)
   })
 
-  it("keeps a UUID id even when it contains a 10-digit run", () => {
-    keep("traceId", "a1b2c3d4-e5f6-4789-8abc-1111111111ab")
+  it("redacts a string UUID even when it contains a 10-digit run", () => {
+    drop("traceId", "a1b2c3d4-e5f6-4789-8abc-1111111111ab")
   })
 
   it("redacts an id that does not match an id shape", () => {
     drop("firmId", "1firm")
     drop("matterId", "bad id")
     drop("firmId", "akia" + "examplekey1")
-    keep("firmId", "f" + "a".repeat(63))
+    drop("firmId", "f" + "a".repeat(63))
     drop("firmId", "f" + "a".repeat(64))
   })
 
@@ -485,7 +498,7 @@ describe("Q15a fail-closed value shapes", () => {
     expect(redactForObservability(["secret"])).toBe(REDACTED)
     expect(redactForObservability("pwd:hunter2")).toBe(REDACTED)
     expect(redactForObservability("not_minimised")).toBe("not_minimised")
-    expect(redactForObservability({ count: "42101-1234567-1", firmId: "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ count: "42101-1234567-1", firmId: firm })).toEqual({ firmId: firm.text })
     expect(redactForObservability({ value: "12" })).toEqual({})
   })
 
@@ -528,8 +541,8 @@ describe("Q15a fail-closed value shapes", () => {
     expect(signature).toMatch(/[A-Z]/)
   })
 
-  it("keeps a UUID and drops a dashed id that is not one", () => {
-    keep("traceId", "A1B2C3D4-E5F6-4789-8ABC-1111111111AB")
+  it("redacts a string UUID and a dashed id", () => {
+    drop("traceId", "A1B2C3D4-E5F6-4789-8ABC-1111111111AB")
     drop("firmId", "1234-5678")
     drop("traceId", "ab/cd")
     drop("traceId", "ab.cd")
@@ -541,8 +554,8 @@ describe("Q15a fail-closed value shapes", () => {
     const leaked = "AyeshaKhan" + "4210112345671"
     const key = "AKIA" + "IOSFODNN7EXAMPLE"
     const google = "AIzaSy" + "ShortKey12"
-    expect(redactForObservability({ errorName: leaked, errorCode: "grpc_3", firmId: "firm_1" })).toEqual({
-      firmId: "firm_1",
+    expect(redactForObservability({ errorName: leaked, errorCode: "grpc_3", firmId: firm })).toEqual({
+      firmId: firm.text,
     })
     expect(redactForObservability({ error_name: leaked, error_code: key, code: "not_minimised" })).toEqual({
       code: "not_minimised",
@@ -575,16 +588,17 @@ describe("Q15a fail-closed value shapes", () => {
     drop("actorId", "id-4210-1123-4567-1")
     drop("requestId", "m0300_123_45_67")
     drop("firmId", "ab123456789")
-    keep("firmId", "ab12345678")
-    keep("firmId", "firm_1")
+    drop("firmId", "ab12345678")
+    drop("firmId", "firm_1")
     expect(JSON.stringify(redactForObservability({ matterId: iban }))).not.toContain("SCBL")
   })
 
-  it("keeps a 20-character Firestore auto-id under the digit cap", () => {
-    keep("firmId", "AbCdEfGhIjKlMnOpQrSt")
-    keep("matterId", "AbCdEf12345678GhJklm")
+  it("redacts a string that only matches a 20-character auto-id shape", () => {
+    drop("firmId", "AbCdEfGhIjKlMnOpQrSt")
+    drop("matterId", "AbCdEf12345678GhJklm")
     drop("actorId", "AbCdEf123456789GhJkl")
     drop("firmId", "ASIA" + "IOSFODNN7EXAMPLE")
+    drop("firmId", "MuhammadAliKhanAbbas")
   })
 
   it("redacts secret prefixes at a boundary and refused segments in an id", () => {
@@ -644,13 +658,140 @@ describe("Q15a fail-closed value shapes", () => {
     const cnic = BigInt("42101" + "1234567" + "1")
     expect(redactForObservability(cnic)).toBe(REDACTED)
     expect(String(redactForObservability(cnic))).not.toContain("4210112345671")
-    expect(redactForObservability({ count: cnic, firmId: "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ count: cnic, firmId: firm })).toEqual({ firmId: firm.text })
   })
 
   it("folds case, separators and confusable letters in field names", () => {
     expect(redactForObservability({ Code: "not_minimised" })).toEqual({ code: "not_minimised" })
-    expect(redactForObservability({ firm_id: "firm_1" })).toEqual({ firmId: "firm_1" })
-    expect(redactForObservability({ "FIRM-ID": "firm_1" })).toEqual({ firmId: "firm_1" })
-    expect(redactForObservability({ ["f\u0456rmId"]: "firm_1" })).toEqual({ firmId: "firm_1" })
+    expect(redactForObservability({ firm_id: firm })).toEqual({ firmId: firm.text })
+    expect(redactForObservability({ "FIRM-ID": firm })).toEqual({ firmId: firm.text })
+    expect(redactForObservability({ ["f\u0456rmId"]: firm })).toEqual({ firmId: firm.text })
+  })
+
+  it("Q15b L2 redacts shape-kept PII on id fields", () => {
+    const phoneUuid = "03001234-5670-4000-8000-000000000000"
+    const cnicUuid = "42101123-4567-4100-8000-000000000000"
+    const lookalike = "O3OO" + "1234567"
+    const left = "p0300123"
+    const right = "p4567"
+    const land = "tel" + "34567890"
+    const dob = "dob" + "19850312"
+    const passport = "AB" + "1234567"
+    const name = "MuhammadAliKhanAbbas"
+    for (const value of [phoneUuid, cnicUuid, lookalike, left, right, land, dob, passport, name]) {
+      drop("firmId", value)
+    }
+    const split = redactForObservability({ firmId: left, matterId: right })
+    const text = JSON.stringify(split)
+    expect(text).not.toContain("0300123")
+    expect(text).not.toContain("4567")
+    expect(text).not.toContain(lookalike)
+  })
+
+  it("Q15b L2 redacts a personal name dressed as an error class", () => {
+    const named = new Error("boom")
+    named.name = "MuhammadAliError"
+    const out = redactForObservability(named) as { errorName?: string }
+    expect(out.errorName).toBe(REDACTED)
+    expect(JSON.stringify(out)).not.toContain("Muhammad")
+  })
+
+  it("Q15b L3 keeps repo token codes by exact membership", () => {
+    for (const code of [
+      "malformed_token",
+      "missing_token",
+      "invalid_token",
+      "token_expired",
+      "token_revoked",
+      "AUTHORIZATION_FAILED",
+      "pwd_reset",
+    ]) {
+      keep("code", code)
+      keep("reason", code)
+    }
+    drop("code", "token_" + "hunter2")
+    drop("code", "password_reset")
+    drop("reason", "not_a_token_code")
+  })
+
+  it("Q15b L4 keeps URIError, tokenizer_failed and secretary_absent", () => {
+    const uri = new Error("boom")
+    uri.name = "URIError"
+    expect((redactForObservability(uri) as { errorName?: string }).errorName).toBe("URIError")
+    keep("code", "tokenizer_failed")
+    keep("reason", "secretary_absent")
+    keep("status", "tokenizer_failed")
+    keep("outcome", "secretary_absent")
+  })
+
+  it("Q15b L5 anchors AKIA, ASIA, AIZA and sk_live at a token boundary", () => {
+    keep("code", "XX" + "AKIA" + "1234")
+    keep("code", "notakia1234")
+    drop("code", "KEY_" + "AKIA" + "1234")
+    drop("code", "X_" + "ASIA" + "1234")
+    drop("code", "x" + "ghp_" + "abcdefgh")
+    drop("code", "AKIA" + "1234")
+    drop("code", "AIZA" + "1234")
+    drop("code", "sk_live_" + "abc")
+    drop("code", "xx" + "sk_live_" + "abc")
+    drop("code", "pre_" + "sk_live_" + "abc")
+  })
+
+  it("Q15b L2 and L3 keep a minted id and redact the same text", () => {
+    const uuid = mintUuid()
+    const autoId = mintFirestoreId()
+    const ulid = mintUlid()
+    const trace = mintHyphenatedId("trace", "abc")
+    const matter = mintMatterSerial(2026, 123)
+    const dated = mintDatedId(2026, 11, 15, 1)
+    expect(trace?.text).toBe("trace-abc")
+    expect(matter?.text).toBe("MATTER_2026_000123")
+    expect(dated?.text).toBe("mat_2026_11_15_001")
+    expect(autoId.text).toMatch(/^[A-Za-z0-9]{20}$/)
+    expect(ulid?.text).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
+    expect(uuid.text).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(matter!.text.replace(/\D/g, "").length).toBeGreaterThan(8)
+    expect(
+      redactForObservability({
+        traceId: uuid,
+        firmId: autoId,
+        spanId: ulid,
+        requestId: trace,
+        matterId: matter,
+        documentId: dated,
+      }),
+    ).toEqual({
+      traceId: uuid.text,
+      firmId: autoId.text,
+      spanId: ulid?.text,
+      requestId: trace?.text,
+      matterId: matter?.text,
+      documentId: dated?.text,
+    })
+    drop("traceId", uuid.text)
+    drop("firmId", autoId.text)
+    drop("spanId", ulid!.text)
+    drop("requestId", "trace-abc")
+    drop("jobId", "job-123")
+    drop("matterId", "MATTER_2026_000123")
+    drop("documentId", "mat_2026_11_15_001")
+    drop("firmId", "malformed_token")
+    expect(mintHyphenatedId("trace", "03001234567")).toBeUndefined()
+    expect(mintHyphenatedId("job", "Muhammad")).toBeUndefined()
+    expect(mintHyphenatedId("trace", "akia12")).toBeUndefined()
+    expect(mintHyphenatedId("job", "token")).toBeUndefined()
+    expect(mintMatterSerial(1999, 1)).toBeUndefined()
+    expect(mintMatterSerial(2026, 1_000_000)).toBeUndefined()
+    expect(mintDatedId(2026, 13, 1, 1)).toBeUndefined()
+    expect(mintDatedId(2026, 11, 15, 1000)).toBeUndefined()
+    expect(mintUlid(-1)).toBeUndefined()
+  })
+
+  it("does not keep a plain object that copies a minted id's text", () => {
+    const phoneUuid = "03001234-5670-4000-8000-000000000000"
+    const forged = { text: phoneUuid }
+    const out = redactForObservability({ firmId: forged }) as { firmId?: unknown }
+    expect(out.firmId).toBe(REDACTED)
+    expect(JSON.stringify(out)).not.toContain("03001234")
   })
 })

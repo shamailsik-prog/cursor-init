@@ -9,6 +9,7 @@ import {
   OBS_TRACE_EXPORTER_FLAG,
   REDACTED,
   createObservability,
+  mintUuid,
   type SignalSink,
 } from "@/platform/observability"
 
@@ -20,6 +21,7 @@ import {
 const FLAGS = [OBS_LOG_EXPORTER_FLAG, OBS_METRICS_EXPORTER_FLAG, OBS_TRACE_EXPORTER_FLAG] as const
 
 const password = "hun" + "ter2"
+const firm = mintUuid()
 const email = "person" + "@" + "example.com"
 
 function sinks(): { log: SignalSink; metrics: SignalSink; trace: SignalSink; lines: { sink: string; record: unknown }[] } {
@@ -31,10 +33,10 @@ function sinks(): { log: SignalSink; metrics: SignalSink; trace: SignalSink; lin
 }
 
 function exercise(obs: ReturnType<typeof createObservability>): void {
-  obs.log("info", "job_done", { firmId: "firm_1", password, email })
-  obs.counter("job_done", 1, { firmId: "firm_1", password })
+  obs.log("info", "job_done", { firmId: firm, password, email })
+  obs.counter("job_done", 1, { firmId: firm, password })
   obs.histogram("job_duration_ms", 12, { email })
-  const span = obs.startSpan("job_run", { firmId: "firm_1", documentText: "SECRET_PLEADING" })
+  const span = obs.startSpan("job_run", { firmId: firm, documentText: "SECRET_PLEADING" })
   span.setAttribute("note", "MATTER_NOTE")
   span.recordException(new Error("password=" + password))
   span.end("ok")
@@ -131,7 +133,7 @@ describe("Q15a exporter flags", () => {
     )
     expect(captured.lines.map((line) => line.sink)).toEqual(["log"])
     const record = captured.lines[0]?.record as Record<string, unknown>
-    expect(record).toMatchObject({ signal: "log", level: "info", event: "job_done", firmId: "firm_1" })
+    expect(record).toMatchObject({ signal: "log", level: "info", event: "job_done", firmId: firm.text })
     expect(JSON.stringify(record)).not.toContain(password)
     expect(JSON.stringify(record)).not.toContain(email)
 
@@ -161,7 +163,7 @@ describe("Q15a exporter flags", () => {
     expect(traces.lines).toHaveLength(1)
     expect(traces.lines[0]?.sink).toBe("trace")
     const span = traces.lines[0]?.record as Record<string, unknown>
-    expect(span).toMatchObject({ signal: "trace", event: "job_run", firmId: "firm_1", status: "ok" })
+    expect(span).toMatchObject({ signal: "trace", event: "job_run", firmId: firm.text, status: "ok" })
     expect(typeof span.traceId).toBe("string")
     expect(typeof span.spanId).toBe("string")
     expect(JSON.stringify(span)).not.toContain(password)
@@ -176,9 +178,9 @@ describe("Q15a exporter flags", () => {
       logSink: captured.log,
       traceSink: captured.trace,
     })
-    obs.log("INFO" as "info", "Job Done", { firmId: "firm_1" })
-    expect(captured.lines[0]?.record).toMatchObject({ level: "error", event: "invalid", firmId: "firm_1" })
-    const span = obs.startSpan("job_run", { firmId: "firm_1" })
+    obs.log("INFO" as "info", "Job Done", { firmId: firm })
+    expect(captured.lines[0]?.record).toMatchObject({ level: "error", event: "invalid", firmId: firm.text })
+    const span = obs.startSpan("job_run", { firmId: firm })
     span.end("ok")
     span.end("error")
     const traces = captured.lines.filter((line) => line.sink === "trace")
@@ -201,10 +203,10 @@ describe("Q15a exporter flags", () => {
       createObservability({
         env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
         logSink: captured.log,
-      }).log("info", "job_done", { firmId: "firm_1", code: child }),
+      }).log("info", "job_done", { firmId: firm, code: child }),
     ).not.toThrow()
     expect(reads).toBe(0)
-    expect(captured.lines[0]?.record).toMatchObject({ firmId: "firm_1", code: REDACTED })
+    expect(captured.lines[0]?.record).toMatchObject({ firmId: firm.text, code: REDACTED })
   })
 
   it("does not export an identifier-length number as a metric value", () => {
@@ -213,10 +215,10 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
       metricsSink: captured.metrics,
-    }).counter("job_done", Number(digits), { firmId: "firm_1" })
+    }).counter("job_done", Number(digits), { firmId: firm })
     expect(captured.lines).toHaveLength(1)
     expect(JSON.stringify(captured.lines[0]?.record)).not.toContain(digits)
-    expect(captured.lines[0]?.record).toMatchObject({ metric: "job_done", firmId: "firm_1" })
+    expect(captured.lines[0]?.record).toMatchObject({ metric: "job_done", firmId: firm.text })
   })
 
   it("does not export a line writer", () => {
@@ -244,7 +246,7 @@ describe("Q15a exporter flags", () => {
     const fields: Record<string, unknown> = {}
     Object.defineProperty(fields, "code", { enumerable: true, get: boom })
     const attrs = new Proxy(
-      { firmId: "firm_1" },
+      { firmId: firm },
       {
         ownKeys() {
           reads += 1
@@ -285,7 +287,7 @@ describe("Q15a exporter flags", () => {
         logSink: () => {
           throw new Error("sink")
         },
-      }).log("info", "job_done", { firmId: "firm_1" }),
+      }).log("info", "job_done", { firmId: firm }),
     ).not.toThrow()
   })
 
@@ -315,11 +317,11 @@ describe("Q15a exporter flags", () => {
     })
     for (const leak of leaks) {
       captured.lines.length = 0
-      obs.log("info", "job_done", { code: leak, reason: leak, firmId: "firm_1" })
+      obs.log("info", "job_done", { code: leak, reason: leak, firmId: firm })
       expect(captured.lines).toHaveLength(1)
       const text = JSON.stringify(captured.lines[0]?.record)
       expect(text).not.toContain(leak)
-      expect(text).toContain("firm_1")
+      expect(text).toContain(firm.text)
     }
     const named = new Error("boom")
     named.name = "Ayesha_Khan_" + "4210112345671"
@@ -339,9 +341,9 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
       metricsSink: metrics.metrics,
-    }).histogram("job_duration_ms", 4210112345.671, { firmId: "firm_1" })
+    }).histogram("job_duration_ms", 4210112345.671, { firmId: firm })
     expect(JSON.stringify(metrics.lines)).not.toContain("4210112345")
-    expect(metrics.lines[0]?.record).toMatchObject({ metric: "job_duration_ms", firmId: "firm_1" })
+    expect(metrics.lines[0]?.record).toMatchObject({ metric: "job_duration_ms", firmId: firm.text })
   })
 
   it("does not let caller fields replace signal, level, metric or value", () => {
@@ -349,12 +351,12 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
       logSink: logs.log,
-    }).log("info", "job_done", { signal: "metric", level: "debug", event: "other_event", value: 5, firmId: "firm_1" })
+    }).log("info", "job_done", { signal: "metric", level: "debug", event: "other_event", value: 5, firmId: firm })
     expect(logs.lines[0]?.record).toMatchObject({
       signal: "log",
       level: "info",
       event: "job_done",
-      firmId: "firm_1",
+      firmId: firm.text,
     })
 
     const metrics = sinks()
@@ -404,12 +406,12 @@ describe("Q15a exporter flags", () => {
     const span = createObservability({
       env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
       traceSink: traces.trace,
-    }).startSpan("job_run", { errorName: leaked, errorCode: "grpc_3", firmId: "firm_1" })
+    }).startSpan("job_run", { errorName: leaked, errorCode: "grpc_3", firmId: firm })
     span.end("ok")
     const text = JSON.stringify(traces.lines)
     expect(text).not.toContain("Ayesha")
     expect(text).not.toContain(leaked)
-    expect(traces.lines[0]?.record).toMatchObject({ firmId: "firm_1", event: "job_run" })
+    expect(traces.lines[0]?.record).toMatchObject({ firmId: firm.text, event: "job_run" })
     expect(traces.lines[0]?.record).not.toHaveProperty("errorName")
     expect(traces.lines[0]?.record).not.toHaveProperty("errorCode")
   })
@@ -419,21 +421,21 @@ describe("Q15a exporter flags", () => {
     createObservability({
       env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
       logSink: logs.log,
-    }).log("info", "job_done", { level: "x", LEVEL: "debug", firmId: "firm_1" })
-    expect(logs.lines[0]?.record).toMatchObject({ level: "info", signal: "log", event: "job_done", firmId: "firm_1" })
+    }).log("info", "job_done", { level: "x", LEVEL: "debug", firmId: firm })
+    expect(logs.lines[0]?.record).toMatchObject({ level: "info", signal: "log", event: "job_done", firmId: firm.text })
 
     const metrics = sinks()
     createObservability({
       env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
       metricsSink: metrics.metrics,
-    }).counter("job_done", 0, { value: 0, VALUE: 999, firmId: "firm_1" })
-    expect(metrics.lines[0]?.record).toMatchObject({ value: 0, signal: "metric", metric: "job_done", firmId: "firm_1" })
+    }).counter("job_done", 0, { value: 0, VALUE: 999, firmId: firm })
+    expect(metrics.lines[0]?.record).toMatchObject({ value: 0, signal: "metric", metric: "job_done", firmId: firm.text })
 
     const traces = sinks()
     const span = createObservability({
       env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
       traceSink: traces.trace,
-    }).startSpan("job_run", { traceId: "x", Trace_Id: "not-the-real-trace", firmId: "firm_1" })
+    }).startSpan("job_run", { traceId: "x", Trace_Id: "not-the-real-trace", firmId: firm })
     span.setAttribute("STATUS", "error")
     span.setAttribute("status", "error")
     span.end("ok")
@@ -443,7 +445,7 @@ describe("Q15a exporter flags", () => {
       status: "ok",
       signal: "trace",
       event: "job_run",
-      firmId: "firm_1",
+      firmId: firm.text,
     })
     expect(JSON.stringify(traces.lines)).not.toContain("not-the-real-trace")
   })
@@ -466,9 +468,9 @@ describe("Q15a exporter flags", () => {
       createObservability({
         env: { [OBS_LOG_EXPORTER_FLAG]: "enabled" },
         logSink: logs.log,
-      }).log("info", bad as unknown as string, { firmId: "firm_1" }),
+      }).log("info", bad as unknown as string, { firmId: firm }),
     ).not.toThrow()
-    expect(logs.lines[0]?.record).toMatchObject({ event: "invalid", firmId: "firm_1" })
+    expect(logs.lines[0]?.record).toMatchObject({ event: "invalid", firmId: firm.text })
   })
 
   it("does not copy an identifier-sized error code onto a span", () => {
@@ -479,12 +481,58 @@ describe("Q15a exporter flags", () => {
     const span = createObservability({
       env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
       traceSink: traces.trace,
-    }).startSpan("job_run", { firmId: "firm_1" })
+    }).startSpan("job_run", { firmId: firm })
     span.recordException(err)
     span.end("error")
     expect(traces.lines[0]?.record).not.toHaveProperty("errorCode")
     expect(JSON.stringify(traces.lines)).not.toContain(cnic)
-    expect(traces.lines[0]?.record).toMatchObject({ status: "error", firmId: "firm_1" })
+    expect(traces.lines[0]?.record).toMatchObject({ status: "error", firmId: firm.text })
+  })
+
+  it("Q15b L1 does not let a folded VALUE or DURATION_MS fill a dropped reserved field", () => {
+    const metrics = sinks()
+    const obs = createObservability({
+      env: { [OBS_METRICS_EXPORTER_FLAG]: "enabled" },
+      metricsSink: metrics.metrics,
+    })
+    obs.counter("c", 1e9, { VALUE: 5 })
+    expect(metrics.lines[0]?.record).not.toHaveProperty("value")
+    expect(JSON.stringify(metrics.lines[0]?.record)).not.toContain("5")
+
+    metrics.lines.length = 0
+    obs.counter("c", Number.NaN, { Value: 7 })
+    expect(metrics.lines[0]?.record).not.toHaveProperty("value")
+    expect(JSON.stringify(metrics.lines[0]?.record)).not.toContain("7")
+
+    metrics.lines.length = 0
+    obs.counter("c", 1e9, { "V-A-L-U-E": 5 })
+    expect(metrics.lines[0]?.record).not.toHaveProperty("value")
+
+    let clock = 0
+    vi.spyOn(performance, "now").mockImplementation(() => clock)
+    const traces = sinks()
+    const span = createObservability({
+      env: { [OBS_TRACE_EXPORTER_FLAG]: "enabled" },
+      traceSink: traces.trace,
+    }).startSpan("job_run", { DURATION_MS: 12 })
+    clock = 86_400_001
+    span.setAttribute("Duration_Ms", 12)
+    span.setAttribute("DURATION-MS", 12)
+    span.end("ok")
+    const record = traces.lines[0]?.record as Record<string, unknown>
+    expect(record).not.toHaveProperty("durationMs")
+    expect(JSON.stringify(record)).not.toContain("durationMs")
+    expect(JSON.stringify(record)).not.toContain("DURATION")
+  })
+
+  it("Q15b L4 drops dead hyphen prefixes and keeps the live ones", () => {
+    const source = readFileSync(path.resolve(__dirname, "../platform/observability/redact.ts"), "utf8")
+    for (const dead of ['"key-"', '"sess-"', '"xoxa-"', '"xoxr-"', '"xoxs-"']) {
+      expect(source).not.toContain(dead)
+    }
+    for (const live of ['"xoxb-"', '"xoxp-"', '"sk_live_"', '"akia"', '"asia"', '"aiza"']) {
+      expect(source).toContain(live)
+    }
   })
 
   it("has no network exporter in the observability sources", () => {
