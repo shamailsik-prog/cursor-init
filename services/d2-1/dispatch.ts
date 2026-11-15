@@ -85,6 +85,50 @@ function remember(userId: string, action: string, items: Numbered[]) {
   if (items.length > 0) threads.set(userId, { action, items })
 }
 
+function tombstoned(matter: object): boolean {
+  return "deleted" in matter && (matter as { deleted?: unknown }).deleted === true
+}
+
+/** The cached row is checked again against the store: membership, clearance, and the draft's own classification. */
+function visibleNow(store: SpineStore, userId: string, action: string, item: Numbered): { allow: boolean; reason: string } {
+  const user = store.users.get(userId)
+  if (!user) return { allow: false, reason: "no-user" }
+
+  if (action === "draft") {
+    const draft = store.drafts.get(item.id)
+    if (!draft || draft.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
+    const permission = permitWhatsApp(store, userId, "draft", draft.matterId)
+    if (!permission.allow) return permission
+    if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(draft.classification)) return { allow: false, reason: "clearance" }
+    return permission
+  }
+
+  if (action === "list_matters") {
+    const permission = permitWhatsApp(store, userId, action)
+    if (!permission.allow) return permission
+    const matter = store.matters.get(item.id)
+    if (!matter || matter.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
+    if (tombstoned(matter)) return { allow: false, reason: "matter-deleted" }
+    if (!listMattersForUser(store, userId).some((row) => row.id === item.id)) return { allow: false, reason: "not-member" }
+    if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(matter.classification)) return { allow: false, reason: "clearance" }
+    return permission
+  }
+
+  if (action === "client.read") {
+    const permission = permitWhatsApp(store, userId, action)
+    if (!permission.allow) return permission
+    const entity = store.entities.get(item.id)
+    if (!entity || entity.firmId !== user.firmId) return { allow: false, reason: "cross-firm" }
+    if (rankOf(user.clearanceLevel) < rankOfStoredOrMax(entity.classification)) return { allow: false, reason: "clearance" }
+    if (!listMattersForUser(store, userId).some((matter) => matter.clientId === entity.id)) {
+      return { allow: false, reason: "not-member" }
+    }
+    return permission
+  }
+
+  return permitWhatsApp(store, userId, action)
+}
+
 export async function dispatchWhatsApp(
   store: SpineStore,
   userId: string,
@@ -103,10 +147,14 @@ export async function dispatchWhatsApp(
   if (parsed.kind === "reply") {
     const stored = threads.get(userId)
     const action = stored?.action ?? "research"
-    const permission = permitWhatsApp(store, userId, action)
-    if (!permission.allow) return denied("open", permission)
     const item = stored?.items[parsed.n - 1]
-    if (!item) return { ok: false, error: "no_list", command: "open", permission, text: "no list" }
+    if (!item) {
+      const permission = permitWhatsApp(store, userId, action)
+      if (!permission.allow) return denied("open", permission)
+      return { ok: false, error: "no_list", command: "open", permission, text: "no list" }
+    }
+    const permission = visibleNow(store, userId, action, item)
+    if (!permission.allow) return denied("open", permission)
     return { ok: true, command: "open", permission, opened: item, text: `${item.n}. ${item.title}` }
   }
 
@@ -175,6 +223,7 @@ export async function dispatchWhatsApp(
     const visible = [...store.drafts.values()]
       .filter((draft) => draft.firmId === user.firmId && matters.some((matter) => matter.id === draft.matterId))
       .filter((draft) => permitWhatsApp(store, userId, "draft", draft.matterId).allow)
+      .filter((draft) => rankOf(user.clearanceLevel) >= rankOfStoredOrMax(draft.classification))
       .sort((a, b) => a.id.localeCompare(b.id))
       .slice(0, PAGE)
       .map((draft, index) => ({ n: index + 1, id: draft.id, title: draft.title, matterId: draft.matterId }))

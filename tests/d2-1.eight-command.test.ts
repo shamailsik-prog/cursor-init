@@ -20,13 +20,15 @@ import {
   permitWhatsApp,
   resetD2WhatsAppThreadsForTests,
 } from "@/services/d2-1/dispatch"
-import { StubWhatsAppTransport } from "@/services/d2-1/transport"
+import { StubWhatsAppTransport, webhookStub } from "@/services/d2-1/transport"
 import {
   handleWhatsAppWebhook,
   resetD2WhatsAppWebhookForTests,
   type WebhookDeps,
 } from "@/services/d2-1/webhook"
 import { POST as whatsAppPost } from "@/app/api/d2/whatsapp/route"
+import { setRequestAuditSinkForTests } from "@/platform/persistence/requestAuditFlush"
+import { getRuntimeStore, resetRuntimeStoreForTests } from "@/platform/spine/runtimeStore"
 
 /**
  * Q14a / FA-D2WA-002. The eight commands are Layer 18 §8
@@ -107,6 +109,7 @@ function deps(store: SpineStore, transport: StubWhatsAppTransport, extra: Partia
       if (!key) throw new Error("Idempotency-Key header required")
       return key
     },
+    persistAudit: async () => {},
     ...extra,
   }
 }
@@ -372,6 +375,69 @@ describe("dispatcher: eight commands through decide()", () => {
     expect(denied.opened).toBeUndefined()
   })
 
+  it("a draft above the caller's clearance is omitted, including its title", async () => {
+    const store = newStore()
+    seedUser(store, { id: "staff", firmId: "firmA", role: "associate", clearanceLevel: "internal" })
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client1",
+      title: "Visible matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "staff", "firmA")
+    store.drafts.set("dr-hidden", {
+      id: "dr-hidden",
+      firmId: "firmA",
+      matterId: matter.id,
+      templateId: "t",
+      title: "Hidden plea",
+      body: "Body",
+      classification: "privileged-restricted",
+      createdBy: "staff",
+      createdAt: 1,
+      status: "draft",
+    })
+    const result = await dispatchWhatsApp(store, "staff", "/drafts")
+    expect(result.ok).toBe(true)
+    expect(result.drafts).toEqual([])
+    expect(result.text).not.toContain("Hidden plea")
+  })
+
+  it("open rechecks the draft after membership is removed", async () => {
+    const store = newStore()
+    user(store, "staff", "associate")
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: "client1",
+      title: "Draft matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "staff", "firmA")
+    store.drafts.set("dr1", {
+      id: "dr1",
+      firmId: "firmA",
+      matterId: matter.id,
+      templateId: "t",
+      title: "Plea",
+      body: "Body",
+      classification: "internal",
+      createdBy: "staff",
+      createdAt: 1,
+      status: "draft",
+    })
+    const listed = await dispatchWhatsApp(store, "staff", "/drafts")
+    expect(listed.drafts?.map((row) => row.title)).toEqual(["Plea"])
+    store.members.delete(store.memberKey(matter.id, "staff"))
+    const opened = await dispatchWhatsApp(store, "staff", "open 1")
+    expect(opened.ok).toBe(false)
+    expect(opened.denied).toBe(true)
+    expect(opened.opened).toBeUndefined()
+    expect(opened.text).toBe("permission denied")
+    expect(opened.text).not.toContain("Plea")
+  })
+
   it("a cut command is refused before decide() allow and before the research reader", async () => {
     const store = newStore()
     user(store, "staff", "partner")
@@ -607,5 +673,97 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
     expect(transport.sent).toHaveLength(1)
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()
+  })
+
+  it("does not send or cache a result when the permission audit cannot be persisted", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const store = newStore()
+    user(store, "clerk1", "clerk")
+    const transport = new StubWhatsAppTransport()
+    let executed = 0
+    const payload = { messageId: "wamid.audit", userId: "clerk1", text: "/help" }
+    const refused = await handleWhatsAppWebhook(signed(payload), {
+      ...deps(store, transport),
+      persistAudit: async () => {
+        throw new Error("audit store down")
+      },
+      execute: async (current, userId, text) => {
+        executed += 1
+        return dispatchWhatsApp(current, userId, text, { now: NOW })
+      },
+    })
+    expect(refused.status).toBe(503)
+    expect(await refused.json()).toEqual({ error: "audit_unavailable" })
+    expect(transport.sent).toEqual([])
+    const retried = await handleWhatsAppWebhook(signed(payload), {
+      ...deps(store, transport),
+      execute: async (current, userId, text) => {
+        executed += 1
+        return dispatchWhatsApp(current, userId, text, { now: NOW })
+      },
+    })
+    expect(retried.status).toBe(200)
+    expect(executed).toBe(2)
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("overlapping deliveries of one message id dispatch and send once", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const store = newStore()
+    user(store, "clerk1", "clerk")
+    const transport = new StubWhatsAppTransport()
+    let executed = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const payload = { messageId: "wamid.race", userId: "clerk1", text: "/help" }
+    const call = () =>
+      handleWhatsAppWebhook(signed(payload), {
+        ...deps(store, transport),
+        execute: async (current, userId, text) => {
+          executed += 1
+          entered()
+          await gate
+          return dispatchWhatsApp(current, userId, text, { now: NOW })
+        },
+      })
+    const first = call()
+    await started
+    const second = call()
+    release()
+    const [left, right] = await Promise.all([first, second])
+    expect(left.status).toBe(200)
+    expect(right.status).toBe(200)
+    expect(await right.json()).toEqual(await left.json())
+    expect(executed).toBe(1)
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("the route persists the permission audit before it returns a result", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    vi.stubEnv("WHATSAPP_APP_SECRET", SECRET)
+    resetRuntimeStoreForTests()
+    const store = getRuntimeStore()
+    user(store, "clerk1", "clerk")
+    const seen: string[] = []
+    setRequestAuditSinkForTests(async (rows) => {
+      expect(webhookStub.sent).toHaveLength(0)
+      seen.push(...rows.map((row) => row.action))
+    })
+    try {
+      const response = await whatsAppPost(signed({ messageId: "wamid.route", userId: "clerk1", text: "/help" }))
+      expect(response.status).toBe(200)
+      expect(seen).toContain("permission_check")
+      expect(webhookStub.sent).toHaveLength(1)
+    } finally {
+      setRequestAuditSinkForTests(null)
+      resetRuntimeStoreForTests()
+      resetD2WhatsAppWebhookForTests()
+    }
   })
 })

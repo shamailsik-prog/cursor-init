@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
-import type { SpineStore } from "@/platform/spine/store"
+import { runWithRequestAudit } from "@/platform/audit/requestAudit"
+import { flushRequestAudit } from "@/platform/persistence/requestAuditFlush"
+import type { AuditEntry, SpineStore } from "@/platform/spine/store"
 import { dispatchWhatsApp, resetD2WhatsAppThreadsForTests, type WhatsAppDispatch } from "./dispatch"
 import { D2_WHATSAPP_GRAMMAR_FLAG, isD2WhatsAppGrammarEnabled } from "./grammar"
 import { webhookStub, type WhatsAppTransport } from "./transport"
@@ -15,10 +17,16 @@ const DEDUPE_LIMIT = 1000
 
 type Cached = { status: number; body: unknown }
 
-const seen = new Map<string, Cached>()
+type Slot = {
+  promise: Promise<Cached>
+}
+
+const seen = new Map<string, Slot>()
+const settled: string[] = []
 
 export function resetD2WhatsAppWebhookForTests(): void {
   seen.clear()
+  settled.length = 0
   webhookStub.sent.length = 0
   resetD2WhatsAppThreadsForTests()
 }
@@ -31,6 +39,8 @@ export type WebhookDeps = {
   requireIdempotencyKey?: (request: Request) => string
   readResearch?: (query: string) => Promise<{ title: string }[]>
   execute?: (store: SpineStore, userId: string, text: string) => Promise<WhatsAppDispatch>
+  /** Persists the request's permission-audit rows. Defaults to flushRequestAudit. */
+  persistAudit?: (rows: readonly AuditEntry[]) => Promise<void>
 }
 
 function json(status: number, body: unknown): Response {
@@ -97,13 +107,43 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
     return json(400, { error: "invalid_message" })
   }
 
-  const cached = seen.get(messageId)
-  if (cached) return json(cached.status, cached.body)
+  const existing = seen.get(messageId)
+  if (existing) {
+    const cached = await existing.promise
+    return json(cached.status, cached.body)
+  }
+
+  let finish!: (cached: Cached, retain: boolean) => void
+  const promise = new Promise<Cached>((resolve) => {
+    finish = (cached, retain) => {
+      if (!retain) seen.delete(messageId)
+      else keepSettled(messageId)
+      resolve(cached)
+    }
+  })
+  seen.set(messageId, { promise })
 
   const store = deps.store()
-  const result = deps.execute
-    ? await deps.execute(store, userId, text)
-    : await dispatchWhatsApp(store, userId, text, { now: deps.now, readResearch: deps.readResearch })
+  const outcome = await runWithRequestAudit(() =>
+    deps.execute
+      ? deps.execute(store, userId, text)
+      : dispatchWhatsApp(store, userId, text, { now: deps.now, readResearch: deps.readResearch })
+  )
+  if ("error" in outcome) {
+    const failed = { status: 500, body: { error: "webhook_failed" } }
+    finish(failed, false)
+    return json(failed.status, failed.body)
+  }
+
+  try {
+    await (deps.persistAudit ?? flushRequestAudit)(outcome.rows)
+  } catch {
+    const unavailable = { status: 503, body: { error: "audit_unavailable" } }
+    finish(unavailable, false)
+    return json(unavailable.status, unavailable.body)
+  }
+
+  const result = outcome.value
   const sent = await deps.transport.send({ toUserId: userId, text: result.text })
   const body = {
     ok: result.ok,
@@ -114,10 +154,15 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
     transport: sent.transport,
   }
   const status = statusOf(result)
-  if (seen.size >= DEDUPE_LIMIT) {
-    const oldest = seen.keys().next().value
+  const cached = { status, body }
+  finish(cached, true)
+  return json(status, body)
+}
+
+function keepSettled(messageId: string): void {
+  settled.push(messageId)
+  while (settled.length > DEDUPE_LIMIT) {
+    const oldest = settled.shift()
     if (oldest) seen.delete(oldest)
   }
-  seen.set(messageId, { status, body })
-  return json(status, body)
 }
