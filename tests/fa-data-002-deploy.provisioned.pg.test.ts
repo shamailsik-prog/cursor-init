@@ -13,6 +13,7 @@
  * This file does not grant DML to make the trigger test pass. Runtime against a deployed corpus
  * database is not what this container proves.
  */
+import { randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -36,7 +37,7 @@ const REFUSAL = "re-apply 007/008 with 15-apply-annex-a.sh"
 const JUDGMENT = "00000000-0000-0000-0000-0000000002b1"
 const VECTOR = `(('[' || repeat('0,', 1535) || '0]')::vector)`
 
-const container = `q02b-deploy-${process.pid}`
+const container = `q02b-deploy-${process.pid}-${randomBytes(4).toString("hex")}`
 
 type Cmd = { status: number; stdout: string; stderr: string }
 
@@ -139,9 +140,16 @@ describe("FA-DATA-002-DEPLOY-001 provisioned corpus database", () => {
       const ping = docker(["exec", "-u", "postgres", container, "pg_isready", "-U", "postgres", "-d", "legal_scraper"])
       const logs = docker(["logs", container])
       ready = `${logs.stdout}\n${logs.stderr}`
-      if (ping.status === 0 && ready.includes("Annex A (001, 003, 004, 005, 006, 007, 008) applied")
+      // The entrypoint's temporary server is ready, and logs the Annex A line, before it
+      // shuts that server down and starts the real one. Wait until init has finished and
+      // the post-init server has logged that it is ready, then prove a query.
+      const initAt = ready.lastIndexOf("PostgreSQL init process complete; ready for start up.")
+      const serverUp = initAt >= 0 && ready.slice(initAt).includes("database system is ready to accept connections")
+      if (ping.status === 0 && serverUp
+          && ready.includes("Annex A (001, 003, 004, 005, 006, 007, 008) applied")
           && ready.includes(`roles ${MIG_USER} (schema owner) and ${APP_USER} (runtime DML) ready`)) {
-        return
+        const probe = psql("legal_scraper", "SELECT 1")
+        if (probe.status === 0 && probe.stdout.trim() === "1") return
       }
       const state = docker(["inspect", "-f", "{{.State.Status}}", container])
       if (state.stdout.trim() === "exited") {

@@ -10,6 +10,10 @@ redis
 # Audit F25: scraper/net/fetch_policy.py guards httpx 0.28's transport layout.
 httpx==0.28.1
 beautifulsoup4
+# CVE-2026-126190: beautifulsoup4 requires soupsieve>=1.6.1. 3.0.4 is the
+# descendant-combinator DoS. 4.1.1 is the current fixed release (4.0 is the
+# minimum fix). Court scrapers call BeautifulSoup.select(), which is soupsieve.
+soupsieve==4.1.1
 lxml
 pdfplumber
 pytesseract
@@ -22,6 +26,9 @@ weasyprint
 python-dateutil
 # Audit F31: scraper/models.py imports pgvector.sqlalchemy at module load.
 pgvector==0.5.0
+# CVE-2026-126360: fastapi requires opentelemetry-api>=1.44.0. 1.45.1 is the
+# traceparent ReDoS. 1.45.2 is the patched release. Hashed deploy input.
+opentelemetry-api==1.45.2
 # Direct imports (F31 import contract); pinned here so the runtime set matches the code.
 anyio
 certifi
