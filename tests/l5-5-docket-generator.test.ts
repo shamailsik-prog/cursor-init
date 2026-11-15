@@ -762,7 +762,11 @@ describe("L5.5 ambiguity queue", () => {
       ...annexure,
       assignedLabel: index === 0 ? "P/1" : "P/2",
     }))
-    for (const phrase of ["Main Street. P/3", "same block. P/3", "the form, P/3"]) {
+    for (const phrase of [
+      "He lives on Main Street. P/3 is the deed.",
+      "He lives in the same block. P/3 is the map.",
+      "The plaintiff signed the form, P/3.",
+    ]) {
       const result = await generateDocket({
         ...ambiguous,
         draft: { body: `The plaintiff relies on P/1 and then P/2. ${phrase}.` },
@@ -925,6 +929,369 @@ describe("L5.5 ambiguity queue", () => {
     expect(result.pdf).not.toBeNull()
     expect(result.docx).not.toBeNull()
     expect(result.queue).toEqual([])
+  })
+
+  it('refuses "Relies on P/1, P/2 and P/99 which is the deed."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "Relies on P/1, P/2 and P/99 which is the deed." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.docx).toBeNull()
+    expect(result.queue.some((entry) => entry.code === "ref_unresolved" && entry.detail.includes("P/99"))).toBe(true)
+  })
+
+  it('refuses "The receipt R/1 proves payment."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. The receipt R/1 proves payment." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("R/1"))).toBe(true)
+  })
+
+  it('refuses "D/1 was produced by the defendant."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. D/1 was produced by the defendant." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("D/1"))).toBe(true)
+  })
+
+  it('refuses "Agreement P/3 dated 01.01.2020 was executed at Karachi."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. Agreement P/3 dated 01.01.2020 was executed at Karachi." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("P/3"))).toBe(true)
+  })
+
+  it('refuses "The deed (P/3) proves title."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. The deed (P/3) proves title." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("P/3"))).toBe(true)
+  })
+
+  it('refuses "The order P/3 was passed." on a letter docket', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The order P/3 was passed.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("P/3"))).toBe(true)
+  })
+
+  it('refuses "The order P/9 was passed." on an enclosure docket', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...enclosures,
+      draft: { body: `${enclosures.draft.body} The order P/9 was passed.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("P/9"))).toBe(true)
+  })
+
+  it('refuses "Annexure AB"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The list includes Annexure AB.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "Annexure ABC"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The list includes Annexure ABC.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "Annexure AB-1"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The list includes Annexure AB-1.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "Annexure Four"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The list includes Annexure Four.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "Enclosure nine"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...enclosures,
+      draft: { body: `${enclosures.draft.body} The letter also mentions Enclosure nine.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "the fourth annexure, D"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner refers to the fourth annexure, D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("D"))).toBe(true)
+  })
+
+  it('refuses "Annex-" broken across a line', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The list stops at Annex-\n` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "C but not D"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures C but not D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "nor"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures C nor D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "followed by"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexure C followed by D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "then" between labels', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures C then D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "plus"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures C plus D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "with"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures C with D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "A…D"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures A\u2026D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "A...D"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexures A...D.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('refuses "et seq."', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The petitioner relies on Annexure A et seq.` },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.pdf).toBeNull()
+    expect(result.queue.some((entry) => entry.detail.includes("without a label expression"))).toBe(true)
+  })
+
+  it('generates "Annexure A, Annexure B or Annexure C" when every annexure exists', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: "Annexure A, Annexure B or Annexure C." },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it('generates "D-45/2, Block 5"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...petition,
+      draft: { body: `${petition.draft.body} The house is D-45/2, Block 5.` },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it('generates glued "p.3, para 4"', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. See p.3, para 4 of the judgment." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it('generates a spaced "p. 3" page reference and fails if that rule is removed', async () => {
+    enableFlag()
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2. See p. 3 of the judgment. See pp. 4 of the judgment." },
+      annexures: ambiguous.annexures.map((annexure, index) => ({
+        ...annexure,
+        assignedLabel: index === 0 ? "P/1" : "P/2",
+      })),
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.queue).toEqual([])
+  })
+
+  it("cites assigned Annexures A-1, A-2 and A-3 through the same grammar", async () => {
+    enableFlag()
+    const base = ambiguous.annexures[0]
+    if (!base) throw new Error("ambiguous fixture has no annexure")
+    const result = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on Annexures A-1, A-2 and A-3." },
+      annexures: [1, 2, 3].map((n) => ({
+        ...base,
+        assignedLabel: `A-${n}`,
+        metadata: { ...base.metadata, artifactId: `sub-${n}`, label: `Sub ${n}`, sourceRef: `sub-${n}` },
+        body: `Sub annexure ${n}.`,
+      })),
+    })
+    expect(result.ok).toBe(true)
+    expect(result.pdf).not.toBeNull()
+    expect(result.docx).not.toBeNull()
+    expect(result.queue).toEqual([])
+
+    const doubled = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on Annexure AA." },
+      annexures: [
+        {
+          ...base,
+          assignedLabel: "AA",
+          metadata: { ...base.metadata, artifactId: "sub-aa", label: "Doubled", sourceRef: "sub-aa" },
+          body: "Doubled annexure.",
+        },
+      ],
+    })
+    expect(doubled.ok).toBe(true)
+    expect(doubled.pdf).not.toBeNull()
+    expect(doubled.queue).toEqual([])
   })
 })
 
