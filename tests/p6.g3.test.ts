@@ -393,6 +393,200 @@ describe("G3 master owned (Layer 18 §10)", () => {
     expect((await store.getProposal(pending.id))?.status).toBe("pending")
   })
 
+  it("FA-Q07-R2-006: insertProposal refuses approved and other terminal statuses", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.insert"), store)
+    const base = {
+      ...pending,
+      id: "00000000-0000-4000-8000-000000000099",
+      decidedBy: null,
+      decidedKind: null,
+      decidedRole: null,
+      declassify: false,
+    }
+    for (const status of ["approved", "applied", "rejected"] as const) {
+      await expect(store.insertProposal({ ...base, status })).rejects.toThrow(/new proposals are pending/)
+      expect(await store.getProposal(base.id)).toBeNull()
+    }
+    await expect(
+      store.insertProposal({
+        ...base,
+        status: "pending",
+        decidedBy: "partner_b",
+        decidedKind: "partner",
+        decidedRole: "partner",
+      }),
+    ).rejects.toThrow(/new proposals are pending/)
+    expect(await store.getProposal(base.id)).toBeNull()
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+  })
+
+  it("FA-Q07-R2-006: saveProposal cannot stamp partner approval fields", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.stamp"), store)
+    await expect(
+      store.saveProposal({
+        ...pending,
+        status: "pending",
+        decidedBy: "partner_b",
+        decidedKind: "partner",
+        decidedRole: "partner",
+        declassify: true,
+      }),
+    ).rejects.toThrow(/approval is not a direct status change/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    expect((await store.getProposal(pending.id))?.decidedBy).toBeNull()
+  })
+
+  it("FA-Q07-R2-006: casProposal refuses a direct move into approved", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.cas"), store)
+    const approved = {
+      ...pending,
+      status: "approved" as const,
+      decidedBy: "partner_b",
+      decidedKind: "partner" as const,
+      decidedRole: "partner",
+      declassify: true,
+    }
+    await store.runExclusive(async (tx) => {
+      await expect(tx.casProposal(approved, "pending")).rejects.toThrow(/approval is not a direct status change/)
+    })
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    expect((await store.getProposal(pending.id))?.decidedBy).toBeNull()
+    await expect(
+      store.commitVersion({
+        firmId: pending.firmId,
+        proposalId: pending.id,
+        action: "apply",
+        diff: { key: pending.entryKey, partition: "mutable", before: { entries: {} }, after: { entries: {} } },
+        snapshot: { entries: {} },
+        authorId: "partner_b",
+        authorKind: "partner",
+        restoredFromVersionId: null,
+        classification: "confidential",
+        proposal: approved,
+        expectedBaseVersionId: null,
+      }),
+    ).rejects.toThrow(/approval is not a direct status change/)
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    expect(await store.listVersions("firmA")).toEqual([])
+    await approveProposal(pending.id, PARTNER, store)
+    const applied = await applyChange(pending.id, store)
+    expect(applied.masterWritten).toBe(true)
+    expect((await store.getProposal(pending.id))?.decidedBy).toBe("partner_a")
+  })
+
+  it("FA-Q07-R2-006: casProposal only follows the explicit transition table", async () => {
+    const store = p6Store()
+    const pending = await proposeChange(substantive("clause.transition"), store)
+    await store.runExclusive(async (tx) => {
+      await expect(
+        tx.casProposal({ ...pending, status: "rejected" }, "pending"),
+      ).rejects.toThrow(/proposal status transition is refused/)
+      await expect(
+        tx.casProposal(
+          {
+            ...pending,
+            status: "applied",
+            decidedBy: "partner_b",
+            decidedKind: "partner",
+            decidedRole: "partner",
+          },
+          "pending",
+        ),
+      ).rejects.toThrow(/approval is not a direct status change/)
+      await expect(
+        tx.casProposal(
+          { ...pending, status: "applied", decidedBy: "p6", decidedKind: "system", decidedRole: "system" },
+          "pending",
+        ),
+      ).rejects.toThrow(/proposal status transition is refused/)
+    })
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    await approveProposal(pending.id, PARTNER, store)
+    const approved = await store.getProposal(pending.id)
+    await store.runExclusive(async (tx) => {
+      await expect(tx.casProposal({ ...approved!, status: "pending" }, "approved")).rejects.toThrow(
+        /proposal status transition is refused/,
+      )
+    })
+    expect((await store.getProposal(pending.id))?.status).toBe("approved")
+    const applied = await applyChange(pending.id, store)
+    expect(applied.masterWritten).toBe(true)
+    const row = await store.getProposal(pending.id)
+    await store.runExclusive(async (tx) => {
+      await expect(
+        tx.casProposal(
+          { ...row!, status: "approved", decidedBy: "partner_b", decidedKind: "partner", decidedRole: "partner" },
+          "applied",
+        ),
+      ).rejects.toThrow(/approval is not a direct status change/)
+    })
+    expect((await store.getProposal(pending.id))?.status).toBe("applied")
+    const seed = await proposeChange(
+      { ...substantive("clause.order"), payload: { order: ["b", "a"] } },
+      store,
+    )
+    await approveProposal(seed.id, { actorId: "partner_b", kind: "partner", role: "partner" }, store)
+    await applyChange(seed.id, store)
+    const cosmeticPending = await proposeChange(
+      { ...cosmetic(), classification: "confidential", payload: { order: ["b", " a"] } },
+      store,
+    )
+    expect(cosmeticPending.changeClass).toBe("cosmetic")
+    const cosmeticApplied = await applyChange(cosmeticPending.id, store)
+    expect(cosmeticApplied.masterWritten).toBe(true)
+    expect((await store.getProposal(cosmeticPending.id))?.decidedKind).toBe("system")
+  })
+
+  it("FA-Q07-R2-006: NFKC and default-ignorables do not split one actor", async () => {
+    const store = p6Store()
+    const pending = await proposeChange({ ...substantive("clause.actor"), proposedBy: "partner_a" }, store)
+    const disguises = [
+      "partner_a\u200D",
+      "part\u200Cner_a",
+      "partner_\u200Ba",
+      "partner_a\u00AD",
+      "\uFEFFpartner_a",
+      "partner_a\uFE0E",
+      "partner_\u202Ea",
+      "\uFF50\uFF41\uFF52\uFF54\uFF4E\uFF45\uFF52\uFF3F\uFF41",
+    ]
+    for (const actorId of disguises) {
+      await expect(
+        approveProposal(pending.id, { actorId, kind: "partner", role: "partner" }, store),
+      ).rejects.toThrow(/differ from proposer/)
+    }
+    expect((await store.getProposal(pending.id))?.status).toBe("pending")
+    await expect(
+      approveProposal(pending.id, { actorId: "\u200B\u200C\u200D\uFEFF", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/partner approval/)
+    const folded = await proposeChange({ ...substantive("clause.eszett"), proposedBy: "straße" }, store)
+    await expect(
+      approveProposal(folded.id, { actorId: "STRASSE", kind: "partner", role: "partner" }, store),
+    ).rejects.toThrow(/differ from proposer/)
+    expect((await store.getProposal(folded.id))?.status).toBe("pending")
+    await approveProposal(pending.id, { actorId: "partner_b\u200D", kind: "partner", role: "partner" }, store)
+    expect((await store.getProposal(pending.id))?.status).toBe("approved")
+    expect((await store.getProposal(pending.id))?.decidedBy).toBe("partner_b\u200D")
+  })
+
+  it("FA-Q07-R2-006: the proposal transition table is enforced in the master DDL", () => {
+    const sql = readFileSync("postgres/ddl/009_p6_master.sql", "utf8")
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.p6_actor_key/)
+    expect(sql).toMatch(/normalize\([\s\S]*?NFKC/)
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.p6_enforce_proposal_transition/)
+    expect(sql).toMatch(/new proposals are pending/)
+    expect(sql).toMatch(/approval is not a direct status change/)
+    expect(sql).toMatch(/approver must differ from proposer/)
+    expect(sql).toMatch(/proposal status transition is refused/)
+    expect(sql).toMatch(
+      /CREATE TRIGGER change_proposals_status_transition[\s\S]*?p6_enforce_proposal_transition\s*\(/,
+    )
+    expect(sql).toMatch(/decided_by IS NOT NULL/)
+  })
+
   it("FA-Q07-DDL-008: LEARNERS_ENABLED is seeded in its own file, not in 002", () => {
     expect(readFileSync("postgres/ddl/002_platform.sql", "utf8")).not.toMatch(/LEARNERS_ENABLED/)
     expect(readFileSync("postgres/ddl/010_p6_learners_flag.sql", "utf8")).toMatch(

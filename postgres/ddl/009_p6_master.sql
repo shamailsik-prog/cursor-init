@@ -8,6 +8,9 @@
 -- That bypass is a residual, not a privilege.
 -- master_versions is append-only: no update, no row removal, and no truncate.
 -- A proposal payload is frozen from the moment it is stored. Approval is bound to payload_hash.
+-- A new proposal is pending. The only way to approved is pending -> approved with a partner
+-- attestation and an actor key that differs from the proposer. CAS may only apply:
+-- pending -> applied for a cosmetic system decision, and approved -> applied with the decision unchanged.
 -- A classification downgrade is refused
 -- unless the transaction set p6.declassify to partner. Learners stay off: this file grants them nothing.
 
@@ -37,8 +40,14 @@ CREATE TABLE IF NOT EXISTS public.change_proposals (
   declassify BOOLEAN NOT NULL DEFAULT false,
   payload_hash TEXT NOT NULL DEFAULT '',
   CONSTRAINT substantive_partner_approval CHECK (
-    (status NOT IN ('approved','applied') OR change_class <> 'substantive')
-    OR (decided_kind = 'partner' AND decided_role = 'partner')
+    status NOT IN ('approved','applied')
+    OR change_class <> 'substantive'
+    OR (
+      decided_kind = 'partner'
+      AND decided_role = 'partner'
+      AND decided_by IS NOT NULL
+      AND btrim(decided_by) <> ''
+    )
   )
 );
 
@@ -61,6 +70,18 @@ CREATE TABLE IF NOT EXISTS public.master_versions (
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS requested_class TEXT;
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS declassify BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.change_proposals ADD COLUMN IF NOT EXISTS payload_hash TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE public.change_proposals DROP CONSTRAINT IF EXISTS substantive_partner_approval;
+ALTER TABLE public.change_proposals ADD CONSTRAINT substantive_partner_approval CHECK (
+  status NOT IN ('approved','applied')
+  OR change_class <> 'substantive'
+  OR (
+    decided_kind = 'partner'
+    AND decided_role = 'partner'
+    AND decided_by IS NOT NULL
+    AND btrim(decided_by) <> ''
+  )
+);
 
 CREATE UNIQUE INDEX IF NOT EXISTS master_versions_one_proposal
   ON public.master_versions (proposal_id)
@@ -205,11 +226,170 @@ REVOKE ALL ON FUNCTION public.p6_bind_payload_hash() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_freeze_approved_payload() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_classification_rank(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.p6_refuse_class_downgrade() FROM PUBLIC;
+
+-- Actor key: NFKC, drop default-ignorables, trim, lower-case, fold ß to ss.
+CREATE OR REPLACE FUNCTION public.p6_actor_key(value text) RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = pg_catalog, public
+AS $fn$
+DECLARE
+  folded text := normalize(coalesce(value, ''), NFKC);
+  out text := '';
+  i integer := 1;
+  ch text;
+  cp integer;
+BEGIN
+  WHILE i <= char_length(folded) LOOP
+    ch := substr(folded, i, 1);
+    cp := ascii(ch);
+    IF NOT (
+      cp = 173 OR cp = 847 OR cp = 1564
+      OR cp BETWEEN 4447 AND 4448
+      OR cp BETWEEN 6068 AND 6069
+      OR cp BETWEEN 6155 AND 6159
+      OR cp BETWEEN 8203 AND 8207
+      OR cp BETWEEN 8234 AND 8238
+      OR cp BETWEEN 8288 AND 8303
+      OR cp = 12644
+      OR cp BETWEEN 65024 AND 65039
+      OR cp = 65279
+      OR cp = 65440
+      OR cp BETWEEN 65520 AND 65528
+      OR cp BETWEEN 113824 AND 113827
+      OR cp BETWEEN 119155 AND 119162
+      OR cp BETWEEN 917504 AND 921599
+    ) THEN
+      out := out || ch;
+    END IF;
+    i := i + 1;
+  END LOOP;
+  RETURN replace(lower(replace(btrim(out), chr(7838), chr(223))), chr(223), 'ss');
+END;
+$fn$;
+
+-- Explicit transitions:
+--   INSERT -> pending, with no decision
+--   pending -> approved, partner kind and role, actor key distinct from the proposer
+--   pending -> applied, cosmetic, system decision p6
+--   approved -> applied, decision fields unchanged
+--   every other write, including a direct approved status, is refused
+CREATE OR REPLACE FUNCTION public.p6_enforce_proposal_transition() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $fn$
+DECLARE
+  proposer text;
+  approver text;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status IS DISTINCT FROM 'pending'
+       OR NEW.decided_by IS NOT NULL
+       OR NEW.decided_kind IS NOT NULL
+       OR NEW.decided_role IS NOT NULL
+       OR NEW.declassify IS TRUE THEN
+      RAISE EXCEPTION 'new proposals are pending' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW.payload IS DISTINCT FROM OLD.payload
+     OR NEW.payload_hash IS DISTINCT FROM OLD.payload_hash
+     OR NEW.entry_key IS DISTINCT FROM OLD.entry_key
+     OR NEW.classification IS DISTINCT FROM OLD.classification
+     OR NEW.partition IS DISTINCT FROM OLD.partition
+     OR NEW.firm_id IS DISTINCT FROM OLD.firm_id
+     OR NEW.proposed_by IS DISTINCT FROM OLD.proposed_by
+     OR NEW.source_module IS DISTINCT FROM OLD.source_module
+     OR NEW.requested_class IS DISTINCT FROM OLD.requested_class
+  THEN
+    RAISE EXCEPTION 'approved proposal payload is frozen' USING ERRCODE = '42501';
+  END IF;
+
+  IF OLD.status = 'pending' AND NEW.status = 'pending' THEN
+    IF NEW.decided_by IS NOT NULL
+       OR NEW.decided_kind IS NOT NULL
+       OR NEW.decided_role IS NOT NULL
+       OR NEW.declassify IS TRUE
+       OR NEW.change_class IS DISTINCT FROM OLD.change_class THEN
+      RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW.status = 'approved' AND OLD.status IS DISTINCT FROM 'pending' THEN
+    RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.decided_kind = 'partner' AND OLD.decided_kind IS DISTINCT FROM 'partner'
+     AND NOT (OLD.status = 'pending' AND NEW.status = 'approved') THEN
+    RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
+  END IF;
+  IF COALESCE(NEW.declassify, false) IS TRUE AND COALESCE(OLD.declassify, false) IS DISTINCT FROM TRUE
+     AND NOT (OLD.status = 'pending' AND NEW.status = 'approved') THEN
+    RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
+  END IF;
+
+  IF OLD.status = 'pending' AND NEW.status = 'approved' THEN
+    IF NEW.change_class IS DISTINCT FROM 'substantive'
+       OR NEW.decided_kind IS DISTINCT FROM 'partner'
+       OR NEW.decided_role IS DISTINCT FROM 'partner'
+       OR NEW.decided_by IS NULL
+       OR btrim(NEW.decided_by) = '' THEN
+      RAISE EXCEPTION 'approval is not a direct status change' USING ERRCODE = '42501';
+    END IF;
+    proposer := public.p6_actor_key(NEW.proposed_by);
+    approver := public.p6_actor_key(NEW.decided_by);
+    IF proposer = '' OR approver = '' OR proposer = approver THEN
+      RAISE EXCEPTION 'approver must differ from proposer' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'pending' AND NEW.status = 'applied' THEN
+    IF NEW.change_class IS DISTINCT FROM 'cosmetic'
+       OR OLD.change_class IS DISTINCT FROM 'cosmetic'
+       OR NEW.decided_kind IS DISTINCT FROM 'system'
+       OR NEW.decided_role IS DISTINCT FROM 'system'
+       OR NEW.decided_by IS DISTINCT FROM 'p6'
+       OR NEW.declassify IS TRUE THEN
+      RAISE EXCEPTION 'proposal status transition is refused' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'approved' AND NEW.status = 'applied' THEN
+    IF NEW.decided_by IS DISTINCT FROM OLD.decided_by
+       OR NEW.decided_kind IS DISTINCT FROM OLD.decided_kind
+       OR NEW.decided_role IS DISTINCT FROM OLD.decided_role
+       OR NEW.declassify IS DISTINCT FROM OLD.declassify
+       OR NEW.change_class IS DISTINCT FROM OLD.change_class THEN
+      RAISE EXCEPTION 'proposal status transition is refused' USING ERRCODE = '42501';
+    END IF;
+    IF NEW.change_class = 'substantive' AND (
+         NEW.decided_kind IS DISTINCT FROM 'partner'
+         OR NEW.decided_role IS DISTINCT FROM 'partner'
+         OR NEW.decided_by IS NULL
+         OR public.p6_actor_key(NEW.decided_by) = ''
+         OR public.p6_actor_key(NEW.decided_by) = public.p6_actor_key(NEW.proposed_by)
+       ) THEN
+      RAISE EXCEPTION 'proposal status transition is refused' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'proposal status transition is refused' USING ERRCODE = '42501';
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.p6_actor_key(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.p6_enforce_proposal_transition() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.p6_refuse_removal() TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_bind_payload_hash() TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_freeze_approved_payload() TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_classification_rank(text) TO p6_service;
 GRANT EXECUTE ON FUNCTION public.p6_refuse_class_downgrade() TO p6_service;
+GRANT EXECUTE ON FUNCTION public.p6_actor_key(text) TO p6_service;
+GRANT EXECUTE ON FUNCTION public.p6_enforce_proposal_transition() TO p6_service;
 
 DROP TRIGGER IF EXISTS change_proposals_no_delete ON public.change_proposals;
 CREATE TRIGGER change_proposals_no_delete
@@ -250,6 +430,11 @@ DROP TRIGGER IF EXISTS change_proposals_freeze_payload ON public.change_proposal
 CREATE TRIGGER change_proposals_freeze_payload
   BEFORE UPDATE ON public.change_proposals
   FOR EACH ROW EXECUTE FUNCTION public.p6_freeze_approved_payload();
+
+DROP TRIGGER IF EXISTS change_proposals_status_transition ON public.change_proposals;
+CREATE TRIGGER change_proposals_status_transition
+  BEFORE INSERT OR UPDATE ON public.change_proposals
+  FOR EACH ROW EXECUTE FUNCTION public.p6_enforce_proposal_transition();
 
 DROP TRIGGER IF EXISTS master_knowledge_no_downgrade ON public.master_knowledge;
 CREATE TRIGGER master_knowledge_no_downgrade

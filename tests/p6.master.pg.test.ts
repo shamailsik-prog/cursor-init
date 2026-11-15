@@ -187,6 +187,25 @@ suite("G3 master grants on local Postgres", () => {
     )
     expect(head.rows[0]?.snapshot.entries["clause.nda.confidentiality"]?.body).toEqual({ wording: "Keep it secret." })
 
+    const cosmetic = await proposeChange(
+      {
+        firmId: "firmA",
+        sourceModule: "learner-style",
+        classification: "confidential",
+        changeClass: "cosmetic",
+        partition: "mutable",
+        entryKey: "clause.nda.confidentiality",
+        payload: { wording: "Keep  it secret." },
+        proposedBy: "learner-1",
+      },
+      store,
+    )
+    expect(cosmetic.changeClass).toBe("cosmetic")
+    const cosmeticApplied = await applyChange(cosmetic.id, store)
+    expect(cosmeticApplied.masterWritten).toBe(true)
+    expect((await store.getProposal(cosmetic.id))?.status).toBe("applied")
+    expect((await store.getProposal(cosmetic.id))?.decidedKind).toBe("system")
+
     // p6_service has no UPDATE grant. The owner bypasses GRANT, so the append-only trigger is what refuses this.
     await expect(
       admin.query("UPDATE master_versions SET author_id = 'forged' WHERE firm_id = 'firmA'"),
@@ -293,6 +312,100 @@ suite("G3 master grants on local Postgres", () => {
         asP6.query(`UPDATE master_knowledge SET classification = 'public' WHERE firm_id = 'firmA'`),
       ).rejects.toThrow(/declassify/)
       await asP6.query("ROLLBACK")
+
+      // FA-Q07-R2-006. A direct insert or update cannot mint an approved row. The approval
+      // update is allowed only from pending, with a partner attestation and a different actor.
+      const forgedId = randomUUID()
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, decided_by, decided_kind, decided_role, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.forged',
+                   '{"wording":"forged"}'::jsonb, 'learner-1', 'approved', 'partner_b', 'partner', 'partner', 'abc')`,
+          [forgedId],
+        ),
+      ).rejects.toThrow(/new proposals are pending/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `INSERT INTO change_proposals
+             (id, firm_id, source_module, classification, change_class, partition, entry_key, payload,
+              proposed_by, status, payload_hash)
+           VALUES ($1, 'firmA', 'learner', 'confidential', 'substantive', 'mutable', 'clause.forged',
+                   '{"wording":"forged"}'::jsonb, 'learner-1', 'approved', 'abc')`,
+          [forgedId],
+        ),
+      ).rejects.toThrow(/new proposals are pending/)
+      await asP6.query("ROLLBACK")
+
+      const self = await proposeChange(
+        {
+          firmId: "firmA",
+          sourceModule: "learner-style",
+          classification: "confidential",
+          changeClass: "substantive",
+          partition: "mutable",
+          entryKey: "clause.self",
+          payload: { wording: "self" },
+          proposedBy: "partner_a",
+        },
+        store,
+      )
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals
+              SET status = 'approved', decided_by = $2, decided_kind = 'partner', decided_role = 'partner'
+            WHERE id = $1`,
+          [self.id, "partner_a\u200D"],
+        ),
+      ).rejects.toThrow(/differ from proposer/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await expect(
+        asP6.query(
+          `UPDATE change_proposals
+              SET status = 'approved', decided_by = NULL, decided_kind = NULL, decided_role = NULL
+            WHERE id = $1`,
+          [self.id],
+        ),
+      ).rejects.toThrow(/approval is not a direct status change|proposal status transition is refused/)
+      await asP6.query("ROLLBACK")
+      await asP6.query("BEGIN")
+      await asP6.query("SET LOCAL ROLE p6_service")
+      await asP6.query(
+        `UPDATE change_proposals
+            SET status = 'approved', decided_by = 'partner_b', decided_kind = 'partner', decided_role = 'partner'
+          WHERE id = $1 AND status = 'pending'`,
+        [self.id],
+      )
+      await asP6.query("COMMIT")
+      const stamped = await admin.query<{ status: string; decided_by: string }>(
+        `SELECT status, decided_by FROM change_proposals WHERE id = $1`,
+        [self.id],
+      )
+      expect(stamped.rows[0]).toEqual({ status: "approved", decided_by: "partner_b" })
+      await expect(approveProposal(self.id, { actorId: "partner_c", kind: "partner", role: "partner" }, store)).rejects.toThrow(
+        /not pending/,
+      )
+      const keys = await admin.query<{ plain: string; zwj: string; wide: string; folded: string; upper: string }>(
+        `SELECT public.p6_actor_key($1) AS plain, public.p6_actor_key($2) AS zwj,
+                public.p6_actor_key($3) AS wide, public.p6_actor_key($4) AS folded,
+                public.p6_actor_key($5) AS upper`,
+        ["partner_a", "partner_a\u200D", "\uFF50\uFF41\uFF52\uFF54\uFF4E\uFF45\uFF52\uFF3F\uFF41", "straße", "STRASSE"],
+      )
+      expect(keys.rows[0]?.plain).toBe("partner_a")
+      expect(keys.rows[0]?.zwj).toBe("partner_a")
+      expect(keys.rows[0]?.wide).toBe("partner_a")
+      expect(keys.rows[0]?.folded).toBe("strasse")
+      expect(keys.rows[0]?.upper).toBe("strasse")
     } finally {
       await asP6.end()
     }

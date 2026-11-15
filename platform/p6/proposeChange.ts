@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto"
 import { classificationRank, isClassification, type Classification } from "@/platform/p1/types"
 import {
   canonicalPayload,
+  normalizeActorKey,
   payloadDigest,
   payloadHasPollutingKey,
   type CommitVersionResult,
@@ -76,7 +77,7 @@ function effectiveClass(
 }
 
 function actorKey(value: string): string {
-  return value.trim().toLowerCase()
+  return normalizeActorKey(value)
 }
 
 function assertApprovalBound(row: PersistedProposal): void {
@@ -115,7 +116,7 @@ function refuseNonPartner(actor: ApprovalActor): void {
   if (actor.kind === "model" || actor.kind === "autonomous") {
     throw new Error("autonomous approval of master changes is refused")
   }
-  if (actor.kind !== "partner" || actor.role !== "partner" || actor.actorId.trim() === "") {
+  if (actor.kind !== "partner" || actor.role !== "partner" || actorKey(actor.actorId) === "") {
     throw new Error("substantive proposal requires partner approval")
   }
 }
@@ -199,7 +200,7 @@ export async function approveProposal(
       decidedRole: "partner",
       declassify: actor.declassify === true,
     }
-    const saved = await tx.casProposal(next, "pending")
+    const saved = await tx.recordApproval(next)
     if (!saved) throw new Error("proposal is not pending")
     return next
   })
