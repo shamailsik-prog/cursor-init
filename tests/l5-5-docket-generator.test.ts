@@ -312,9 +312,61 @@ describe("L5.5 court-format docket", () => {
     expect(Buffer.from(first.pdf!).equals(Buffer.from(second.pdf!))).toBe(true)
     expect(Buffer.from(first.docx!).equals(Buffer.from(second.docx!))).toBe(true)
   })
+
+  it("freezes document timestamps and leaves an ISO timestamp in the filing text", async () => {
+    enableFlag()
+    const stamp = "2026-11-14T10:30:00Z"
+    const filing: DocketFilingSet = {
+      ...petition,
+      draft: { body: `${petition.draft.body} The notice was served at ${stamp}.` },
+    }
+    const first = await generateDocket(filing)
+    const second = await generateDocket(filing)
+    expect(first.ok).toBe(true)
+    expect(Buffer.from(first.docx!).equals(Buffer.from(second.docx!))).toBe(true)
+    const files = unzipSync(first.docx!)
+    const core = strFromU8(files["docProps/core.xml"] ?? new Uint8Array())
+    const document = strFromU8(files["word/document.xml"] ?? new Uint8Array())
+    expect(core).toContain("2026-01-01T00:00:00Z")
+    expect(core).not.toContain(stamp)
+    expect(document).toContain(stamp)
+    const pdf = await pdfPages(first.pdf!)
+    expect(pdf.texts.join("\n")).toContain(stamp)
+  })
 })
 
 describe("L5.5 ambiguity queue", () => {
+  it("keeps assigned labels on an ambiguous scheme and queues a citation outside that set", async () => {
+    enableFlag()
+    const labeled = ambiguous.annexures.map((annexure, index) => ({
+      ...annexure,
+      assignedLabel: index === 0 ? "P/1" : "P/2",
+    }))
+    const accepted = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/1 and then P/2." },
+      annexures: labeled,
+    })
+    expect(accepted.ok).toBe(true)
+    expect(accepted.index?.map((entry) => entry.label)).toEqual(["P/1", "P/2"])
+
+    const dangling = await generateDocket({
+      ...ambiguous,
+      draft: { body: "The plaintiff relies on P/99." },
+      annexures: labeled,
+    })
+    expect(dangling.ok).toBe(false)
+    expect(dangling.pdf).toBeNull()
+    expect(dangling.docx).toBeNull()
+    expect(dangling.queue).toEqual([
+      expect.objectContaining({
+        code: "ref_unresolved",
+        artifactId: null,
+        detail: "body cites P/99, which is not an annexure in this filing set",
+      }),
+    ])
+  })
+
   it("queues an unresolved series and refuses bytes", async () => {
     enableFlag()
     const result = await generateDocket(ambiguous)

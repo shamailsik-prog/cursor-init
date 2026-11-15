@@ -34,19 +34,23 @@ function paragraph(line: PlanLine): Paragraph {
   })
 }
 
+const FIXED_CORE_TIMESTAMP = "2026-01-01T00:00:00Z"
+
+/** Created and modified stamps in core properties. Filing text is not rewritten. */
+function freezeCoreTimestamps(xml: string): string {
+  return xml.replace(
+    /(<(?:dcterms:created|dcterms:modified)\b[^>]*>)[^<]*/g,
+    `$1${FIXED_CORE_TIMESTAMP}`,
+  )
+}
+
 function freezeDocx(bytes: Uint8Array): Uint8Array {
   const files = unzipSync(bytes)
   const frozen: Record<string, [Uint8Array, { level: 9; mtime: Date }]> = {}
   for (const name of Object.keys(files).sort()) {
     let data = files[name]
     if (!data) continue
-    if (name.endsWith(".xml")) {
-      const text = strFromU8(data).replace(
-        /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g,
-        "2026-01-01T00:00:00Z",
-      )
-      data = strToU8(text)
-    }
+    if (name === "docProps/core.xml") data = strToU8(freezeCoreTimestamps(strFromU8(data)))
     frozen[name] = [data, { level: 9, mtime: FIXED_DATE }]
   }
   return zipSync(frozen)
