@@ -36,7 +36,7 @@ const settled: string[] = []
 export function resetD2WhatsAppWebhookForTests(): void {
   seen.clear()
   settled.length = 0
-  webhookStub.sent.length = 0
+  webhookStub.reset()
   resetD2WhatsAppThreadsForTests()
 }
 
@@ -77,9 +77,12 @@ function payloadKey(raw: Buffer): string {
   return `unbound\0${createHash("sha256").update(raw).digest("hex")}`
 }
 
-function withTimeout<T>(pending: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(pending: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("whatsapp_timeout")), ms)
+    const timer = setTimeout(() => {
+      onTimeout?.()
+      reject(new Error("whatsapp_timeout"))
+    }, ms)
     pending.then(
       (value) => {
         clearTimeout(timer)
@@ -134,12 +137,19 @@ function reserve(key: string, now: number): { wait: Promise<Cached> } | { settle
 }
 
 /** Touch the store, then refuse. The body is not parsed for a user id. */
-async function acknowledgeUnbound(deps: WebhookDeps): Promise<Cached> {
+async function acknowledgeUnbound(deps: WebhookDeps, idempotencyKey: string, signal: AbortSignal): Promise<Cached> {
   deps.store()
-  await deps.transport.send({ toUserId: "unbound", text: WHATSAPP_NOT_LINKED_TEXT })
+  await deps.transport.send(
+    { toUserId: "unbound", text: WHATSAPP_NOT_LINKED_TEXT },
+    { signal, idempotencyKey, now: deps.now ?? Date.now(), idempotencyTtlMs: WHATSAPP_DEDUPE_TTL_MS }
+  )
   return { status: 200, body: { ok: false } }
 }
 
+/**
+ * Stop at the cap while reading. A missing Content-Length must not buffer the
+ * rest of the stream, and the bytes are not signed until this returns a buffer.
+ */
 async function readCapped(request: Request): Promise<Buffer | Response> {
   const declared = request.headers.get("content-length")
   if (declared !== null) {
@@ -148,9 +158,27 @@ async function readCapped(request: Request): Promise<Buffer | Response> {
       return json(413, { error: "payload_too_large" })
     }
   }
-  const raw = Buffer.from(await request.arrayBuffer())
-  if (raw.byteLength > WHATSAPP_BODY_CAP_BYTES) return json(413, { error: "payload_too_large" })
-  return raw
+  const stream = request.body
+  if (!stream) return Buffer.alloc(0)
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      if (total + value.byteLength > WHATSAPP_BODY_CAP_BYTES) {
+        await reader.cancel()
+        return json(413, { error: "payload_too_large" })
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+  } finally {
+    if (stream.locked) reader.releaseLock()
+  }
+  return Buffer.concat(chunks, total)
 }
 
 export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps): Promise<Response> {
@@ -187,11 +215,17 @@ export async function handleWhatsAppWebhook(request: Request, deps: WebhookDeps)
     }
   }
 
+  const controller = new AbortController()
   try {
-    const cached = await withTimeout(acknowledgeUnbound(deps), WHATSAPP_PROCESSING_TIMEOUT_MS)
+    const cached = await withTimeout(
+      acknowledgeUnbound(deps, key, controller.signal),
+      WHATSAPP_PROCESSING_TIMEOUT_MS,
+      () => controller.abort()
+    )
     reserved.settle(cached, true)
     return json(cached.status, cached.body)
   } catch {
+    controller.abort()
     const failed: Cached = { status: 503, body: { ok: false } }
     reserved.settle(failed, false)
     return json(failed.status, failed.body)

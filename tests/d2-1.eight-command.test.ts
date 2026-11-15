@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { decide, type DecisionCaller } from "@/platform/p5/permissionDecision"
 import { seedUser } from "@/platform/p5/checkPermission"
@@ -24,6 +25,7 @@ import { StubWhatsAppTransport, webhookStub } from "@/services/d2-1/transport"
 import {
   handleWhatsAppWebhook,
   resetD2WhatsAppWebhookForTests,
+  WHATSAPP_BODY_CAP_BYTES,
   type WebhookDeps,
 } from "@/services/d2-1/webhook"
 import { POST as whatsAppPost } from "@/app/api/d2/whatsapp/route"
@@ -83,7 +85,39 @@ function user(store: SpineStore, id: string, role: Role) {
 }
 
 function sign(secret: string, raw: string): string {
+  return signBytes(secret, Buffer.from(raw))
+}
+
+function signBytes(secret: string, raw: Buffer): string {
   return `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`
+}
+
+function streamedRequest(
+  total: number,
+  chunk: number,
+  headers: Record<string, string>,
+  source?: Buffer
+): { request: Request; pulled: () => number } {
+  const bytes = source ?? Buffer.alloc(total)
+  let pulled = 0
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= total) {
+        controller.close()
+        return
+      }
+      const n = Math.min(chunk, total - pulled)
+      controller.enqueue(bytes.subarray(pulled, pulled + n))
+      pulled += n
+    },
+  })
+  const request = new Request("http://127.0.0.1/api/d2/whatsapp", {
+    method: "POST",
+    headers,
+    body: stream,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" })
+  return { request, pulled: () => pulled }
 }
 
 function signed(payload: unknown, secret = SECRET): Request {
@@ -783,11 +817,16 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
     const tooBig = await handleWhatsAppWebhook(oversized, deps(newStore(), transport))
     expect(tooBig.status).toBe(413)
     expect(transport.sent).toEqual([])
-    const blank = await handleWhatsAppWebhook(signed({ messageId: "wamid.ws", userId: "clerk1", text: "/help" }), {
-      ...deps(newStore(), transport),
-      secret: () => "   ",
-    })
+    const padded = "   "
+    const blank = await handleWhatsAppWebhook(
+      signed({ messageId: "wamid.ws", userId: "clerk1", text: "/help" }, padded),
+      {
+        ...deps(newStore(), transport),
+        secret: () => padded,
+      }
+    )
     expect(blank.status).toBe(401)
+    expect(transport.sent).toEqual([])
   })
 
   it("FA-Q14A-DEDUPE-004 keys a replay on the payload and expires it", async () => {
@@ -918,5 +957,222 @@ describe("signed webhook, dedupe, stub transport, flag default off", () => {
       resetRuntimeStoreForTests()
       resetD2WhatsAppWebhookForTests()
     }
+  })
+
+  it("FA-Q14A-SIG-005 stops reading a stream that has no Content-Length once the cap is crossed", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const total = 64 * 1024
+    const chunk = 1024
+    const raw = Buffer.alloc(total)
+    const { request, pulled } = streamedRequest(total, chunk, {
+      "Content-Type": "application/octet-stream",
+      "X-Hub-Signature-256": signBytes(SECRET, raw),
+    })
+    expect(request.headers.get("content-length")).toBeNull()
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: "payload_too_large" })
+    expect(pulled()).toBeGreaterThan(WHATSAPP_BODY_CAP_BYTES)
+    expect(pulled()).toBeLessThanOrEqual(WHATSAPP_BODY_CAP_BYTES + chunk)
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-SIG-005 rejects Content-Length over the cap before any body byte is read", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const raw = Buffer.from(JSON.stringify({ messageId: "wamid.cl", text: "/help" }))
+    const { request } = streamedRequest(raw.byteLength, raw.byteLength, {
+      "Content-Type": "application/json",
+      "Content-Length": String(WHATSAPP_BODY_CAP_BYTES + 1),
+      "X-Hub-Signature-256": signBytes(SECRET, raw),
+    }, raw)
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: "payload_too_large" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-SIG-005 rejects a body over the cap when Content-Length understates it", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const total = WHATSAPP_BODY_CAP_BYTES + 2048
+    const chunk = 1024
+    const raw = Buffer.alloc(total)
+    const { request, pulled } = streamedRequest(total, chunk, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": "1",
+      "X-Hub-Signature-256": signBytes(SECRET, raw),
+    })
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: "payload_too_large" })
+    expect(pulled()).toBeLessThanOrEqual(WHATSAPP_BODY_CAP_BYTES + chunk)
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-SIG-005 accepts a body that is exactly the cap", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const raw = Buffer.alloc(WHATSAPP_BODY_CAP_BYTES)
+    const { request, pulled } = streamedRequest(raw.byteLength, 1024, {
+      "Content-Type": "application/octet-stream",
+      "X-Hub-Signature-256": signBytes(SECRET, raw),
+    })
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: false })
+    expect(pulled()).toBe(WHATSAPP_BODY_CAP_BYTES)
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("FA-Q14A-SIG-005 returns 413 for an oversized body before it inspects the signature", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const total = WHATSAPP_BODY_CAP_BYTES + 1024
+    const { request } = streamedRequest(total, 1024, {
+      "Content-Type": "application/octet-stream",
+      "X-Hub-Signature-256": "sha256=" + "ab".repeat(32),
+    })
+    expect(request.headers.get("content-length")).toBeNull()
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: "payload_too_large" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-SIG-005 verifies the HMAC over the raw bytes, not the decoded text", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const raw = Buffer.from([0x7b, 0xff, 0x7d])
+    const request = new Request("http://127.0.0.1/api/d2/whatsapp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Hub-Signature-256": signBytes(SECRET, raw),
+      },
+      body: raw,
+    })
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(request, deps(newStore(), transport))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: false })
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("FA-Q14A-SIG-005 refuses an empty secret even when the body is signed with it", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const transport = new StubWhatsAppTransport()
+    const response = await handleWhatsAppWebhook(signed({ messageId: "wamid.empty", text: "/help" }, ""), {
+      ...deps(newStore(), transport),
+      secret: () => "",
+    })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: "webhook_not_configured" })
+    expect(transport.sent).toEqual([])
+  })
+
+  it("FA-Q14A-R2-L1 cancels a timed-out send so the late completion and the retry produce one message", async () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "true")
+    const realSetTimeout = globalThis.setTimeout
+    vi.useFakeTimers()
+    try {
+      const transport = new StubWhatsAppTransport()
+      const original = transport.send.bind(transport)
+      let release: () => void = () => {}
+      const hold = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let calls = 0
+      transport.send = async (message, options) => {
+        calls += 1
+        if (calls === 1) await hold
+        return original(message, options)
+      }
+      const payload = { messageId: "wamid.late", userId: "clerk1", text: "/help" }
+      const pending = handleWhatsAppWebhook(signed(payload), deps(newStore(), transport))
+      await vi.advanceTimersByTimeAsync(5_000)
+      const first = await pending
+      expect(first.status).toBe(503)
+      release()
+      await new Promise((resolve) => realSetTimeout(resolve, 0))
+      const retry = await handleWhatsAppWebhook(signed(payload), deps(newStore(), transport))
+      expect(retry.status).toBe(200)
+      expect(await retry.json()).toEqual({ ok: false })
+      expect(transport.sent).toHaveLength(1)
+      expect(transport.sent[0]?.text).toBe("not linked")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an aborted send records nothing and does not consume its idempotency key", async () => {
+    const transport = new StubWhatsAppTransport()
+    const message = { toUserId: "unbound", text: "not linked" }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(transport.send(message, { signal: controller.signal, idempotencyKey: "same" })).rejects.toThrow()
+    await transport.send(message, { idempotencyKey: "same" })
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it("two sends with the same idempotency key record one outbound message", async () => {
+    const transport = new StubWhatsAppTransport()
+    const message = { toUserId: "unbound", text: "not linked" }
+    await transport.send(message, { idempotencyKey: "same" })
+    await transport.send(message, { idempotencyKey: "same" })
+    await transport.send({ toUserId: "unbound", text: "other" }, { idempotencyKey: "other" })
+    expect(transport.sent.map((row) => row.text)).toEqual(["not linked", "other"])
+  })
+
+  it("FA-Q14A-PARITY-006 denies an intern the client registry the web route denies", async () => {
+    const store = newStore()
+    user(store, "intern1", "intern")
+    const entity = createClient(store, {
+      firmId: "firmA",
+      canonicalName: "Intern Visible Client",
+      cnic: "4210112345671",
+      phone: "03001111111",
+      classification: "internal",
+    })
+    const matter = createMatter(store, {
+      firmId: "firmA",
+      clientId: entity.id,
+      title: "Intern matter",
+      courtId: "SHC",
+      classification: "internal",
+    })
+    addMember(store, matter.id, "intern1", "firmA")
+    expect(decide(caller("intern"), "client.read", undefined, false).allow).toBe(true)
+    const result = await dispatchWhatsApp(store, "intern1", "/clients")
+    expect(result.ok).toBe(false)
+    expect(result.denied).toBe(true)
+    expect(result.clients).toBeUndefined()
+    expect(result.permission).toEqual({
+      allow: false,
+      reason: "user role not allowed for client registry reads",
+    })
+    expect(result.text).not.toContain("Intern Visible Client")
+    expect(store.audit.some((row) => row.action === "permission_check" && row.reason?.startsWith("allow:"))).toBe(false)
+  })
+
+  it("an intern still follows decide() for presence", async () => {
+    const store = newStore()
+    user(store, "intern1", "intern")
+    const result = await dispatchWhatsApp(store, "intern1", "/presence in")
+    expect(result.ok).toBe(true)
+    expect(result.permission).toEqual(decide(caller("intern"), "client.read", undefined, false))
+  })
+
+  it("FA-Q14A-FLAG-008 does not let a firm-scoped value turn the channel on", () => {
+    vi.stubEnv(`SIKANDER_FLAG_${D2_WHATSAPP_GRAMMAR_FLAG}`, "")
+    vi.stubEnv("SIKANDER_FLAG_D2_WHATSAPP_GRAMMAR_FIRM", "true")
+    expect(isD2WhatsAppGrammarEnabled()).toBe(false)
+    expect(isD2WhatsAppGrammarEnabled.length).toBe(0)
+    const src = readFileSync(new URL("../services/d2-1/grammar.ts", import.meta.url), "utf8")
+    const start = src.indexOf("export function isD2WhatsAppGrammarEnabled")
+    const end = src.indexOf("export const INCLUDED_WHATSAPP_COMMANDS")
+    const body = src.slice(start, end)
+    expect(body).toContain("SIKANDER_FLAG_")
+    expect(body).not.toMatch(/firmId|FLAG_REGISTRY|perFirm/)
   })
 })

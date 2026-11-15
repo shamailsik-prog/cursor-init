@@ -158,6 +158,13 @@ export async function dispatchWhatsApp(
     return { ok: true, command: "open", permission, opened: item, text: `${item.n}. ${item.title}` }
   }
 
+  // GET /api/d1/clients denies an intern before the registry read. decide()
+  // client.read allows an intern, so this route guard runs first and does not
+  // write an allow audit. Presence keeps client.read.
+  if (parsed.name === "clients" && store.users.get(userId)?.role === "intern") {
+    return denied(parsed.name, { allow: false, reason: "user role not allowed for client registry reads" })
+  }
+
   const action = WHATSAPP_WEB_ACTION[parsed.name]
   const permission = permitWhatsApp(store, userId, action)
   if (!permission.allow) return denied(parsed.name, permission)
