@@ -1,7 +1,15 @@
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Timestamp } from "firebase-admin/firestore"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CHECK_PAGE_SIZE, CHECKER_BUDGET_MS, checkerTestSeam, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
+import { CHECK_MAX_PAGES, CHECK_PAGE_SIZE, CHECK_PASSES, CHECKER_BUDGET_MS, checkerTestSeam, reservationQueryRunBound, runAlertChecker, type CheckCursor, type CheckQuery, type CheckerPageRow } from "../src/alerts/checker"
 import { raiseAlertBestEffort } from "../src/alerts/raise"
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+
+const BOUND_SENTENCE = "each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query"
+const OVERSTATED_BOUND = "rotation then reads a row within 3·ceil"
 
 /**
  * FA-F43-R1-004. Two defects in the checker, pinned without the emulator:
@@ -131,5 +139,104 @@ describe("FA-F43-R1-004: pass rotation under a budget that fits one pass", () =>
 
     expect(calls.map((c) => c.name)).toEqual(["jobsWaiting", "sagas", "reservationsHeld", "jobsWaiting"])
     expect(CHECK_PAGE_SIZE).toBe(100)
+  })
+})
+
+describe("FA-F43-R1-004-001: held/quarantine residual bound", () => {
+  const T = Date.parse("1970-01-04T00:00:00.000Z")
+  const stamp = Timestamp.fromMillis(T)
+
+  it("reads quarantined reservations on run 6·ceil(N/500) when a held window spends the budget, and held still leads the previous reservations turn", async () => {
+    const calls: Array<Call & { run: number }> = []
+    let pages = 0
+    const origin = 1_700_000_000_000
+    checkerTestSeam.memory = { cursors: {}, passIndex: 0 }
+    let currentRun = 0
+    checkerTestSeam.readPage = async (name, field, cursor) => {
+      calls.push({ name, field, cursor, run: currentRun })
+      pages += 1
+      if (name === "reservationsQuarantined") {
+        return [{ id: "q1", data: { firmId: "firm-q", state: "reconcile_failed", leaseUntil: stamp } }]
+      }
+      return Array.from({ length: CHECK_PAGE_SIZE }, (_, i) => ({
+        id: `${name}-${pages}-${i}`,
+        data: { firmId: "firm-fill", leaseUntil: stamp, nextAttemptAt: stamp, sweepAt: stamp, "unmerge.startedAt": stamp },
+      }))
+    }
+    const wallClock = () => origin + Math.floor((pages * CHECKER_BUDGET_MS) / CHECK_MAX_PAGES)
+    const runs = reservationQueryRunBound(1)
+
+    for (let run = 0; run < runs; run++) {
+      currentRun = run
+      pages = 0
+      await runAlertChecker({ now: () => T, wallClock })
+    }
+
+    const firstQuarantined = calls.find((c) => c.name === "reservationsQuarantined")
+    expect(reservationQueryRunBound(1)).toBe(6)
+    expect(reservationQueryRunBound(CHECK_PAGE_SIZE * CHECK_MAX_PAGES)).toBe(6)
+    expect(reservationQueryRunBound(CHECK_PAGE_SIZE * CHECK_MAX_PAGES + 1)).toBe(12)
+    expect(firstQuarantined?.run).toBe(runs - 1)
+    expect(calls.filter((c) => c.run === 2).map((c) => c.name)[0]).toBe("reservationsHeld")
+    expect(calls.filter((c) => c.run === 2).some((c) => c.name === "reservationsQuarantined")).toBe(false)
+    expect(CHECK_PAGE_SIZE * CHECK_MAX_PAGES).toBe(500)
+  })
+
+  it("states the same 6·ceil bound in the checker, the README and the spec, and does not leave the unqualified 3·ceil sentence", () => {
+    const files = [
+      "functions/src/alerts/checker.ts",
+      "functions/src/alerts/README.md",
+      "docs/superpowers/specs/2026-10-24-f43-durable-alert-delivery-design.md",
+    ]
+    for (const file of files) {
+      const text = readFileSync(resolve(repoRoot, file), "utf8")
+      expect(text, file).toContain(BOUND_SENTENCE)
+      expect(text, file).not.toContain(OVERSTATED_BOUND)
+    }
+  })
+
+  it("on the quarantine lead, reads quarantine first and still reads held when the budget remains", async () => {
+    const calls = install({
+      reservationsHeld: [{ id: "h1", data: { firmId: "firm-held", state: "reserved", leaseUntil: stamp } }],
+      reservationsQuarantined: [{ id: "q1", data: { firmId: "firm-q", state: "reconcile_failed", leaseUntil: stamp } }],
+    })
+    checkerTestSeam.memory = { cursors: {}, passIndex: CHECK_PASSES.length * 2 - 1 }
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    expect(calls.map((c) => c.name)).toEqual(["reservationsQuarantined", "reservationsHeld"])
+    expect(raise.mock.calls.map((c) => (c[0] as { firmId: string }).firmId).sort()).toEqual(["firm-held", "firm-q"])
+  })
+})
+
+describe("FA-F43-R1-004-002: a quarantined row with no leaseUntil stays outside the lease order", () => {
+  const T = Date.parse("1970-01-05T00:00:00.000Z")
+
+  it("does not alert a quarantined row whose leaseUntil is absent", async () => {
+    const calls = install({
+      reservationsQuarantined: [{ id: "missing", data: { firmId: "firm-missing", state: "reconcile_failed" } }],
+    })
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    expect(calls.filter((c) => c.name === "reservationsQuarantined").map((c) => c.field)).toEqual(["leaseUntil"])
+    expect(raise.mock.calls).toHaveLength(0)
+  })
+
+  it("keeps a Timestamp lease and a stored null, and drops only the absent field", async () => {
+    const calls = install({
+      reservationsQuarantined: [
+        { id: "leased", data: { firmId: "firm-leased", state: "reconcile_failed", leaseUntil: Timestamp.fromMillis(T) } },
+        { id: "missing", data: { firmId: "firm-missing", state: "reconcile_failed" } },
+        { id: "null-lease", data: { firmId: "firm-null", state: "reconcile_failed", leaseUntil: null } },
+      ],
+    })
+
+    await runAlertChecker({ now: () => T, passes: ["reservations"], wallClock: () => 0 })
+
+    expect(calls.find((c) => c.name === "reservationsQuarantined")?.field).toBe("leaseUntil")
+    const specs = raise.mock.calls.map((c) => c[0] as { firmId: string; detail: { quarantined: number } })
+    expect(specs.map((s) => s.firmId)).toEqual(["firm-leased", "firm-null"])
+    expect(specs.every((s) => s.detail.quarantined === 1)).toBe(true)
   })
 })

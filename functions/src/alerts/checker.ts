@@ -21,16 +21,19 @@ import { queueAgeSpec, reservationUnresolvedSpec, sagaAgeSpec } from "./specs"
  * document id, and read in pages of `CHECK_PAGE_SIZE`, at most `CHECK_MAX_PAGES` pages per run, starting after the
  * cursor the previous run left in `platform/opsAlertChecker` (server-only, like all of `platform/*`). Quarantined
  * reservations order by `leaseUntil` (the durable time the gateway writes and quarantine keeps; no new field), not by
- * document id. A row with no `leaseUntil` is outside that index; `createdAt` is the documented creation time and is not
- * a second query. A short page means the query reached its end: the cursor is cleared, so the next run starts again
- * from the oldest row (the wrap). An id-only cursor (`at: null`) cannot resume a time order and is ignored once.
+ * document id. A row with no `leaseUntil` is outside that index and is dropped from the page (FA-F43-R1-004-002);
+ * `createdAt` is the documented creation time and is not a second query. A stored null stays: the index returns it.
+ * A short page means the query reached its end: the cursor is cleared, so the next run starts again from the oldest
+ * row (the wrap). An id-only cursor (`at: null`) cannot resume a time order and is ignored once.
  *
  * Passes rotate (`passIndex` on the same document): run N starts at `CHECK_PASSES[N mod 3]`. A jobs pass that spends
  * `CHECKER_BUDGET_MS` therefore cannot skip sagas and reservations on every run. When the budget covers all three
- * passes, a backlog row is still read within ceil(N / 500) runs. That figure alone overstated a budget that fits only
- * the leading pass: rotation then reads a row within 3·ceil(N / 500) runs. For two passes the leading pass's last
- * window is the 2·ceil(N / 500)−1 run; it is not a bound for the pass that was last. Counts are of the rows this run
- * read. The cursor is saved after each query; a run that fails or overlaps another costs at most a window re-read.
+ * passes, a backlog row is still read within ceil(N / 500) runs. When the budget fits only the leading query, that
+ * query is read within 3·ceil(N / 500) runs (for two passes the leading pass's last window is the 2·ceil(N / 500)−1
+ * run; it is not a bound for the pass that was last). That 3-pass figure is the leading query only. Held and
+ * quarantined reservations alternate which one leads (`floor(passIndex / 3)` odd: quarantine first), so a held window
+ * cannot skip quarantine on every reservations lead (FA-F43-R1-004-001). So each of held and quarantined is read within 6·ceil(N / 500) runs when the budget fits only the leading query. Counts are of the rows this run read. The
+ * cursor is saved after each query; a run that fails or overlaps another costs at most a window re-read.
  *
  * Each pass is caught on its own (`ops_alert.pass_failed`), so a query that fails (an index still building) stops only
  * its own pass.
@@ -43,6 +46,17 @@ export const CHECK_PAGE_SIZE = 100
 export const CHECK_MAX_PAGES = 5
 /** One run's wall-clock budget, inside the function's 60 s timeout. */
 export const CHECKER_BUDGET_MS = 40_000
+
+/**
+ * Runs within which one reservations query is read when the budget fits only the leading query.
+ * Reservations leads once per `CHECK_PASSES` cycle, and held and quarantined alternate which one leads,
+ * so the factor is `CHECK_PASSES.length * 2` windows (FA-F43-R1-004-001). A non-positive count is no runs.
+ */
+export function reservationQueryRunBound(rows: number): number {
+  if (!Number.isFinite(rows) || rows <= 0) return 0
+  const window = CHECK_PAGE_SIZE * CHECK_MAX_PAGES
+  return CHECK_PASSES.length * 2 * Math.ceil(rows / window)
+}
 
 /** The checker's queries, each with its own cursor. */
 export const CHECK_QUERIES = ["jobsWaiting", "jobsRunning", "sagas", "reservationsHeld", "reservationsQuarantined"] as const
@@ -114,6 +128,10 @@ async function readOrderedPage(name: CheckQuery, base: Query | null, field: stri
  * Reads up to `CHECK_MAX_PAGES` pages of `base` ordered by `field` (null: by document id alone) and the id, starting
  * after `cursor`. Returns the rows and the cursor to save: the last row read, or null once a page came back short (the
  * end of the query: the next run wraps to the start). Stops early, keeping the cursor, when the run's budget is spent.
+ *
+ * A time-ordered page drops a row whose order field is absent. Firestore's `orderBy` already excludes it; the drop
+ * keeps the seam on that rule and fails closed if a row with no lease reaches the checker (FA-F43-R1-004-002). A
+ * stored null is a value the index returns, so it stays.
  */
 async function scan(name: CheckQuery, base: Query | null, field: string | null, cursor: CheckCursor | null, spent: () => boolean): Promise<Scan> {
   const docs: QueryDocumentSnapshot[] = []
@@ -121,9 +139,10 @@ async function scan(name: CheckQuery, base: Query | null, field: string | null, 
   for (let page = 0; page < CHECK_MAX_PAGES; page++) {
     if (spent()) break
     const pageDocs = await readOrderedPage(name, base, field, after)
-    docs.push(...pageDocs)
-    if (pageDocs.length < CHECK_PAGE_SIZE) return { docs, next: null }
-    const last = pageDocs[pageDocs.length - 1]!
+    const indexed = field === null ? pageDocs : pageDocs.filter((d) => d.get(field) !== undefined)
+    docs.push(...indexed)
+    if (indexed.length < CHECK_PAGE_SIZE) return { docs, next: null }
+    const last = indexed[indexed.length - 1]!
     after = { at: field === null ? null : (last.get(field) as Timestamp), id: last.id }
   }
   return { docs, next: after }
@@ -195,6 +214,17 @@ function tally(groups: Map<string, Group>, firmId: string, key: string, ms: numb
 
 const isFirm = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.includes("/") && v.length <= 128
 
+type ReservationQuery = "held" | "quarantined"
+
+/**
+ * Which reservation query leads. Turn `floor(passIndex / CHECK_PASSES.length)` even: held, then quarantined.
+ * Odd: quarantined, then held. A negative or non-integer index fails closed to held first (FA-F43-R1-004-001).
+ */
+function reservationQueryOrder(passIndex: number): readonly [ReservationQuery, ReservationQuery] {
+  const quarantineLeads = Number.isInteger(passIndex) && passIndex >= 0 && Math.floor(passIndex / CHECK_PASSES.length) % 2 === 1
+  return quarantineLeads ? ["quarantined", "held"] : ["held", "quarantined"]
+}
+
 /** `start` selects which pass leads. The rest follow in `CHECK_PASSES` order, wrapping. */
 function rotatedPasses(start: number, passes: readonly CheckPass[]): readonly CheckPass[] {
   const n = passes.length
@@ -241,10 +271,20 @@ async function sagasPass({ nowMs, cursors, spent }: PassContext): Promise<AlertS
 
 async function reservationsPass({ nowMs, cursors, spent }: PassContext): Promise<AlertSpec[]> {
   const reservations = live(() => adminDb().collection("ai_reservations"))
-  const held = await scanFrom("reservationsHeld", reservations?.where("state", "==", "reserved").where("leaseUntil", "<=", at(nowMs - RESERVATION_UNRESOLVED_ALERT_MS)) ?? null, "leaseUntil", cursors, spent)
-  // Oldest lease first. `leaseUntil` is already on the row (gateway write, kept when quarantined). `createdAt` is the
-  // documented creation time for a row that never received a lease; it is not a second page order (FA-F43-R1-004).
-  const quarantined = await scanFrom("reservationsQuarantined", reservations?.where("state", "==", "reconcile_failed") ?? null, "leaseUntil", cursors, spent)
+  const heldQuery = reservations?.where("state", "==", "reserved").where("leaseUntil", "<=", at(nowMs - RESERVATION_UNRESOLVED_ALERT_MS)) ?? null
+  const quarantinedQuery = reservations?.where("state", "==", "reconcile_failed") ?? null
+  // Oldest lease first. `leaseUntil` is the gateway's durable time, kept when quarantined. `createdAt` is not a second
+  // page order. The two queries alternate the lead so a full held window cannot skip quarantine (FA-F43-R1-004-001).
+  const read: Record<ReservationQuery, () => Promise<QueryDocumentSnapshot[]>> = {
+    held: () => scanFrom("reservationsHeld", heldQuery, "leaseUntil", cursors, spent),
+    quarantined: () => scanFrom("reservationsQuarantined", quarantinedQuery, "leaseUntil", cursors, spent),
+  }
+  let held: QueryDocumentSnapshot[] = []
+  let quarantined: QueryDocumentSnapshot[] = []
+  for (const which of reservationQueryOrder(cursors.passIndex)) {
+    if (which === "held") held = await read.held()
+    else quarantined = await read.quarantined()
+  }
   const groups = new Map<string, Group>()
   for (const [docs, isQuarantined] of [[held, 0], [quarantined, 1]] as const) {
     for (const d of docs) {
