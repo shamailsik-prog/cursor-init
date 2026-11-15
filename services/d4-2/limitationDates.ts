@@ -15,8 +15,12 @@ export function limitationAlertSchedule(deadline: string): LimitationAlert[] {
 export function addDays(isoDate: string, days: number): string {
   const date = parts(isoDate)
   if (!date) throw new Error("limitation date arithmetic on a date that is not a calendar day")
-  const next = new Date(Date.UTC(date.y, date.m - 1, date.d + days))
-  return iso(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate())
+  const next = utc(date.y, date.m - 1, date.d + days)
+  const year = next.getUTCFullYear()
+  const month = next.getUTCMonth() + 1
+  const day = next.getUTCDate()
+  if (!Number.isFinite(year) || year < 1 || year > 9999) throw new Error("limitation date arithmetic overflow")
+  return iso(year, month, day)
 }
 
 /**
@@ -25,14 +29,30 @@ export function addDays(isoDate: string, days: number): string {
  * The clamp is used only when the verified text states that rule.
  */
 export function addUnit(isoDate: string, count: number, unit: DateUnit, clamp: boolean): string | null {
-  if (unit === "day") return addDays(isoDate, count)
+  if (unit === "day") {
+    try {
+      const shifted = addDays(isoDate, count)
+      return isCalendarDate(shifted) ? shifted : null
+    } catch {
+      return null
+    }
+  }
   const date = parts(isoDate)
   if (!date) return null
   const months = unit === "year" ? count * 12 : count
   const index = date.m - 1 + months
   const year = date.y + Math.floor(index / 12)
   const month = (index % 12) + 1
-  const dim = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  if (!Number.isInteger(year) || year < 1 || year > 9999) return null
+  let dim: number
+  try {
+    const probe = utc(year, month, 0)
+    if (!Number.isFinite(probe.getTime())) return null
+    dim = probe.getUTCDate()
+  } catch {
+    return null
+  }
+  if (!Number.isFinite(dim) || dim < 1) return null
   if (date.d > dim) return clamp ? iso(year, month, dim) : null
   return iso(year, month, date.d)
 }
@@ -43,8 +63,15 @@ function parts(isoDate: string): { y: number; m: number; d: number } | null {
   const m = Number(isoDate.slice(5, 7))
   const d = Number(isoDate.slice(8, 10))
   if (m < 1 || m > 12 || d < 1) return null
-  if (d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return null
+  if (d > utc(y, m, 0).getUTCDate()) return null
   return { y, m, d }
+}
+
+/** Date.UTC maps years 0–99 onto 1900–1999. The written year is the year. */
+function utc(y: number, monthIndex: number, day: number): Date {
+  const date = new Date(Date.UTC(y, monthIndex, day))
+  if (y >= 0 && y <= 99) date.setUTCFullYear(y, monthIndex, day)
+  return date
 }
 
 function iso(y: number, m: number, d: number): string {

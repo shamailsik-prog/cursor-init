@@ -33,6 +33,17 @@ import {
   type LimitationAlert,
 } from "@/services/d4-2/limitationDates"
 import { scheduleLimitationAlerts } from "@/services/d6-1/limitationAlerts"
+import {
+  hasUnicodeDash,
+  isCanonicalMonthEnd,
+  isCanonicalProviso,
+  isCanonicalReckoning,
+  NEUTRAL_WORDS,
+  provisoShaped,
+  QUANTITY_LABELS,
+  UNICODE_DASH,
+  wordsOf,
+} from "@/services/d4-2/limitationAllowlist"
 
 const courts = loadCourts(courtsSeed)
 
@@ -76,8 +87,6 @@ const NUMBER_WORDS: Record<string, number> = {
   ninety: 90,
 }
 
-const RECKONING_RE = /day from which[\s\S]{0,160}?excluded/i
-const MONTH_END_RE = /corresponding date does not exist[\s\S]{0,200}?last day of that month/i
 const CLOSED_RE = /court is closed[\s\S]{0,200}?re-?opens/i
 const COPY_RE = /time requisite for obtaining a copy/i
 const WRONG_COURT_RE = /court without jurisdiction/i
@@ -141,6 +150,8 @@ export type NotAssessedReason =
   | "text_not_verified"
   | "period_unreadable"
   | "period_ambiguous"
+  | "period_exceeds_engine_cap"
+  | "accrual_before_floor"
   | "accrual_in_future"
   | "reckoning_unverified"
   | "anniversary_does_not_exist"
@@ -197,6 +208,9 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (!forum.ok) return notAssessed(forum.reason)
   const cause = parseCause(facts.article)
   if (!cause) return notAssessed("unknown_article")
+  if (accrualDate < accrualFloor(facts.versions, cause.sectionId, forum.jurisdiction)) {
+    return notAssessed("accrual_before_floor")
+  }
 
   const article = inForce(facts.versions, cause.sectionId, forum.jurisdiction, accrualDate)
   if (!article.ok) return notAssessed(article.reason)
@@ -206,8 +220,15 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   const reckoning = reckoningSource(facts.versions, article.row, forum.jurisdiction, accrualDate)
   if (!reckoning.ok) return notAssessed(reckoning.reason)
 
-  const clamp = MONTH_END_RE.test(article.row.text)
-  let deadline = addUnit(accrualDate, period.n, period.unit, clamp)
+  const clamp = normalizeSource(article.row.text).split(/[.\u0000]/).some((part) => isCanonicalMonthEnd(part))
+  if (calendarOverflow(accrualDate, period.n, period.unit)) return notAssessed("period_unreadable")
+  let deadline: string | null
+  try {
+    deadline = addUnit(accrualDate, period.n, period.unit, clamp)
+  } catch {
+    return notAssessed("period_unreadable")
+  }
+  if (deadline && !isCalendarDate(deadline)) return notAssessed("period_unreadable")
   if (!deadline) return notAssessed("anniversary_does_not_exist")
 
   const exclusions: ExclusionApplied[] = [
@@ -240,6 +261,14 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
   if (!closed.ok) return notAssessed(closed.reason)
   if (closed.exclusion) exclusions.push(closed.exclusion)
 
+  let alerts: LimitationAlert[]
+  try {
+    alerts = limitationAlertSchedule(closed.deadline)
+  } catch {
+    return notAssessed("period_unreadable")
+  }
+  if (alerts.some((row) => !isCalendarDate(row.dueOn))) return notAssessed("period_unreadable")
+
   return {
     status: "ASSESSED",
     reason: null,
@@ -256,7 +285,7 @@ export function checkLimitation(facts: LimitationFacts): LimitationResult {
       periodCited: period.cited,
     },
     exclusionsApplied: exclusions,
-    alerts: limitationAlertSchedule(closed.deadline),
+    alerts,
     courtClosed: closed.finding,
   }
 }
@@ -319,6 +348,24 @@ function versionsFromStore(rows: readonly StatuteSectionVersion[]): LimitationVe
       },
     ]
   })
+}
+
+/**
+ * Engine floor for a year 0001–0099 that Date.UTC would mis-read, and for a text
+ * that starts later. 1908-01-01 is not a finding that every article commenced that
+ * day. [REQUIRES VERIFICATION] before a lawyer treats it as the Act's commencement.
+ */
+const ACT_FLOOR = "1908-01-01"
+
+function accrualFloor(versions: readonly LimitationVersion[], sectionId: string, jurisdiction: string): string {
+  let earliest = ""
+  for (const row of versions) {
+    if (row.sectionId !== sectionId || row.jurisdiction !== jurisdiction) continue
+    if (!isCalendarDate(row.effectiveFrom)) continue
+    if (earliest === "" || row.effectiveFrom < earliest) earliest = row.effectiveFrom
+  }
+  if (earliest === "" || earliest < ACT_FLOOR) return ACT_FLOOR
+  return earliest
 }
 
 function blank(value: string | null | undefined): value is null | undefined | "" {
@@ -403,27 +450,54 @@ const QUANTITY_ARTICLE_RE = new RegExp(
 /** N11: fortnights? has to stay. Dropping it lets "three years or fortnights" assess. */
 const UNIT_WORD_RE = /\b(fortnights?|weeks?|months?|years?|hours?|days?|mos|mths|yrs|wks|hrs|mo|yr|wk|hr)\b/gi
 const FILLER_JOIN_RE = /\d(?:\p{Cf}|[\u034F\u3164\u2800])+\d|[A-Za-z](?:\p{Cf}|[\u034F\u3164\u2800])+[A-Za-z]/u
-const QUALIFIER_RE = /\b(?:more|least|twice|about|approximately|within|over|under|some|another|several)\b/i
-
+/**
+ * Engine ceiling, not a Limitation Act article. 81 years and 9999 days still assess.
+ * A longer span, including 10000 days, is period_exceeds_engine_cap.
+ * [REQUIRES VERIFICATION] before anyone treats 100 years as the longest article
+ * in the First Schedule.
+ */
+const SPAN_LIMIT_YEARS = 100
 type NumberToken = { start: number; end: number; value: number | null; raw: string }
 
 /**
- * A period is assessed only when the provision has exactly one quantity heading
- * exactly one day, month, or year. Superscripts and subscripts are not digits.
- * The reckoning and month-end provisos are removed only when they are the
- * canonical sentences; a number or an extra unit inside either span is unreadable.
- * A qualifier such as "or more", "at least", or "twice" is unreadable.
+ * A period is assessed only when every sentence is on the allowlist: the canonical
+ * reckoning, the canonical month-end, a neutral label clause, or one quantity
+ * clause. The quantity clause is optional label words, one English cardinal or
+ * digit run, and one day, month, or year. Anything else is period_ambiguous, or
+ * period_unreadable when the sentence was trying to be a proviso, a unicode
+ * dash appears anywhere in the provision, a non-ASCII decimal digit appears,
+ * or a full stop that the sentence split removes sits before a digit
+ * (spaces ignored). A count above the engine ceiling is
+ * period_exceeds_engine_cap. A single newline is a space. A blank line splits.
  */
+function normalizeSource(text: string): string {
+  let out = text.replace(/\p{Cf}/gu, "").replace(/\r\n?/g, "\n")
+  out = out.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035\u0060\u00B4]/g, "'")
+  out = out.replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+  out = out.replace(/[\u2028\u2029\u0085\u000B]/g, "\n")
+  while (/\n[ \t]*\n/.test(out)) out = out.replace(/\n[ \t]*\n/g, "\u0000")
+  out = out.replace(/\n/g, " ")
+  return out.replace(/[^\S\n\u0000]+/gu, " ")
+}
+
 function parsePeriod(
   text: string
-): { ok: true; n: number; unit: DateUnit; cited: string } | { ok: false; reason: "period_unreadable" | "period_ambiguous" } {
-  if (/\p{No}/u.test(text)) return { ok: false, reason: "period_unreadable" }
+):
+  | { ok: true; n: number; unit: DateUnit; cited: string }
+  | { ok: false; reason: "period_unreadable" | "period_ambiguous" | "period_exceeds_engine_cap" } {
+  if (/\p{No}/u.test(text) || hasNonAsciiDigit(text)) return { ok: false, reason: "period_unreadable" }
   if (FILLER_JOIN_RE.test(text)) return { ok: false, reason: "period_unreadable" }
-  const normalized = text.replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ")
-  if (QUALIFIER_RE.test(normalized)) return { ok: false, reason: "period_unreadable" }
-  if (provisoUnsafe(normalized, RECKONING_RE, ["day"])) return { ok: false, reason: "period_unreadable" }
-  if (provisoUnsafe(normalized, MONTH_END_RE, ["day", "month"])) return { ok: false, reason: "period_unreadable" }
-  const scan = normalized.replace(RECKONING_RE, " ").replace(MONTH_END_RE, " ").replace(/\s+/gu, " ")
+  const normalized = normalizeSource(text)
+  if (hasUnicodeDash(normalized) || dotBeforeDigit(normalized)) return { ok: false, reason: "period_unreadable" }
+  const sentences = normalized.split(/[.\u0000]/)
+  for (const sentence of sentences) {
+    if (sentence.trim() === "") continue
+    if (provisoShaped(sentence) && !isCanonicalProviso(sentence)) return { ok: false, reason: "period_unreadable" }
+  }
+  const scan = sentences
+    .filter((sentence) => sentence.trim() !== "" && !isCanonicalProviso(sentence))
+    .join(". ")
+    .replace(/[^\S\n]+/gu, " ")
   const numbers = numberTokens(scan)
   UNIT_WORD_RE.lastIndex = 0
   const units = [...scan.matchAll(UNIT_WORD_RE)]
@@ -431,26 +505,152 @@ function parsePeriod(
   const number = numbers[0]
   const unitMatch = units[0]
   if (!number || unitMatch.index === undefined) return { ok: false, reason: "period_unreadable" }
+  const unitEnd = unitMatch.index + (unitMatch[0]?.length ?? 0)
   if (scan.slice(number.end, unitMatch.index) !== " ") return { ok: false, reason: "period_unreadable" }
-  if (badNeighbour(scan, number.start, number.end)) return { ok: false, reason: "period_unreadable" }
-  const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
-  if (previous === "and" || previous === "or" || previous === "to") return { ok: false, reason: "period_unreadable" }
-  const unit = canonicalUnit(unitMatch[1] ?? "")
-  if (!unit || number.value === null || !Number.isInteger(number.value) || number.value < 1 || number.value > 9999) {
+  if (badNeighbour(scan, number.start, number.end) || spacedMark(scan, number.start)) {
     return { ok: false, reason: "period_unreadable" }
   }
+  const previous = /([A-Za-z]+)$/.exec(scan.slice(0, number.start).trimEnd())?.[1]?.toLowerCase()
+  const extras = quantityExtras(scan, number.start, unitEnd)
+  if (
+    extras.length === 1 &&
+    (extras[0] === "and" || extras[0] === "or" || extras[0] === "to") &&
+    previous === extras[0]
+  ) {
+    return { ok: false, reason: "period_unreadable" }
+  }
+  if (outsideAllowlist(scan, number.start, unitEnd)) return { ok: false, reason: "period_ambiguous" }
+  const unit = canonicalUnit(unitMatch[1] ?? "")
+  if (!unit || number.value === null || !Number.isSafeInteger(number.value) || number.value < 1) {
+    return { ok: false, reason: "period_unreadable" }
+  }
+  if (!spanAllowed(number.value, unit)) return { ok: false, reason: "period_exceeds_engine_cap" }
   return { ok: true, n: number.value, unit, cited: `${number.raw} ${unitMatch[1]}` }
 }
 
-function provisoUnsafe(text: string, re: RegExp, allowedUnits: readonly string[]): boolean {
-  const match = text.match(re)
-  if (!match) return false
-  const span = match[0]
-  if (numberTokens(span).length > 0) return true
-  UNIT_WORD_RE.lastIndex = 0
-  const units = [...span.matchAll(UNIT_WORD_RE)].map((hit) => (hit[1] ?? "").toLowerCase()).sort()
-  const expected = [...allowedUnits].sort()
-  return units.length !== expected.length || units.some((unit, index) => unit !== expected[index])
+function spanAllowed(n: number, unit: DateUnit): boolean {
+  if (unit === "year") return n <= SPAN_LIMIT_YEARS
+  if (unit === "month") return n <= SPAN_LIMIT_YEARS * 12
+  return n <= 9999
+}
+
+function calendarOverflow(iso: string, n: number, unit: DateUnit): boolean {
+  const year = Number(iso.slice(0, 4))
+  const month = Number(iso.slice(5, 7))
+  const day = Number(iso.slice(8, 10))
+  try {
+    if (unit === "day") {
+      const utc = Date.UTC(year, month - 1, day + n)
+      if (!Number.isFinite(utc)) return true
+      const end = new Date(utc).getUTCFullYear()
+      return !Number.isInteger(end) || end < 1 || end > 9999
+    }
+    const months = unit === "year" ? n * 12 : n
+    const end = year + Math.floor((month - 1 + months) / 12)
+    return !Number.isInteger(end) || end < 1 || end > 9999
+  } catch {
+    return true
+  }
+}
+
+function splitClauses(text: string): { start: number; end: number }[] {
+  const clauses: { start: number; end: number }[] = []
+  let start = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? ""
+    if (ch === "." || ch === ";" || ch === ":" || ch === "\u0000") {
+      clauses.push({ start, end: i })
+      start = i + 1
+    }
+  }
+  clauses.push({ start, end: text.length })
+  return clauses
+}
+
+function quantityExtras(text: string, numberStart: number, unitEnd: number): string[] {
+  const clauses = splitClauses(text)
+  const index = clauses.findIndex((clause) => numberStart >= clause.start && numberStart < clause.end)
+  const clause = index < 0 ? undefined : clauses[index]
+  if (!clause) return ["missing"]
+  return [...wordsOf(text.slice(clause.start, numberStart)), ...wordsOf(text.slice(unitEnd, clause.end))].filter(
+    (word) => !QUANTITY_LABELS.has(word)
+  )
+}
+
+function outsideAllowlist(text: string, numberStart: number, unitEnd: number): boolean {
+  const clauses = splitClauses(text)
+  const index = clauses.findIndex((clause) => numberStart >= clause.start && numberStart < clause.end)
+  if (index < 0) return true
+  for (let i = 0; i < clauses.length; i += 1) {
+    const clause = clauses[i]
+    if (!clause) return true
+    const slice = text.slice(clause.start, clause.end)
+    if (clauseForbidden(slice)) return true
+    const words = i === index
+      ? [...wordsOf(text.slice(clause.start, numberStart)), ...wordsOf(text.slice(unitEnd, clause.end))]
+      : wordsOf(slice)
+    const allowedWords = i === index ? words : withoutExactPhrase(words, POSSESSION_OVER_THE_PROPERTY)
+    const allowed = i === index ? QUANTITY_LABELS : NEUTRAL_WORDS
+    if (allowedWords.some((word) => !allowed.has(word))) return true
+  }
+  return false
+}
+
+function clauseForbidden(clause: string): boolean {
+  if (/\p{S}/u.test(clause) || /[<>+=~]/.test(clause)) return true
+  for (const char of clause) {
+    if (char.charCodeAt(0) > 127 && /\p{L}/u.test(char)) return true
+  }
+  return false
+}
+
+const POSSESSION_OVER_THE_PROPERTY = ["possession", "over", "the", "property"]
+
+function withoutExactPhrase(words: readonly string[], phrase: readonly string[]): string[] {
+  const rest: string[] = []
+  for (let i = 0; i < words.length; ) {
+    const matches = phrase.every((word, offset) => words[i + offset] === word)
+    if (matches) {
+      i += phrase.length
+      continue
+    }
+    const word = words[i]
+    if (word) rest.push(word)
+    i += 1
+  }
+  return rest
+}
+
+function dotBeforeDigit(text: string): boolean {
+  return /\.\s*\d/.test(text)
+}
+
+function hasNonAsciiDigit(text: string): boolean {
+  for (const char of text) {
+    if (char >= "0" && char <= "9") continue
+    if (/\p{Nd}/u.test(char)) return true
+  }
+  return false
+}
+
+function textHasCanonicalReckoning(text: string): boolean {
+  const parts = normalizeSource(text).split(/[.\u0000]/)
+  if (parts.some((part) => part.trim() !== "" && provisoShaped(part) && !isCanonicalProviso(part))) return false
+  return parts.some((part) => isCanonicalReckoning(part))
+}
+
+function isSymbolCode(code: number): boolean {
+  return /\p{S}/u.test(String.fromCodePoint(code))
+}
+
+function isDashCode(code: number): boolean {
+  return UNICODE_DASH.test(String.fromCodePoint(code))
+}
+
+function spacedMark(text: string, start: number): boolean {
+  if (start < 2 || text[start - 1] !== " ") return false
+  const mark = text[start - 2] ?? ""
+  return (mark === "-" || mark === "." || mark === "~") && isDigit(text[start] ?? "")
 }
 
 function numberTokens(text: string): NumberToken[] {
@@ -516,7 +716,8 @@ function badNeighbour(text: string, start: number, end: number): boolean {
   if (before !== "" && before !== " " && before !== "(") return true
   for (const index of [start - 1, start - 2, end, end + 1]) {
     if (index < 0 || index >= text.length) continue
-    if ((text.codePointAt(index) ?? 0) > 0x7e) return true
+    const code = text.codePointAt(index) ?? 0
+    if (code > 0x7e && !isSymbolCode(code) && !isDashCode(code)) return true
   }
   return false
 }
@@ -545,6 +746,15 @@ function isDigit(ch: string): boolean {
   return /[0-9]/.test(ch)
 }
 
+function shiftDays(iso: string, days: number): string | null {
+  try {
+    const next = addDays(iso, days)
+    return isCalendarDate(next) ? next : null
+  } catch {
+    return null
+  }
+}
+
 function utcToday(): string {
   const now = new Date()
   const month = String(now.getUTCMonth() + 1).padStart(2, "0")
@@ -558,12 +768,12 @@ function reckoningSource(
   jurisdiction: string,
   asAt: string
 ): { ok: true; sectionId: string; versionNo: number; statedIn: "article" | "section" } | { ok: false; reason: NotAssessedReason } {
-  if (RECKONING_RE.test(article.text)) {
+  if (textHasCanonicalReckoning(article.text)) {
     return { ok: true, sectionId: article.sectionId, versionNo: article.versionNo, statedIn: "article" }
   }
   const section = inForce(versions, "limitation-act-1908/section/12", jurisdiction, asAt)
   if (!section.ok) return { ok: false, reason: section.reason === "no_history" ? "reckoning_unverified" : section.reason }
-  if (!RECKONING_RE.test(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
+  if (!textHasCanonicalReckoning(section.row.text)) return { ok: false, reason: "reckoning_unverified" }
   return { ok: true, sectionId: section.row.sectionId, versionNo: section.row.versionNo, statedIn: "section" }
 }
 
@@ -593,9 +803,11 @@ function applyDayExclusion(
   const row = inForce(versions, `limitation-act-1908/section/${section}`, jurisdiction, asAt)
   if (!row.ok) return { ok: false, reason: row.reason === "no_history" ? "exclusion_unsupported" : row.reason }
   if (!phrase.test(row.row.text)) return { ok: false, reason: "exclusion_unsupported" }
+  const shifted = shiftDays(deadline, days)
+  if (!shifted) return { ok: false, reason: "period_unreadable" }
   return {
     ok: true,
-    deadline: addDays(deadline, days),
+    deadline: shifted,
     exclusion: {
       section,
       sectionId: row.row.sectionId,
@@ -627,7 +839,9 @@ function applyCourtClosed(
   let steps = 0
   while (calendar.isClosed(forumId, cursor)) {
     if (steps >= CLOSED_ROLL_LIMIT) return { ok: false, reason: "court_closed_unresolved" }
-    cursor = addDays(cursor, 1)
+    const next = shiftDays(cursor, 1)
+    if (!next) return { ok: false, reason: "period_unreadable" }
+    cursor = next
     steps += 1
   }
   return {
