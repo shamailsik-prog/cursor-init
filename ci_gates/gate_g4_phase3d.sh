@@ -118,27 +118,31 @@ GW_TESTS=(
   # G-1 forensic test 7 (L8505-8506)
   'G-1 forensic 7 equivalent a privileged call with no DPA is blocked, and its exported trace has classification privileged and no input or output'
 )
-# The refusal table is an it.each: vitest titles each row "'<name, cut to 40 characters>' → blocked '<reason>', <tail>".
-# One row per block reason variant (kill_switch_platform, kill_switch_firm, policy_denied, model_unpriced,
-# budget_not_set, budget_exhausted, no_credentials); not_minimised is the separate test above.
+# The refusal table is it.each("$name → blocked $reason, <tail>"). Vitest 5 prints a string
+# value with no quotes and, when it is longer than 40 characters, keeps 39 and adds "…".
+# Vitest 3 quoted the value and truncated that quoted form ("'the platform switch with
+# disableAll (…'"), which matches none of these 15 rows, so the gate's -t selected 0 of them
+# and the JSON check failed closed (178 passed against 193 names). One row per block reason
+# (kill_switch_platform, kill_switch_firm, policy_denied, model_unpriced, budget_not_set,
+# budget_exhausted, no_credentials); not_minimised is the separate test above.
 REFUSAL_PREFIX='refusals (P3-61 steps 2 to 8)'
 REFUSAL_TAIL=', no provider call, a blocked row, event and deny audit row'
 REFUSAL_TESTS=(
-  "'the platform switch with disableAll (…' → blocked 'kill_switch_platform'"
-  "'the platform switch naming the routed…' → blocked 'kill_switch_platform'"
-  "'the firm switch with disableAll' → blocked 'kill_switch_firm'"
-  "'the firm switch naming the routed mod…' → blocked 'kill_switch_firm'"
-  "'confidential with no DPA' → blocked 'policy_denied'"
-  "'a model with no price' → blocked 'model_unpriced'"
-  "'no ai_config at all' → blocked 'budget_not_set'"
-  "'an ai_config with no budget' → blocked 'budget_not_set'"
-  "'a zero budget' → blocked 'budget_not_set'"
-  "'a negative budget' → blocked 'budget_not_set'"
-  "'a fractional budget' → blocked 'budget_not_set'"
-  "'a string budget' → blocked 'budget_not_set'"
-  "'spend exactly at the budget' → blocked 'budget_exhausted'"
-  "'spend over the budget' → blocked 'budget_exhausted'"
-  "'no transport and no key' → blocked 'no_credentials'"
+  'the platform switch with disableAll (th… → blocked kill_switch_platform'
+  'the platform switch naming the routed m… → blocked kill_switch_platform'
+  'the firm switch with disableAll → blocked kill_switch_firm'
+  'the firm switch naming the routed model → blocked kill_switch_firm'
+  'confidential with no DPA → blocked policy_denied'
+  'a model with no price → blocked model_unpriced'
+  'no ai_config at all → blocked budget_not_set'
+  'an ai_config with no budget → blocked budget_not_set'
+  'a zero budget → blocked budget_not_set'
+  'a negative budget → blocked budget_not_set'
+  'a fractional budget → blocked budget_not_set'
+  'a string budget → blocked budget_not_set'
+  'spend exactly at the budget → blocked budget_exhausted'
+  'spend over the budget → blocked budget_exhausted'
+  'no transport and no key → blocked no_credentials'
 )
 
 # --- audit F07 and F08 end to end (functions/test/f07-f08-ai-spend.e2e.emu.test.ts) ---------------------------

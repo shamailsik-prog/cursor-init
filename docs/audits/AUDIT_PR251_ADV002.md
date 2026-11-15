@@ -20,6 +20,8 @@ Vitest 5 matches `-t` against the full name joined by ` > `. The G-4 scripts anc
 
 Proof (`tests/g4-vitest5-name-filter.test.ts`, Vitest 5.1.0): a space-joined anchor on `functions/test/d4.boot.test.ts` selects 0 tests and the checker exits 1; the pattern emitted by `gate_g4_phase4a.sh --filter-only` contains ` > ` and selects the named boot test (checker exit 0). All six gate scripts resolve their name lists (`--filter-only` exit 0).
 
+On `5dcf4db2` the arrow form selected tests, and every G-4 step except phase 3d passed. Phase 3d passed 178 and expected 193. The 15 missing rows are the refusal `it.each("$name → blocked $reason, …")`. Vitest 5 prints a string value with no quotes and truncates the raw string at 40 characters (`39 + …`). The gate still held Vitest 3's quoted truncation (`'the platform switch with disableAll (…'`), so those 15 anchors matched nothing. The names in `gate_g4_phase3d.sh` are now the Vitest 5 titles. The same proof test lists those 15 rows and requires each live name to match the phase 3d filter, and requires the old quoted title to match nothing.
+
 ### Mutation floor (document vault)
 
 `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` are pinned to 10.1.1 at the root and in `functions/`. 10.1.1 joins test names with ` > ` when Vitest is 5 or newer (10.0.0 joined with a space, so covered mutants were scored survived).

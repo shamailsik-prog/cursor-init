@@ -77,4 +77,38 @@ describe("G-4 vitest 5 name filter", () => {
     expect(result.stdout).toContain("1 passed")
     expect(result.code).toBe(0)
   })
+
+  it("phase 3d refusal rows use Vitest 5's unquoted 40-character titles", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "g4-3d-"))
+    const filter = execFileSync("bash", ["ci_gates/gate_g4_phase3d.sh", "--inner", dir, "--filter-only"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }).trim()
+    expect(filter).toContain(" > ")
+    expect(filter).not.toContain("disableAll \\(…")
+    expect(filter).toContain("disableAll \\(th…")
+
+    const listed = execFileSync(
+      "npx",
+      ["vitest", "list", "test/p1.gateway.emu.test.ts", "--no-static-parse", "--silent"],
+      {
+        cwd: path.join(ROOT, "functions"),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080",
+          FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099",
+        },
+      },
+    )
+    const refusals = listed
+      .split("\n")
+      .filter((line) => line.includes("refusals (P3-61 steps 2 to 8) > ") && line.includes("→ blocked"))
+      .map((line) => line.replace(/^test\/p1\.gateway\.emu\.test\.ts > /, ""))
+    expect(refusals).toHaveLength(15)
+    const pattern = new RegExp(filter)
+    const oldQuoted = "callP1 (P3-61, P3-63..P3-66, P3-69) > refusals (P3-61 steps 2 to 8) > 'the firm switch with disableAll' → blocked 'kill_switch_firm', no provider call, a blocked row, event and deny audit row"
+    expect(pattern.test(oldQuoted)).toBe(false)
+    for (const name of refusals) expect(pattern.test(name)).toBe(true)
+  })
 })
